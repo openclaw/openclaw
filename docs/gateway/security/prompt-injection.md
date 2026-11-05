@@ -36,6 +36,7 @@ What helps in practice:
 - Keep `web_search` / `web_fetch` / `browser` off for tool-enabled agents unless needed.
 - For OpenResponses URL inputs (`input_file` / `input_image`), set a tight `gateway.http.endpoints.responses.files.urlAllowlist` / `images.urlAllowlist` and keep `maxUrlParts` low (empty allowlists count as unset). Use `files.allowUrl: false` / `images.allowUrl: false` to disable URL fetching entirely.
 - Keep secrets out of prompts; pass them via env/config on the gateway host instead.
+- To screen or redact what actually reaches the model provider (injected instructions or leaked credentials), use a trusted plugin with the opt-in [final model request hook](#screening-the-final-model-request).
 
 **Model choice matters.** Prompt-injection resistance is not uniform across model tiers - smaller/cheaper models are more susceptible to tool misuse and instruction hijacking under adversarial prompts.
 
@@ -57,6 +58,62 @@ OpenClaw also strips common self-hosted LLM chat-template special-token literals
 Outbound model responses have a separate sanitizer that strips leaked `<tool_call>`, `<function_calls>`, `<system-reminder>`, `<previous_response>`, and similar internal markup from user-visible replies at the final channel delivery boundary.
 
 This does not replace `dmPolicy`, allowlists, exec approvals, sandboxing, or `contextVisibility` - it closes one specific tokenizer-layer bypass.
+
+### Screening the final model request
+
+A trusted plugin can register the [`before_model_request`](/plugins/hooks/prompt-and-session#final-model-request-policy) hook to inspect the exact request body the embedded runner is about to send to the provider. That body holds everything assembled for the call: tool results, retrieved context, memory, attachments, and the conversation history. The plugin can return a rewritten payload (for example to strip or neutralize an injected instruction) or throw to withhold the request entirely; a thrown error or timeout fails the call and the original payload is never sent.
+
+The same hook works as a credential-screening (DLP) layer. API keys, tokens, passwords, or private keys that end up in tool output, a fetched page, or a pasted log can be redacted before they leave the gateway for the model provider.
+
+The hook is off by default for every plugin, bundled ones included. Enable it per plugin:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "secret-screen": {
+        hooks: {
+          allowModelRequest: true,
+          // Non-bundled plugins also need conversation access.
+          allowConversationAccess: true,
+        },
+      },
+    },
+  },
+}
+```
+
+`allowPromptModification: false` blocks the hook even when `allowModelRequest` is on. A replacement may rewrite content but not the tool surface: if `tools`, `tool_choice`, or the provider's equivalent fields change, the request fails. A minimal redacting handler:
+
+```typescript index.ts
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+const SECRET =
+  /\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{36,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,})\b|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
+const TOOL_KEYS = new Set(["tools", "tool_choice", "toolConfig", "functions", "function_call"]);
+
+function redact(value: unknown): unknown {
+  if (typeof value === "string") return value.replace(SECRET, "[REDACTED]");
+  if (Array.isArray(value)) return value.map(redact);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, v]) => [key, TOOL_KEYS.has(key) ? v : redact(v)]),
+    );
+  }
+  return value;
+}
+
+export default definePluginEntry({
+  id: "secret-screen",
+  name: "Secret screen",
+  description: "Redact credentials from the final model request.",
+  register(api) {
+    api.on("before_model_request", (event) => ({ payload: redact(event.payload) }));
+  },
+});
+```
+
+Pattern matching catches common credential formats, not every secret; keep secrets out of the agent's reachable filesystem and environment as the first layer. The hook covers embedded agent runs only: CLI-backed runtimes, external harnesses such as Codex, and compaction summary calls are not intercepted. See [Final model request policy](/plugins/hooks/prompt-and-session#final-model-request-policy) for the full contract.
 
 ### Bypass flags (keep off in production)
 

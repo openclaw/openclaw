@@ -138,6 +138,10 @@ contracts above; a modifying hook is not an observation hook.
 | `agent_end`                     | Observe | Observe final messages, success state, and run duration                                                                         |
 | `heartbeat_prompt_contribution` | Modify  | Add context for receipt-owned proactive automation jobs; retains its historical public name                                     |
 
+`before_model_request` can also screen injected instructions or leaked credentials before
+they reach the provider; see
+[Screening the final model request](/gateway/security/prompt-injection#screening-the-final-model-request).
+
 **Conversation observation**
 
 | Hook                                      | Kind    | Purpose                                                                                                            |
