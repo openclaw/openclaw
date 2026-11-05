@@ -302,6 +302,15 @@ esac
     });
   });
 
+  it("omits retired heartbeat defaults when configuring beta baselines", () => {
+    const stable = configValue(baselineSteps("base", "2026.10.10"), "agents").defaults;
+    const beta = configValue(baselineSteps("base", "2026.11.5-beta.1"), "agents").defaults;
+
+    expect(stable.heartbeat).toEqual({ every: "0m" });
+    expect(beta).not.toHaveProperty("heartbeat");
+    expect(beta.model).toEqual(stable.model);
+  });
+
   it("composes configured plugin installs into the SQLite volume scenario", () => {
     expect(resolveScenarioConfigSteps("sqlite-volume")).toEqual(
       resolveScenarioConfigSteps("configured-plugin-installs"),
