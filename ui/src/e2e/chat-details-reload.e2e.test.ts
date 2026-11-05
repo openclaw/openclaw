@@ -148,6 +148,26 @@ suite.define(() => {
             ).flush();
           });
           await page.addInitScript(() => {
+            const dockFlips: string[] = [];
+            new MutationObserver((records) => {
+              for (const record of records) {
+                if (
+                  record.target instanceof Element &&
+                  record.target.matches(".chat-details--docked") &&
+                  record.attributeName === "class" &&
+                  record.oldValue?.split(" ").includes("chat-details") &&
+                  !record.oldValue.split(" ").includes("chat-details--docked")
+                ) {
+                  dockFlips.push(record.oldValue);
+                }
+              }
+            }).observe(document, {
+              attributes: true,
+              attributeFilter: ["class"],
+              attributeOldValue: true,
+              subtree: true,
+            });
+            Reflect.set(window, "detailsDockFlips", dockFlips);
             const frames: Array<{
               details: boolean;
               progress: string | null;
@@ -232,6 +252,7 @@ suite.define(() => {
             }>;
           });
           expect(frames.length).toBeGreaterThan(1);
+          expect(await page.evaluate(() => Reflect.get(window, "detailsDockFlips"))).toEqual([]);
           expect(frames[0]!.details).toBe(true);
           expect(frames[0]!.sections.some((section) => section.id === "automations")).toBe(true);
           const settled = frames.at(-1)!.sections;

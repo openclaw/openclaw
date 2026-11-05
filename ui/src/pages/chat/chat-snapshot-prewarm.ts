@@ -1,3 +1,4 @@
+import { ChatDetailsDesktopComposition } from "./components/chat-details-desktop-loader.ts";
 import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
   snapshotStoreGeneration,
@@ -49,9 +50,16 @@ export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
     cacheKey,
     cancelled: false,
     promise: readStoredChatSnapshotRecord(cacheKey)
-      .then((record) =>
-        entry.cancelled || generation !== snapshotStoreGeneration ? undefined : record,
-      )
+      .then((record) => {
+        if (entry.cancelled || generation !== snapshotStoreGeneration) {
+          return undefined;
+        }
+        // Warm the renderer on a cache hit; validation still owns display admission.
+        if (record !== undefined) {
+          void ChatDetailsDesktopComposition.preload().catch(() => undefined);
+        }
+        return record;
+      })
       .catch(() => undefined),
   };
   pending = entry;

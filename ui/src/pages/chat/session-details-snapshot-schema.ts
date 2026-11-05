@@ -17,6 +17,7 @@ const subagentStatus = json.enumeration([
 export const detailsSnapshotSchema = json.optional(
   json.object({
     locale: json.text,
+    docking: json.optional(json.object({ layout: json.text, wide: json.boolean })),
     session: json.optional(
       json.object({
         createdActor: json.optional(
