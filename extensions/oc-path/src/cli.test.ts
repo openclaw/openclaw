@@ -1004,39 +1004,39 @@ describe("openclaw path CLI", () => {
   });
 
   describe("find", () => {
-    it.each(["jsonc", "yaml", "jsonl"])("CLI-F01 finds array indexes in %s", async (kind) => {
+    const findFiles = ["config.jsonc", "config.yaml", "config.jsonl"];
+    if (process.platform !== "win32") {
+      findFiles.push("report?.jsonc");
+    }
+    it.each(findFiles)("CLI-F01 finds and round-trips indexes in %s", async (filename) => {
       const options = { cwd: tempDirs.make("oc-path-cli-"), json: true };
       const before = '{ "items": [ { "id": "a" }, { "id": "b" } ] }\n';
-      writeFileSync(join(options.cwd, `config.${kind}`), before, "utf-8");
-      const prefix = `oc://config.${kind}/${kind === "jsonl" ? "L1/" : ""}items`;
+      writeFileSync(join(options.cwd, filename), before, "utf-8");
+      const file = filename.includes("?") ? JSON.stringify(filename) : filename;
+      const prefix = `oc://${file}/${filename.endsWith(".jsonl") ? "L1/" : ""}`;
       for (const [suffix, expected] of [
-        [".*/id", ["a", "b"]],
-        ['."1"/*', ["b"]],
-        ['.""/*', []],
-        ['."$first"/*', []],
-        ['."2"/*', []],
+        ["items.*/id", ["a", "b"]],
+        ['items."1"/*', ["b"]],
+        ['items.""/*', []],
+        ['items."$first"/*', []],
+        ['items."2"/*', []],
+        ["nope/*", []],
       ] as const) {
         const rt = createTestRuntime();
-        await pathFindCommand(prefix + suffix, options, rt);
+        await pathFindCommand(prefix + suffix + "?session=proof", options, rt);
         expect(rt.exitCode).toBe(expected.length ? 0 : 1);
         const out = JSON.parse(stdoutText(rt));
         expect(out.count).toBe(expected.length);
         expect(out.matches).toMatchObject(expected.map((valueText) => ({ match: { valueText } })));
         for (const { path, match } of out.matches) {
+          expect(path).toMatch(/\?session=proof$/);
           const resolved = createTestRuntime();
           await pathResolveCommand(path, options, resolved);
+          expect(resolved.exitCode).toBe(0);
           expect(JSON.parse(stdoutText(resolved))).toMatchObject({ resolved: true, match });
         }
       }
-      expect(readFileSync(join(options.cwd, `config.${kind}`), "utf-8")).toBe(before);
-    });
-
-    it("CLI-F02 returns 1 when zero matches", async () => {
-      const { workspaceDir, filePath } = fileFixture("gateway.jsonc");
-      writeFileSync(filePath, "{}", "utf-8");
-      const rt = createTestRuntime();
-      await pathFindCommand("oc://gateway.jsonc/nope/*", { cwd: workspaceDir, json: true }, rt);
-      expect(rt.exitCode).toBe(1);
+      expect(readFileSync(join(options.cwd, filename), "utf-8")).toBe(before);
     });
 
     it("CLI-F03 file-slot wildcard rejected with clear error (no ENOENT)", async () => {
