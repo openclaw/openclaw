@@ -1,3 +1,4 @@
+import { getAiTransportHost } from "@openclaw/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicResponse } from "../../packages/ai/src/provider-transport-parity.test-support.js";
 import { createSseResponse } from "../../packages/ai/src/transports/anthropic-transport-stream.test-support.js";
@@ -10,9 +11,17 @@ import { streamSimple } from "../llm/stream.js";
 import type { Model, SimpleStreamOptions } from "../llm/types.js";
 import { registerSingleProviderPlugin } from "../plugin-sdk/plugin-test-runtime.js";
 import { clearLiveCatalogCacheForTests } from "../plugin-sdk/provider-catalog-live-runtime.js";
+import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { makeInMemorySessionManager } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
+import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
+import type { AgentMessage } from "./runtime/index.js";
+import { convertToLlm } from "./sessions/messages.js";
 import { completionChunk, completionContext } from "./simple-completion.test-support.js";
+import "./ai-transport-runtime-host.js";
+import { resolveTranscriptPolicy } from "./transcript-policy.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
 
 const routes = [
   [
@@ -119,10 +128,18 @@ async function fixture(
     catalogKeys: Array<string | null>;
     expectedUrl: string;
   }) => Promise<void>,
+  options: {
+    native?: boolean;
+    missing?: boolean;
+    providerPatch?: Record<string, unknown>;
+    offerPatch?: Record<string, unknown>;
+    modelPatch?: Record<string, unknown>;
+    routePatch?: Record<string, unknown>;
+  } = {},
 ) {
   const [upstreamProvider, upstream, api, capability, endpoint, path, format] = route;
   const id = upstreamProvider + "/" + upstream;
-  const native = api === "anthropic-messages";
+  const native = options.native ?? api === "anthropic-messages";
   const publicPath = native
     ? `/v1/native/${upstreamProvider}${path}`
     : api === "openai-completions"
@@ -149,9 +166,16 @@ async function fixture(
             openaiCompatible: true,
             nativeBaseUrl: `/v1/native/${upstreamProvider}`,
             routes: [
-              { endpoint, path, methods: ["POST"], requestFormat: format, responseFormat: format },
+              {
+                endpoint,
+                path,
+                methods: ["POST"],
+                requestFormat: format,
+                responseFormat: format,
+                ...options.routePatch,
+              },
             ],
-            models: [{ id, upstream, capabilities: [capability] }],
+            models: [{ id, upstream, capabilities: [capability], ...options.modelPatch }],
             offers: [
               {
                 endpoint,
@@ -161,8 +185,10 @@ async function fixture(
                 route: publicPath,
                 eligible: true,
                 affordability: "request-dependent",
+                ...options.offerPatch,
               },
             ],
+            ...options.providerPatch,
           },
         ],
       });
@@ -207,11 +233,18 @@ async function fixture(
         discoveryApiKey: "synthetic-router-key",
       }),
     });
-    if (!result || !("provider" in result) || !result.provider)
+    if (!result || !("provider" in result) || !result.provider) {
       throw new Error("Missing actual ClawRouter catalog");
+    }
     const selected = result.provider.models.find((model) => model.id === id);
-    if (!selected || selected.api !== api || !selected.baseUrl)
+    if (options.missing) {
+      expect(selected).toBeUndefined();
+      expect(requests).toHaveLength(0);
+      return;
+    }
+    if (!selected || selected.api !== api || !selected.baseUrl) {
       throw new Error("Missing selected OpenCode route");
+    }
     const model: Model = {
       ...selected,
       provider: "clawrouter",
@@ -230,6 +263,43 @@ async function fixture(
 }
 
 describe("actual OpenCode proxy SDK session bridge", () => {
+  it.each([
+    { providerPatch: { offers: [] } },
+    { providerPatch: { allowed: false } },
+    { offerPatch: { eligible: false } },
+    { offerPatch: { route: "https://foreign.example/v1/chat/completions" } },
+    { modelPatch: { capabilities: ["llm.embeddings"] } },
+    { modelPatch: { upstream: "foreign-model" } },
+    { routePatch: { methods: ["GET"] } },
+    { routePatch: { responseFormat: "unknown.stream" } },
+  ])("does not infer OpenCode execution from broad provider flags: %j", async (patch) => {
+    await fixture(routes[0], async () => {}, { ...patch, missing: true });
+  });
+
+  it("rejects conflicting static and caller identities before any SDK request", async () => {
+    await fixture(routes[0], async ({ model, plugin, requests }) => {
+      const stream = plugin.wrapStreamFn!({
+        provider: "clawrouter",
+        modelId: model.id,
+        streamFn: streamSimple,
+      })!;
+      for (const [modelHeaders, callerHeaders] of [
+        [{ "X-OpenCode-Session": "one" }, { "x-opencode-session": "two" }],
+        [{ "x-clawrouter-session-id": "other-conversation" }, {}],
+        [{}, { "x-clawrouter-session-id": "other-conversation" }],
+      ]) {
+        expect(() =>
+          stream({ ...model, headers: modelHeaders }, completionContext("ok"), {
+            apiKey: "synthetic-router-key",
+            sessionId: "conversation",
+            headers: callerHeaders,
+          }),
+        ).toThrow("Conflicting");
+      }
+      expect(requests).toHaveLength(0);
+    });
+  });
+
   it.each(routes)("keeps %s %s conversations stable through %s", async (...route) => {
     await fixture(route, async ({ model, plugin, requests, catalogKeys, expectedUrl }) => {
       for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
@@ -239,14 +309,16 @@ describe("actual OpenCode proxy SDK session bridge", () => {
           model,
           streamFn: streamSimple,
         });
-        if (!stream) throw new Error("Missing actual provider hook");
+        if (!stream) {
+          throw new Error("Missing actual provider hook");
+        }
         for (const explicit of [false, true]) {
-          const context = completionContext("Reply ok");
+          const context: Parameters<typeof streamSimple>[1] = completionContext("Reply ok");
           const selected = {
             ...model,
             headers: {
-              ...(explicit ? { "X-OpenCode-Session": "model-session" } : {}),
-              "x-clawrouter-session-id": "static-router-session",
+              ...(explicit ? { "X-OpenCode-Session": "caller-session" } : {}),
+              "x-clawrouter-session-id": explicit ? "caller-session" : "conversation-123",
             },
           };
 
@@ -317,7 +389,7 @@ describe("actual OpenCode proxy SDK session bridge", () => {
           streamFn: streamSimple,
         })!;
         for (const turnId of ["turn-one", "turn-two"]) {
-          const state = await plugin.resolveTransportTurnState?.({
+          const state = plugin.resolveTransportTurnState?.({
             provider: "clawrouter",
             modelId: model.id,
             model,
@@ -326,14 +398,10 @@ describe("actual OpenCode proxy SDK session bridge", () => {
             transport: "stream",
           });
           const result = await (
-            await stream(
-              { ...model, headers: { "x-clawrouter-session-id": "must-not-share" } },
-              completionContext("ok"),
-              {
-                apiKey: "synthetic-router-key",
-                headers: state?.headers,
-              },
-            )
+            await stream(model, completionContext("ok"), {
+              apiKey: "synthetic-router-key",
+              headers: state?.headers,
+            })
           ).result();
           expect(result.stopReason, result.errorMessage).toBe("stop");
         }
@@ -367,6 +435,212 @@ describe("actual OpenCode proxy SDK session bridge", () => {
         }),
       ).toThrow("Conflicting");
       expect(requests).toHaveLength(0);
+    });
+  });
+
+  it.each(routes)(
+    "retains the selected %s %s owner through native %s projection",
+    async (...route) => {
+      await fixture(
+        route,
+        async ({ model, plugin, requests, expectedUrl }) => {
+          const prepared = attachModelProviderRuntimePluginHandle(model, {
+            provider: "clawrouter",
+            modelId: model.id,
+            plugin,
+          });
+          const host = getAiTransportHost();
+          const projected = host.inheritManagedTransport(prepared, { ...prepared });
+          const state = host.plugin.resolveTransportTurnState({
+            provider: "clawrouter",
+            modelId: model.id,
+            allowRuntimePluginLoad: false,
+            context: {
+              provider: "clawrouter",
+              modelId: model.id,
+              model: projected,
+              sessionId: "native-conversation",
+              turnId: "turn-one",
+              attempt: 0,
+              transport: "stream",
+            },
+          });
+          const stream = host.plugin.wrapSimpleCompletionStream({
+            provider: "clawrouter",
+            context: {
+              provider: "clawrouter",
+              modelId: model.id,
+              model: projected,
+              streamFn: streamSimple,
+            },
+          });
+          if (!stream) {
+            throw new Error("Missing actual prepared ClawRouter stream");
+          }
+          const aborted = await (
+            await stream(projected, completionContext("ok"), {
+              apiKey: "synthetic-router-key",
+              signal: AbortSignal.abort(new Error("synthetic caller abort")),
+              headers: state?.headers,
+            })
+          ).result();
+          expect(aborted.stopReason).not.toBe("stop");
+          expect(requests).toHaveLength(0);
+          const result = await (
+            await stream(projected, completionContext("ok"), {
+              apiKey: "synthetic-router-key",
+              headers: state?.headers,
+              cacheRetention: "none",
+            })
+          ).result();
+          expect(result.stopReason, result.errorMessage).toBe("stop");
+          expect(requests).toHaveLength(1);
+          expect(requests[0]?.url).toBe(expectedUrl);
+          expect(requests[0]?.headers.get("x-clawrouter-session-id")).toBe("native-conversation");
+          expect(requests[0]?.headers.get("x-opencode-session")).toBeNull();
+          expect(requests[0]?.headers.get("authorization")).toBe("Bearer synthetic-router-key");
+          expect((await requests[0]!.json()).model).toBe(route[1]);
+        },
+        { native: true },
+      );
+    },
+  );
+
+  it("encodes automatic conversation identities without merging distinct sessions", async () => {
+    await fixture(routes[0], async ({ model, plugin, requests }) => {
+      const stream = plugin.wrapStreamFn!({
+        provider: "clawrouter",
+        modelId: model.id,
+        streamFn: streamSimple,
+      })!;
+      const identities = ["conversation with spaces", "会話", "a".repeat(300), "\ud800", "\ud801"];
+      for (const sessionId of [...identities, ...identities]) {
+        expect(
+          (
+            await (
+              await stream(model, completionContext("ok"), {
+                apiKey: "synthetic-router-key",
+                sessionId,
+              })
+            ).result()
+          ).stopReason,
+        ).toBe("stop");
+      }
+      const sent = requests.map((request) => request.headers.get("x-clawrouter-session-id"));
+      expect(sent.slice(0, identities.length)).toEqual(sent.slice(identities.length));
+      expect(new Set(sent).size).toBe(identities.length);
+      expect(sent.every((value) => value && /^[A-Za-z0-9._~:/+@=-]{1,256}$/u.test(value))).toBe(
+        true,
+      );
+      await (
+        await stream(model, completionContext("ok"), {
+          apiKey: "synthetic-router-key",
+          sessionId: sent[0]!,
+        })
+      ).result();
+      expect(requests.at(-1)?.headers.get("x-clawrouter-session-id")).not.toBe(sent[0]);
+    });
+  });
+
+  it("preserves signed Messages thinking and tool results through actual replay and SDK conversion", async () => {
+    await fixture(routes[4], async ({ model, plugin, requests }) => {
+      const history: AgentMessage[] = [
+        { role: "user", content: "Look up a record", timestamp: 1 },
+        {
+          role: "assistant",
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          content: [
+            {
+              type: "thinking",
+              thinking: "Use the lookup tool",
+              thinkingSignature: "synthetic-signature",
+            },
+            { type: "toolCall", id: "toolu_fixture", name: "lookup", arguments: { index: 1 } },
+          ],
+          usage: makeZeroUsageSnapshot(),
+          stopReason: "toolUse",
+          timestamp: 2,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "toolu_fixture",
+          toolName: "lookup",
+          content: [{ type: "text", text: "synthetic record" }],
+          isError: false,
+          timestamp: 3,
+        },
+      ];
+      const replay = await sanitizeSessionHistory({
+        provider: "clawrouter",
+        modelId: model.id,
+        modelApi: model.api,
+        model,
+        policy: resolveTranscriptPolicy({
+          provider: "clawrouter",
+          modelId: model.id,
+          modelApi: model.api,
+          model,
+          runtimeHandle: { provider: "clawrouter", plugin },
+        }),
+        config: {},
+        env: {},
+        sessionId: "tool-conversation",
+        sessionManager: makeInMemorySessionManager([]),
+        messages: history,
+      });
+      const context = {
+        messages: convertToLlm(replay),
+        tools: [
+          {
+            name: "lookup",
+            description: "Synthetic record lookup",
+            parameters: { type: "object", properties: { index: { type: "integer" } } },
+          },
+        ],
+      };
+      for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
+        const stream = plugin[hook]!({
+          provider: "clawrouter",
+          modelId: model.id,
+          model,
+          streamFn: streamSimple,
+        })!;
+        const result = await (
+          await stream(model, context, {
+            apiKey: "synthetic-router-key",
+            sessionId: "tool-conversation",
+            maxTokens: 100,
+          })
+        ).result();
+        expect(result.stopReason, result.errorMessage).toBe("stop");
+      }
+      expect(requests).toHaveLength(2);
+      for (const request of requests) {
+        expect(request.headers.get("x-clawrouter-session-id")).toBe("tool-conversation");
+        expect((await request.json()).messages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "assistant",
+              content: expect.arrayContaining([
+                {
+                  type: "thinking",
+                  thinking: "Use the lookup tool",
+                  signature: "synthetic-signature",
+                },
+                { type: "tool_use", id: "toolu_fixture", name: "lookup", input: { index: 1 } },
+              ]),
+            }),
+            expect.objectContaining({
+              role: "user",
+              content: expect.arrayContaining([
+                expect.objectContaining({ type: "tool_result", tool_use_id: "toolu_fixture" }),
+              ]),
+            }),
+          ]),
+        );
+      }
     });
   });
 
