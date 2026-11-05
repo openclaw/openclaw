@@ -72,16 +72,18 @@ export function resolveAgentModelOutputLimit(
       (model) => model.id === ref.model,
     ) ?? -1;
   const row = materialized.models?.providers?.[providerKey]?.models?.[index];
-  // A limit authored on the row wins over the provider fallback, so point at the row.
-  const rowAuthored = cfg.models?.providers?.[providerKey]?.models?.[index]?.maxTokens;
+  // The provider fallback applies only when neither the row nor the catalog set a limit.
+  // Otherwise only a row-level maxTokens (which wins over the catalog) changes it.
+  const authoredRow = cfg.models?.providers?.[providerKey]?.models?.[index];
+  const providerFallback = cfg.models?.providers?.[providerKey]?.maxTokens ?? 8192;
+  const fromProvider = authoredRow?.maxTokens === undefined && row?.maxTokens === providerFallback;
   const ceiling =
     typeof row?.maxTokens === "number"
       ? {
           maxTokens: row.maxTokens,
-          path:
-            rowAuthored === undefined
-              ? `models.providers.${providerKey}.maxTokens`
-              : `models.providers.${providerKey}.models[${index}].maxTokens`,
+          path: fromProvider
+            ? `models.providers.${providerKey}.maxTokens`
+            : `models.providers.${providerKey}.models[${index}].maxTokens`,
         }
       : undefined;
   // Transports clamp a larger request budget to the model ceiling; the lower one binds.

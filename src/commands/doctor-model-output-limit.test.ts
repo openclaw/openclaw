@@ -1,10 +1,14 @@
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveAgentModelOutputLimit } from "./doctor-model-output-limit.js";
 
+const registry = vi.hoisted(() => ({ plugins: [] as unknown[] }));
 // mock-isolation: the resolver must not scan installed plugin manifests in tests.
 vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({ plugins: [] }),
+  loadPluginManifestRegistryForPluginRegistry: () => registry,
 }));
 
 const withLocal = (provider: Record<string, unknown>, primary = "Local/m"): OpenClawConfig =>
@@ -43,6 +47,28 @@ it.each([
     maxTokens: max,
     path,
   });
+});
+
+it("points a catalog-derived limit at the model row, where a raise takes effect", () => {
+  const rootDir = path.resolve("extensions/openai");
+  const loaded = loadPluginManifest(rootDir);
+  if (!loaded.ok) {
+    throw new Error(loaded.error);
+  }
+  registry.plugins = [createPluginManifestRecordFixture({ ...loaded.manifest, rootDir })];
+  const cfg = {
+    agents: { defaults: { model: { primary: "openai/gpt-4.1" } } },
+    models: {
+      providers: {
+        openai: { maxTokens: 65_536, models: [{ id: "gpt-4.1", name: "gpt-4.1" }] },
+      },
+    },
+  } as unknown as OpenClawConfig;
+  expect(resolveAgentModelOutputLimit({ cfg, agentId: "main" })).toMatchObject({
+    maxTokens: 32_768,
+    path: "models.providers.openai.models[0].maxTokens",
+  });
+  registry.plugins = [];
 });
 
 it("leaves catalog-only models alone", () => {
