@@ -108,7 +108,7 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
   > &
   Strings<"runnerTemp" | "ciOnPush" | "targetContextRef" | "targetRef"> &
   Strings<"testRuntimePolicy" | "workflow" | "workflowSha" | "workflowToken"> &
-  Strings<"windowsCiReplay" | "workspace"> &
+  Strings<"windowsCiReplay" | "workflowRef" | "workspace"> &
   Flags<"cancelled" | "draft" | "failed" | "frozenTarget" | "hostedRunnerProfileContract"> &
   Flags<"releaseGate" | "runCheck" | "runWindowsCi" | "includeAndroid"> &
   Flags<"skipDefenderExclusions" | "useGithubHostedRunners"> & {
@@ -215,6 +215,7 @@ export function evaluateWorkflowExpression(
       sha: context.sha,
       workflow: context.workflow,
       workflow_sha: context.workflowSha,
+      workflow_ref: context.workflowRef,
       workspace: context.workspace,
       token: context.workflowToken,
       event:
