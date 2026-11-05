@@ -476,12 +476,12 @@ describe("handleChatGatewayEvent", () => {
     const label = () =>
       chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
     receive(state, "status", { phase: "preparing_context", seq: 1 });
-    expect(label()).toBe("Preparing this turn…");
+    expect(label()).toBe("Preparing reply…");
     receive(state, "delta", {
       runId: "run-other",
       message: { role: "assistant", content: "Other" },
     });
-    expect(label()).toBe("Preparing this turn…");
+    expect(label()).toBe("Preparing reply…");
     receive(state, "status", { phase: "starting_model", seq: 2 });
     expect(label()).toBe("Waiting for a response");
     receive(state, "status", { phase: "preparing_context", seq: 3 });
@@ -1246,7 +1246,7 @@ describe("loadChatHistory retry handling", () => {
       expect(state.chatLoading).toBe(false);
       expect(getChatHistoryLoadState(state)).toMatchObject({
         phase: "failed",
-        message: expect.stringContaining("timed out"),
+        message: expect.stringContaining("in time"),
       });
     }
     expect(request.mock.calls[1]?.[2]?.signal.aborted).toBe(true);
@@ -1346,16 +1346,16 @@ describe("loadChatHistory retry handling", () => {
     },
   );
 
-  it("clears live tool cards when history catches up with content-block tool ids", async () => {
+  it("clears live tool cards for recorded content-block results", async () => {
     const persistedUser = userText("latest ask", { seq: 1 });
-    const persistedToolCall = {
+    const persistedToolResult = {
       role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "shell", arguments: {} }],
+      content: [{ type: "toolResult", id: "call_1", name: "shell", text: "done" }],
       timestamp: 2,
       __openclaw: { seq: 2 },
     };
     const state = createLiveToolHistoryState(
-      [persistedUser, persistedToolCall],
+      [persistedUser, persistedToolResult],
       "Still answering.",
       [toolCall("call_1")],
       [{ text: "before tool", ts: 1 }],
@@ -1364,7 +1364,7 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages).toEqual([
       persistedUser,
       expect.objectContaining({ ...replyText("before tool"), timestamp: 1 }),
-      persistedToolCall,
+      persistedToolResult,
     ]);
     expect(state).toMatchObject({
       chatRunId: "run-1",
@@ -1440,8 +1440,7 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatVerboseLevel).toBeNull();
     expect(getChatHistoryLoadState(state)).toMatchObject({
       phase: "failed",
-      message:
-        "You don't have permission to view existing chat history. Ask the person who manages OpenClaw for access.",
+      message: "Couldn’t view session history. Ask an admin to grant read access.",
       retryable: false,
     });
     expect(state.lastError).toBeNull();

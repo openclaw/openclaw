@@ -617,12 +617,31 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
             const message = asOptionalRecord(asOptionalRecord(event)?.message);
             return message?.role === "user" ? [message] : [];
           });
-          expect(userMessages, "only human request and child settlement persist").toMatchObject([
-            { provenance: { kind: "external_user" } },
-            { provenance: { kind: "inter_session", sourceTool: "subagent_settle" } },
+          // Settlement and continuation input persists for model replay, not displayed history.
+          const visibleUserMessages = userMessages.filter((message) => message.display !== false);
+          expect(visibleUserMessages, "only the human request is visible").toMatchObject([
+            { provenance: { kind: "external_user" }, content: scenario.prompt },
           ]);
-          expect(JSON.stringify(userMessages[0])).toContain(scenario.prompt);
+          expect(
+            userMessages.slice(0, 2),
+            "human request and child settlement persist",
+          ).toMatchObject([
+            { provenance: { kind: "external_user" } },
+            {
+              display: false,
+              provenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+            },
+          ]);
           expect(JSON.stringify(userMessages[1])).toContain(scenario.childResult);
+          const continuationMessages = userMessages.slice(2);
+          expect(continuationMessages).toHaveLength(scenario.gate === "none" ? 2 : 0);
+          for (const message of continuationMessages) {
+            expect(message).toMatchObject({
+              display: false,
+              provenance: { kind: "internal_system" },
+              content: [{ type: "text", text: expect.stringContaining("Advance the active goal") }],
+            });
+          }
         } finally {
           readControl?.mockRestore();
           scenario.releaseRead.resolve();

@@ -1,5 +1,7 @@
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import {
   agentRunFrameActiveStatusParts,
@@ -7,6 +9,7 @@ import {
   coalesceAgentRunFrames,
 } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import { isHandoffBoundaryItem } from "../chat-sessions-yield.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -62,7 +65,10 @@ type TranscriptIndex = Readonly<{
   liveItem?: StreamOwner;
 }>;
 
-type TranscriptIndexSource = Pick<TranscriptChain, "searchActive" | "transcriptItems" | "live">;
+type TranscriptIndexSource = Pick<
+  TranscriptChain,
+  "searchActive" | "transcriptItems" | "continuations" | "live"
+>;
 
 type LiveStream = Extract<ReturnType<typeof buildCachedChatItems>[number], { kind: "stream" }>;
 type StreamOwner = Extract<ChatRenderItem, { kind: "stream-run" | "agent-run-frame" }>;
@@ -190,7 +196,7 @@ export function projectTranscriptChain(
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {
     // A handoff boundary only shapes the grouping above; it has no row of its own.
-    if (item.kind === "notice" && item.handoffBoundary) {
+    if (isHandoffBoundaryItem(item)) {
       return false;
     }
     const previous = collapsedItems[index - 1];
@@ -244,30 +250,78 @@ export function projectTranscriptChain(
   return value;
 }
 
+// Loaded history messages are immutable. Fingerprint each once, rather than
+// reserializing every loaded row whenever an older page rebuilds the index.
+const messageRevisions = new WeakMap<object, string>();
+function messageRevision(message: object): string {
+  let revision = messageRevisions.get(message);
+  if (revision === undefined) {
+    const identity = nativeHistoryMessageIdentity(message) ?? JSON.stringify(message);
+    revision = `${identity.length}:${fnv1aUtf16(identity)}`;
+    messageRevisions.set(message, revision);
+  }
+  return revision;
+}
+
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
   expandedToolCards: Map<string, boolean>,
-  props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName">,
+  props: Pick<
+    ChatThreadProps,
+    "assistantName" | "currentAgentId" | "agents" | "userId" | "userName" | "messageReactions"
+  >,
 ): TranscriptIndex {
-  const key = [
+  const cacheKey = [
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
     props.assistantName,
+    props.currentAgentId,
+    props.agents,
     props.userId,
     props.userName,
+    props.messageReactions,
   ];
-  return indexes(chain, key, (): TranscriptIndex => {
+  return indexes(chain, cacheKey, (): TranscriptIndex => {
     const loadedReplySources = new Map<string, LoadedReplySource>();
     const messageRowKeysById = new Map<string, string>();
     const transcriptMessageKeys = new Map<string, string>();
-    // New row keys measure expanded work immediately; existing keys keep their
-    // cached height until ResizeObserver reports the changed layout.
     const rows: TranscriptRow<ChatRenderItem>[] = [];
+    const row = (item: ChatRenderItem, key = item.key): TranscriptRow<ChatRenderItem> => {
+      const groups = chatItemGroups(item);
+      const parts = item.kind === "agent-run-frame" ? item.parts : [item];
+      if (
+        chain.continuations.has(item.key) ||
+        (item.kind === "agent-run-frame" && item.outcome.kind === "active") ||
+        groups.some((group) => group.isStreaming) ||
+        parts.some(
+          (part) =>
+            part.kind === "stream-run" ||
+            part.kind === "stream" ||
+            part.kind === "reading-indicator",
+        )
+      ) {
+        return { kind: "item", key, item };
+      }
+      const messages = groups.flatMap((group) =>
+        group.messages.map(({ message }) => [
+          message && typeof message === "object" ? messageRevision(message) : message,
+          props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
+        ]),
+      );
+      const content = JSON.stringify(
+        item.kind === "agent-run-frame"
+          ? [item.outcome.kind, messages]
+          : messages.length
+            ? messages
+            : item,
+      );
+      return { kind: "item", key, item, revision: `${content.length}:${fnv1aUtf16(content)}` };
+    };
     for (const item of chain.transcriptItems) {
-      rows.push({ kind: "item", key: item.key, item });
+      rows.push(row(item));
       if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
         for (const group of item.groups) {
-          rows.push({ kind: "item", key: `${item.key}:${group.key}`, item: group });
+          rows.push(row(group, `${item.key}:${group.key}`));
         }
       }
       const parts = item.kind === "agent-run-frame" ? item.parts : [item];
@@ -286,7 +340,11 @@ export function projectTranscriptIndex(
           transcriptMessageKeys.set(part.key, item.key);
         }
         for (const group of chatItemGroups(part)) {
-          const senderLabel = resolveMessageGroupSenderLabel(firstGroup ?? group, props);
+          const senderLabel = resolveMessageGroupSenderLabel(
+            firstGroup ?? group,
+            props,
+            props.currentAgentId,
+          );
           const rowKey =
             item.kind === "work-group" && expandedToolCards.get(item.key)
               ? item.key + ":" + group.key
@@ -350,19 +408,41 @@ export function expandReplyTargetWork(
   }
 }
 
+export type PlacedContentRow = Extract<TranscriptRow, { kind: "content" }> & {
+  /** Row key this content follows; null leads the transcript and undefined trails it. */
+  after?: string | null;
+};
+
 export function projectTranscriptRows(
   rows: readonly TranscriptRow<ChatRenderItem>[],
   workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>,
-  contentRows: readonly Extract<TranscriptRow, { kind: "content" }>[],
+  contentRows: readonly PlacedContentRow[],
 ): readonly TranscriptRow<ChatRenderItem>[] {
-  return presentationRows(rows, [workPreviews, ...contentRows.map((row) => row.key)], () => {
+  const key = [workPreviews, ...contentRows.flatMap((row) => [row.key, row.after])];
+  return presentationRows(rows, key, () => {
     if (!workPreviews.size && !contentRows.length) {
       return rows;
     }
-    const result: TranscriptRow<ChatRenderItem>[] = [];
+    const placed = Map.groupBy(
+      contentRows.filter((row) => row.after !== undefined),
+      (row) => row.after,
+    );
+    const take = (after: string | null) => {
+      const found = placed.get(after) ?? [];
+      placed.delete(after);
+      return found;
+    };
+    const result: TranscriptRow<ChatRenderItem>[] = take(null);
     for (const row of rows) {
       result.push(row);
-      const previews = workPreviews.get(row.key);
+      // Work outside a run frame can anchor its previews to an answer inside
+      // one; that answer renders as part of the frame row.
+      const anchors =
+        row.kind === "item" && row.item.kind === "agent-run-frame"
+          ? [row.key, ...row.item.parts.map((part) => part.key)]
+          : [row.key];
+      const anchored = anchors.flatMap((anchor) => workPreviews.get(anchor) ?? []);
+      const previews = anchored.length > 0 ? anchored : undefined;
       if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
         const content: NativeTranscriptView = { kind: "work-previews", previews };
         result.push({
@@ -371,7 +451,12 @@ export function projectTranscriptRows(
           content: new GuardedTranscriptItem([content], content),
         });
       }
+      result.push(...take(row.key));
     }
-    return result.concat(contentRows);
+    // An anchor outside these rows keeps its content visible at the end.
+    return result.concat(
+      [...placed.values()].flat(),
+      contentRows.filter((row) => row.after === undefined),
+    );
   });
 }

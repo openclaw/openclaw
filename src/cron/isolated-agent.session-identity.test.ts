@@ -4,12 +4,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it as baseIt, vi } from "vitest";
 import type { RunEmbeddedAgentInternalParams as AgentRequest } from "../agents/embedded-agent-runner/run/internal-params.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
+import { admitScheduledOccurrence } from "./execution-context-admission.js";
+import {
+  readScheduledMemoryParent,
+  readScheduledToolTargets,
+} from "./execution-context-registry.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import * as f from "./isolated-agent.test-harness.js";
 import {
@@ -27,6 +33,7 @@ import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.j
 import type { CronJob, CronStoredJob } from "./types.js";
 
 setupRunCronIsolatedAgentTurnSuite();
+const embeddedAgentMock = vi.mocked(runEmbeddedAgent);
 const prepareProfiles = useUserProfileCatalogForTest();
 const it = baseIt.extend<{ home: string }>({
   home: async ({ task: _task }, use) => {
@@ -47,10 +54,14 @@ async function useRealCronSessionState(): Promise<void> {
 }
 
 function lastEmbeddedAgentCall(): AgentRequest {
-  return h.runEmbeddedAgentMock.mock.calls.at(-1)?.[0];
+  const call = embeddedAgentMock.mock.calls.at(-1)?.[0];
+  if (!call) {
+    throw new Error("Cron did not invoke its embedded runner");
+  }
+  return call;
 }
 
-function embeddedResult(sessionId: string | undefined, extra = {}) {
+function embeddedResult(sessionId: string, extra = {}) {
   return {
     payloads: [{ text: "ok" }],
     meta: {
@@ -72,10 +83,11 @@ function runSessionTurn(
   job: CronStoredJob,
   sessionKey = "cron:job-1",
   agentId?: string,
+  occurrence = TEST_SCHEDULED_OCCURRENCE,
 ) {
   setRuntimeConfigSnapshot(cfg);
   return runCronIsolatedAgentTurn({
-    occurrence: TEST_SCHEDULED_OCCURRENCE,
+    occurrence,
     deliveryAttemptFence: null,
     cfg,
     deps: makeDeps(),
@@ -90,13 +102,14 @@ function runSessionTurn(
 describe("runCronIsolatedAgentTurn session identity", () => {
   beforeEach(() => {
     h.mockRunCronFallbackPassthrough();
+    embeddedAgentMock.mockReset();
+    mockEmbeddedOk();
   });
 
   it("uses agentId for workspace, session key, and store paths", async ({ home }) => {
     const agentId = "ops";
     const sessionKey = "cron:job-ops";
     const workspaceDir = path.join(home, `${agentId}-workspace`);
-    mockEmbeddedOk();
 
     const cfg = f.makeCfg(
       home,
@@ -142,7 +155,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       const cfg = f.makeCfg(home, storePath, {
         gateway: { roles: { default: "guest", definitions: { guest } } },
       });
-      h.runEmbeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
+      embeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
         const sessionKey = input.sessionKey ?? "";
         expect(sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
         for (const key of ["agent:main:cron:job-1", sessionKey]) {
@@ -157,7 +170,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       });
       const res = await runSessionTurn(cfg, job);
       expect(res.status, res.status === "error" ? res.error : undefined).toBe("ok");
-      expect(h.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(embeddedAgentMock).toHaveBeenCalledOnce();
       const entry = await readCronSessionEntry(storePath, "agent:main:cron:job-1");
       expect(entry).toMatchObject({ createdActor, sandbox: "required" });
       await expect(readCronSessionEntry(storePath, res.sessionKey!)).resolves.toBeUndefined();
@@ -182,7 +195,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       sessionContext: { sessionKey: boundSessionKey },
     }) as CronJob;
     const executionSessionKey = `agent:main:cron:${currentBoundJob.id}`;
-    h.runEmbeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
+    embeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
       const { agentId = "main", sessionId, sessionKey = "" } = input;
       const target = { agentId, sessionId, sessionKey, storePath };
       const manager = SessionManager.open(target, input.workspaceDir);
@@ -205,6 +218,69 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     await expect(readCronSessionEntry(storePath, boundSessionKey)).resolves.toMatchObject({
       sessionId: "bound-session",
     });
+  });
+
+  it("runs a linked current job as a child of its conversation", async ({ home }) => {
+    const parentKey = "agent:main:dashboard:creator";
+    const parentWorkspace = path.join(home, "creator-workspace");
+    await fs.mkdir(parentWorkspace, { recursive: true });
+    const parentRow = {
+      sessionId: "creator-session",
+      lifecycleRevision: "rev-1",
+      updatedAt: Date.now() - 1_000,
+      spawnedWorkspaceDir: parentWorkspace,
+      spawnedCwd: parentWorkspace,
+      systemSent: true,
+    };
+    const storePath = await f.writeSessionStoreEntries(home, { [parentKey]: parentRow });
+    const cfg = f.makeCfg(home, storePath);
+    const job: CronStoredJob = {
+      ...(normalizeCronJobCreate(sessionJob({ sessionTarget: "current" }), {
+        sessionContext: { sessionKey: parentKey },
+      }) as CronJob),
+      sourceConversation: {
+        sessionKey: parentKey,
+        sessionId: "creator-session",
+        lifecycleRevision: "rev-1",
+      },
+    };
+    const occurrence = await admitScheduledOccurrence({
+      cfg,
+      job,
+      agentId: "main",
+      trigger: "cron",
+    });
+    let seen: Record<string, unknown> | undefined;
+    embeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
+      const admitted = await input.preparedRunAdmission!.admit("gateway", input.runId);
+      seen = {
+        sessionKey: input.sessionKey,
+        workspaceDir: input.workspaceDir,
+        board: readScheduledToolTargets(admitted)?.boardSessionKey,
+        placement: readScheduledToolTargets(admitted)?.placement,
+        memory: readScheduledMemoryParent(admitted.operationalRunInstance)?.sessionKey,
+      };
+      return embeddedResult(input.sessionId);
+    });
+
+    let res;
+    try {
+      res = await runSessionTurn(cfg, job, parentKey, undefined, occurrence);
+    } finally {
+      occurrence.release();
+    }
+
+    expect(res.status, res.error).toBe("ok");
+    // The child runs under its own run key, so it never joins a live parent turn,
+    // and takes the parent's board, memory and workspace.
+    expect(seen).toEqual({
+      sessionKey: expect.stringMatching(new RegExp(`^agent:main:cron:${job.id}:run:`)),
+      workspaceDir: parentWorkspace,
+      board: parentKey,
+      placement: "child",
+      memory: parentKey,
+    });
+    await expect(readCronSessionEntry(storePath, parentKey)).resolves.toMatchObject(parentRow);
   });
 
   it("uses lightweight bootstrap context for command-style cron payloads", async ({ home }) => {

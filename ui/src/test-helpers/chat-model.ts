@@ -90,3 +90,14 @@ export function sessionListResult(
 ): SessionsListResult {
   return { ts, path: "", count: sessions.length, defaults, sessions };
 }
+
+export const nativeRuntime = (
+  id = "openclaw",
+  mode: "worker-turn" | "remote-exec" = "worker-turn",
+) => ({
+  id,
+  source: "model" as const,
+  cloudPlacementSupported: true,
+  cloudPlacementExecutionMode: mode,
+  devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+});

@@ -95,7 +95,7 @@ it.each([false, true])(
       vi.mocked(updateNpmInstalledPlugins).mockImplementation(async (params) =>
         installTx.withPluginInstallTransactions(
           params,
-          () => {},
+          { assertCurrent() {}, assertOwned() {} },
           async (owned, assertCurrent) => {
             assertOriginal = assertCurrent;
             const installed = await packageDir.installPackageDir(

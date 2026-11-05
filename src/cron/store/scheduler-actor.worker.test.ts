@@ -15,6 +15,7 @@ import {
 import { projectCronRunHistoryPage } from "../run-history.js";
 import type { CronJob } from "../types.js";
 import { loadCronStoreFromDatabase } from "./load.kernel.js";
+import { finalizeCronRunsInWorker } from "./run-finalization.worker.js";
 import { readCronRunRecordsInDatabase } from "./run-history.kernel.js";
 import { queueJob } from "./run-queue.test-support.js";
 import { cancelCronRequestsInWorker } from "./run-queue.worker.js";
@@ -367,6 +368,72 @@ it.each([false, true])("bounds forward clock catch-up with intervening refresh=%
   expect(scheduler.receipts()).toHaveLength(5);
 });
 
+it.each([false, true])("recovers stale cron slots unless skipMissedJobs=%s", (skipMissedJobs) => {
+  const healthy = job("stale-future", now + minute, {
+    schedule: cronSchedule,
+    state: {
+      nextRunAtMs: now + minute,
+      lastRunAtMs: now,
+      lastRunStatus: "ok",
+      lastDurationMs: 1_000,
+    },
+  });
+  const scheduler = storedScheduler(`missed-slot-${skipMissedJobs}`, [healthy]);
+  expect(
+    scheduler.start(now, {
+      snapshot: { config: { ...snapshot.config, cronConfig: { skipMissedJobs } } },
+    }).accepted,
+  ).toEqual([]);
+  scheduler.save([
+    {
+      ...healthy,
+      state: {
+        nextRunAtMs: now + 30 * minute,
+        lastRunAtMs: now - 120 * minute,
+        lastRunStatus: "ok",
+        lastDurationMs: 1_000,
+      },
+    },
+  ]);
+  const tick = scheduler.tick(now + 1_000, 1_000);
+  expect(jobIds(tick.launches)).toEqual(skipMissedJobs ? [] : ["stale-future"]);
+  if (skipMissedJobs) {
+    return;
+  }
+  let launch = tick.launches[0]!;
+  for (let slot = 1; slot <= 30; slot += 1) {
+    const endedAt = launch.runReceipt.startedAtMs + 100;
+    withinWorker(() =>
+      finalizeCronRunsInWorker(database, {
+        storeKey: scheduler.storeKey,
+        snapshot: {
+          nowMs: endedAt,
+          defaultAgentId: "main",
+          outcomes: [
+            {
+              jobId: launch.job.id,
+              job: launch.job,
+              runReceipt: launch.runReceipt,
+              status: "ok",
+              completionStatus: "succeeded",
+              errorReason: undefined,
+              deliveryState: {
+                status: "not-requested",
+                failureNotification: { status: "not-requested" },
+              },
+              startedAt: launch.runReceipt.startedAtMs,
+              endedAt,
+            },
+          ],
+        },
+      }),
+    );
+    const next = scheduler.tick(now + slot * minute, slot * minute);
+    expect(jobIds(next.launches), `scheduled minute ${slot}`).toEqual(["stale-future"]);
+    launch = next.launches[0]!;
+  }
+});
+
 it("keeps the persisted next deadline when the wall clock moves backward", () => {
   const deadline = now + minute;
   const scheduler = singleJobScheduler("backward", deadline, { schedule: cronSchedule });
@@ -471,4 +538,73 @@ it.each([
   );
   scheduler.start();
   expect(scheduler.tick(now + elapsed * minute, elapsed * minute).accepted).toHaveLength(accepted);
+});
+
+it("backs off one deferred occurrence through restart and runs it once when admission clears", async () => {
+  const dueAt = now + 1_000;
+  const scheduler = singleJobScheduler("waiting", dueAt, {
+    payload: { kind: "agentTurn", message: "Synthetic pending occurrence" },
+    state: { nextRunAtMs: dueAt, lastRunStatus: "ok", consecutiveErrors: 0 },
+  });
+  scheduler.start();
+  let atMs = dueAt;
+  let launch = scheduler.tick(atMs, atMs - now).launches[0]!;
+  const finish = (deferred: boolean) =>
+    withinWorker(() =>
+      finalizeCronRunsInWorker(database, {
+        storeKey: scheduler.storeKey,
+        snapshot: {
+          nowMs: atMs,
+          outcomes: [
+            {
+              jobId: launch.job.id,
+              job: launch.job,
+              runReceipt: launch.runReceipt,
+              startedAt: launch.runReceipt.startedAtMs,
+              endedAt: atMs,
+              status: deferred ? "skipped" : "ok",
+              completionStatus: deferred ? "failed" : "succeeded",
+              errorReason: undefined,
+              deliveryState: {
+                status: "not-requested",
+                failureNotification: { status: "not-requested" },
+              },
+              ...(deferred
+                ? { admissionDeferred: true, executionStarted: false, summary: "Agent is busy" }
+                : {}),
+            },
+          ],
+        },
+      }),
+    );
+  for (const [index, delay] of [30_000, 60_000, 120_000, 240_000, 300_000, 300_000].entries()) {
+    finish(true);
+    expect(scheduler.tick(atMs + 2_000, atMs + 2_000 - now).launches).toEqual([]);
+    expect(scheduler.job("waiting").state).toMatchObject({
+      nextRunAtMs: dueAt,
+      lastRunStatus: "ok",
+      consecutiveErrors: 0,
+      admissionDeferred: {
+        reason: "Agent is busy",
+        sinceMs: dueAt,
+        attempts: index + 1,
+        retryAtMs: atMs + delay,
+      },
+    });
+    expect(scheduler.receipts()).toHaveLength(1);
+    atMs += delay;
+    if (index === 5) {
+      // An elapsed wait remains the same occurrence, even with agent catch-up deferral enabled.
+      await scheduler.restart(atMs + 1, { deferAgentWork: true });
+      expect(scheduler.job("waiting").state.nextRunAtMs).toBe(dueAt);
+      atMs += 2;
+    }
+    launch = scheduler.tick(atMs, atMs - now).launches[0]!;
+    expect(launch).toBeDefined();
+  }
+  finish(false);
+  expect(scheduler.job("waiting").state.admissionDeferred).toBeUndefined();
+  expect(scheduler.job("waiting").state.lastRunStatus).toBe("ok");
+  expect(scheduler.tick(atMs + 2_000, atMs + 2_000 - now).launches).toEqual([]);
+  expect(scheduler.receipts()).toHaveLength(1);
 });

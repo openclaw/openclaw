@@ -51,6 +51,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
   "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
   "test/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
+  // The isolated live steering launcher is invoked directly by its documented command.
+  "test/helpers/run-quiet-steering-live.mts!",
   // The PR artifact Vitest suite launches this standalone Node regression by path.
   "test/scripts/pr-review-artifacts.node.mjs!",
   // The Gateway profiler tests launch these subprocess fixtures through a computed path.
@@ -76,6 +78,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/cli/plugins-feature-artifact.native.test-support.ts!",
   // ExecHostTransportProofTests.swift launches this isolated native client by path.
   "src/infra/exec-host.native.test-support.ts!",
+  // The authority retention test launches this isolated V8 heap proof by path.
+  "src/agents/harness/tool-authority.runtime.retention.test-support.ts!",
   // Generated handoff preload and resolver shims import this helper by URL.
   "test/helpers/managed-handoff-isolation.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.

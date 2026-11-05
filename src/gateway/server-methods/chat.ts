@@ -6,10 +6,8 @@ import {
   validateChatToolTitlesParams,
   type ChatInjectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { injectGatewayAssistantMessage } from "./chat-inject.js";

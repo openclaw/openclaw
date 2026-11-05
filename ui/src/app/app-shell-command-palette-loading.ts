@@ -131,7 +131,9 @@ export class ShellCommandPaletteOwner {
       return false;
     }
     event.preventDefault();
-    this.toggle();
+    if (!event.repeat) {
+      this.toggle();
+    }
     return true;
   }
 }
@@ -333,7 +335,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       if (files.length) {
         event.preventDefault();
         if (!uploadsEnabled(host.context?.config)) {
-          showToast({ message: uploadsDisabledMessage() });
+          showToast({ severity: "error", message: uploadsDisabledMessage() });
           return;
         }
         attachmentFiles.push(...files);
@@ -366,7 +368,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
         return;
       }
       if (!uploadsEnabled(host.context?.config)) {
-        showToast({ message: uploadsDisabledMessage() });
+        showToast({ severity: "error", message: uploadsDisabledMessage() });
         return;
       }
       // Keep raw Files in memory until the canonical draft owns admission/reads.

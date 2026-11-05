@@ -1,11 +1,15 @@
 import { onTestFinished, vi } from "vitest";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
+import type { OpenClawStateWorkerOperations } from "../../../state/openclaw-state-worker-contract.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import type { DomainScope } from "../../../state/openclaw-state-worker-store.types.js";
+import {
+  acknowledgeMockSubagentRegistryWrite,
+  createSubagentRunRecord,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import * as subagentMemory from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createSubagentRegistrySweeper } from "./subagent-registry-sweeper.js";
-import type { SubagentRegistryWrite } from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -43,7 +47,6 @@ export function createArchivedSubagentSweeperRun(
 }
 
 export function createSubagentSweeperHarness(
-  runtime: { current?: GatewayRecoveryRuntime },
   entry = createSubagentSweeperRun(),
   runs = new Map<string, SubagentRunRecord>(),
 ) {
@@ -54,17 +57,24 @@ export function createSubagentSweeperHarness(
     .mockImplementation(async (owner, run, options) => {
       options?.assertCurrent?.();
       return run({
-        execute: async (command, executeOptions) => {
-          if (command.type !== "subagents.persistChanges") {
-            return execute(owner, (scope) => scope.execute(command, executeOptions), options);
-          }
-          // Scheduling tests exercise publication through the real owner; native CAS has worker coverage.
-          const write = command.input as SubagentRegistryWrite;
-          return { writeId: write.writeId, notices: [] } as never;
-        },
+        execute: vi
+          .fn()
+          .mockImplementation(
+            async (
+              command: SqliteWorkerCommand<OpenClawStateWorkerOperations>,
+              executeOptions: Parameters<DomainScope["execute"]>[1],
+            ) => {
+              if (command.type !== "subagents.persistChanges") {
+                return execute(owner, (scope) => scope.execute(command, executeOptions), options);
+              }
+              // Scheduling tests exercise publication through the real owner; native CAS has worker coverage.
+              acknowledgeMockSubagentRegistryWrite(options?.createAdmission, command.input.writeId);
+            },
+          ),
       });
     });
   const callbacks = {
+    sweepPendingLifecycle: vi.fn(),
     completeCleanupBookkeeping: vi.fn<SweeperOptions["completeCleanupBookkeeping"]>(
       async ({ runId, entry: expectedEntry, isCurrent = () => true, finalizeDelivery }) => {
         if (!isCurrent()) {
@@ -84,9 +94,6 @@ export function createSubagentSweeperHarness(
           { runs },
         );
       },
-    ),
-    finalizeInterruptedSubagentRun: vi.fn<SweeperOptions["finalizeInterruptedSubagentRun"]>(
-      async () => 0,
     ),
     completeSubagentRunWithRecovery: vi.fn(),
     discardTerminalDelivery: vi.fn<SweeperOptions["discardTerminalDelivery"]>(),
@@ -116,8 +123,6 @@ export function createSubagentSweeperHarness(
     resumedRuns: new Set(),
     clearPendingLifecycleError: vi.fn(),
     clearPendingLifecycleTimeout: vi.fn(),
-    sweepPendingLifecycle: vi.fn(),
-    getGatewayRecoveryRuntime: () => runtime.current,
     resumePendingRequesterSettlements: () => false,
     isCleanupOwnerCurrent: (selected) =>
       isSameSubagentRunOwner(runs.get(selected.runId), selected) || !runs.has(selected.runId),

@@ -94,7 +94,21 @@ const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 
 export function resolveMemorySearchProviderId(provider?: string): string {
   const configured = provider?.trim();
-  return configured && configured !== "auto" ? configured : DEFAULT_MEMORY_EMBEDDING_PROVIDER;
+  if (configured?.toLowerCase() === "none") {
+    return "none";
+  }
+  return configured && configured.toLowerCase() !== "auto"
+    ? configured
+    : DEFAULT_MEMORY_EMBEDDING_PROVIDER;
+}
+
+/** Compare provider identities without collapsing distinct configured tenants into their adapter. */
+export function isSameMemorySearchProvider(left?: string, right?: string): boolean {
+  const canonical = (id?: string) => {
+    const normalized = resolveMemorySearchProviderId(normalizeProviderId(id ?? ""));
+    return normalized === "google" ? "gemini" : normalized;
+  };
+  return canonical(left) === canonical(right);
 }
 
 function getConfiguredMemoryEmbeddingProvider(providerId: string, cfg: OpenClawConfig) {
@@ -171,7 +185,14 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
   const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
-  const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
+  // Auth can follow another adapter only when the shared destination follows it too.
+  const inheritedRemote =
+    isSameMemorySearchProvider(provider, defaults?.provider) ||
+    (overrideRemote?.baseUrl === undefined && defaultRemote?.baseUrl?.trim())
+      ? defaultRemote
+      : undefined;
+  const configuredFallback = overrides?.fallback ?? defaults?.fallback ?? "none";
+  const fallback = configuredFallback.toLowerCase() === "none" ? "none" : configuredFallback;
   const fallbackAdapter =
     normalizeProviderId(provider) !== "none" && fallback && fallback !== "none"
       ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)
@@ -185,9 +206,9 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     fallbackAdapter?.transport === "remote";
   const remote = includeRemote
     ? {
-        baseUrl: overrideRemote?.baseUrl ?? defaultRemote?.baseUrl,
-        apiKey: overrideRemote?.apiKey ?? defaultRemote?.apiKey,
-        headers: overrideRemote?.headers ?? defaultRemote?.headers,
+        baseUrl: overrideRemote?.baseUrl ?? inheritedRemote?.baseUrl,
+        apiKey: overrideRemote?.apiKey ?? inheritedRemote?.apiKey,
+        headers: overrideRemote?.headers ?? inheritedRemote?.headers,
         batch: {
           enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,
           wait: true,

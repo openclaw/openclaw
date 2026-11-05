@@ -57,7 +57,7 @@ const OVERVIEW = {
 };
 
 it(
-  "reports exact usage totals, including right after an upgrade that left partitions without quarter rows",
+  "reports exact usage totals after background backfill of missing quarter rows",
   { timeout: TEST_TIMEOUT_MS },
   async () => {
     const portClaim = await acquireGatewayE2ePortBlock();
@@ -133,22 +133,27 @@ it(
         Object.fromEntries(result.aggregates.costDaily.map((day) => [day.date, day.totalTokens])),
       ).toEqual(TRUTH.daily);
       const { startDate, endDate, mode, timeZone } = OVERVIEW;
-      const cost = (await client!.request("usage.cost", {
-        agentId: "main",
-        startDate,
-        endDate,
-        mode,
-        timeZone,
-      })) as {
-        totals: { totalTokens: number };
-        daily: Array<{ date: string; totalTokens: number }>;
-        cacheStatus: { status: string };
-      };
-      expect(cost.cacheStatus.status).toBe("fresh");
+      const readCost = () =>
+        client!.request("usage.cost", {
+          agentId: "main",
+          startDate,
+          endDate,
+          mode,
+          timeZone,
+        }) as Promise<{
+          totals: { totalTokens: number };
+          daily: Array<{ date: string; totalTokens: number }>;
+          cacheStatus: { status: string };
+        }>;
+      const cost = await readCost();
       expect(cost.totals.totalTokens).toBe(TRUTH.tokens);
       expect(Object.fromEntries(cost.daily.map((day) => [day.date, day.totalTokens]))).toEqual(
         TRUTH.daily,
       );
+      // Committed quarters can be complete before the refresh owner closes its writer.
+      await expect
+        .poll(async () => (await readCost()).cacheStatus.status, { timeout: 10_000 })
+        .toBe("fresh");
     };
     const sessionFiles = SESSIONS.map(({ id }) =>
       formatSqliteSessionFileMarker({ agentId: "main", sessionId: id, storePath }),
@@ -229,9 +234,12 @@ it(
       expect(remaining).toHaveLength(2);
       await closeOpenClawAgentDatabasesAsync();
 
-      // The first reads after the restart ask the refresh owner to finish the backfill
-      // for their sessions and wait for it, so they are exact without a partial answer.
+      // Reports return committed coverage while restart backfill advances independently.
       await startGateway();
+      await expect.poll(overview, { timeout: 10_000 }).toMatchObject({
+        cacheStatus: { status: "fresh" },
+        totals: { totalTokens: TRUTH.tokens },
+      });
       await expectExact();
       await stopGateway();
 

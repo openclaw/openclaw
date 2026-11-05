@@ -73,7 +73,7 @@ describe("resolveBranchLanding", () => {
     );
 
     expect(revision).not.toBeNull();
-    expect(JSON.parse(revision!).slice(0, 4)).toEqual([
+    expect(JSON.parse(revision!.key).slice(0, 4)).toEqual([
       { branch: "main", refsBase: path.join(root, ".git") },
       "origin/main",
       [],

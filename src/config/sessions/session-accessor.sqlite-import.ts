@@ -164,6 +164,7 @@ function importSqliteSessionRowsInTransaction(
       database,
       params.entry.sessionId,
       params.transcriptMtimeMs,
+      { strictly: transcriptEvents > 0 },
     );
   } else if (transcriptEvents > 0) {
     touchTranscriptMutationInTransaction(database, params.entry.sessionId);

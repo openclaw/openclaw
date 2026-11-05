@@ -9,6 +9,7 @@ import type {
   ChatPendingInputsDismissResult,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueDisplayItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
@@ -24,6 +25,7 @@ import {
   removeQueuedMessage,
 } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
+import { describeChatQueueAttachmentLabels } from "./chat-send-presentation.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { buildMessageItems } from "./chat-thread-items.ts";
@@ -66,18 +68,25 @@ function reconcileQueuedInputs(
 
 function describePendingInputMessage(message: unknown): string {
   const normalized = normalizeMessage(message);
-  const attachmentLabels = normalized.content.flatMap((part) =>
-    part.type === "attachment" || part.type === "attachment_error"
-      ? [part.attachment.label]
-      : part.type === "image"
-        ? part.sources.flatMap((source) => (source.fileName ? [source.fileName] : []))
-        : [],
-  );
-  const imageCount = normalized.content.filter((part) => part.type === "image").length;
+  let imageCount = 0;
+  const attachmentLabels = normalized.content.flatMap((part) => {
+    if (part.type === "image") {
+      imageCount += 1;
+      return part.sources.map(({ fileName }) => fileName);
+    }
+    return part.type === "attachment" || part.type === "attachment_error"
+      ? part.attachment.label
+      : [];
+  });
   return (
-    extractText(message) ||
-    attachmentLabels.join(", ") ||
-    (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : "")
+    extractText(message)?.trim() ||
+    describeChatQueueAttachmentLabels(attachmentLabels) ||
+    describeChatQueueAttachmentLabels(
+      (readPersistedMediaFacts(asNullableRecord(message) ?? {}) ?? []).map(
+        ({ fileName }) => fileName,
+      ),
+      imageCount,
+    )
   );
 }
 
@@ -112,7 +121,8 @@ function describePendingInputPreview(message: unknown): string {
 function isDismissablePendingInput(input: ChatPendingInputsPage["items"][number]): boolean {
   return (
     !input.queued &&
-    (input.state === "interrupted" || input.state === "cancelled") &&
+    input.state === "cancelled" &&
+    !input.cancelledByUser &&
     asNullableRecord(input.message)?.display !== false
   );
 }
@@ -129,8 +139,11 @@ export function buildPendingInputItems(
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
   for (const input of inputs) {
-    let pendingStatus: PendingInputStatus =
-      input.state === "queued" || input.state === "cancelled" ? input.state : "interrupted";
+    // Legacy interrupted custody is retained in storage but has no presentation.
+    if (input.state !== "queued" && input.state !== "cancelled") {
+      continue;
+    }
+    let pendingStatus: PendingInputStatus = input.state;
     if (
       input.state === "queued" &&
       input.runId &&
@@ -141,7 +154,6 @@ export function buildPendingInputItems(
     const retired = isDismissablePendingInput(input)
       ? {
           id: input.id,
-          status: input.state === "interrupted" ? ("interrupted" as const) : ("cancelled" as const),
           preview: describePendingInputPreview(input.message),
         }
       : undefined;
@@ -155,6 +167,7 @@ export function buildPendingInputItems(
           status: pendingStatus,
           key: `pending-input:${input.id}:state`,
           timestamp: input.acceptedAt,
+          ...(input.cancelledByUser ? { cancelledByUser: true } : {}),
           ...(retired ? { retired } : {}),
         }),
       ),
@@ -398,15 +411,6 @@ async function requestPendingInputPage(
 
 export function loadChatPendingInputs(state: ChatState, before?: number): Promise<void> {
   return requestPendingInputPage(state, before, "navigation");
-}
-
-/** Retired inputs on the displayed page that are not already being dismissed. */
-export function listDismissablePendingInputs(
-  view: ChatPendingInputView,
-): ChatPendingInputsPage["items"] {
-  return view.page.items.filter(
-    (input) => isDismissablePendingInput(input) && !isPendingInputDismissHidden(view, input.id),
-  );
 }
 
 /** Hide the selected retired inputs at once, then keep or restore them by the Gateway outcome. */

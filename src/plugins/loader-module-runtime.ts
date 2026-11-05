@@ -15,6 +15,7 @@ import { withProfile } from "./plugin-load-profile.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { nativeAdmissionStateFor } from "./plugin-native-admission-state.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
+import { resolveBundledPluginStateOperationCapture } from "./plugin-state-operation-module-loader.js";
 import {
   getPluginRegistryInspectionResources,
   type PluginRegistryInspectionResources,
@@ -70,6 +71,7 @@ const LAZY_RUNTIME_PROPERTIES = {
   webSearch: true,
   modelConfig: true,
   capabilities: true,
+  skills: true,
 } satisfies Record<keyof PluginRuntime, true>;
 
 export function runPluginRegisterSyncInRegistry(
@@ -122,6 +124,7 @@ export function createDeferredGatewaySubagentRuntime(
     },
     complete: (...args) => runtime.subagent.complete(...args),
     forkSession: (...args) => runtime.subagent.forkSession(...args),
+    runForkedTurn: (params) => runtime.subagent.runForkedTurn(params),
     run: (...args) => runtime.subagent.run(...args),
     waitForRun: (...args) => runtime.subagent.waitForRun(...args),
     getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
@@ -146,6 +149,8 @@ export function createPluginModuleLoader(options: {
   loaderFilename?: string;
   installNativeSdkResolver?: boolean;
   expectedSourceDigests?: Readonly<Record<string, string>>;
+  /** Explicit development reload targets; empty unless the Gateway opted in. */
+  bundledCodeReloadPluginIds?: readonly string[];
 }) {
   const cache = getPluginCache();
   const captured = {
@@ -189,6 +194,9 @@ export function createPluginModuleLoader(options: {
           inspectionSourceIdentity: owner.immutableInstallIdentity,
           inspectionRetention: nativeAdmissionStateFor(cache).inspectionNativeEsm,
         };
+  const reloadsBundledCode = (owner: Owner) =>
+    owner.record.origin === "bundled" &&
+    captured.bundledCodeReloadPluginIds?.includes(owner.record.id) === true;
   const binding = (
     modulePath: string,
     owner: Owner,
@@ -199,6 +207,7 @@ export function createPluginModuleLoader(options: {
     source: modulePath,
     rootDir: owner.rootDir,
     standalone: owner.standalone,
+    reloadBundledCode: reloadsBundledCode(owner),
     expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
     ...inspection(owner),
     devSourceRoot: captured.devSourceRoot,
@@ -236,21 +245,30 @@ export function createPluginModuleLoader(options: {
           pluginSdkResolution: captured.pluginSdkResolution,
           registry: owner.registry,
         });
-      if (
-        !isMainThread ||
-        owner.record.origin === "bundled" ||
-        getPluginInstance(owner.record) ||
-        retained()
-      ) {
+      if (!isMainThread || getPluginInstance(owner.record) || retained()) {
         return;
       }
       await withPluginCache(cache, async () => {
+        const bundledCodeReload = reloadsBundledCode(owner);
+        const bundledCapture =
+          owner.record.origin === "bundled" && !bundledCodeReload
+            ? resolveBundledPluginStateOperationCapture({
+                rootDir: owner.rootDir,
+                source: modulePath,
+              })
+            : undefined;
+        if (owner.record.origin === "bundled" && !bundledCapture && !bundledCodeReload) {
+          return;
+        }
         const { preparePluginGenerationArtifact } = await import("./plugin-generation-worker.js");
-        const preparedArtifact = await preparePluginGenerationArtifact({
-          rootDir: owner.rootDir,
-          source: modulePath,
-          standalone: owner.standalone,
-        });
+        const preparedArtifact = await preparePluginGenerationArtifact(
+          bundledCapture ?? {
+            rootDir: owner.rootDir,
+            source: modulePath,
+            standalone: owner.standalone,
+            bundledReload: bundledCodeReload,
+          },
+        );
         if (cache.retirement || isPluginRegistryRetired(owner.registry)) {
           await preparedArtifact.artifact.disposeAsync();
           throw new PluginInventoryRetiredError();

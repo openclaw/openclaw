@@ -38,7 +38,7 @@ it("retains sign-in and retry actions when the recovery dialog import fails", as
     await waitForSolid(() =>
       expect(getByRole(document.body, "button", { name: "Retry" })).toBeTruthy(),
     );
-    expect(getByRole(document.body, "alert").textContent).toContain("Panel failed to load");
+    expect(getByRole(document.body, "alert").textContent).toContain("Couldn’t load this panel.");
     getByRole(document.body, "button", { name: "Sign in" }).click();
     expect(opened).toHaveBeenCalledExactlyOnceWith(
       `${window.location.origin}/nested/`,

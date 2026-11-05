@@ -30,7 +30,6 @@ suite.define(() => {
         await page.clock.install();
         const sessionKey = "agent:main:scope-reader";
         const operatorMethods = [
-          "board.get",
           "presence.activity",
           "cron.list",
           "cron.status",
@@ -66,10 +65,9 @@ suite.define(() => {
         );
         await page.goto(`${suite.server.baseUrl}cron`);
         await page
-          .getByText(
-            "You don't have permission to view scheduled tasks. Ask the person who manages OpenClaw for access.",
-            { exact: true },
-          )
+          .getByText("Couldn’t view scheduled tasks. Ask an admin to grant read access.", {
+            exact: true,
+          })
           .waitFor();
         expect(await gateway.getRequests("cron.list")).toHaveLength(0);
 
@@ -292,7 +290,7 @@ suite.define(() => {
           await expect.poll(() => composer.inputValue()).toBe("");
         }
         const footer = page.locator(".sidebar-footer-bar");
-        const connectionStatus = page.locator(".sidebar-shell__footer .gateway-status");
+        const connectionStatus = page.locator(".sidebar-shell__connection .gateway-status");
         await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(2);
         await connectionStatus.getByText("Reconnecting… · 2 queued", { exact: true }).waitFor();
         expect(await connectionStatus.getByRole("button").count()).toBe(0);
@@ -301,7 +299,7 @@ suite.define(() => {
           "Reconnecting… · 2 queued",
         );
         expect(await content.boundingBox()).toEqual(connectedContentBounds);
-        expect((await connectionStatus.boundingBox())!.height).toBe(44);
+        expect((await connectionStatus.boundingBox())!.height).toBe(28);
         const identityStatus = footer.locator(".sidebar-identity-card");
         expect(await identityStatus.isVisible()).toBe(true);
         expect(await identityStatus.getAttribute("data-connection-status")).toBe("reconnecting");

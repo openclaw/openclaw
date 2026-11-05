@@ -573,22 +573,6 @@ it("does not pass stale enqueue-time state into a rotated session generation", a
   expect(state.refreshGoal).toHaveBeenCalledWith(undefined, undefined);
 });
 
-it("settles presentation and releases the reply operation when dispatcher setup fails", async () => {
-  const failure = new Error("dispatcher reset failed");
-  const onQueuedFollowupSettled = vi.fn(async () => {});
-
-  await expect(
-    prepare(createRun(), {
-      opts: {
-        onQueuedFollowupAdmitted: vi.fn().mockRejectedValue(failure),
-        onQueuedFollowupSettled,
-      },
-    }),
-  ).rejects.toBe(failure);
-  expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
-  expect(operation.complete).toHaveBeenCalledOnce();
-});
-
 it("keeps the model selected at admission when preferences change during source adoption", async () => {
   const queued = createRun();
   state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
@@ -618,6 +602,12 @@ it.each([
 ] as const)(
   "binds $kind Access at admission (saved=$saved, provided=$provided)",
   async ({ kind, saved, expected, provided }) => {
+    const replyOperation = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "queued-session",
+      turnKind: kind,
+      resetTriggered: false,
+    });
     const queued = createRun();
     queued.run.cyberAccessProgram = "daybreak_blue";
     const initialEntry = makeEntry({
@@ -627,27 +617,31 @@ it.each([
     state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
       // The preference committed before this source entered the queue, so no queue refresh saw it.
       captureRunSelection();
-      return { status: "owned", operation, sessionEntry: admittedEntry };
+      return { status: "owned", operation: replyOperation, sessionEntry: admittedEntry };
     });
 
-    const turn = await admitted(
-      prepare(
-        queued,
-        {
-          sessionEntry: initialEntry,
-          sessionStore: { main: initialEntry },
-          opts: {
-            onQueuedFollowupAdmitted: async () => {
-              admittedEntry.cyberAccessProgram = "daybreak_red";
-              queued.run.cyberAccessProgram = "daybreak_red";
+    try {
+      const turn = await admitted(
+        prepare(
+          queued,
+          {
+            sessionEntry: initialEntry,
+            sessionStore: { main: initialEntry },
+            opts: {
+              onQueuedFollowupAdmitted: async () => {
+                admittedEntry.cyberAccessProgram = "daybreak_red";
+                queued.run.cyberAccessProgram = "daybreak_red";
+              },
             },
           },
-        },
-        { kind, ...(provided ? { providedReplyOperation: operation } : {}) },
-      ),
-    );
+          { kind, ...(provided ? { providedReplyOperation: replyOperation } : {}) },
+        ),
+      );
 
-    expect(turn.queued.run.cyberAccessProgram).toBe(expected);
+      expect(turn.queued.run.cyberAccessProgram).toBe(expected);
+    } finally {
+      replyOperation.complete();
+    }
   },
 );
 

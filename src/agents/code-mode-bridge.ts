@@ -263,18 +263,21 @@ export async function runBridgeRequest(params: {
             value = params.results.save(values[0], params.runtime.hasNetworkContent());
           }
         } else if (params.request.method === "resultLoad") {
-          const loaded = sessionStore
-            ? await sessionStore.load(values[0])
-            : params.results.load(values[0]);
+          if (!sessionStore) {
+            const loaded = params.results.load(values[0]);
+            if (loaded.networkContent) {
+              params.runtime.observeNetworkContent(params.parentToolCallId);
+            }
+            // The guest decodes its own copy; keep the stored JSON intact on the host.
+            params.reply.settleJson(true, loaded.json);
+            return;
+          }
+          const loaded = await sessionStore.load(values[0]);
           if (loaded.networkContent) {
             params.runtime.observeNetworkContent(params.parentToolCallId);
           }
           // Session values need an envelope to preserve missing/undefined across the JSON bridge.
-          value = sessionStore
-            ? loaded.value === undefined
-              ? {}
-              : { value: loaded.value }
-            : loaded.value;
+          value = loaded.value === undefined ? {} : { value: loaded.value };
         } else if (sessionStore) {
           await sessionStore.delete(values[0]);
         } else {
@@ -479,7 +482,7 @@ export async function runBridgeRequest(params: {
         const called = await params.runtime.callExactId(
           binding.id,
           params.request.method === "skillsRead"
-            ? { name: values[0] }
+            ? { name: values[0], ...(values[1] === undefined ? {} : { relativePath: values[1] }) }
             : { query: values[0], ...(values[1] === undefined ? {} : { limit: values[1] }) },
           callOptions(),
         );
@@ -499,16 +502,17 @@ export async function runBridgeRequest(params: {
           );
         }
         if (params.request.method === "skillsRead") {
-          const { name, location, locationNote, content } = result.details;
+          const { name, location, locationNote, relativePath, content } = result.details;
           if (
             typeof name !== "string" ||
             typeof location !== "string" ||
             typeof content !== "string" ||
+            (relativePath !== undefined && typeof relativePath !== "string") ||
             (locationNote !== undefined && typeof locationNote !== "string")
           ) {
             throw new ToolInputError("Installed skill instructions are unavailable.");
           }
-          value = formatSkillInstructions({ name, location, locationNote, content });
+          value = formatSkillInstructions({ name, location, locationNote, relativePath, content });
         } else {
           value = result.details;
         }

@@ -7,6 +7,16 @@ import { z } from "zod";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 
+export function controlUiScriptAssetUrl(value: string, assets: URL): URL | null {
+  const url = URL.parse(value);
+  return url &&
+    url.origin === assets.origin &&
+    url.pathname.includes(assets.pathname) &&
+    /\.m?js$/u.test(url.pathname)
+    ? url
+    : null;
+}
+
 /** V8 offsets are UTF-16; nested block counts override their containing function. */
 export function summarizeScriptCoverage(entry: {
   source?: string;
@@ -157,20 +167,12 @@ export async function mapColdLoadCpuProfile(
   const nodes = await Promise.all(
     profile.nodes.map(async (node) => {
       const frame = node.callFrame;
-      const url = URL.parse(frame.url);
-      if (
-        !url ||
-        url.origin !== base.origin ||
-        frame.lineNumber < 0 ||
-        !/\.m?js$/u.test(url.pathname)
-      ) {
+      const url = controlUiScriptAssetUrl(frame.url, base);
+      if (!url || frame.lineNumber < 0) {
         return node;
       }
       // Preview also serves relative entry assets beneath the deep-link path.
       const assetStart = url.pathname.lastIndexOf(base.pathname);
-      if (assetStart < 0) {
-        return node;
-      }
       const relative = decodeURIComponent(url.pathname.slice(assetStart + base.pathname.length));
       const file = path.resolve(directory, relative);
       if (!file.startsWith(`${directory}${path.sep}`)) {

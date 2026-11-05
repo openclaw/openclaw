@@ -1,26 +1,60 @@
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { readBackupEngineImage, type BackupEngine } from "./database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
-import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
+import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
+import {
+  readUpdateDatabaseGeneration,
+  readUpdateDatabaseGenerationPair,
+  type SqliteDatabaseGenerationReceipt,
+} from "./update-database-generations.js";
 
-export function readUpdatePhysicalDatabaseObservation(pathname: string): {
+export function readUpdatePhysicalDatabaseObservation(
+  pathname: string,
+  stagingRoot?: string,
+): {
   engine?: BackupEngine;
   generation: Result<string | null, unknown>;
+  preparedSource?: PreparedSqliteSnapshotSource;
+  sqliteReceipt?: SqliteDatabaseGenerationReceipt;
 } {
   let engine: BackupEngine | undefined;
   let classificationFailed = false;
   try {
-    const generations = readUpdateDatabaseGenerations([pathname], (imagePath, sourcePath) => {
-      try {
-        engine = readBackupEngineImage(imagePath, sourcePath);
-      } catch (error) {
-        classificationFailed = true;
-        throw error;
-      }
-    });
-    return { engine, generation: ok(generations[pathname]!) };
+    const observation = readUpdateDatabaseGeneration(
+      pathname,
+      (imagePath, sourcePath) => {
+        try {
+          engine = readBackupEngineImage(imagePath, sourcePath);
+        } catch (error) {
+          classificationFailed = true;
+          throw error;
+        }
+      },
+      stagingRoot ? { stagingRoot, accept: () => engine?.engine === "sqlite" } : undefined,
+    );
+    return {
+      engine,
+      generation: ok(observation.generation),
+      preparedSource: observation.preparedSource,
+      ...(engine?.engine === "sqlite" && observation.generation && observation.physical
+        ? {
+            sqliteReceipt: Object.freeze({
+              sourcePath: pathname,
+              generation: observation.generation,
+              physical: observation.physical,
+            }),
+          }
+        : {}),
+    };
   } catch (error) {
-    if (classificationFailed) {
+    if (
+      classificationFailed ||
+      collectNestedErrorCandidates(error).some(
+        (failure) => failure instanceof SqliteSnapshotCleanupError,
+      )
+    ) {
       throw error;
     }
     // The coherent private image already established the engine. A later generation
@@ -66,4 +100,38 @@ export async function readUpdatePhysicalDatabaseGenerations(
     }
   }
   return Object.assign(result, await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners));
+}
+
+export async function readUpdatePhysicalDatabaseGenerationPair(
+  paths: readonly string[],
+  pluginOwners?: DatabasePortPluginOwners,
+) {
+  const postgres: string[] = [];
+  // Classify the captured image without reacquiring the live source family.
+  const result = readUpdateDatabaseGenerationPair(paths, (imagePath, sourcePath) => {
+    if (readBackupEngineImage(imagePath, sourcePath).engine === "postgres") {
+      postgres.push(sourcePath);
+    }
+  });
+  const fingerprints = await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners);
+  Object.assign(result.committed, fingerprints);
+  Object.assign(result.physical, fingerprints);
+  return result;
+}
+
+/** Only the recorded 9.33-line parent sends an unmarked restore inspection. */
+export async function isLegacyUpdateGenerationRequest(env: NodeJS.ProcessEnv): Promise<boolean> {
+  const { findActiveUpdateRun } = await import("./update-run-reader.js");
+  const { readUpdateRunDriver, sameUpdateRunDriver } = await import("./update-run-driver.js");
+  const run = findActiveUpdateRun({ env });
+  if (run?.status !== "running" || !["2026.9.33", "2026.9.34"].includes(run.before.version ?? "")) {
+    return false;
+  }
+  const parent = readUpdateRunDriver(process.ppid);
+  return (
+    parent !== undefined &&
+    [run.origin.driver, ...(run.origin.previousDrivers ?? [])].some(
+      (driver) => driver && sameUpdateRunDriver(driver, parent),
+    )
+  );
 }

@@ -23,7 +23,7 @@ function completed(value: unknown, output: unknown[] = []): CodeModeHeadlessResu
 function createPreparedRuntime(config: OpenClawConfig, tools?: AnyAgentTool[]) {
   const context = { config, agentId: "main", sessionKey: "cron:test:trigger" };
   const tool = wrapToolWithBeforeToolCallHook(makeTool("probe", vi.fn()), context);
-  return { createTools: async () => tools ?? [tool], context };
+  return { createTools: async () => tools ?? [tool], context, scheduledToolPolicy: undefined };
 }
 
 function makeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool {
@@ -216,6 +216,28 @@ it("keeps an uncanonicalized alias-name cap fail-closed for exec", async () => {
 
   expect(result).toMatchObject({ kind: "error", code: "internal_error" });
   expect(result.kind === "error" ? result.error : "").toContain("exec is not defined");
+});
+
+it("projects typed exec details into trigger scripts without content wrappers", async () => {
+  const evaluate = execEvaluator("gateway");
+
+  await expect(
+    evaluate({
+      ...INPUT,
+      toolsAllow: ["exec"],
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      script: `
+        const result = await exec({ command: "printf watcher-ready" });
+        return {
+          fire:
+            result.status === "completed" &&
+            result.exitCode === 0 &&
+            result.aggregated === "watcher-ready" &&
+            result.content === undefined,
+        };
+      `,
+    }),
+  ).resolves.toEqual({ kind: "evaluated", fire: true });
 });
 
 it.each([

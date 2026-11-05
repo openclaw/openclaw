@@ -3,6 +3,7 @@ import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-sto
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { recordSessionRowPartitionRevision } from "../infra/gateway-work-metrics.js";
 import {
   projectSessionOwner,
   resolveSessionProfileId,
@@ -15,6 +16,7 @@ import {
   type SelectionChange,
 } from "./session-row-projection-record.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
+import { sameSelectionFacts } from "./session-row-selection-facts.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 
@@ -193,7 +195,7 @@ export function createSessionRowSelection(
   };
   const keyFor = (row: Pick<SelectionTarget, "key" | "agentId">) =>
     sentinel(row.key) && activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key;
-  const update = (id: string, key: string, row?: SelectionTarget) => {
+  const update = (id: string, key: string, row?: SelectionTarget, changeScope?: string) => {
     let group = groups.get(key);
     const oldWinner = winners.get(key);
     const eligible =
@@ -233,6 +235,21 @@ export function createSessionRowSelection(
     } else {
       duplicates.delete(key);
     }
+    // Raw selections without an owner snapshot still need structural comparison.
+    if (
+      winner &&
+      oldWinner &&
+      winner !== oldWinner &&
+      (oldWinner.row.selectionFactsRevision && winner.row.selectionFactsRevision
+        ? rowIdentity(oldWinner.row) === rowIdentity(winner.row) &&
+          oldWinner.row.selectionFactsRevision === winner.row.selectionFactsRevision
+        : sameSelectionFacts(oldWinner.row, winner.row))
+    ) {
+      oldWinner.row = winner.row;
+      oldWinner.pair[1] = winner.row.entry;
+      group?.set(rowIdentity(winner.row), oldWinner);
+      return;
+    }
     if (winner) {
       winners.set(key, winner);
     } else {
@@ -246,6 +263,7 @@ export function createSessionRowSelection(
     const partition = partitionFor(key);
     if (partition) {
       partition.revision = {};
+      recordSessionRowPartitionRevision(changeScope);
       if (winner) {
         partition.entries.set(key, winner.pair);
       } else {
@@ -288,7 +306,7 @@ export function createSessionRowSelection(
       update(rowIdentity(row), keyFor(row), row);
     },
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
-      update(change.id, keyFor(change), change.row);
+      update(change.id, keyFor(change), change.row, change.scope);
     },
     createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
       assertCanonical();

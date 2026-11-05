@@ -3,7 +3,7 @@ import { expect, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { createChannelCapability } from "../../lib/channels/index.ts";
+import { createChannelCapability, type ChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
@@ -75,7 +75,10 @@ export function iconRequests(fetchMock: ReturnType<typeof mockIcon>) {
     .filter((url) => url.includes("/__openclaw__/plugin-icon/"));
 }
 
-export const sources: Array<Pick<ApplicationContext, "runtimeConfig" | "channels">> = [];
+export const sources: Array<{
+  runtimeConfig: ApplicationContext["runtimeConfig"];
+  channels: ChannelCapability;
+}> = [];
 
 export function catalogFixture(plugins: object[], initial = channelSnapshot(), scopes?: string[]) {
   let refreshed: ReturnType<typeof channelSnapshot> | undefined;
@@ -156,7 +159,7 @@ export function createContext(gateway: ApplicationContext["gateway"]) {
     basePath: "",
     resourceBasePath: "",
     gateway,
-    channels,
+    acquireChannels: () => channels,
     runtimeConfig,
     router,
     navigate: vi.fn(),

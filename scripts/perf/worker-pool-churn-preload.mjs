@@ -109,7 +109,7 @@ const script = path.basename(process.argv[1] ?? "");
 if (
   output &&
   !isMainThread &&
-  /^(session-transcript|openclaw-state-read|git-operation|disk-budget|plugin-model-catalog-read)\.worker\.[cm]?[jt]s$/.test(
+  /^(session-transcript|openclaw-state-read|git-operation|disk-budget|plugin-model-catalog-read|client-credential|identity-file|control-ui-file|discovery|provider-prompt-state)\.worker\.[cm]?[jt]s$/.test(
     script,
   )
 ) {

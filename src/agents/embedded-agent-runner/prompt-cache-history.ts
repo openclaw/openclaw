@@ -131,9 +131,9 @@ export function fingerprintMessage(
   if (cached) {
     if (
       previous &&
-      (previous === cached ||
-        (previous.identityLength === cached.identityLength &&
-          previous.packed.startsWith(cached.packed.slice(0, cached.identityLength))))
+      previous !== cached &&
+      previous.identityLength === cached.identityLength &&
+      previous.packed.startsWith(cached.packed.slice(0, cached.identityLength))
     ) {
       messageFingerprints.set(message, previous);
       return previous;

@@ -277,7 +277,9 @@ describe("session-share node commands", () => {
 
         const pendingRead = fixture.read(scope.sessionKey);
         fixture.config.session = { store: defaultStorePath };
-        await expect(pendingRead).rejects.toThrow("no longer shared");
+        await expect(pendingRead).rejects.toThrow(
+          "Session sharing configuration changed. Refresh the session catalog.",
+        );
 
         fixture.config.session = { store };
         await upsertSessionEntryCore(
@@ -543,8 +545,16 @@ describe("session-share receiver identity integration", () => {
         }
         const page = await catalog.read({ hostId, threadId: nativeSession.threadId });
         expect(page.items.map((item) => item.sender)).toEqual([
-          { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
-          { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
+          {
+            identity: { type: "profile", id: profile.id },
+            label: "Catalog Person",
+            avatarUrl: "/api/users/" + profile.id + "/avatar?v=" + profile.updatedAt,
+          },
+          {
+            identity: { type: "profile", id: profile.id },
+            label: "Catalog Person",
+            avatarUrl: "/api/users/" + profile.id + "/avatar?v=" + profile.updatedAt,
+          },
           { identity: { ...namespacedIdentity, id: "9999" }, label: "Remote Person" },
         ]);
       } finally {

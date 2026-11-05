@@ -50,6 +50,7 @@ import { registerGatewayCronCompletionTests } from "./server-cron-completion.tes
 import { registerGatewayCronContextTests } from "./server-cron.context.test-support.js";
 import { registerGatewayCronMutationAuthorityTests } from "./server-cron.mutation-lifecycle.test-support.js";
 import { createWatchedRun, runExit } from "./server-cron.process.test-support.js";
+import { registerGatewayCronPublicationTests } from "./server-cron.publication.test-support.js";
 import { registerGatewayCronQueueTests } from "./server-cron.queue.test-support.js";
 import { registerGatewayCronSystemJobTests } from "./server-cron.system-jobs.test-support.js";
 
@@ -2296,49 +2297,11 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("broadcasts refreshed session rows when cron bindings change", async () => {
-    const cfg = createCronConfig("server-cron-binding-broadcast");
-    const sessionStorePath = path.join(
-      os.tmpdir(),
-      `server-cron-binding-broadcast-sessions-${Date.now()}`,
-      "sessions.json",
-    );
-    (cfg.session as { store?: string }).store = sessionStorePath;
-    const fs = await import("node:fs/promises");
-    await fs.mkdir(path.dirname(sessionStorePath), { recursive: true });
-    await fs.writeFile(
-      sessionStorePath,
-      JSON.stringify({ "agent:main:probe": { sessionId: "sess-probe", updatedAt: Date.now() } }),
-      "utf-8",
-    );
-
-    const broadcast = vi.fn();
-    await withCronService(
-      cfg,
-      async (state) => {
-        // The automation source registers on start (stale-reload safety).
-        await state.cron.start();
-        const sessionsChanged = () =>
-          broadcast.mock.calls.filter((call) => call[0] === "sessions.changed");
-        const job = await addAgentTurnJob(state, "bound schedule", "ping", {
-          schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-          sessionTarget: "session:agent:main:probe",
-        });
-        // Payload row fields depend on shared-process session-store state, so
-        // this test pins only the broadcast mechanism; hasAutomation projection
-        // is covered by session-utils and session-automation-index tests.
-        const added = requireRecord(sessionsChanged().at(-1)?.[1], "added payload");
-        expect(added.sessionKey).toBe("agent:main:probe");
-        expect(added.reason).toBe("cron-binding");
-
-        broadcast.mockClear();
-        await state.cron.update(job.id, { enabled: false });
-        const disabled = requireRecord(sessionsChanged().at(-1)?.[1], "disabled payload");
-        expect(disabled.sessionKey).toBe("agent:main:probe");
-        expect(disabled.reason).toBe("cron-binding");
-      },
-      { broadcast },
-    );
+  registerGatewayCronPublicationTests({
+    createCronConfig,
+    withCronService,
+    addAgentTurnJob,
+    getCronDeps,
   });
 
   registerGatewayCronContextTests({

@@ -60,19 +60,23 @@ export function defineTypographyModuleBoundaryTests(
         await page.keyboard.press("Enter");
         const menu = page.locator(".sidebar-identity-menu");
         await menu.waitFor();
-        const settingsShortcut = menu
-          .locator('[data-value="command:settings"]')
-          .locator(".session-menu__shortcut");
-
-        const report = await settingsShortcut.evaluate((element) => ({
-          body: getComputedStyle(document.body).fontFamily,
-          shortcut: getComputedStyle(element).fontFamily,
-          text: element.textContent?.replace(/\s+/gu, ""),
-        }));
+        const report = await page.evaluate(() => {
+          const element = document.querySelector(
+            '.sidebar-identity-menu [data-value="command:settings"] .session-menu__shortcut',
+          );
+          if (!element) {
+            throw new Error("Settings shortcut must be present in the open identity menu");
+          }
+          return {
+            body: getComputedStyle(document.body).fontFamily,
+            shortcut: getComputedStyle(element).fontFamily,
+            text: element.textContent?.replace(/\s+/gu, ""),
+          };
+        });
         expect(report.body).toMatch(/^"?JetBrains Mono/u);
         expect(report.shortcut).toMatch(/^system-ui,/u);
         const applePlatform = platform === "MacIntel";
-        expect(report.text).toBe(applePlatform ? "⌘⇧," : "Ctrl+Shift+,");
+        expect(report.text).toBe(applePlatform ? "⌘⇧," : "Ctrl⇧,");
 
         await page.keyboard.press("Escape");
         await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
@@ -81,9 +85,7 @@ export function defineTypographyModuleBoundaryTests(
           panelSelector.getByRole("button", { name }).locator(".side-panel-type-option__shortcut"),
         );
         await panelSelector.waitFor();
-        const labels = applePlatform
-          ? ["⌘⌥⇧E", "⌘⇧B", "⌘⇧S"]
-          : ["Ctrl+Alt+Shift+E", "Ctrl+Shift+B", "Ctrl+Shift+S"];
+        const labels = applePlatform ? ["⌘⌥⇧E", "⌘⇧B", "⌘⇧S"] : ["CtrlAlt⇧E", "Ctrl⇧B", "Ctrl⇧S"];
         const shortcuts = await Promise.all(
           panelShortcuts.map((shortcut) =>
             shortcut.evaluate((key) => {
@@ -130,7 +132,7 @@ export function defineTypographyModuleBoundaryTests(
 
         const genericFonts = await page.evaluate(() => {
           const fixture = document.createElement("div");
-          fixture.innerHTML = `<span class="chat-controls__model-option-action"><kbd>C</kbd></span>
+          fixture.innerHTML = `<span class="chat-controls__model-option-action"><kbd class="shortcut-kbd">C</kbd></span>
           <span class="session-menu__shortcut">C</span>`;
           document.body.append(fixture);
           const fonts = Array.from(
@@ -143,7 +145,10 @@ export function defineTypographyModuleBoundaryTests(
             mono: getComputedStyle(document.documentElement).getPropertyValue("--mono").trim(),
           };
         });
-        expect(genericFonts.fonts).toEqual([genericFonts.mono, genericFonts.mono]);
+        expect(genericFonts.fonts).toEqual([
+          expect.stringMatching(/^system-ui,/u),
+          genericFonts.mono,
+        ]);
       },
     );
   });

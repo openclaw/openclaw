@@ -221,6 +221,20 @@ type CapturedRequest = {
 };
 afterEach(() => configureAiTransportHost({}));
 describe("Anthropic SDK host fetch wiring", () => {
+  it("does not send a request when aborted while client preparation is pending", async () => {
+    const hostFetch = vi.fn<typeof fetch>();
+    configureAiTransportHost({ buildModelFetch: () => hostFetch });
+    const controller = new AbortController();
+    const stream = streamAnthropic(makeModel("https://example.invalid"), context, {
+      apiKey: "synthetic",
+      signal: controller.signal,
+    });
+    controller.abort();
+    expect(await collectEventTypes(stream)).toEqual(["error"]);
+    expect((await stream.result()).stopReason).toBe("aborted");
+    expect(hostFetch).not.toHaveBeenCalled();
+  });
+
   it("routes every non-Cloudflare client branch through the host fetch", async () => {
     const requests: CapturedRequest[] = [];
     await withLoopback(

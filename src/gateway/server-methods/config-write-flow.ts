@@ -234,13 +234,7 @@ export async function commitGatewayConfigWrite(params: {
   disconnectSharedAuthClients?: boolean;
   awaitRuntimeApplication?: boolean;
   respond?: RespondFn;
-}): Promise<{
-  path: string;
-  config: OpenClawConfig;
-  hash: string | null;
-  application?: Promise<RuntimeConfigWriteApplicationStatus>;
-  queueFollowUp: () => void;
-}> {
+}) {
   const previousRuntimeConfig =
     params.context?.getCommittedRuntimeConfig?.() ?? params.snapshot.config;
   const application = params.awaitRuntimeApplication

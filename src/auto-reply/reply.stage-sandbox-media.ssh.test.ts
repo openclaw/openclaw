@@ -24,7 +24,7 @@ import {
 
 const sandboxMocks = vi.hoisted(() => ({
   resolveSandboxContext: vi.fn(),
-  ensureSandboxWorkspaceForSession: vi.fn(),
+  prepareSandboxWorkspaceForSession: vi.fn(),
 }));
 vi.mock("../agents/sandbox/context.js", () => sandboxMocks);
 vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
@@ -75,7 +75,11 @@ it.each([
     sandboxMocks.resolveSandboxContext
       .mockReset()
       .mockResolvedValue({ ...workspace, fsBridge: bridge });
-    sandboxMocks.ensureSandboxWorkspaceForSession.mockReset().mockResolvedValue(workspace);
+    sandboxMocks.prepareSandboxWorkspaceForSession.mockReset().mockResolvedValue({
+      workspace,
+      assertCurrent() {},
+      [Symbol.dispose]() {},
+    });
 
     const inboundDir = path.join(home, ".openclaw", "media", "inbound");
     await fs.mkdir(inboundDir, { recursive: true });
@@ -113,15 +117,14 @@ it.each([
       assert(prepared.ok, "attachment preparation failed");
       ctx.media = prepared.value.mediaPathOffloads;
       sessionCtx.media = ctx.media;
-    } else {
-      await stageSandboxMedia({
-        ctx,
-        sessionCtx,
-        cfg,
-        sessionKey: "agent:main:chat",
-        workspaceDir: localWorkspace,
-      });
     }
+    await stageSandboxMedia({
+      ctx,
+      sessionCtx,
+      cfg,
+      sessionKey: "agent:main:chat",
+      workspaceDir: localWorkspace,
+    });
 
     expect(await readRemote("seeded.txt")).toBe("first turn");
     if (workspaceAccess === "ro") {

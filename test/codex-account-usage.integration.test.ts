@@ -16,15 +16,14 @@ afterEach(() => vi.restoreAllMocks());
 
 it.each([false, true])(
   "uses personal account authority without main-thread SQL (reconnect: %s)",
-  async (reconnect) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  async (reconnect) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { handleCodexAccountUsage, readCodexAppServerUsage } =
         createCodexAccountUsageTestFixture();
       const config: OpenClawConfig = {
         agents: { entries: { main: {} } },
         plugins: { enabled: false },
       };
-      const owner = ensureProfileForEmail("account-usage@example.test");
       const credential: OAuthCredential = {
         type: "oauth",
         provider: "openai",
@@ -33,35 +32,24 @@ it.each([false, true])(
         expires: 1_900_000_000_000,
         accountId: "synthetic-account",
       };
-      const { authProfileId: profileId } = connectUserModelAccount({
-        ownerProfileId: owner.id,
+      const connection = {
+        ownerProfileId: ensureProfileForEmail("account-usage@example.test").id,
         credential,
         assertCurrent() {},
-      });
+      };
+      const { authProfileId: profileId } = connectUserModelAccount(connection);
+      const reconnected: {
+        account: Awaited<ReturnType<typeof connectUserModelAccountAsync>> | null;
+      } = { account: null };
       vi.mocked(readCodexAppServerUsage).mockImplementation(async (options) => {
         options.assertCurrent?.();
-        expect(options.preparedAuth).toMatchObject({
-          kind: "profile",
-          profileId,
-          store: { profiles: { [profileId]: credential } },
-        });
         if (reconnect) {
-          const connected = await connectUserModelAccountAsync({
-            ownerProfileId: owner.id,
-            credential,
+          reconnected.account = await connectUserModelAccountAsync({
+            ...connection,
             matchesCredential: () => true,
-            assertCurrent() {},
           });
-          expect(connected.authProfileId).toBe(profileId);
         }
-        return {
-          rateLimits: {
-            rateLimits: {
-              limitId: "codex",
-              primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1_800_000_000 },
-            },
-          },
-        };
+        return { rateLimits: { rateLimits: { limitId: "codex" } } };
       });
       const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
       const params = { agentId: "main", profileId };
@@ -77,25 +65,22 @@ it.each([false, true])(
           context: { getRuntimeConfig: () => config } as GatewayRequestHandlerOptions["context"],
           hasCurrentClientAuthority: () => true,
         });
-        expect(readCodexAppServerUsage, JSON.stringify(respond.mock.calls)).toHaveBeenCalledOnce();
+        expect(vi.mocked(readCodexAppServerUsage).mock.calls[0]?.[0].preparedAuth).toMatchObject({
+          kind: "profile",
+          profileId,
+          store: { profiles: { [profileId]: credential } },
+        });
         if (reconnect) {
-          expect(respond).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({ code: "UNAVAILABLE" }),
-          );
-        } else {
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({
-              providers: [expect.objectContaining({ provider: "openai" })],
-            }),
-          );
+          expect(reconnected.account?.authProfileId).toBe(profileId);
         }
+        const provider = expect.objectContaining({ provider: "openai" });
+        const expected = reconnect
+          ? [false, undefined, expect.objectContaining({ code: "UNAVAILABLE" })]
+          : [true, expect.objectContaining({ providers: [provider] })];
+        expect(respond).toHaveBeenCalledWith(...expected);
         sql.expectIdle();
       } finally {
         sql.restore();
       }
-    });
-  },
+    }),
 );

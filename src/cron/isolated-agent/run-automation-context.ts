@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyLegacyHeartbeatPromptContribution } from "../../infra/heartbeat-compat.js";
 import { appendCronJobScratchPrompt, buildCronCommandBody } from "../run-prompt.js";
 import { readCronScratchSnapshot } from "../scratch-read.js";
-import { resolveCronJobsStorePathFromConfig } from "../store/paths.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../store/paths.js";
 import type { CronStoredJob } from "../types.js";
 import { buildCurrentConversationContextBlock } from "./run-current-context.js";
 
@@ -56,7 +56,7 @@ export async function prepareCronAutomationPrompt(
   const message = await resolveCronAutomationMessage(params);
   const prompt = await buildCronCommandBody({ ...params, message });
   const scratchSnapshot = await readCronScratchSnapshot(
-    params.cronStorePath ?? resolveCronJobsStorePathFromConfig(params.cfg),
+    params.cronStorePath ?? (await resolveCronJobsStorePathFromConfigAsync(params.cfg)),
     { kind: "job", jobId: params.job.id, createdAtMsFallback: params.job.createdAtMs },
     {},
     { assertCurrent: params.assertCurrent, signal: params.signal },

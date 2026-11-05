@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type { Page } from "playwright";
+import type { JSHandle, Page } from "playwright";
 import type { AgentEvent } from "../../packages/gateway-protocol/src/schema/agent.ts";
 import { pathForRoute } from "../../ui/src/app-route-paths.ts";
 import type {
@@ -36,6 +36,40 @@ type ToolEvent = AgentEvent & {
   agentId: "main";
   data: ToolData;
 };
+
+const initialBursts = new WeakMap<Page, JSHandle<ToolEvent[]>>();
+
+async function prepareInitialBurst(
+  page: Page,
+  gateway: MockGatewayControls,
+  output: "ascii" | "unicode" | "changed" = "ascii",
+) {
+  await ready(page, gateway);
+  const events = toolEvents(0, population, output === "unicode" ? "unicode" : "ascii");
+  if (output === "changed") {
+    for (const payload of events) {
+      if (payload.data.phase === "result") {
+        const { result } = payload.data;
+        result.text = `${result.text.slice(0, 1_999)}!${result.text.slice(2_000)}`;
+      }
+    }
+  }
+  // Stage automation's multi-megabyte argument decoding outside the product interval.
+  initialBursts.set(page, await page.evaluateHandle((payloads) => payloads, events));
+}
+
+async function emitInitialBurst(page: Page) {
+  const events = initialBursts.get(page);
+  if (!events) {
+    throw new Error("Missing prepared Activity Live burst");
+  }
+  initialBursts.delete(page);
+  try {
+    await emitBurst(page, events);
+  } finally {
+    await events.dispose();
+  }
+}
 
 function createDataActivityLiveFixture(): InteractionFixtureOverrides {
   const now = Date.now();
@@ -107,7 +141,7 @@ function toolEvents(
   }).flat();
 }
 
-async function emitBurst(page: Page, events: ToolEvent[]) {
+async function emitBurst(page: Page, events: ToolEvent[] | JSHandle<ToolEvent[]>) {
   // One browser task models queued delivery, without one automation round trip per event.
   await page.evaluate((payloads) => {
     // SAFETY: installMockGateway owns this documented browser test surface.
@@ -143,6 +177,7 @@ async function expectWindow(page: Page, first: number, last: number) {
       const rows = document.querySelectorAll(selector);
       return (
         rows.length === count &&
+        [...rows].every((row) => row.querySelector(".activity-entry__body")) &&
         rows[0]?.textContent?.includes(firstId) &&
         rows[rows.length - 1]?.textContent?.includes(lastId)
       );
@@ -319,9 +354,9 @@ export const dataActivityLiveScenarios: readonly InteractionScenario[] = [
     expected:
       "A 2,800-event tool burst across 20 subscribed sessions renders the newest 100 tools.",
     rowSelector,
-    prepare: ready,
+    prepare: prepareInitialBurst,
     run: async (page) => {
-      await emitBurst(page, toolEvents(0, population));
+      await emitInitialBurst(page);
       await expectWindow(page, 900, 999);
       return verifyCapacity(page);
     },
@@ -332,16 +367,9 @@ export const dataActivityLiveScenarios: readonly InteractionScenario[] = [
     expected:
       "A 2,800-event tool burst changes every terminal preview at its final retained code unit.",
     rowSelector,
-    prepare: ready,
+    prepare: (page, gateway) => prepareInitialBurst(page, gateway, "changed"),
     run: async (page) => {
-      const events = toolEvents(0, population);
-      for (const payload of events) {
-        if (payload.data.phase === "result") {
-          const { result } = payload.data;
-          result.text = `${result.text.slice(0, 1_999)}!${result.text.slice(2_000)}`;
-        }
-      }
-      await emitBurst(page, events);
+      await emitInitialBurst(page);
       await expectWindow(page, 900, 999);
       const capacity = await verifyCapacity(page);
       const terminalPreviews = await page
@@ -359,9 +387,9 @@ export const dataActivityLiveScenarios: readonly InteractionScenario[] = [
     expected:
       "A 2,800-event multilingual burst preserves 100 exact UTF-16 previews and opens its newest tool.",
     rowSelector,
-    prepare: ready,
+    prepare: (page, gateway) => prepareInitialBurst(page, gateway, "unicode"),
     run: async (page) => {
-      await emitBurst(page, toolEvents(0, population, "unicode"));
+      await emitInitialBurst(page);
       await expectWindow(page, 900, 999);
       const contents = await page.locator(streamSelector).evaluate((stream) => ({
         running: stream.querySelectorAll(".activity-entry--running").length,

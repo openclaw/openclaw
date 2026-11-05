@@ -1,0 +1,3 @@
+# ESM executable payloads and loopback-only transport isolation preserve existing release fixture assertions.
+# Exact net test-line growth against baaa01091c56798bdff09f78ea3f9519a30810c5; no added test cases.
+21

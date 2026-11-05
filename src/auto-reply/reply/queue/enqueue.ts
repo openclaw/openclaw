@@ -174,6 +174,7 @@ export function enqueueFollowupRun(
         throw new Error("Dedupe source was not submitted to its mailbox");
       }
       const mailbox = recentInput.mailbox;
+      const inputInstance = recentInput.instance;
       for (const [alias, record] of mailbox.recentSources) {
         if (record.expires <= now) {
           mailbox.recentSources.delete(alias);
@@ -183,14 +184,14 @@ export function enqueueFollowupRun(
         mailbox.recentSources.delete(mailbox.recentSources.keys().next().value!);
       }
       mailbox.recentSources.set(recentMessageIdKey, {
-        input: recentInput,
+        inputInstance,
         expires: now + RECENT_MESSAGE_ID_TTL,
       });
       const lifecycle = run.turnAdoptionLifecycle;
       if (lifecycle) {
         const onAbandoned = lifecycle.onAbandoned;
         lifecycle.onAbandoned = () => {
-          if (mailbox.recentSources.get(recentMessageIdKey)?.input === recentInput) {
+          if (mailbox.recentSources.get(recentMessageIdKey)?.inputInstance === inputInstance) {
             mailbox.recentSources.delete(recentMessageIdKey);
           }
           return onAbandoned?.();
@@ -244,7 +245,13 @@ function applyFollowupQueueOverflow(
   run: FollowupRun,
 ): boolean {
   const elidedSummaryLines: string[] = [];
-  const capacity = { ...queue, items: queue.items };
+  // The generic drop policy owns temporary lines; publish only paired mailbox entries.
+  const summarySources = queue.summaryEntries.map(({ source }) => source);
+  const capacity = {
+    ...queue,
+    items: queue.items,
+    summaryLines: queue.summaryEntries.map(({ line }) => line),
+  };
   const shouldEnqueue = applyQueueDropPolicy({
     queue: capacity,
     inFlight: queue.inFlight,
@@ -266,7 +273,7 @@ function applyFollowupQueueOverflow(
             source.controllerInput.payload = "summary";
           }
         }
-        queue.summarySources.push(...dropped);
+        summarySources.push(...dropped);
         return;
       }
       for (const item of dropped) {
@@ -282,10 +289,13 @@ function applyFollowupQueueOverflow(
     isProtected: (item) => item.protectFromQueueOverflow === true,
   });
   queue.droppedCount = capacity.droppedCount;
-  queue.summaryLines = capacity.summaryLines;
   if (queue.dropPolicy === "summarize") {
-    const overflow = Math.max(0, queue.summarySources.length - queue.summaryLines.length);
-    const removed = queue.summarySources.splice(0, overflow);
+    const overflow = Math.max(0, summarySources.length - capacity.summaryLines.length);
+    const removed = summarySources.splice(0, overflow);
+    queue.summaryEntries = summarySources.map((source, index) => ({
+      source,
+      line: capacity.summaryLines[index]!,
+    }));
     for (const [index, item] of removed.entries()) {
       const summaryLine = elidedSummaryLines[index];
       if (summaryLine === undefined) {
@@ -300,16 +310,12 @@ function applyFollowupQueueOverflow(
       if (elision?.contextKey !== contextKey) {
         elision = {
           contextKey,
-          count: 0,
-          sources: [],
-          summaryLines: [],
+          entries: [],
           sourceRefs: new Map<FollowupRun, FollowupRun>(),
         };
         queue.summaryElisions.push(elision);
       }
-      elision.sources.push(compactSource);
-      elision.count = elision.sources.length;
-      elision.summaryLines.push(summaryLine);
+      elision.entries.push({ source: compactSource, line: summaryLine });
       elision.sourceRefs.set(item, compactSource);
       if (queue.activeSummarySources.has(item)) {
         queue.activeSummarySources.add(compactSource);
@@ -418,12 +424,12 @@ export function reserveSteerCandidate(
     const wasClearing = queue.clearing;
     queue.clearing = true;
     try {
-      if (consume || receipt.accepted === true) {
+      if (consume) {
         input.payload = "unbound";
         delete run.protectFromQueueOverflow;
-        completeFollowupRunLifecycle(run, receipt.accepted === true ? "consumed" : disposition);
+        completeFollowupRunLifecycle(run, disposition);
       }
-      if (!consume && receipt.accepted !== true) {
+      if (!consume) {
         // A settled negative handoff explicitly requests queued execution. Merely
         // remembering the steering callback must leave the mailbox dormant.
         queue.dispatchEnabled = true;

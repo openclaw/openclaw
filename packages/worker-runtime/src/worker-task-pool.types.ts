@@ -34,6 +34,8 @@ export type WorkerTaskPoolOptions<Output> = {
 
 export type WorkerTaskPoolOwnerOptions = {
   retainedTransport?: true;
+  /** Internal interactive owners retain their newest idle worker until explicit retirement. */
+  retainOneIdleWorker?: true;
   decodeResourceError?: (error: unknown) => Error;
 };
 
@@ -78,6 +80,8 @@ export type WorkerTaskOptions<Input> = {
 
 /** Internal codecs may answer a worker while their caller cannot run Promise reactions. */
 export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> & {
+  /** Retained owners may exclude queueing behind owner-controlled work from their budget. */
+  timeoutFrom?: "dispatch";
   /** Host diagnostics classify this operation before publishing bounded labels. */
   diagnosticOperation?: string;
   /** Optional shared sequence word; wakeups are hints, never task receipts. */

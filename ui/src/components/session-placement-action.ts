@@ -70,7 +70,9 @@ export function sessionPlacementActionReason(
   const access = readSessionMethodAccess(snapshot, {
     method: action === "dispatch" ? "sessions.dispatch" : "sessions.move",
     requiredScope:
-      retry?.target.kind === "profile" || requiredProfile ? "operator.admin" : "operator.write",
+      action !== "dispatch" && (retry?.target.kind === "profile" || requiredProfile)
+        ? "operator.admin"
+        : "operator.write",
   });
   if (!access.allowed) {
     return access.reason;
@@ -121,7 +123,8 @@ export async function moveSessionFromMenu(params: {
     context.gateway.connectionRevision === revision &&
     context.gateway.snapshot.hello === hello;
   const publishError: (error: unknown) => void =
-    params.publishError ?? ((error) => showToast({ message: formatUiError(error) }));
+    params.publishError ??
+    ((error) => showToast({ severity: "error", message: formatUiError(error) }));
   try {
     const { changeSessionPlacement } = await import("./session-placement.runtime.ts");
     await changeSessionPlacement({

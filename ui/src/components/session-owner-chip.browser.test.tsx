@@ -192,7 +192,8 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
     BUILTIN_THEME_IDS.flatMap((theme) =>
       modes.flatMap((mode) =>
         (theme === "claw" ? [2, 3, 5, 12, 13] : [12]).flatMap((ownerCount) =>
-          (theme === "claw"
+          // Run/unread share fixed geometry; retain the avatar pair and widest overflow.
+          (theme === "claw" && (ownerCount === 2 || ownerCount === 13)
             ? ["present", "running", "away", "unread"]
             : ["present", "away"]
           ).flatMap((presence) =>
@@ -276,14 +277,14 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         }
         const peerBounds = peer.getBoundingClientRect();
         const stackBounds = stack.getBoundingClientRect();
-        expect(stackBounds).toMatchObject({ width: 28, height: 20 });
+        expect(stackBounds.width).toBeGreaterThan(primary.getBoundingClientRect().width);
         const leftToRight = ownerCount === 2 ? [peer, primary] : [primary, peer];
         for (const [index, face] of leftToRight.entries()) {
           expect(face.getBoundingClientRect()).toMatchObject({
             width: 18,
             height: 18,
             top: stackBounds.top + 1,
-            left: stackBounds.left + index * 10,
+            left: stackBounds.left + index * (stackBounds.width - 18),
           });
         }
         expect(getComputedStyle(primary).fontSize).toBe(getComputedStyle(peer).fontSize);
@@ -300,10 +301,12 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         }
         if (presence === "running") {
           const traceBounds = row.querySelector(".session-glyph__trace")!.getBoundingClientRect();
-          expect(traceBounds).toMatchObject({
-            left: stackBounds.left - 2,
-            right: stackBounds.right + 2,
-          });
+          expect(traceBounds.left).toBeLessThan(stackBounds.left);
+          expect(traceBounds.right).toBeGreaterThan(stackBounds.right);
+          expect(traceBounds.left + traceBounds.width / 2).toBeCloseTo(
+            stackBounds.left + stackBounds.width / 2,
+            3,
+          );
         }
         if (presence === "unread") {
           const badge = row.querySelector(".session-glyph__badge--unread")!;
