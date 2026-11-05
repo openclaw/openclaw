@@ -25,7 +25,8 @@ vi.mock("./models.fetch.js", async (importOriginal) => ({
     prepareLmstudioModelForInferenceMock(params),
 }));
 
-vi.mock("./runtime.js", () => ({
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
   resolveLmstudioProviderHeaders: (params: unknown) => resolveLmstudioProviderHeadersMock(params),
   resolveLmstudioRuntimeApiKey: (params: unknown) => resolveLmstudioRuntimeApiKeyMock(params),
 }));
@@ -294,9 +295,9 @@ function runHeldPreloadScenario(
 
 describe("lmstudio stream wrapper", () => {
   beforeEach(() => {
-    // Production preload state is keyed by base URL, model, and context length.
-    // Give each test a real cache namespace while preserving within-test reuse.
+    // Give tests distinct endpoint scope while preserving within-test cache reuse.
     defaultBaseUrl = `http://lmstudio-test-${defaultBaseUrlSequence++}.localhost:1234`;
+    prepareLmstudioModelForInferenceMock.mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
