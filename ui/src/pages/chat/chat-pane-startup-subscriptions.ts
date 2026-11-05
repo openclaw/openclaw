@@ -1,3 +1,5 @@
+import type { ApplicationContext } from "../../app/context.ts";
+import { cacheChatComposerAgentDefault } from "./chat-composer-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatSnapshotKey } from "./session-message-cache.ts";
@@ -22,4 +24,16 @@ export function subscribeChatPaneSnapshotInvalidation(
     onInvalidate?.();
     resetChatHistoryProjection(state);
   });
+}
+
+export function subscribeChatPaneAgentFacts(
+  context: ApplicationContext,
+  state: ChatPageHost,
+): () => void {
+  const stopIdentity = context.agentIdentity.subscribe(() => void state.loadAssistantIdentity());
+  const stopDefaults = context.agents.subscribe(() => cacheChatComposerAgentDefault(state));
+  return () => {
+    stopIdentity();
+    stopDefaults();
+  };
 }

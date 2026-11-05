@@ -48,7 +48,7 @@ import { ChatPaneSessionObservation } from "./chat-pane-session-observation.ts";
 import { createChatPaneSessionPanelToggles } from "./chat-pane-session-panel-toggle.ts";
 import { focusChatComposerFromKeydown } from "./chat-pane-shared.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
-import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
+import * as startupSubscriptions from "./chat-pane-startup-subscriptions.ts";
 import type { ChatPaneInputChanges } from "./chat-pane-state-owner.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { cancelChatModelRecovery } from "./chat-session.ts";
@@ -369,9 +369,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       }),
     );
     // Identity publications start scoped loads even when this retained pane is hidden.
-    chatState.addCleanup(
-      this.context.agentIdentity.subscribe(() => void pageState.loadAssistantIdentity()),
-    );
+    chatState.addCleanup(startupSubscriptions.subscribeChatPaneAgentFacts(this.context, pageState));
     const creationComposer = takeCreatedComposer(
       this.context,
       pageState.sessionKey,
@@ -536,7 +534,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       }),
     );
     chatState.addCleanup(
-      subscribeChatPaneSnapshotInvalidation(
+      startupSubscriptions.subscribeChatPaneSnapshotInvalidation(
         () => this.state,
         () => {
           const target = this.resolveChatReadTarget();

@@ -230,8 +230,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       : renderChatPaneComposerControls({
           state,
           selectedSession,
+          cachedSessionStatePending: Boolean(this.cachedSessionStatePending()),
           agentDefaultModel,
-          agentDefaultPermissionMode: selectedAgent?.defaultPermissionMode,
           modelAccess: mutationAccess.model,
           effortAccess: mutationAccess.effort,
           contextWindowAccess: mutationAccess.contextWindow,
@@ -278,7 +278,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       cached: cachedSession?.unarchiveAllowed === true,
     });
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
-    const presence = this.presence.snapshot;
     const catalogCanContinue = this.history.catalogSession?.canContinue === true;
     const auth = gatewaySnapshot.hello?.auth ?? null;
     const hasWriteScope = hasOperatorWriteAccess(auth);
@@ -318,7 +317,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       !catalog &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.typing") === true &&
       hasSessionPresenceViewers(
-        presence,
+        this.presence.snapshot,
         gatewaySnapshot.selfUser,
         gatewaySnapshot.client?.instanceId,
         state.sessionKey,

@@ -24,7 +24,7 @@ suite.define(() => {
           hasActiveRun: true,
           activeRunIds: ["synthetic-active-run"],
           lastRunId: "synthetic-active-run",
-          permissionMode: "full",
+          permissionMode: undefined,
           totalTokens: 14_000,
           contextTokens: 100_000,
           totalTokensFresh: true,
@@ -44,7 +44,7 @@ suite.define(() => {
           sessionKey,
           authMethod: "trusted-proxy",
           authMode: "trusted-proxy",
-          deferredMethods: ["connect"],
+          deferredMethods: ["connect", "sessions.describe", "sessions.list", "agents.list"],
           agentModel: "openai/reasoning-example",
           sessions: [cached],
           historyMessages: [{ role: "assistant", content: text }],
@@ -67,9 +67,31 @@ suite.define(() => {
             },
           ],
         });
+        const setAgentDefault = (defaultPermissionMode?: "full" | "guarded") =>
+          gateway.setMethodResponse("agents.list", {
+            agents: [
+              { id: "main", model: { primary: "openai/reasoning-example" }, defaultPermissionMode },
+            ],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+          });
+        const releaseAgents = async () => {
+          await gateway.waitForRequest("agents.list");
+          await gateway.resolveDeferred("agents.list");
+        };
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await setAgentDefault("full");
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
+        const releaseSessionRow = async () => {
+          await gateway.waitForRequest("sessions.describe");
+          await gateway.resolveDeferred("sessions.describe");
+        };
+        await releaseAgents();
+        await releaseSessionRow();
+        await gateway.waitForRequest("sessions.list");
+        await gateway.resolveDeferred("sessions.list");
         await page.getByText(text, { exact: true }).waitFor();
         const pane = page.locator(".chat-pane-cache__pane--active");
         const model = pane.locator("[data-chat-model-select]");
@@ -92,9 +114,11 @@ suite.define(() => {
           .poll(() => model.getAttribute("data-chat-select-value"))
           .toBe("openai/reasoning-example");
         await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("high");
-        await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("full");
+        await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("");
+        await expect.poll(() => permission.textContent()).toContain("Full access");
         await openChatDetails(page);
         await flushSnapshot();
+        await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
 
         const appearance = () =>
           pane
@@ -129,6 +153,7 @@ suite.define(() => {
               ".context-usage",
               "[data-chat-model-select]",
               "[data-chat-thinking-select]",
+              "[data-chat-permission-select]",
               ".agent-chat__composer-actions",
             ];
             const controls = selectors.flatMap((selector) => {
@@ -165,6 +190,11 @@ suite.define(() => {
         await page.reload();
         await gateway.waitForRequest("connect");
         await page.getByText(text, { exact: true }).waitFor();
+        expect(
+          await pane.evaluate(
+            (element) => Reflect.get(element, "state").sessions.state.resultCached,
+          ),
+        ).toBe(true);
         await pane
           .locator(".agent-chat__input")
           .screenshot({ path: `${suite.artifactDir}/cached-composer.png` });
@@ -192,10 +222,28 @@ suite.define(() => {
         }
         expect(await pane.locator("details[open], :popover-open").count()).toBe(0);
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        const freshHistory = "Live history arrived before the session row.";
+        await gateway.setMethodResponse("chat.startup", {
+          sessionId: cached.sessionId,
+          messages: [
+            { role: "assistant", content: text },
+            { role: "assistant", content: freshHistory },
+          ],
+        });
         await gateway.resolveDeferred("connect");
+        await pane.locator("p").getByText(freshHistory, { exact: true }).waitFor();
+        expect(await permission.getAttribute("data-chat-select-value")).toBe("");
+        expect(await permission.isDisabled()).toBe(true);
+        await releaseSessionRow();
         await expect.poll(() => permission.isEnabled()).toBe(true);
         await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
         expect(await stop.isEnabled()).toBe(true);
+        expect(await permission.textContent()).toContain("Full access");
+        const pendingPermissionBox = await permission.boundingBox();
+        await releaseAgents();
+        await expect.poll(() => permission.textContent()).toContain("Full access");
+        expect(await permission.boundingBox()).toEqual(pendingPermissionBox);
+        await flushSnapshot();
         await pane
           .locator(".agent-chat__input")
           .screenshot({ path: `${suite.artifactDir}/live-composer.png` });
@@ -229,8 +277,14 @@ suite.define(() => {
           permissionMode: "workspace",
           totalTokens: 42_000,
         };
+        await setAgentDefault("guarded");
         await gateway.setSessionsListResponse({ sessions: [live] });
         await gateway.setMethodResponse("sessions.describe", { session: live });
+        await gateway.setMethodResponse("chat.startup", {
+          sessionId: live.sessionId,
+          sessionInfo: live,
+          messages: [{ role: "assistant", content: text }],
+        });
         await page.reload();
         await gateway.waitForRequest("connect");
         await page.getByText(text, { exact: true }).waitFor();
@@ -239,7 +293,7 @@ suite.define(() => {
         expect(await model.getAttribute("aria-busy")).toBe("false");
         expect(await model.getAttribute("aria-disabled")).toBe("true");
         expect(await effort.getAttribute("aria-disabled")).toBe("true");
-        expect(await permission.getAttribute("data-chat-select-value")).toBe("full");
+        expect(await permission.getAttribute("data-chat-select-value")).toBe("");
         expect(await permission.isDisabled()).toBe(true);
         expect(await ring.getAttribute("aria-label")).toContain("14%");
         const retainedRing = await ring.elementHandle();
@@ -247,6 +301,7 @@ suite.define(() => {
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
         await gateway.resolveDeferred("connect");
+        await releaseSessionRow();
         await expect
           .poll(() => model.getAttribute("data-chat-select-value"))
           .toBe("openai/alternate-example");
@@ -261,6 +316,8 @@ suite.define(() => {
             (element) => element === document.querySelector(".context-ring"),
           ),
         ).toBe(true);
+        await releaseAgents();
+        expect(await permission.getAttribute("data-chat-select-value")).toBe("workspace");
         await flushSnapshot();
 
         const cleared = {
@@ -272,6 +329,11 @@ suite.define(() => {
         };
         await gateway.setSessionsListResponse({ sessions: [cleared] });
         await gateway.setMethodResponse("sessions.describe", { session: cleared });
+        await gateway.setMethodResponse("chat.startup", {
+          sessionId: cleared.sessionId,
+          sessionInfo: cleared,
+          messages: [{ role: "assistant", content: text }],
+        });
         await page.reload();
         await gateway.waitForRequest("connect");
         await page.getByText(text, { exact: true }).waitFor();
@@ -279,11 +341,44 @@ suite.define(() => {
         expect(await permission.getAttribute("data-chat-select-value")).toBe("workspace");
         expect(await permission.isDisabled()).toBe(true);
         await gateway.resolveDeferred("connect");
+        await releaseSessionRow();
         await expect.poll(() => model.textContent()).toContain("Reasoning example");
         await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("");
         await expect.poll(() => effort.textContent()).toContain("Medium");
         await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("");
         await expect.poll(() => permission.isEnabled()).toBe(true);
+        await expect.poll(() => permission.textContent()).toContain("Ask me");
+        await releaseAgents();
+        await flushSnapshot();
+        for (const [next, previousLabel, nextLabel] of [
+          ["full", "Ask me", "Full access"],
+          [undefined, "Full access", "Default"],
+        ] as const) {
+          await setAgentDefault(next);
+          await page.reload();
+          await gateway.waitForRequest("connect");
+          await page.getByText(text, { exact: true }).waitFor();
+          await expect.poll(() => permission.textContent()).toContain(previousLabel);
+          const retainedPermission = await permission.elementHandle();
+          const before = await permission.boundingBox();
+          await gateway.resolveDeferred("connect");
+          await releaseSessionRow();
+          await expect.poll(() => permission.isEnabled()).toBe(true);
+          expect(await permission.textContent()).toContain(previousLabel);
+          expect(await permission.boundingBox()).toEqual(before);
+          await releaseAgents();
+          await expect.poll(() => permission.textContent()).toContain(nextLabel);
+          expect(
+            await retainedPermission!.evaluate(
+              (element) => element === document.querySelector("[data-chat-permission-select]"),
+            ),
+          ).toBe(true);
+          await flushSnapshot();
+        }
+        await page.reload();
+        await gateway.waitForRequest("connect");
+        await page.getByText(text, { exact: true }).waitFor();
+        expect(await permission.textContent()).toBe("Default");
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       },
