@@ -57,8 +57,8 @@ const startRelay = (
   > = {},
 ) => createServiceChildRelayAdapter({ ...relayDefaults, ...params });
 
-function mockWritableRelay() {
-  const stub = buildRelay((child) => mocks.spawn.mockReturnValue(child));
+function mockWritableRelay(platform: "linux" | "darwin" = "darwin") {
+  const stub = buildRelay((child) => mocks.spawn.mockReturnValue(child), platform);
   cleanups.push(() => {
     closeStub(stub);
     stub.stdout.destroy();
