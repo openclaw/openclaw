@@ -488,8 +488,9 @@ describe("syncWorkspaceSkills", () => {
     expect(await exists(skillPath(target, "gamma", "SKILL.md"))).toBe(true);
   });
 
-  it("refreshes changed support files without replacing unchanged copies", async () => {
-    const { source, target } = await setupSkills(["alpha"]);
+  it.each([false, true])("reconciles support files with cold sync state=%s", async (cold) => {
+    const { source, target: initialTarget } = await setupSkills(["alpha"]);
+    const target = cold ? await newDir("restarted-target") : initialTarget;
     const sourceSkill = skillPath(source, "alpha");
     const targetSkill = skillPath(target, "alpha");
     await writeFiles(sourceSkill, {
@@ -499,10 +500,15 @@ describe("syncWorkspaceSkills", () => {
       "scripts/edited.txt": "original",
     });
     const skillsSnapshot = await buildSnapshot(source);
-    await sync(source, target, { skillsSnapshot });
+    await sync(source, initialTarget, { skillsSnapshot });
+    if (cold) {
+      // Retain the on-disk result without a process-local entry for this destination.
+      await fs.rename(skillPath(initialTarget), skillPath(target));
+    }
     const unchanged = path.join(targetSkill, "scripts/unchanged.txt");
+    await fs.utimes(unchanged, 1, 1);
     const before = await fs.stat(unchanged);
-    await fs.writeFile(path.join(sourceSkill, "references/changed.txt"), "after");
+    await fs.writeFile(path.join(sourceSkill, "references/changed.txt"), "after!");
     await fs.rm(path.join(sourceSkill, "references/removed.txt"));
     await fs.writeFile(path.join(targetSkill, "unexpected.txt"), "stale");
     await fs.writeFile(path.join(targetSkill, "scripts/edited.txt"), "modified");
@@ -510,7 +516,7 @@ describe("syncWorkspaceSkills", () => {
 
     await sync(source, target, { skillsSnapshot });
 
-    expect(await readText(targetSkill, "references/changed.txt")).toBe("after");
+    expect(await readText(targetSkill, "references/changed.txt")).toBe("after!");
     expect(await exists(path.join(targetSkill, "references/removed.txt"))).toBe(false);
     expect(await exists(path.join(targetSkill, "unexpected.txt"))).toBe(false);
     expect(await readText(unchanged)).toBe("keep");

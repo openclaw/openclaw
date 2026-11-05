@@ -414,19 +414,17 @@ export async function syncWorkspaceSkills(params: {
           : [];
       }),
     );
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.target_scan");
+    const children = new Set(await fsp.readdir(targetSkillsDir));
+    assertCurrent?.();
+    // A restart loses usage records, not copied bytes. Reconcile existing trees
+    // against current content before reuse, independently of the process version.
     const incrementalDestinations = new Set(
       plans.flatMap((plan) => {
         const destination = plan.destinationPath ? path.basename(plan.destinationPath) : null;
-        return destination &&
-          previousUsage?.destinations.get(plan.identity) === destination &&
-          !plan.pin
-          ? [destination]
-          : [];
+        return destination && children.has(destination) && !plan.pin ? [destination] : [];
       }),
     );
-    phases.mark("attempt.setup.sandbox.layout.skills_sync.target_scan");
-    const children = await fsp.readdir(targetSkillsDir);
-    assertCurrent?.();
     phases.mark("attempt.setup.sandbox.layout.skills_sync.remove_stale");
     for (const child of children) {
       if (
