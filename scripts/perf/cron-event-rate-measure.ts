@@ -22,6 +22,7 @@ import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import type { OperatorScope } from "../../src/gateway/operator-scopes.js";
 import { delay, stopChild } from "../lib/gateway-bench-child.ts";
 import { getFreePort } from "../lib/gateway-bench-probes.ts";
 import {
@@ -61,7 +62,7 @@ while (port < 40_000) {
   port = await getFreePort();
 }
 const origin = "https://cron-measure.example";
-const scopes = ["operator.admin", "operator.read", "operator.write"];
+const scopes: OperatorScope[] = ["operator.admin", "operator.read", "operator.write"];
 await writeFile(
   configPath,
   JSON.stringify({
@@ -156,7 +157,7 @@ function runtime(value: unknown): Runtime {
 }
 
 async function rpc(client: Client, method: string, params: unknown) {
-  assert(!failure, failure?.message);
+  assert.ifError(failure);
   let response = await client.request(method, params, 60_000);
   const error = response.error;
   if (
@@ -360,7 +361,7 @@ try {
       assert.equal(view.get(row.id)?.value, row.value, `Client runtime differs for ${row.id}`);
     }
   }
-  assert(!failure, failure?.message);
+  assert.ifError(failure);
   const waves = seconds / 30;
   assert.equal(
     successfulFinishes,
