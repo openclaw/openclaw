@@ -49,6 +49,7 @@ type TalkTranscriptionRelayEvent = TalkTranscriptionRelayEventPayload & {
 type TranscriptionRelaySession = {
   id: string;
   connId: string;
+  sessionKey?: string;
   context: GatewayRequestContext;
   sttSession:
     | ReturnType<RealtimeTranscriptionProviderPlugin["createSession"]>
@@ -63,12 +64,14 @@ type TranscriptionRelaySession = {
 type CreateTalkTranscriptionRelaySessionParams = {
   context: GatewayRequestContext;
   connId: string;
+  sessionKey?: string;
+  assertCurrent: () => void;
 } & (
   | {
       provider: RealtimeTranscriptionProviderPlugin;
       providerConfig: RealtimeTranscriptionProviderConfig;
     }
-  | { file: TalkFileTranscriptionConfig; assertCurrent: () => void }
+  | { file: TalkFileTranscriptionConfig }
 );
 
 const transcriptionSessions = new Map<string, TranscriptionRelaySession>();
@@ -109,7 +112,7 @@ function assertRelayInputAudioConfig(providerConfig: RealtimeTranscriptionProvid
 }
 
 function broadcastToOwner(
-  session: Pick<TranscriptionRelaySession, "id" | "context" | "connId" | "talk">,
+  session: Pick<TranscriptionRelaySession, "id" | "context" | "connId" | "talk" | "sessionKey">,
   event: TalkTranscriptionRelayEvent,
   talkEvent?: TalkEventInput,
 ): void {
@@ -121,7 +124,10 @@ function broadcastToOwner(
       ...(talkEvent ? { talkEvent: session.talk.emit(talkEvent) } : {}),
     },
     new Set([session.connId]),
-    { dropIfSlow: event.type === "inputAudio" || event.type === "partial" },
+    {
+      dropIfSlow: event.type === "inputAudio" || event.type === "partial",
+      ...(session.sessionKey ? { sessionKeys: [session.sessionKey] } : {}),
+    },
   );
 }
 
@@ -224,6 +230,7 @@ export function createTalkTranscriptionRelaySession(
     id: transcriptionSessionId,
     context: params.context,
     connId: params.connId,
+    sessionKey: params.sessionKey,
     talk,
   };
   const emit = (event: TalkTranscriptionRelayEvent, talkEvent?: TalkEventInput) =>
@@ -231,7 +238,16 @@ export function createTalkTranscriptionRelaySession(
   const relayRef: { current?: TranscriptionRelaySession } = {};
   const getActiveRelay = (): TranscriptionRelaySession | undefined => {
     const relay = relayRef.current;
-    return relay && transcriptionSessions.get(relay.id) === relay ? relay : undefined;
+    if (!relay || transcriptionSessions.get(relay.id) !== relay) {
+      return undefined;
+    }
+    try {
+      params.assertCurrent();
+      return relay;
+    } catch {
+      closeTranscriptionSession(relay, "error");
+      return undefined;
+    }
   };
   const onTranscript = (text: string, final: boolean) => {
     const relay = getActiveRelay();
@@ -286,6 +302,7 @@ export function createTalkTranscriptionRelaySession(
   const relay: TranscriptionRelaySession = {
     id: transcriptionSessionId,
     connId: params.connId,
+    sessionKey: params.sessionKey,
     context: params.context,
     sttSession,
     talk,
@@ -307,7 +324,7 @@ export function createTalkTranscriptionRelaySession(
   sttSession
     .connect()
     .then(() => {
-      if (transcriptionSessions.get(transcriptionSessionId) !== relay || relay.draining) {
+      if (getActiveRelay() !== relay || relay.draining) {
         return;
       }
       emit({ type: "ready" }, { type: "session.ready", payload: null });

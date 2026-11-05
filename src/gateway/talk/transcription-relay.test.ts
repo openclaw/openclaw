@@ -74,6 +74,7 @@ function createRelay(
   connId = "conn-1",
   providerConfig: Record<string, unknown> = {},
   onRequest?: (req: RealtimeTranscriptionSessionCreateRequest) => void,
+  assertCurrent: () => void = () => {},
 ) {
   let request: RealtimeTranscriptionSessionCreateRequest | undefined;
   const provider = createTranscriptionProvider(sttSession, (value) => {
@@ -83,6 +84,7 @@ function createRelay(
   const session = createTalkTranscriptionRelaySession({
     context,
     connId,
+    assertCurrent,
     provider,
     providerConfig,
   });
@@ -626,10 +628,37 @@ describe("talk transcription gateway relay", () => {
       createTalkTranscriptionRelaySession({
         context,
         connId: "conn-1",
+        assertCurrent: () => {},
         provider,
         providerConfig: { encoding: "linear16", sampleRate: 16000 },
       }),
     ).toThrow("Gateway transcription relay requires g711_ulaw/8000 audio");
     expect(provider.createSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("transcription live authority", () => {
+  it("closes instead of delivering a transcript after authority is revoked", async () => {
+    const { context, events } = createBroadcastContext();
+    const stt = createSttSessionMock();
+    let current = true;
+    const { request } = createRelay(context, stt, "revoked-dictation", {}, undefined, () => {
+      if (!current) {
+        throw new Error("revoked");
+      }
+    });
+    await Promise.resolve();
+    current = false;
+    request.onTranscript?.("private dictation must not be delivered");
+    expect(
+      events.some(
+        ({ payload }) =>
+          typeof payload === "object" &&
+          payload !== null &&
+          "text" in payload &&
+          payload.text === "private dictation must not be delivered",
+      ),
+    ).toBe(false);
+    expect(stt.close).toHaveBeenCalledOnce();
   });
 });

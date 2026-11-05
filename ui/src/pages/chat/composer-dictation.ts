@@ -18,6 +18,7 @@ type ComposerDictationFailure = {
 type ComposerDictationOwnerOptions = {
   client: GatewayBrowserClient | null;
   sessionKey?: string;
+  prepareSession?: () => Promise<string | undefined>;
   draftKey?: string;
   connected: boolean;
   enabled: boolean;
@@ -293,7 +294,7 @@ export class ComposerDictationOwner extends EventTarget {
       await this.stop({ commit: false });
       return;
     }
-    if (this.options.dictationAvailable === false) {
+    if (this.options.dictationAvailable === false && !this.options.prepareSession) {
       this.clearPointerGesture();
       this.setPhase("idle");
       this.options.onDictationUnavailable?.();
@@ -315,6 +316,9 @@ export class ComposerDictationOwner extends EventTarget {
     try {
       // Preserve Safari playback activation before the lazy capture module loads.
       this.playback.prepare(client, () => void this.stop({ commit: false }));
+      const sessionKey = this.options.prepareSession
+        ? await this.options.prepareSession()
+        : this.options.sessionKey;
       const { ComposerDictationSession, formatDictationError } =
         await import("./composer-dictation-session.ts");
       if (
@@ -350,7 +354,7 @@ export class ComposerDictationOwner extends EventTarget {
             }
           },
         },
-        { sessionKey: this.options.sessionKey },
+        { sessionKey },
       );
       this.session = session;
       await session.start();

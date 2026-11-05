@@ -52,7 +52,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   shutdown: [],
   "gateway.suspension": [],
   tick: [],
-  "talk.event": [READ_SCOPE],
+  "talk.event": [READ_SCOPE, SESSION_READ_SCOPE],
   "talk.mode": [TALK_SCOPE],
   "talk.voice.change": [TALK_SCOPE],
   task: [READ_SCOPE],
@@ -116,6 +116,15 @@ export function isPlainEventPayload(payload: unknown): payload is Record<string,
   }
   const prototype = Object.getPrototypeOf(payload);
   return (prototype === null || prototype === Object.prototype) && !("toJSON" in payload);
+}
+
+/** Realtime Talk stays operator-only; session readers receive only targeted dictation. */
+export function isTargetedTranscriptionEvent(payload: unknown, targeted: boolean): boolean {
+  return (
+    targeted &&
+    isPlainEventPayload(payload) &&
+    typeof Object.getOwnPropertyDescriptor(payload, "transcriptionSessionId")?.value === "string"
+  );
 }
 
 export function isSessionReadInvalidation(

@@ -38,7 +38,12 @@ const dictationHarness = vi.hoisted(() => {
       return true;
     });
 
-    constructor(private options: { onCommit: (transcript: string) => void }) {
+    constructor(
+      private options: {
+        onCommit: (transcript: string) => void;
+        prepareSession?: () => Promise<string | undefined>;
+      },
+    ) {
       super();
       this.update(options);
       harness.controllers.push(this);
@@ -47,7 +52,10 @@ const dictationHarness = vi.hoisted(() => {
       this.addEventListener("change", listener);
       return () => this.removeEventListener("change", listener);
     }
-    update(options: { onCommit: (transcript: string) => void }) {
+    update(options: {
+      onCommit: (transcript: string) => void;
+      prepareSession?: () => Promise<string | undefined>;
+    }) {
       this.options = options;
       harness.options = options;
     }
@@ -59,7 +67,10 @@ const dictationHarness = vi.hoisted(() => {
     }
   }
   const harness = {
-    options: null as null | { onCommit: (transcript: string) => void },
+    options: null as null | {
+      onCommit: (transcript: string) => void;
+      prepareSession?: () => Promise<string | undefined>;
+    },
     controllers: [] as Controller[],
   };
   return Object.assign(harness, { Controller });
@@ -273,4 +284,15 @@ describe("DirectDictationControl", () => {
     expect(insertTranscript).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
   });
+});
+
+it("prepares a target for session writers with read access but no Talk authority", () => {
+  const client = createTestGatewayClient(vi.fn());
+  Object.defineProperty(client, "auth", {
+    value: { role: "operator", scopes: ["operator.read", "operator.sessions.write"] },
+  });
+  const prepareSession = vi.fn(async () => "agent:main:prepared-draft");
+  const { control } = fixture({ getClient: () => client, prepareSession });
+  control.prepare("new-guest-draft");
+  expect(dictationHarness.options?.prepareSession).toBe(prepareSession);
 });
