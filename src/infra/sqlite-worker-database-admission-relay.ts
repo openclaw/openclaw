@@ -22,7 +22,12 @@ const ABANDONED = 2;
 const ADMISSION_PEER_SAFETY_TIMEOUT_MS = 10 * 60_000;
 export const SQLITE_COLD_ADMISSION_PENDING = 4;
 
-type AdmissionWait = { readonly deadlineAtMs?: number; assertActive?: () => void };
+type AdmissionWait = {
+  readonly deadlineAtMs?: number;
+  assertActive?: () => void;
+  /** Outer cancellation stops here; outer deadlines still apply. */
+  settlesCancellation?: true;
+};
 type AdmissionWaitScope = { wait: AdmissionWait; parent?: AdmissionWaitScope; active: boolean };
 const admissionWait = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteDatabaseAdmissionWait"),
@@ -50,6 +55,11 @@ export function withSqliteDatabaseAdmissionWait<T>(wait: AdmissionWait, run: () 
   }
 }
 
+/** Releasing or retiring cancelled work must finish; only its deadline still bounds the wait. */
+export function withSqliteDatabaseAdmissionSettlement<T>(run: () => T): T {
+  return withSqliteDatabaseAdmissionWait({ settlesCancellation: true }, run);
+}
+
 export function readSqliteDatabaseAdmissionDeadline(): number | undefined {
   let deadline: number | undefined;
   for (let scope = admissionWait.getStore(); scope; scope = scope.parent) {
@@ -68,9 +78,13 @@ export function readSqliteDatabaseAdmissionDeadline(): number | undefined {
 export function assertSqliteDatabaseAdmissionWaitActive(): void {
   try {
     for (let scope = admissionWait.getStore(); scope; scope = scope.parent) {
-      if (scope.active) {
-        scope.wait.assertActive?.();
+      if (!scope.active) {
+        continue;
       }
+      if (scope.wait.settlesCancellation) {
+        return;
+      }
+      scope.wait.assertActive?.();
     }
   } catch (error) {
     throw wrapSqliteWorkerError(

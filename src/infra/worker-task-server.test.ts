@@ -1,7 +1,11 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
 import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { cancelWorkerNativeSections } from "../../packages/worker-runtime/src/worker-task-native-sections.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
 import { expectCalls } from "./worker-task-pool.owned.test-support.js";
 import type { WorkerTaskContext } from "./worker-task-transport.js";
@@ -12,6 +16,8 @@ const boundary = vi.hoisted(() => {
 });
 vi.mock("node:worker_threads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:worker_threads")>()),
+  // Served workers resolve SQLite facts through their host, as in a real Worker thread.
+  threadId: 1,
   get parentPort() {
     return boundary.port;
   },
@@ -50,6 +56,7 @@ vi.mock("./worker-idle-gc.js", () => ({
   scheduleWorkerIdleGc: vi.fn(),
 }));
 const exitCode = process.exitCode;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
@@ -113,11 +120,17 @@ async function workerFixture() {
     ...(await import("./worker-task-server.js")),
     port,
     closed: closed.promise,
-    task(this: void, taskId: number, context = taskContext(), sampleMemory = false) {
+    task(
+      this: void,
+      taskId: number,
+      context = taskContext(),
+      sampleMemory = false,
+      nativeSections = new SharedArrayBuffer(4),
+    ) {
       result = createDeferred<string>();
       port.emit("message", {
         taskId,
-        nativeSections: new SharedArrayBuffer(4),
+        nativeSections,
         taskContext: context,
         sampleMemory,
       });
@@ -257,6 +270,42 @@ it("expires a task's admission budget without poisoning its successor or resourc
   expectCalls(2, admission.exchanges, handler);
   expectCalls(0, port.close, boundary.closeMemory);
   expect(process.exitCode).toBe(exitCode);
+});
+
+it("retires a cancelled task's snapshot copy unless a live reader still holds it", async () => {
+  const { task, serveOwnedWorkerTasks } = await workerFixture();
+  const admission = await admissionFixture();
+  const root = tempDirs.make("cancelled-snapshot-");
+  const sections = new SharedArrayBuffer(4);
+  const staging = await import("./sqlite-snapshot-staging.js");
+  const { removeTempDirectoryAsync } = await import("./sqlite-readonly-location-cleanup.js");
+  const { DatabaseSync } = (await import("./node-sqlite.js")).requireNodeSqlite();
+  const settled = createDeferred<boolean[]>();
+  const settle = async (control: { throwIfCancelled(): void }) => {
+    const allocate = () => {
+      const directory = staging.createSqliteSnapshotStagingDirectorySync(root);
+      // A child process writes the copy, so retiring it asks the host for its facts.
+      const copy = new DatabaseSync(path.join(directory, "database.sqlite"));
+      copy.exec("CREATE TABLE copied(value)");
+      copy.close();
+      return directory;
+    };
+    const [held, idle] = [allocate(), allocate()];
+    const releaseReader = staging.acquireSqliteSnapshotReadToken(held);
+    cancelWorkerNativeSections(new Int32Array(sections));
+    expect(() => control.throwIfCancelled()).toThrow("worker task cancelled");
+    const removed = [await removeTempDirectoryAsync(idle), await removeTempDirectoryAsync(held)];
+    expect(fs.readdirSync(root)).toEqual([path.basename(held)]);
+    expect(fs.existsSync(path.join(held, "database.sqlite"))).toBe(true);
+    releaseReader();
+    return [...removed, await removeTempDirectoryAsync(held)];
+  };
+  serveOwnedWorkerTasks((_input, _channel, control) =>
+    settle(control).then(settled.resolve, settled.reject),
+  );
+  void task(1, taskContext(admission.port), false, sections);
+  expect(await settled.promise).toEqual([true, false, true]);
+  expect(fs.readdirSync(root)).toEqual([]);
 });
 
 it.each([undefined, "openclaw doctor --fix"])(

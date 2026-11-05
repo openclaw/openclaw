@@ -41,6 +41,7 @@ import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-recei
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
 import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import { sqliteSchemaOwners } from "./sqlite-schema-scope.js";
+import { withSqliteDatabaseAdmissionSettlement } from "./sqlite-worker-database-admission-relay.js";
 import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export {
@@ -750,15 +751,18 @@ export function retireSqliteDatabaseAdmissionForPath(
   location: string,
   options: { requireSoleDescriptor?: boolean } = {},
 ): void {
-  const observed = prepareSqliteDatabaseAdmission(location);
-  if (!observed) {
-    return;
-  }
-  state.localSchemaRevisions.delete(observed);
-  const record = threadId === 0 ? state.registry.records.get(observed) : pathAdmission(location);
-  if (state.registry.retireDescriptor(observed, options) && record) {
-    exchange(record);
-  }
+  // Removing a cancelled task's private copy still publishes its retired facts.
+  withSqliteDatabaseAdmissionSettlement(() => {
+    const observed = prepareSqliteDatabaseAdmission(location);
+    if (!observed) {
+      return;
+    }
+    state.localSchemaRevisions.delete(observed);
+    const record = threadId === 0 ? state.registry.records.get(observed) : pathAdmission(location);
+    if (state.registry.retireDescriptor(observed, options) && record) {
+      exchange(record);
+    }
+  });
 }
 
 export function suspendSqliteDatabaseAdmission(database: DatabaseSync, suspended: boolean): void {

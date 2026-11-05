@@ -5,6 +5,7 @@ import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { withSqliteNativeOpen } from "./sqlite-error-diagnostics.js";
+import { withSqliteDatabaseAdmissionSettlement } from "./sqlite-worker-database-admission-relay.js";
 
 export const SQLITE_STAGING_TOKEN_FILES = [
   "owner.sqlite",
@@ -28,6 +29,26 @@ export function acquireSqliteStagingToken(
   directory: string,
   mode: "create" | "read" | "reclaim",
   options: { allowMissing?: boolean } = {},
+): SqliteStagingToken {
+  // Cancelled work still releases or retires its private lock instead of leaving the copy behind.
+  const settle = withSqliteDatabaseAdmissionSettlement;
+  const token = settle(() => acquireStagingToken(directory, mode, options));
+  const settled: SqliteStagingToken = Object.assign(
+    (retiring?: boolean) => settle(() => token(retiring)),
+    {
+      beginRetirement: () => {
+        settle(() => token.beginRetirement());
+        return settled;
+      },
+    },
+  );
+  return settled;
+}
+
+function acquireStagingToken(
+  directory: string,
+  mode: "create" | "read" | "reclaim",
+  options: { allowMissing?: boolean },
 ): SqliteStagingToken {
   const location = path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]);
   const readIdentity = (pathname: string, kind: "directory" | "file") => {
