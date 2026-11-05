@@ -15,6 +15,7 @@ import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-session-optional.ts";
+import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
@@ -36,6 +37,7 @@ import {
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
 registerEnglishCatalog(registerChatComposerEnglish);
+registerEnglishCatalog(registerModelControlsEnglish);
 
 registerNewSessionRuntimeEnglish();
 
@@ -412,6 +414,25 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
   );
   return (
     <>
+      <Show when={props.runError && props.defaultModelRecovery}>
+        {(recovery) => (
+          <div class="chat-composer-neighbor-card chat-model-recovery" role="status">
+            <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
+              <Icon name="refresh" />
+            </span>
+            <span>{t("chat.modelControls.switchOnlyHelp")}</span>
+            <button
+              class="btn btn--sm"
+              type="button"
+              data-chat-default-model-recovery
+              disabled={!props.connected}
+              onClick={() => void recovery().switchModel()}
+            >
+              {t("chat.modelControls.switchToDefault", { model: recovery().modelLabel })}
+            </button>
+          </div>
+        )}
+      </Show>
       <Show when={props.providerPolicyNotice}>
         {(notice) => <ProviderPolicyNoticeView notice={notice()} />}
       </Show>
