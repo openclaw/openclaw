@@ -3,6 +3,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { waitForAbortSignal as waitForAbort } from "../../infra/abort-signal.js";
 import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -539,14 +541,22 @@ describe("channel ingress monitor", () => {
       await withQueue(async (queue) => {
         const creator = new PluginInstance("ingress-runtime");
         const foreign = new PluginInstance("foreign-runtime");
+        const invocation = new PluginInvocationScope(createEmptyPluginRegistry(), [foreign]);
         const runtime = createPluginRuntimeStore<string>({
           pluginId: "ingress-runtime",
           errorMessage: "Ingress runtime not initialized",
         });
         const entered = createDeferred();
         const gate = createDeferred();
-        const delivered = createDeferred<{ admissionClosed: boolean; runtime: string | null }>();
+        const delivered = createDeferred<unknown>();
         const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+          try {
+            foreign.run(() => undefined);
+          } catch (error) {
+            entered.resolve();
+            delivered.resolve({ error });
+            throw error;
+          }
           entered.resolve();
           await gate.promise;
           delivered.resolve({
@@ -555,25 +565,19 @@ describe("channel ingress monitor", () => {
           });
           await lifecycle.onAdopted();
         });
-        let pumpTail: Promise<void> | undefined;
         const monitor = creator.run(() => {
           runtime.setRuntime("creator");
           return createMonitor(queue, deliver, {
             pollIntervalMs: 60_000,
             ...(mode === "detached"
-              ? {
-                  runPumpTask: (work) => {
-                    pumpTail = runWithGatewayIndependentRootWorkContinuation(work);
-                    return pumpTail;
-                  },
-                }
+              ? { runPumpTask: runWithGatewayIndependentRootWorkContinuation }
               : {}),
           });
         });
         const scanned = createDeferred();
         const scanGate = createDeferred();
         const listUnsettled = queue.listUnsettled!.bind(queue);
-        let holdScan = mode === "released";
+        let holdScan = true;
         queue.listUnsettled = async (...args) => {
           if (holdScan) {
             holdScan = false;
@@ -582,22 +586,26 @@ describe("channel ingress monitor", () => {
           }
           return await listUnsettled(...args);
         };
-        monitor.start();
+        await queue.enqueue(
+          "event-ended-root",
+          {
+            version: 1,
+            rawEvent: JSON.stringify({ id: "event-ended-root", lane: "a", text: "hello" }),
+          },
+          { laneKey: "lane:a" },
+        );
         try {
           await foreign.run(() =>
             runWithGatewayIndependentRootWorkAdmission(async () => {
               runtime.setRuntime("foreign");
-              await monitor.admit({ id: "event-ended-root", lane: "a", text: "hello" });
-              if (mode === "released") {
-                await scanned.promise;
-              }
+              invocation.run(() => monitor.start());
+              await scanned.promise;
             }),
           );
+          invocation.release();
           scanGate.resolve();
           await entered.promise;
-          if (mode === "detached") {
-            await pumpTail;
-          }
+          await monitor.waitForPumpIdle();
           gate.resolve();
           expect(await delivered.promise).toEqual({ admissionClosed: false, runtime: "creator" });
           expect(deliver).toHaveBeenCalledOnce();
@@ -605,6 +613,7 @@ describe("channel ingress monitor", () => {
           await expect(queue.listPending()).resolves.toEqual([]);
           await expect(queue.listClaims()).resolves.toEqual([]);
         } finally {
+          invocation.release();
           gate.resolve();
           scanGate.resolve();
           await monitor.stop();
@@ -634,47 +643,28 @@ describe("channel ingress monitor", () => {
     });
   });
 
-  it("keeps deferred handoffs with their owner when a stop abort races the return", async () => {
-    await withQueue(async (queue) => {
-      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
-        lifecycle.onDeferred();
-        await waitForAbort(lifecycle.abortSignal);
-        return { kind: "deferred" as const };
+  it.each(["deferred", "completed"] as const)(
+    "keeps a deferred handoff when stop abort races a %s return",
+    async (kind) => {
+      await withQueue(async (queue) => {
+        const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+          lifecycle.onDeferred();
+          await waitForAbort(lifecycle.abortSignal);
+          return { kind };
+        });
+        const monitor = createMonitor(queue, deliver);
+        monitor.start();
+        await monitor.admit({ id: "event-stop-deferred-race", lane: "a", text: "hello" });
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+
+        await monitor.stop();
+
+        // The handoff owns the claim even when a conflicting terminal return races stop.
+        await expect(queue.listPending()).resolves.toEqual([]);
+        await expect(queue.listClaims()).resolves.toHaveLength(1);
       });
-      const monitor = createMonitor(queue, deliver);
-      monitor.start();
-      await monitor.admit({ id: "event-stop-deferred-race", lane: "a", text: "hello" });
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
-
-      await monitor.stop();
-
-      // The deferred owner still owns the claim; releasing it for retry would
-      // replay work the owner is completing.
-      await expect(queue.listPending()).resolves.toEqual([]);
-      await expect(queue.listClaims()).resolves.toHaveLength(1);
-    });
-  });
-
-  it("keeps a deferred handoff when stop abort races a conflicting completed return", async () => {
-    await withQueue(async (queue) => {
-      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
-        lifecycle.onDeferred();
-        await waitForAbort(lifecycle.abortSignal);
-        return { kind: "completed" as const };
-      });
-      const monitor = createMonitor(queue, deliver);
-      monitor.start();
-      await monitor.admit({ id: "event-deferred-then-completed", lane: "a", text: "hello" });
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
-
-      await monitor.stop();
-
-      // A recorded handoff owns the claim, so stop cannot rewrite the
-      // conflicting terminal return and release the row for replay.
-      await expect(queue.listPending()).resolves.toEqual([]);
-      await expect(queue.listClaims()).resolves.toHaveLength(1);
-    });
-  });
+    },
+  );
 
   it("clears a queued drain request when abort wins an active pump", async () => {
     await withQueue(async (queue) => {
