@@ -1080,6 +1080,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["fence cr indent", ["~~~\rx\r", null, "~~~\rx\r  y"], ["~~~\rx\r", "~~~\n  y"]],
     ["partial 2", ["P", null, "PA", true, "PAE", 2, "PN", 2, false], ["P", "A", "AE\n\nPN"]],
     ["old block", ["X.", 3, 2, "X. Y.", ["X.", 0], 3, "X. Y. Z."], ["X.", "X. Y.X.", "X. Y. Z."]],
+    ["mid block", [2, "B.", 2, "B. C.", ["B.", 1], 3, "B. C. D."], ["B.\n\nB. C.B.", "B. C. D."]],
+    ["two starts", ["X.", 3, 2, 2, "X. Y.", ["X.", 0], 3, "X. Y. Z."], ["X.", "X. Y.X.", "X. Y. Z."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1421,7 +1423,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
-
   it("waits for an in-flight close before recovering from companion media failure", async () => {
     const { options, media, pending } = await holdMediaFinal("accepted card");
     const deliveryErrorPromise = pending.catch((error: unknown) => error);
@@ -1476,7 +1477,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(visible ? 0 : 1);
     },
   );
-
   it("preserves fallback-only nested-error precedence after media failure", async () => {
     const transportCause = new Error("socket closed");
     sendStructuredCardFeishuMock.mockRejectedValueOnce(
