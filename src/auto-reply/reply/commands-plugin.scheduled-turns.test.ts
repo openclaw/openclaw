@@ -302,8 +302,13 @@ describe("native scheduled command execution", () => {
         storePath: parent.storePath,
       });
       expect(child?.spawnedBy).toBe(parent.sessionKey);
-      // The child inherits the stored ceiling minus scheduling: no recursive schedules.
-      expect(child?.inheritedToolAllow).toEqual(["read", "sessions_spawn", "agents_wait"]);
+      // The stored requester ceiling is distinct from the child's scheduling authority.
+      expect(child?.inheritedToolAllow).toEqual([
+        "read",
+        "sessions_spawn",
+        "agents_wait",
+        "automations",
+      ]);
       expect(subagentRuns.get(expectDefined(childRunId, "accepted child run"))).toMatchObject({
         requesterSessionKey: parent.sessionKey,
         requesterTurnRunId: expectDefined(capacity.occurrenceRunId(), "scheduled occurrence run"),
