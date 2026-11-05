@@ -158,7 +158,7 @@ it.each(["inbound", "outbound"] as const)(
     await f.answer();
     expect(f.updates()).toHaveLength(1);
     expect(f.updates()[0]).toMatch(/<Say[^>]*>Hello &amp; welcome\.<\/Say>\s*<Gather/);
-    listening(f.updates()[0]);
+    listening(f.updates()[0]!);
     expect(f.manager.getActiveCalls()[0]?.state).toBe("listening");
   },
 );
