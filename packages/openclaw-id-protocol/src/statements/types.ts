@@ -11,6 +11,7 @@ export const STATEMENT_TYPES = [
   "Revocation",
   "MembershipSnapshot",
   "InviteRedemption",
+  "RootReset",
 ] as const;
 
 /** One of {@link STATEMENT_TYPES}. */
@@ -20,9 +21,9 @@ export type StatementType = (typeof STATEMENT_TYPES)[number];
 export type UnixSeconds = number;
 
 /**
- * The only root epoch in v1-draft. A claw's root never changes (owner reset is out of scope;
- * see OCF-319), so `root_epoch` is a constant: statements carry it, and anything else is
- * malformed.
+ * The only root epoch in v1-draft. There are no root epochs: an owner reset replaces the root
+ * without one (RootReset), so `root_epoch` is a constant: statements carry it, and anything
+ * else is malformed.
  */
 export const ROOT_EPOCH = 1;
 
@@ -213,6 +214,20 @@ export type InviteRedemptionBody = {
   requested_at: UnixSeconds;
 };
 
+/**
+ * Owner reset (OCF-319): the Gateway, with the K_gw of the claw's current binding, vouches that
+ * the claw's root is now `new_root_pub` from `binding_seq` on. Reset only happens on the claw's
+ * machine. It keeps K_srv and K_gw, so the new binding (signed by the new root at this
+ * binding_seq) names the same keys as the binding it replaces.
+ */
+export type RootResetBody = {
+  claw_id: string;
+  new_root_pub: Ed25519PublicKey;
+  /** The new binding's binding_seq: higher than the binding the reset replaces. */
+  binding_seq: number;
+  issued_at: UnixSeconds;
+};
+
 /** Maps each statement type to its body. */
 export type StatementBodies = {
   OwnerDeviceCert: OwnerDeviceCertBody;
@@ -222,6 +237,7 @@ export type StatementBodies = {
   Revocation: RevocationBody;
   MembershipSnapshot: MembershipSnapshotBody;
   InviteRedemption: InviteRedemptionBody;
+  RootReset: RootResetBody;
 };
 
 /**

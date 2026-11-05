@@ -417,6 +417,24 @@
         "sig": "87lno6odyhgan2oIX0VmH_A06EhYoQhGLeAoHP0zZ6llfUWctwAqwrEJls6M8P0cQUAA0iFlcEniGfK7d6ZdCQ"
       },
       "signing_input_hex": "6f70656e636c61772f496e76697465526564656d7074696f6e2f7631007b226163636f756e745f6964223a22616363745f626f62222c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226465766963655f707562223a22656432353531393a37373637633564336564343163306166303466626336363864336334333864366464343664613166316164333331376562623032363635663032383263343832222c22696e766974655f6964223a223030313132323333343435353636373738383939616162626363646465656666222c22706565725f6b6579223a2269726f683a37373637633564336564343163306166303466626336363864336334333864366464343664613166316164333331376562623032363635663032383263343832222c2270726f6f66223a2261353336643339663465636532613161366637623031656237613666363762386438353130333564623631346262306465306534653730636233616566393033222c227265717565737465645f6174223a313739333331343830307d"
+    },
+    {
+      "name": "gateway signs root reset to root-2",
+      "verifier": "reset",
+      "statement": {
+        "v": 1,
+        "type": "RootReset",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "binding_seq": 3,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "BrbI3Er5bXQdcDgyWMvIzu9az-KF4xisVXQDiFJ01fLPOV2D54AXRnJRDT5f_WQS9ZjRO6XJMqH0Wd0xROc5Ag"
+      },
+      "signing_input_hex": "6f70656e636c61772f526f6f7452657365742f7631007b2262696e64696e675f736571223a332c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226973737565645f6174223a313739333331343830302c226e65775f726f6f745f707562223a22656432353531393a30323434376530336637623333393834623163646232393661363465353336653134663539333431363035376363383236363138393964363739373265663061227d"
     }
   ],
   "invalid": [
@@ -727,6 +745,42 @@
         "sig": "umGEFlEbNSr753tR-vy76JSogqyD86-yRm3yZB_ooV3rjFTweI_M4lo9C3xDlnljDU68XRhMhJ7pFpk-uaTfDw"
       },
       "expected_error": "wrong_signer"
+    },
+    {
+      "name": "root reset not signed by K_gw",
+      "verifier": "reset",
+      "statement": {
+        "v": 1,
+        "type": "RootReset",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "binding_seq": 3,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+        "alg": "ed25519",
+        "sig": "JdFD7fhQ0jTR6Hw4ScF52nitwgRw3SXQOe5H4ZCfBLgbqu9BRevP4mccBySRrKoD_Xv9pw60fFwDl8qHsSoyAw"
+      },
+      "expected_error": "wrong_signer"
+    },
+    {
+      "name": "root reset for another claw",
+      "verifier": "reset",
+      "statement": {
+        "v": 1,
+        "type": "RootReset",
+        "body": {
+          "claw_id": "ffffffffffffffffffffffffffffffff",
+          "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "binding_seq": 3,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "x_MSlbPB1sE1sJZrjL_ZOcTFJmaHWQNVeh6YQm_vLtpQLBlnlop3rlisJsAO6nWno_AHB5aXTYA-1Tq8zI27DQ"
+      },
+      "expected_error": "wrong_claw"
     }
   ],
   "pins": [
@@ -955,6 +1009,134 @@
           "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
           "alg": "ed25519",
           "sig": "kdfmNMWinzwViv8o_XVp6eFTuUJu9LuM9HABUioYX0GhlKaqNd39M1z42KtyTuUbgSjWeOdqOy-0OqTZDF0NAg"
+        }
+      },
+      "expected": {
+        "ok": false,
+        "error": "root_mismatch"
+      }
+    },
+    {
+      "name": "owner reset vouched for by the pinned claw's K_gw",
+      "host": "studio-k7x2q.crabd.me",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "binding_seq": 2
+      },
+      "evidence": {
+        "root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 3,
+            "root_epoch": 1,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "alg": "ed25519",
+          "sig": "kdfmNMWinzwViv8o_XVp6eFTuUJu9LuM9HABUioYX0GhlKaqNd39M1z42KtyTuUbgSjWeOdqOy-0OqTZDF0NAg"
+        },
+        "reset": {
+          "previous_root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+          "previous_binding": {
+            "v": 1,
+            "type": "ServerBinding",
+            "body": {
+              "claw_id": "0123456789abcdef0123456789abcdef",
+              "hostname": "studio-k7x2q.crabd.me",
+              "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+              "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+              "binding_seq": 2,
+              "root_epoch": 1,
+              "issued_at": 1793314800
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "alg": "ed25519",
+            "sig": "QaXvZ1rIgj-6xBGQ38xuebkWhGAfjcbUcNy1pkImb3J8bEkxnXCoof8dh9ReTiQfnczsIC2T2V01Tz6wwCn1CQ"
+          },
+          "statement": {
+            "v": 1,
+            "type": "RootReset",
+            "body": {
+              "claw_id": "0123456789abcdef0123456789abcdef",
+              "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+              "binding_seq": 3,
+              "issued_at": 1793314800
+            },
+            "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "alg": "ed25519",
+            "sig": "BrbI3Er5bXQdcDgyWMvIzu9az-KF4xisVXQDiFJ01fLPOV2D54AXRnJRDT5f_WQS9ZjRO6XJMqH0Wd0xROc5Ag"
+          }
+        }
+      },
+      "expected": {
+        "ok": false,
+        "error": "owner_reset"
+      }
+    },
+    {
+      "name": "a new root with a root reset not signed by K_gw (substitution)",
+      "host": "studio-k7x2q.crabd.me",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "binding_seq": 2
+      },
+      "evidence": {
+        "root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 3,
+            "root_epoch": 1,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "alg": "ed25519",
+          "sig": "kdfmNMWinzwViv8o_XVp6eFTuUJu9LuM9HABUioYX0GhlKaqNd39M1z42KtyTuUbgSjWeOdqOy-0OqTZDF0NAg"
+        },
+        "reset": {
+          "previous_root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+          "previous_binding": {
+            "v": 1,
+            "type": "ServerBinding",
+            "body": {
+              "claw_id": "0123456789abcdef0123456789abcdef",
+              "hostname": "studio-k7x2q.crabd.me",
+              "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+              "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+              "binding_seq": 2,
+              "root_epoch": 1,
+              "issued_at": 1793314800
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "alg": "ed25519",
+            "sig": "QaXvZ1rIgj-6xBGQ38xuebkWhGAfjcbUcNy1pkImb3J8bEkxnXCoof8dh9ReTiQfnczsIC2T2V01Tz6wwCn1CQ"
+          },
+          "statement": {
+            "v": 1,
+            "type": "RootReset",
+            "body": {
+              "claw_id": "0123456789abcdef0123456789abcdef",
+              "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+              "binding_seq": 3,
+              "issued_at": 1793314800
+            },
+            "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+            "alg": "ed25519",
+            "sig": "JdFD7fhQ0jTR6Hw4ScF52nitwgRw3SXQOe5H4ZCfBLgbqu9BRevP4mccBySRrKoD_Xv9pw60fFwDl8qHsSoyAw"
+          }
         }
       },
       "expected": {
