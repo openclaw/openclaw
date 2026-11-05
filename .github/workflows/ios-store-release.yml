@@ -219,7 +219,11 @@ jobs:
         with:
           cache-mode: off
           install-bun: "false"
+          install-deps: "false"
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install mobile release dependencies
+        run: node scripts/install-mobile-release-dependencies.mjs
 
       - name: Setup Ruby
         uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
