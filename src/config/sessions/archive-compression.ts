@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { pipeline as pipelineStreams, type Readable, Transform } from "node:stream";
+import { pipeline as pipelineStreams, Readable, Transform } from "node:stream";
 import { finished } from "node:stream/promises";
 import zlib from "node:zlib";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
@@ -121,6 +121,20 @@ export async function openSessionArchiveReader(filePath: string) {
       await finished(previous, { cleanup: true }).catch(() => undefined);
     }
   };
+  // A destroyed FileHandle read stream closes its descriptor, even with autoClose:false.
+  // Decoder restarts own only this iterator; close() alone owns the source descriptor.
+  async function* readSource() {
+    let position = 0;
+    while (true) {
+      const chunk = Buffer.allocUnsafe(64 * 1024);
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) {
+        return;
+      }
+      position += bytesRead;
+      yield chunk.subarray(0, bytesRead);
+    }
+  }
   return {
     stat: () => handle.stat(),
     async read(buffer: Buffer, position: number): Promise<number> {
@@ -133,7 +147,7 @@ export async function openSessionArchiveReader(filePath: string) {
       if (!chunks) {
         offset = 0;
         stream = pipelineStreams(
-          handle.createReadStream({ start: 0, autoClose: false }),
+          Readable.from(readSource(), { objectMode: false }),
           zlib.createZstdDecompress(),
           limitDecodedBytes(filePath),
           () => undefined,

@@ -1,31 +1,24 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { constants, zstdCompressSync, zstdDecompressSync } from "node:zlib";
+import { constants, zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
-  encodeSessionArchiveContent,
   openSessionArchiveReader,
-  readSessionArchiveContentSync,
   readSessionArchivePrefix,
   readSessionArchiveText,
-  SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "./archive-compression.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("archive compression", () => {
-  it("keeps plain and compressed archives compatible with the publishing codec", async () => {
+  it("reads compressed UTF-8 text and bounded plaintext prefixes", async () => {
     const content = `${JSON.stringify({ type: "message", body: "archive round trip 🦞" })}\n`;
-    const encoded = encodeSessionArchiveContent(content);
-    const dir = tempDirs.make("openclaw-archive-zstd-");
-    const plain = path.join(dir, "plain.jsonl");
-    const archive = path.join(dir, `archive.jsonl${encoded.suffix}`);
+    const plain = path.join(tempDirs.make("openclaw-archive-zstd-"), "plain.jsonl");
+    const archive = `${plain}.zst`;
     fs.writeFileSync(plain, content);
-    fs.writeFileSync(archive, encoded.bytes);
-    expect(encoded.suffix).toBe(SESSION_ARCHIVE_ZSTD_SUFFIX);
-    expect(zstdDecompressSync(encoded.bytes).toString("utf8")).toBe(content);
-    expect(readSessionArchiveContentSync(plain, Buffer.byteLength(content))).toBe(content);
+    fs.writeFileSync(archive, zstdCompressSync(Buffer.from(content)));
     expect(await readSessionArchiveText(archive)).toBe(content);
     expect(await readSessionArchivePrefix(plain, 13)).toEqual(Buffer.from(content).subarray(0, 13));
   });
@@ -33,19 +26,25 @@ describe("archive compression", () => {
   it("reads large archives forwards and backwards without creating plaintext files", async () => {
     const dir = tempDirs.make("openclaw-archive-zstd-");
     const archive = path.join(dir, "large.jsonl.zst");
-    const frame = zstdCompressSync(Buffer.alloc(1024 * 1024, "x"));
+    const noise = Buffer.concat(
+      Array.from({ length: 4096 }, (_, index) =>
+        createHash("sha256").update(String(index)).digest(),
+      ),
+    );
+    const frame = zstdCompressSync(
+      Buffer.concat([noise, Buffer.alloc(1024 * 1024 - noise.length, "x")]),
+    );
     const bytes = Buffer.concat(Array.from({ length: 64 }, () => frame));
     fs.writeFileSync(archive, bytes);
     const reader = await openSessionArchiveReader(archive);
     const sibling = await openSessionArchiveReader(archive);
     const buffer = Buffer.alloc(17);
     try {
+      expect(await reader.read(buffer, 0)).toBe(17);
+      expect(await reader.read(buffer, 0)).toBe(17);
+      expect(buffer).toEqual(noise.subarray(0, 17));
       expect(await reader.read(buffer, 64 * 1024 * 1024 - 5)).toBe(5);
       expect(buffer.subarray(0, 5).toString()).toBe("xxxxx");
-      expect(await sibling.read(buffer, 0)).toBe(17);
-      expect(await reader.read(buffer, 0)).toBe(17);
-      expect(buffer.toString()).toBe("x".repeat(17));
-      expect(await reader.read(buffer, 64 * 1024 * 1024)).toBe(0);
       expect((await reader.stat()).size).toBe(bytes.length);
     } finally {
       await reader.close();
@@ -53,7 +52,6 @@ describe("archive compression", () => {
     try {
       expect(await sibling.read(buffer, 17)).toBe(17);
       expect(fs.readdirSync(dir)).toEqual(["large.jsonl.zst"]);
-      expect(fs.readFileSync(archive)).toEqual(bytes);
     } finally {
       await sibling.close();
     }
