@@ -261,8 +261,8 @@ describe("ClawRouter registered file transcription", () => {
       async ({ cfg, filePath, requests }) => {
         cfg.tools!.media!.models![0]!.timeoutSeconds = 0.1;
         await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(/abort|timed out/i);
-        await closed.promise;
         expect(requests).toHaveLength(1);
+        await closed.promise;
       },
       (res) => {
         res.setHeader("content-type", "application/json");
