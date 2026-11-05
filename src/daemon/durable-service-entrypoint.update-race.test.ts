@@ -70,17 +70,26 @@ async function stage(name: string, version: string) {
   };
 }
 
-/** The real package swap of `openclaw update` and of a service install, into the durable copy. */
+/**
+ * The real package swap of `openclaw update` and of a service install, into the durable copy.
+ * A service install's updater validates the staged candidate first, as the package updater does.
+ */
 async function publish(
   name: string,
   version: string,
-  onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>,
+  updater: {
+    validateCandidate?: (packageRoot: string) => Promise<Array<{ exitCode: number | null }>>;
+    onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
+  } = {},
 ) {
+  const staged = await stage(name, version);
+  const validation = (await updater.validateCandidate?.(staged.packageRoot)) ?? [];
+  expect(validation.filter((step) => step.exitCode !== 0)).toEqual([]);
   const result = await swapStagedPackageInstall({
     installTarget: createNpmTarget(durable().globalRoot),
     packageName: "openclaw",
-    stage: await stage(name, version),
-    ...(onTransaction ? { onTransaction } : {}),
+    stage: staged,
+    ...(updater.onTransaction ? { onTransaction: updater.onTransaction } : {}),
   });
   expect(result.status, result.step.stderrTail ?? "").toBe("committed");
 }
@@ -93,24 +102,31 @@ it.each([
     "during-backup-verification",
     "3.0.0",
   ],
+  [
+    "keeps an update published while its own updater cleans up after publishing",
+    "after-publication",
+    "3.0.0",
+  ],
 ] as const)("a failed install %s", async (_name, when, expected) => {
   await writePackageRoot(packageRoot(), "1.0.0");
   fs.mkdirSync(durable().binDir, { recursive: true });
   fs.writeFileSync(path.join(durable().binDir, "openclaw"), "launcher 1.0.0\n");
   runGlobalPackageUpdateSteps.mockImplementation(
-    async (params: {
-      beforeActivate?: () => Promise<void>;
-      onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
-    }) => {
+    async (params: Parameters<typeof publish>[2] & { beforeActivate?: () => Promise<void> }) => {
       await params.beforeActivate?.();
-      await publish("install-stage", "2.0.0", params.onTransaction);
+      await publish("install-stage", "2.0.0", params);
+      if (when === "after-publication") {
+        // The updater still awaits its stage cleanup after publishing this install's copy.
+        await publish("update-stage", "3.0.0");
+      }
       return { failedStep: null };
     },
   );
   const warn = vi.fn();
 
   // A node install publishes 2.0.0 and its activation fails; `openclaw update` publishes 3.0.0
-  // either before the restore starts or while the rollback verifies its backup.
+  // while the install's updater finishes, before the restore starts, or while the rollback
+  // verifies its backup.
   await expect(
     installDurableServiceCli({
       env: env(),
@@ -122,7 +138,7 @@ it.each([
       },
       install: async (beforeMutation) => {
         await beforeMutation?.();
-        expect(liveVersion()).toBe("2.0.0");
+        expect(liveVersion()).toBe(when === "after-publication" ? "3.0.0" : "2.0.0");
         const update = () => publish("update-stage", "3.0.0");
         if (when === "before-restore") {
           await update();

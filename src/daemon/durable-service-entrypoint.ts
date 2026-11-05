@@ -339,6 +339,21 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
   const gate = createDeferredCore<boolean>();
   const cancelled = new Error("Durable OpenClaw copy replacement cancelled before activation");
   let transaction: PackageUpdateTransaction | undefined;
+  // `openclaw update` does not take the package lock and can publish its own copy meanwhile.
+  // The rollback calls its authority check synchronously right before each rename, so the
+  // check admits only trees this install owns: the copy it published, the backup it restores
+  // (renames keep identity), or none while the copy is moved aside.
+  type Identity = { dev: bigint; ino: bigint };
+  let published: Identity | undefined;
+  let replacedByAnotherInstall = false;
+  const identityOf = (entry: string): Identity | undefined => {
+    const stat = fsSync.lstatSync(entry, { bigint: true, throwIfNoEntry: false });
+    return stat ? { dev: stat.dev, ino: stat.ino } : undefined;
+  };
+  // The swap renames this validated candidate into place, so its identity is the published
+  // copy's. Reading it here, not after the updater returns, keeps a copy that another owner
+  // publishes while the updater finishes from being taken for this install's.
+  let candidate: Identity | undefined;
   const failure = (step: { name: string; stderrTail?: string | null }) =>
     new Error(
       `Cannot install durable OpenClaw ${replacement.version} for the background service: ${step.stderrTail || step.name}`,
@@ -355,6 +370,7 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
     packageRoot: replacement.packageRoot,
     // Refuse before the swap a candidate without the entry the planned service runs.
     validateCandidate: async (candidateRoot) => {
+      candidate = identityOf(candidateRoot);
       const entry = path.join(
         candidateRoot,
         path.relative(replacement.packageRoot, replacement.entrypoint),
@@ -404,17 +420,6 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
   }
   // Service installs have no update-run fence; the package lock orders them among themselves.
   const unfenced = () => undefined;
-  // `openclaw update` does not take the package lock and can publish its own copy meanwhile.
-  // The rollback calls its authority check synchronously right before each rename, so the
-  // check admits only trees this install owns: the copy it published, the backup it restores
-  // (renames keep identity), or none while the copy is moved aside.
-  type Identity = { dev: bigint; ino: bigint };
-  let published: Identity | undefined;
-  let replacedByAnotherInstall = false;
-  const identityOf = (entry: string): Identity | undefined => {
-    const stat = fsSync.lstatSync(entry, { bigint: true, throwIfNoEntry: false });
-    return stat ? { dev: stat.dev, ino: stat.ino } : undefined;
-  };
   const sameIdentity = (a: Identity | undefined, b: Identity | undefined) =>
     a !== undefined && b !== undefined && a.dev === b.dev && a.ino === b.ino;
   const restoreAuthority = (backup: Identity | undefined) => () => {
@@ -433,7 +438,7 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
       if (result.failedStep) {
         throw failure(result.failedStep);
       }
-      published = identityOf(replacement.packageRoot);
+      published = candidate;
     },
     cancel: async (): Promise<string[]> => {
       gate.resolve(false);
