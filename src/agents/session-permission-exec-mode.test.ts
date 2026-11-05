@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type ExecMode, resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
-import { resolveModelExecCeiling } from "./lazy-exec-tool.js";
+import { resolveModelExecCeilings } from "./lazy-exec-tool.js";
 import {
   projectEffectiveExecPolicy,
   SESSION_PERMISSION_BY_EXEC_MODE,
@@ -23,49 +23,49 @@ describe("model exec ceiling", () => {
     const { security, ask } = resolveExecPolicyForMode(mode);
     return { mode, security, ask };
   };
+  const project = (base: object, ceilings: ExecMode[], extra = {}) =>
+    projectEffectiveExecPolicy({ base, modelExecCeilings: ceilings, ...extra });
   it.each([
-    [{ mode: "full" }, "auto", "auto"],
-    [{}, "deny", "deny"],
-    [exact("ask"), "auto", "ask"],
-    [exact("allowlist"), "auto", "allowlist"],
-    [{ security: "full", ask: "on-miss" }, "ask", "ask"],
-  ] as const)("caps %j at %s to %s", (base, ceiling, mode) => {
-    expect(projectEffectiveExecPolicy({ base, modelExecCeiling: ceiling })).toMatchObject(
-      exact(mode),
-    );
+    [exact("full"), ["auto"], exact("auto")],
+    [{}, ["deny"], exact("deny")],
+    [exact("ask"), ["auto"], exact("ask")],
+    [exact("auto"), ["ask"], exact("ask")],
+    [exact("allowlist"), ["auto"], exact("allowlist")],
+    [exact("full"), ["auto", "allowlist"], exact("allowlist")],
+    [{ security: "full", ask: "on-miss" }, ["ask"], exact("ask")],
+    // Mandatory approval survives: no canonical mode may erase ask=always.
+    [{ ask: "always" }, ["auto"], { mode: undefined, security: "allowlist", ask: "always" }],
+    [
+      { security: "allowlist", ask: "always" },
+      ["allowlist"],
+      { mode: undefined, security: "allowlist", ask: "always" },
+    ],
+  ] as const)("caps %j with %j", (base, ceilings, expected) => {
+    expect(project(base, [...ceilings])).toMatchObject(expected);
   });
 
   it("caps per-run overrides and full sessions without host-floor bypass", () => {
-    expect(
-      projectEffectiveExecPolicy({
-        base: { mode: "ask" },
-        overrides: { mode: "full" },
-        modelExecCeiling: "auto",
-      }),
-    ).toMatchObject({ mode: "auto", security: "allowlist" });
-    expect(
-      projectEffectiveExecPolicy({
-        base: {},
-        permissionPolicy: { mode: "full" },
-        modelExecCeiling: "auto",
-      }),
-    ).toMatchObject({ mode: "auto", security: "allowlist", bypassHostApprovalFloors: false });
+    expect(project({ mode: "ask" }, ["auto"], { overrides: { mode: "full" } })).toMatchObject(
+      exact("auto"),
+    );
+    expect(project({}, ["auto"], { permissionPolicy: { mode: "full" } })).toMatchObject({
+      ...exact("auto"),
+      bypassHostApprovalFloors: false,
+    });
   });
 
-  it("matches provider/model keys and lets the stricter global or agent entry win", () => {
+  it("matches provider/model keys and binds both global and agent entries", () => {
     const cfg = {
       tools: { byProvider: { "local-llm/small": { exec: { mode: "auto" } } } },
       agents: {
         entries: { helper: { tools: { byProvider: { "local-llm": { exec: { mode: "deny" } } } } } },
       },
     } as const;
-    const ceiling = (agentId: string, modelId: string) =>
-      resolveModelExecCeiling({ cfg, agentId, modelProvider: "local-llm", modelId });
-    expect(ceiling("main", "small")).toBe("auto");
-    expect(ceiling("main", "large")).toBeUndefined();
-    expect(ceiling("helper", "small")).toBe("deny");
-    expect(
-      resolveModelExecCeiling({ cfg, agentId: "main", modelProvider: "anthropic", modelId: "x" }),
-    ).toBeUndefined();
+    const ceilings = (agentId: string, modelProvider: string, modelId: string) =>
+      resolveModelExecCeilings({ cfg, agentId, modelProvider, modelId });
+    expect(ceilings("main", "local-llm", "small")).toEqual(["auto"]);
+    expect(ceilings("main", "local-llm", "large")).toEqual([]);
+    expect(ceilings("helper", "local-llm", "small")).toEqual(["auto", "deny"]);
+    expect(ceilings("main", "anthropic", "small")).toEqual([]);
   });
 });

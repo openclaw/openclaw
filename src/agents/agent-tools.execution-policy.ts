@@ -8,7 +8,7 @@ import type { ResolvedConversationCapabilityProfile } from "./conversation-capab
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
 import { prepareExecDefaults } from "./exec-defaults.js";
 import { isGatewayToolAllowedWithoutAction } from "./gateway-tool-policy.js";
-import { resolveModelExecCeiling, type resolveExecToolConfig } from "./lazy-exec-tool.js";
+import { resolveModelExecCeilings, type resolveExecToolConfig } from "./lazy-exec-tool.js";
 import {
   resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
@@ -29,7 +29,7 @@ export function projectAgentToolsExecPolicy(params: {
     overrides: options?.exec,
     permissionPolicy: options?.sessionPermissionPolicy,
     scheduledExecTarget: options?.scheduledToolPolicy?.execTarget,
-    modelExecCeiling: resolveModelExecCeiling({
+    modelExecCeilings: resolveModelExecCeilings({
       cfg: options?.config,
       agentId: params.agentId,
       modelProvider: params.model.provider,

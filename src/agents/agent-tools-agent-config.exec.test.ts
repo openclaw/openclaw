@@ -9,12 +9,12 @@ import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { getFinishedSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { EXEC_AUTO_REVIEW_GUIDANCE } from "./bash-tools.descriptions.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 
@@ -222,13 +222,18 @@ describe("Agent-specific exec tool defaults", () => {
         byProvider: { "local-llm/small": { exec: { mode } } },
       },
     });
+    const reviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "deny",
+      risk: "high",
+      rationale: "fixture denial",
+    }));
     const toolsForModel = (config: OpenClawConfig, modelProvider: string, modelId: string) =>
       createOpenClawCodingTools({
         config,
         sessionKey: "agent:main:main",
         modelProvider,
         modelId,
-        exec: { backgroundMs: 0, notifyOnExit: false },
+        exec: { backgroundMs: 0, notifyOnExit: false, autoReviewer: reviewer },
         ...createTempAgentDirs(`ceiling-${modelProvider}-${modelId}`),
       });
 
@@ -246,14 +251,23 @@ describe("Agent-specific exec tool defaults", () => {
       expect(other.details).toMatchObject({ status: "completed" });
     });
 
-    it("puts only the capped model behind the exec reviewer", () => {
+    it("sends only the capped model's exec misses to the reviewer before any process starts", async () => {
       const config = ceilingConfig("auto");
-      expect(requireExecTool(toolsForModel(config, "local-llm", "small")).description).toContain(
-        EXEC_AUTO_REVIEW_GUIDANCE,
+      const marker = (name: string) => path.join(tempDirs.make("ceiling-marker-"), name);
+      const capped = marker("capped");
+      const result = await requireExecTool(toolsForModel(config, "local-llm", "small")).execute(
+        "capped-review",
+        { command: `touch ${capped}` },
       );
-      expect(requireExecTool(toolsForModel(config, "anthropic", "big")).description).not.toContain(
-        EXEC_AUTO_REVIEW_GUIDANCE,
-      );
+      expect(reviewer).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(result)).toContain("fixture denial");
+      expect(fs.existsSync(capped)).toBe(false);
+      const uncapped = marker("uncapped");
+      await requireExecTool(toolsForModel(config, "anthropic", "big")).execute("uncapped-run", {
+        command: `touch ${uncapped}`,
+      });
+      expect(reviewer).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(uncapped)).toBe(true);
     });
   });
 

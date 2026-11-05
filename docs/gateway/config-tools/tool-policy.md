@@ -300,7 +300,7 @@ Further restrict tools for specific providers or models. Order: base profile →
 
 ### Per-model exec ceiling
 
-`exec.mode` in a `byProvider` entry caps host exec for turns that run on that provider or `provider/model`. The stricter of the ceiling and the configured exec policy applies, in the order `deny` < `allowlist` < `ask` < `auto` < `full`. It caps per-run `/exec` overrides and full-permission sessions too, and never loosens a stricter configured mode. Global and agent `byProvider` entries both apply; the stricter one wins.
+`exec.mode` in a `byProvider` entry caps host exec for turns that run on that provider or `provider/model`. The ceiling only restricts: the lower security level applies, allowlist misses stay denied when either side denies them, a human `ask` beats reviewer `auto`, and a configured `ask: "always"` keeps prompting for every command. It caps per-run `/exec` overrides and full-permission sessions too. Global and agent `byProvider` entries both apply.
 
 Use `auto` to put only one model's exec misses behind the [exec reviewer](/tools/permission-modes) while other models keep their normal mode:
 
