@@ -3586,6 +3586,7 @@ function runFullReleaseChildDispatch(
     LIVE_SUITE_FILTER: "",
     MODE: "both",
     NPM_DIST_TAG: "beta",
+    NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS: "false",
     PACKAGE_ACCEPTANCE_PACKAGE_SPEC: "",
     PACKAGE_SPEC: "openclaw@beta",
     PARENT_WORKFLOW_SHA: parentSha,
@@ -9220,6 +9221,34 @@ test "$package_manager" = "pnpm@12.1.0"
     },
   );
 
+  it.each(["true", "false"])(
+    "routes npm preflight runners per dispatch (hosted=%s) through declared artifact inputs",
+    (hosted) => {
+      const child = fullReleaseChild("artifact-npm");
+      const { calls, result } = runFullReleaseChildDispatch(child, {
+        NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS: hosted,
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      const dispatches = calls.filter(({ args }) => args[0] === "workflow");
+      expect(dispatches).toHaveLength(1);
+      const fields = dispatches[0]!.args.filter((_, index, args) => args[index - 1] === "-f");
+      expect(fields).toContain(`npm_preflight_use_github_hosted_runners=${hosted}`);
+      // GitHub rejects a dispatch carrying any input the child does not declare.
+      const declared =
+        readWorkflow(FULL_RELEASE_ARTIFACTS_WORKFLOW).on?.workflow_dispatch?.inputs ?? {};
+      const names = fields.map((field) => field.slice(0, field.indexOf("=")));
+      expect(names.filter((key) => !declared[key])).toEqual([]);
+      expect(workflowJob(FULL_RELEASE_ARTIFACTS_WORKFLOW, "npm").with).toMatchObject({
+        use_github_hosted_runners: "${{ inputs.npm_preflight_use_github_hosted_runners }}",
+      });
+      expect(workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, child.jobName).env).toMatchObject({
+        NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS:
+          "${{ inputs.npm_preflight_use_github_hosted_runners }}",
+      });
+    },
+  );
+
   it("recovers one ambiguous dispatch by exact name without reposting", () => {
     const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
       MOCK_GH_DISPATCH_ERROR: "HTTP 500: Failed to run workflow dispatch",
@@ -10761,9 +10790,26 @@ describe("package artifact reuse", () => {
     }
     expect(imageDockerfile).toContain("rm -rf /var/lib/apt/lists/*");
     expect(imageWorkflow).toContain(`- "${LIVE_MEDIA_RUNNER_DOCKERFILE}"`);
+    expect(workflowStep(buildJob, "Set up Docker Buildx")).toEqual({
+      name: "Set up Docker Buildx",
+      uses: "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+      with: { version: "v0.23.0" },
+    });
+    expect(buildStep).toMatchObject({
+      uses: "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc",
+      with: {
+        platforms: "linux/amd64",
+        sbom: true,
+        provenance: "mode=max",
+        push: true,
+      },
+    });
     expect(buildStep.with?.context).toBe(".github/images/live-media-runner");
     expect(buildStep.with?.file).toBe(LIVE_MEDIA_RUNNER_DOCKERFILE);
     expect(buildStep.with?.tags).toContain(LIVE_MEDIA_RUNNER_IMAGE);
+    expect(buildStep.with?.tags).toContain(
+      "ghcr.io/openclaw/openclaw-live-media-runner:${{ github.sha }}",
+    );
     expect(workflow).toContain("suite_id: native-live-extensions-media-audio");
     expect(workflow).toContain("suite_id: native-live-extensions-media-music-google");
     expect(workflow).toContain("suite_id: native-live-extensions-media-music-minimax");
@@ -12342,6 +12388,14 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "plugin-update",
       "plugin-binding-command-escape",
     ]);
+    const focused = runReleaseChecksInputValidation("full", "false", "qualified-package");
+    expect(focused.result.status, focused.result.stderr).toBe(0);
+    const focusedOutput = readFileSync(focused.outputPath, "utf8");
+    expect(focusedOutput).toContain("package_acceptance_scheduled=true\n");
+    expect(focusedOutput).toContain("package_required=true\n");
+    expect(focusedOutput).toContain(
+      "package_acceptance_lanes=npm-onboard-channel-agent published-upgrade-survivor plugins-offline plugin-update\n",
+    );
     expect(packageAcceptanceJob.with?.published_upgrade_survivor_baselines).toBe(
       "${{ needs.prepare_release_package.outputs.upgrade_survivor_baselines }}",
     );

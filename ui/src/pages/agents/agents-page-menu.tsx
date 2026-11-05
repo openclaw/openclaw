@@ -8,7 +8,7 @@ import { showToast } from "../../lib/toast.ts";
 async function copyAgentId(id: string) {
   const copied = await copyToClipboard(id);
   showToast({
-    severity: copied ? undefined : "error",
+    severity: copied ? "success" : "error",
     message: t(copied ? "common.copied" : "common.copyFailed"),
   });
 }

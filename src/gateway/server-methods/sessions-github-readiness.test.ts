@@ -8,15 +8,8 @@ import { Value } from "typebox/value";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { SessionGitHubReadinessResultSchema } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as identity from "../../agents/github-tool-identity.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import * as gatewayTransport from "../../agents/tools/gateway.js";
-import { createGitHubPublishTool } from "../../agents/tools/github-publish-tool.js";
-import { runGit } from "../../agents/worktrees/git.js";
-import { insertRegistryWorktree, updateRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { updateRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
-import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
@@ -38,7 +31,6 @@ import { resolvePrivateSqliteSnapshotStagingRoot } from "../../infra/sqlite-priv
 import { SQLITE_SNAPSHOT_PREFIX } from "../../infra/sqlite-snapshot-retirement.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { holdStateRead } from "../../state/github-publication-fixtures.test-support.js";
 import { repositoryRow } from "../../state/github-publication.worker.test-support.js";
 import {
@@ -63,7 +55,6 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import * as oauth from "../github-oauth-lifecycle.js";
 import { digestGitHubPublicationRequest } from "../github-publication-receipt.js";
 import {
   claimGitHubPublicationExecutionFixture,
@@ -71,66 +62,27 @@ import {
   insertRepositoryGitHubPublicationFixture,
 } from "../github-publication-store.test-support.js";
 import { insertGitHubPublicationRequest } from "../github-publication-store.worker.js";
-import * as publicationTarget from "../github-publication-target.js";
-import { createGitHubPublicationCoordinator } from "../github-publication.js";
 import { repositoryGitHubPublicationDigest } from "../github-repository-publication.kernel.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
-import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { sessionKey, sessionId, type ReadFixture } from "./sessions-github-read.test-support.js";
 import {
-  sessionKey,
-  sessionId,
-  withReadFixture,
-  type ReadFixture,
-} from "./sessions-github-read.test-support.js";
+  bind,
+  fixture,
+  git,
+  githubOrigin,
+  temporary,
+  tool,
+} from "./sessions-github-readiness.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
-const githubOrigin = "https://github.com/example/project.git";
 const unbound = {
   policy: { read: "admitted", write: "unknown" },
   custody: { kind: "unbound_workspace" },
   target: { kind: "unknown", reason: "not-qualified" },
   request: { kind: "none", selection: "current" },
 };
-
-async function fixture(
-  run: (f: ReadFixture) => Promise<void>,
-  options: Parameters<typeof withReadFixture>[1] = {},
-) {
-  await withReadFixture(async (f) => {
-    Object.assign(f.context, createContext([], f.context.getRuntimeConfig));
-    const service = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore(),
-      getCommittedRuntimeConfig: f.context.getRuntimeConfig,
-    });
-    f.context.githubPublicationService = service;
-    const forbidden = () => {
-      throw new Error("Readiness attempted an external effect or credential preparation");
-    };
-    const effects = [
-      vi.spyOn(service, "requestForSessionV2").mockImplementation(forbidden),
-      vi.spyOn(service, "preparePersonalStatus").mockImplementation(forbidden),
-      vi.spyOn(service, "personalPending").mockImplementation(forbidden),
-      vi.spyOn(identity, "prepareGitHubPublicationIdentity").mockImplementation(forbidden),
-      vi.spyOn(identity, "prepareGitHubPublicationOptionsIdentity").mockImplementation(forbidden),
-      vi.spyOn(oauth, "requestCurrentGitHubOAuthRefresh").mockImplementation(forbidden),
-      vi.spyOn(publicationTarget, "prepareGitHubPublicationTarget").mockImplementation(forbidden),
-      vi.spyOn(gatewayTransport, "callGatewayTool").mockImplementation(forbidden),
-    ];
-    try {
-      await run(f);
-    } finally {
-      for (const effect of effects) {
-        expect(effect).not.toHaveBeenCalled();
-        effect.mockRestore();
-      }
-      expect(f.personalConnectionStatus).not.toHaveBeenCalled();
-    }
-  }, options);
-}
 
 async function call(f: ReadFixture, params: Record<string, unknown> = {}, internal = false) {
   const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
@@ -162,24 +114,6 @@ async function expectUnknownRequest(f: ReadFixture, requestId: string, reason = 
     selectedRequestId: requestId,
   });
 }
-async function tool(f: ReadFixture, input: Record<string, unknown>) {
-  const publisher = createGitHubPublishTool();
-  // Fixture precondition: supplied arguments satisfy the schema before direct execution.
-  expect(Value.Check(publisher.parameters, input)).toBe(true);
-  return withPluginRuntimeGatewayRequestScope(
-    { context: f.context, client: f.client, isWebchatConnect: () => false },
-    () =>
-      withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey, gatewayContextResolver: () => f.context },
-        () => publisher.execute("readiness-observation", input),
-      ),
-  );
-}
-async function git(root: string, ...args: string[]) {
-  const result = await runGit(root, args);
-  assert(result.code === 0, result.stderr);
-  return result.stdout.trim();
-}
 const readerSession = { agentId: "main", sessionKey };
 async function bindRepository(owner = sessionKey, branch?: string) {
   const workspace = await getSessionRepositoryWorkspaceStore().create({
@@ -191,29 +125,6 @@ async function bindRepository(owner = sessionKey, branch?: string) {
   });
   await upsertSessionEntryCore(readerSession, { repositoryWorkspaceId: workspace.workspaceId });
   return workspace;
-}
-async function bind(origin = githubOrigin) {
-  const root = await fs.realpath(temporary.make("readiness-git-"));
-  await git(root, "init", "--initial-branch=feature");
-  await git(root, "config", "user.name", "Publication Fixture");
-  await git(root, "config", "user.email", "publication@example.invalid");
-  await git(root, "config", "commit.gpgsign", "false");
-  await git(root, "commit", "--allow-empty", "-m", "fixture");
-  if (origin) {
-    await git(root, "remote", "add", "origin", origin);
-  }
-  const repository = await managedWorktrees.resolveRepositoryIdentity(root);
-  const worktree = makeWorktreeRecord(repository.repoRoot, randomUUID(), {
-    path: root,
-    repoFingerprint: repository.fingerprint,
-    branch: "feature",
-    ownerId: sessionKey,
-  });
-  await insertRegistryWorktree(process.env, worktree);
-  await upsertSessionEntryCore(readerSession, {
-    worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-  });
-  return worktree;
 }
 function publishedFields(branch: string) {
   return {

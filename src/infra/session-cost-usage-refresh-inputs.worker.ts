@@ -1,6 +1,4 @@
-import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { sql } from "kysely";
-import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { listTranscriptArchiveIdentitiesFromDatabase } from "../config/sessions/session-accessor.sqlite-archive-read.js";
@@ -129,12 +127,11 @@ export function usageRefreshInputs(databasePath: string) {
 
 export function createUsageCostCollectionAccess(params: {
   input: UsageCostWorkerInput;
-  control: WorkerTaskControl;
   target: (agentId: string, storePath: string) => UsageCostWorkerDatabase;
   readStore: <T>(agentId: string, storePath: string, read: () => T) => Promise<T>;
   readCheckpoint?: (marker: SqliteSessionFileMarker) => UsageCostSqliteCheckpoint | undefined;
 }) {
-  const { input, control, target, readStore } = params;
+  const { input, target, readStore } = params;
   const { location, operation } = input;
   const { env } = location;
   const sourceRows = <T>(read: OpenClawAgentDatabaseReadOnlyResult<T[]>): T[] => {
@@ -154,8 +151,6 @@ export function createUsageCostCollectionAccess(params: {
   };
   const access: UsageCostCollectionAccess = {
     env,
-    materializeArchive: (sourcePath) =>
-      control.runNativeSection(() => materializeSessionArchiveForRead(sourcePath)),
     listSqliteMetadataStores: () => input.archiveStorePaths,
     resolveSqliteStorePath: (agentId, storePath) => target(agentId, storePath).path,
     readSqliteArchives: (agentId, storePath, archiveNames) => {

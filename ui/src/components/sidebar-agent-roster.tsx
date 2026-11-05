@@ -161,8 +161,8 @@ export function SidebarAgentRoster(props: {
       return;
     }
     const confirmed = await showConfirmDialog({
-      message: t("agentsHome.deleteAgentConfirm", { agent: agent.name }),
-      details: t("agentsHome.deleteAgentDetails"),
+      title: t("agentsHome.deleteAgentConfirm", { agent: agent.name }),
+      message: t("agentsHome.deleteAgentDetails"),
       confirmLabel: t("common.delete"),
       danger: true,
     }).catch((error: unknown) => {

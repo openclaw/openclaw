@@ -92,6 +92,8 @@ export function createHarness(
   const finishArchive = vi.fn();
   const mocks = {
     finishArchive,
+    create: vi.fn(async (): Promise<string | null> => "agent:main:nested-child"),
+    selectSession: vi.fn(),
     acknowledgeHiddenRuns: vi.fn(async () => []),
     beginArchive: vi.fn(() => finishArchive),
     patch: vi.fn(async (key: string) => ({ ok: true, key })),
@@ -120,6 +122,7 @@ export function createHarness(
     },
     gateway: { snapshot },
     sessions: {
+      create: mocks.create,
       beginArchive: mocks.beginArchive,
       captureConnectionScope: () => connection,
       isConnectionScopeCurrent: () => current,
@@ -145,6 +148,7 @@ export function createHarness(
       refreshSidebarSessions: vi.fn(),
     },
     sidebarSessionStatusFilter: () => "active",
+    selectSession: mocks.selectSession,
     pruneSidebarSessionEntry: mocks.pruneSidebarSessionEntry,
     replaceCurrentSession: mocks.replaceCurrentSession,
   } as unknown as SessionOrganizerDependencies;

@@ -12,7 +12,7 @@ vi.mock("../../lib/toast.ts", async (importOriginal) => ({
 function menuProps() {
   return {
     agentId: "alpha",
-    defaultLabel: "Set Default",
+    defaultLabel: "Set default",
     defaultDisabled: false,
     pinLabel: "Pin",
     showPhoneActions: false,
@@ -42,7 +42,9 @@ it("copies the agent ID from the page menu and confirms with a toast", async () 
     [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
       .find((item) => item.textContent?.trim() === t("agents.copyId"))!
       .click();
-    await vi.waitFor(() => expect(showToast).toHaveBeenCalledWith({ message: t("common.copied") }));
+    await vi.waitFor(() =>
+      expect(showToast).toHaveBeenCalledWith({ severity: "success", message: t("common.copied") }),
+    );
     expect(writeText).toHaveBeenCalledWith("alpha");
   } finally {
     view.dispose();

@@ -35,6 +35,7 @@ import {
   resolveToolSections,
   type AgentToolEntry,
 } from "../../lib/agents/tool-catalog.ts";
+import { resolveAgentConfigEntryTarget } from "../../lib/config/config-state-model.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
@@ -237,14 +238,32 @@ export function AgentTools(
         <For
           each={
             [
-              [!params.configForm, "agentTools.loadConfig"],
-              [hasAgentAllow(), "agentTools.explicitAllowlist"],
-              [hasGlobalAllow(), "agentTools.globalAllowlist"],
-              [props.failed, "agentTools.catalogFallback"],
+              [!params.configForm, "agentTools.loadConfig", undefined],
+              [
+                hasAgentAllow(),
+                "agentTools.explicitAllowlist",
+                resolveAgentConfigEntryTarget(params.configForm, params.agentId)
+                  ?.path.concat("tools", "allow")
+                  .join("."),
+              ],
+              [hasGlobalAllow(), "agentTools.globalAllowlist", "tools.allow"],
+              [props.failed, "agentTools.catalogFallback", undefined],
             ] as const
           }
         >
-          {(entry) => (entry[0] ? <div class="callout info">{t(entry[1])}</div> : undefined)}
+          {(entry) =>
+            entry[0] ? (
+              <div class="callout info">
+                {t(entry[1])}
+                {entry[2] ? (
+                  <>
+                    {" "}
+                    <code>{entry[2]}</code>
+                  </>
+                ) : undefined}
+              </div>
+            ) : undefined
+          }
         </For>
         <SettingsSection
           title={t("agentTools.title")}

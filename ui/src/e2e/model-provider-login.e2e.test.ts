@@ -260,7 +260,7 @@ suite.define(() => {
           await captureProviderProof(`provider-settings-${origin}.png`, card);
           await page.locator("[data-models-connect]").click();
           const dialog = page.locator("openclaw-modal-dialog");
-          await dialog.getByRole("heading", { name: "Connect a provider", exact: true }).waitFor();
+          await dialog.getByRole("heading", { name: "Add an account", exact: true }).waitFor();
           await dialog.locator('[data-models-login-provider="openai"]').waitFor();
           expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
         },
@@ -321,7 +321,7 @@ suite.define(() => {
               .first()
               .textContent()
           )?.trim(),
-        ).toBe("Save credentials for this agent. Choose the active model separately.");
+        ).toBe("Add an account for this agent. Choose the model separately.");
         await page.getByRole("button", { name: "Example browser sign-in", exact: true }).click();
         const login = await gateway.waitForRequest("models.authLogin");
         const loginParams = login.params;
@@ -667,7 +667,7 @@ suite.define(() => {
         expect(await profiles.first().textContent()).toContain("Codex CLI");
         expect(await profiles.last().textContent()).toContain("alex@example.invalid");
         expect(await profiles.last().textContent()).toContain("Access token expires in 1h");
-        expect(await profiles.last().textContent()).toContain("Credentials configured");
+        expect(await profiles.last().textContent()).toContain("Account added");
         expect(await profiles.last().textContent()).toContain(
           "Access-token expiry alone does not mean you need to sign in again.",
         );

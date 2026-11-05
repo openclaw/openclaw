@@ -1,0 +1,4 @@
+# Production-handler regressions for current-chat mention recency and silent-member fallback,
+# search/new-session isolation, merged sender timestamps, and ranking before the 100-user cap.
+# Existing recipient-authorization and identity coverage is preserved; shared baseline unchanged.
+110

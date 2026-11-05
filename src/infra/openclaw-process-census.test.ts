@@ -495,6 +495,31 @@ it.each([peer, launcher, self])(
   },
 );
 
+it("classifies title-erased Darwin runtimes whose environment is unbounded", () => {
+  // Before macOS 27, process.title leaves a JS runtime's environment unterminated.
+  processRow(peer, ["openclaw-gateway", "", "", ""]);
+  processRow(peer + 1, ["node", "/standalone/server.mjs"]);
+  processRow(peer + 2, ["/bin/sleep", "60"]);
+  mockDarwinBatch({ status: 0, stdout: "" });
+  darwinCommand.mockImplementation((pid: number) => {
+    if (pid === peer + 2) {
+      throw new ProcSafeError("layout-mismatch", "invalid Darwin argument alignment");
+    }
+    return {
+      argv: rows.get(pid)!.argv,
+      executable: "/opt/homebrew/bin/node",
+      ...(pid === peer || pid === peer + 1 ? { serviceMarkerUnavailable: true } : {}),
+    };
+  });
+  expect(inspectOtherOpenClawProcesses("/tmp/openclaw-update-runtime-Held01")).toEqual({
+    pids: [peer + 1, peer + 2],
+    warnings: [
+      `Could not verify runtime custody for PID ${peer + 1}: process environment is unreadable`,
+      `Could not verify runtime custody for PID ${peer + 2}: process command is unavailable`,
+    ],
+  });
+});
+
 it("retains Darwin cwd holders from one partial batch without trusting other PID records", () => {
   processRow(peer, ["node", "/vendor/worker.js"]);
   processRow(peer + 1, ["bun", "run", "--silent", "start"]);

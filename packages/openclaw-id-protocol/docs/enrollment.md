@@ -22,16 +22,16 @@ must perform (`disconnect`, `invalidate_tokens`, `cancel_runs`, `notify_owners`,
 
 ### Write rules
 
-| Write                                         | Function                                   | Allowed channels       | Notes                                                                |
-| --------------------------------------------- | ------------------------------------------ | ---------------------- | -------------------------------------------------------------------- |
-| Link claw (pin R for good)                    | `linkClaw`                                 | local_operator         | spec 4                                                               |
-| MembershipChange by an owner device           | `submitStatement`                          | tunnel, local_operator | `seq` must be current + 1                                            |
-| MembershipChange signed by R (kit enrollment) | `submitStatement`                          | any, incl. mailbox     | `add_owner_device` via mailbox emits `notify_owners: kit_used`       |
-| Revocation                                    | `submitStatement`                          | any                    | deletes the key and every owner device it approved (no history kept) |
-| InviteCap + proof key                         | `registerInvite`                           | tunnel, local_operator | `secret_hash` must equal SHA-256(proof key)                          |
-| InviteRedemption                              | `submitRedemption`                         | any (normally mailbox) | becomes **pending**, reserves the invite, admits nothing             |
-| Approve redemption                            | `submitStatement` (`add` with `invite_id`) | tunnel, local_operator | must match the pending account and peer key; role <= invite role     |
-| Deny redemption                               | `submitStatement` (`deny_invite`)          | tunnel, local_operator | consumes the invite                                                  |
+| Write                                         | Function                                   | Allowed channels       | Notes                                                                                               |
+| --------------------------------------------- | ------------------------------------------ | ---------------------- | --------------------------------------------------------------------------------------------------- |
+| Link claw (pin R for good)                    | `linkClaw`                                 | local_operator         | spec 4                                                                                              |
+| MembershipChange by an owner device           | `submitStatement`                          | tunnel, local_operator | `seq` must be current + 1                                                                           |
+| MembershipChange signed by R (kit enrollment) | `submitStatement`                          | any, incl. mailbox     | `add_owner_device` via mailbox emits `notify_owners: kit_used`                                      |
+| Revocation                                    | `submitStatement`                          | any                    | removes keys listed at or before its `seq`, with every owner device they approved (no history kept) |
+| InviteCap + proof key                         | `registerInvite`                           | tunnel, local_operator | `secret_hash` must equal SHA-256(proof key); expires within a week; at most 100 per claw            |
+| InviteRedemption                              | `submitRedemption`                         | any (normally mailbox) | becomes **pending**, reserves the invite, admits nothing                                            |
+| Approve redemption                            | `submitStatement` (`add` with `invite_id`) | tunnel, local_operator | must match the pending account and peer key; role <= invite role                                    |
+| Deny redemption                               | `submitStatement` (`deny_invite`)          | tunnel, local_operator | consumes the invite                                                                                 |
 
 Root supremacy: an R-signed statement is accepted wherever a device-signed one is, plus over
 the mailbox. A refusal leaves the state unchanged and has no events.
@@ -86,6 +86,13 @@ Not modeled here (Gateway work): pending-redemption expiry after 7 days, and per
 4. The Gateway verifies (`verifyInviteRedemption`): self-signature, invite match, expiry,
    proof, audience (account id or email asserted by OpenClaw ID). Result: **pending**.
 5. An owner approves (`add` with `invite_id`) or denies (`deny_invite`) **directly**.
+
+The Gateway keeps an invite only while it can matter. `registerInvite` refuses a cap that has
+expired or expires more than a week from now, deletes spent records first, and refuses a new
+invite while the claw holds 100. A record is spent once its cap expired (plus the clock skew)
+and no redemption is pending on it (`withoutSpentInvites`); the Gateway also deletes spent
+records before its other writes. Removing an owner device deletes the open invites it
+registered.
 
 ## SAS approval of a new owner device (spec 6.1)
 

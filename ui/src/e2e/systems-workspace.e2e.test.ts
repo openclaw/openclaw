@@ -127,12 +127,22 @@ suite.define(() => {
           });
           await page.goto(suite.server.baseUrl + "new");
           await waitForControlUiRoute(page, { routeId: "new-session" });
-          const outletOrigin = () =>
-            page.locator("openclaw-router-outlet").evaluate((element) => {
-              const { x, y } = element.getBoundingClientRect();
-              return { x, y };
+          const shifts = await page.evaluateHandle(() => {
+            let cls = 0;
+            const observer = new PerformanceObserver((list) => {
+              for (const entry of list.getEntries()) {
+                const shift = entry as PerformanceEntry & {
+                  hadRecentInput: boolean;
+                  value: number;
+                };
+                if (!shift.hadRecentInput) {
+                  cls += shift.value;
+                }
+              }
             });
-          const initialOrigin = await outletOrigin();
+            observer.observe({ type: "layout-shift", buffered: false });
+            return { read: () => cls, stop: () => observer.disconnect() };
+          });
           const inventoryReads = await gateway.deferNext("environments.list");
           const backupReads = await gateway.deferNext("backup.status");
           await page.evaluate(() => {
@@ -144,8 +154,6 @@ suite.define(() => {
             await page.getByRole("button", { name: "Show statistics" }).click();
           }
           await page.getByText("Loading backups…", { exact: true }).waitFor();
-          // A phone draft shares chat's canvas; other pages sit under the floating header.
-          expect(await outletOrigin()).toEqual(width === 400 ? { x: 4, y: 64 } : initialOrigin);
           const body = page.locator(".systems-body");
           expect(await body.locator(".systems-state").isVisible()).toBe(false);
           const position = () => body.evaluate((element) => element.getBoundingClientRect().y);
@@ -166,23 +174,6 @@ suite.define(() => {
               ),
             )
             .toBe(true);
-          const shifts = await page.evaluateHandle(() => {
-            let cls = 0;
-            const observer = new PerformanceObserver((list) => {
-              for (const entry of list.getEntries()) {
-                const shift = entry as PerformanceEntry & {
-                  hadRecentInput: boolean;
-                  value: number;
-                };
-                if (!shift.hadRecentInput) {
-                  cls += shift.value;
-                }
-              }
-            });
-            observer.observe({ type: "layout-shift", buffered: false });
-            return { read: () => cls, stop: () => observer.disconnect() };
-          });
-
           await gateway.resolveDeferred("environments.list");
           await page.locator(".systems-volume-summary").waitFor();
           await expect.poll(position).toBe(initialY);

@@ -67,7 +67,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
-
 it("destroys the client after an aborted Bedrock request", async () => {
   const controller = new AbortController();
   const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(() => {
@@ -151,17 +150,23 @@ it.each([
   ],
   [
     "us-west-2",
-    bedrockModel({ baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com" }),
+    bedrockModel({
+      id: "us.xai.grok-4.6",
+      baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
+    }),
     { profile: "prod-bedrock", region: "us-west-2" },
   ],
 ] as const)("resolves %s ahead of the ambient region", async (region, model, options) => {
   vi.stubEnv("AWS_PROFILE", "");
   vi.stubEnv("AWS_REGION", "us-east-1");
   const send = mockStream();
-  await streamBedrockForTest(model, userContext(), options).result();
+  await streamBedrockForTest(model, userContext(), { ...options, temperature: 0.2 }).result();
   const client = send.mock.contexts[0] as BedrockRuntimeClient;
   expect(client.config.endpoint).toBeUndefined();
   await expect(client.config.region()).resolves.toBe(region);
+  if (region === "us-west-2") {
+    expect(send.mock.calls[0]?.[0]).not.toHaveProperty("input.inferenceConfig.temperature");
+  }
 });
 it.each([
   [BedrockStopReason.STOP_SEQUENCE, "stop", undefined],
@@ -292,12 +297,7 @@ describe("Bedrock Fable contract", () => {
     expect(input).toMatchObject({
       modelId: "production-fable",
       inferenceConfig: {},
-      messages: [
-        {
-          role: "user",
-          content: [{ text: "Reply briefly." }, { cachePoint: { type: "default" } }],
-        },
-      ],
+      messages: [wireUser(wireText("Reply briefly."), checkpoint)],
       toolConfig: { toolChoice: { auto: {} } },
       additionalModelRequestFields: adaptiveFields("high"),
       additionalModelResponseFieldPaths: ["/stop_details"],

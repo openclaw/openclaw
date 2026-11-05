@@ -730,7 +730,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-trigger-state {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 /* Size the disclosure glyph without attenuating its shared foreground again. */

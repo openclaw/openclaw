@@ -275,7 +275,7 @@ function PortalPreview(props: {
                 if (item.id === "copy") {
                   void copyToClipboard(props.portal.publicUrl).then((copied) =>
                     showToast({
-                      severity: copied ? undefined : "error",
+                      severity: copied ? "success" : "error",
                       message: t(
                         copied ? "portalsPage.embeddedCopied" : "portalsPage.embeddedCopyFailed",
                       ),

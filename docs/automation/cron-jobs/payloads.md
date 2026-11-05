@@ -30,6 +30,7 @@ The weekly Skill Workshop curator (declaration key `skill-collection-review:<age
 
 <ParamField path="--message" type="string" required>
   Prompt text for an agent-turn job, including main, isolated, current, and custom sessions.
+  Creation preserves leading and trailing whitespace in nonblank prompts and treats a whitespace-only message input as missing.
 </ParamField>
 <ParamField path="--model" type="string">
   Model override; must resolve to an allowed model or the run fails with a validation error.
@@ -255,6 +256,11 @@ Doctor uses normal automation model selection, preserves inherited defaults and
 fallback lists, leaves existing bindings unchanged, and backs up cron state before
 committing. Missing accounts, and personal accounts needing their owner's
 authorization, are left unchanged with job-specific adoption instructions.
+Run `openclaw doctor --lint` to preview missing bindings. Add `--all` to inspect
+unavailable profiles referenced by saved account order. An empty per-agent credential store
+can be valid when credentials are inherited from the shared store; Doctor checks
+effective credentials before reporting a missing profile. It does not remove a
+missing profile from account order or recreate its credentials automatically.
 
 Managed updates and the standard container entrypoint run repairing Doctor before
 activation. A manual source upgrade must include `openclaw doctor --fix` before
@@ -391,7 +397,7 @@ openclaw automations create "*/15 * * * *" \
   --to "-1001234567890"
 ```
 
-`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution without shell parsing. Optional `--command-env KEY=VALUE` (repeatable), `--command-input`, `--timeout-seconds` (default 10 minutes), `--no-output-timeout-seconds`, and `--output-max-bytes` control the process environment, stdin, and output bounds.
+`--command <shell>` stores the Gateway host's shell: `argv: ["sh", "-lc", <shell>]` on macOS and Linux, or `argv: ["cmd.exe", "/d", "/s", "/c", <shell>]` on Windows, where the command uses `cmd.exe` syntax such as `%VAR%`. The CLI asks the Gateway for its platform; when the Gateway cannot report it, the command fails and asks for `--command-argv` instead. Jobs created before this rule on a Windows Gateway keep their stored `sh -lc` argv and fail with `spawn sh ENOENT`; rerun `openclaw cron edit <job-id> --command <shell>` to store the Windows shell. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution without shell parsing. Optional `--command-env KEY=VALUE` (repeatable), `--command-input`, `--timeout-seconds` (default 10 minutes), `--no-output-timeout-seconds`, and `--output-max-bytes` control the process environment, stdin, and output bounds.
 
 On `automations edit`, `--command-env` replaces all stored environment overrides; repeat every variable you want to keep. After a successful edit, the CLI warns on stderr with the dropped key names, never their values. This warning is best effort if the stored job cannot be read.
 

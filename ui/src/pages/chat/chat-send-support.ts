@@ -42,8 +42,9 @@ import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-m
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
-export const OFFLINE_QUEUE_STORAGE_ERROR =
-  "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+export function chatOfflineQueueStorageError(): string {
+  return t("chat.queue.storageFailed");
+}
 
 export function formatChatQueueAdmissionError(
   result: Exclude<ChatQueueAdmissionResult, "admitted">,
@@ -55,7 +56,7 @@ export function formatChatQueueAdmissionError(
   if (result === "full") {
     return t("chat.queue.full");
   }
-  return editing ? t("chat.queue.editStorageFailed") : OFFLINE_QUEUE_STORAGE_ERROR;
+  return editing ? t("chat.queue.editStorageFailed") : chatOfflineQueueStorageError();
 }
 
 export function isChatResetCommand(text: string) {

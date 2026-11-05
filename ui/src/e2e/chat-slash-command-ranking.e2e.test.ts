@@ -31,12 +31,7 @@ function makeCommand(
   };
 }
 
-async function installCommands(
-  page: Page,
-  commands: CommandEntry[],
-  sessionId: string,
-  metadata = false,
-) {
+async function installCommands(page: Page, commands: CommandEntry[], sessionId: string) {
   return installMockGateway(page, {
     methodResponses: {
       "chat.startup": {
@@ -46,7 +41,7 @@ async function installCommands(
         sessionId,
         thinkingLevel: null,
       },
-      ...(metadata ? { "chat.metadata": { commands, models: [] } } : {}),
+      "chat.metadata": { commands, models: [] },
       "commands.list": { commands },
     },
   });
@@ -85,7 +80,7 @@ suite.define(() => {
 
         await page
           .locator(".chat-thread-inner")
-          .getByText("There are no messages to export yet.", { exact: true })
+          .getByText("No messages to export yet.", { exact: true })
           .waitFor({ state: "visible" });
         await expect.poll(() => composer.inputValue()).toBe("");
         expect(await attachment.isVisible()).toBe(true);
@@ -174,7 +169,7 @@ suite.define(() => {
             },
           ]),
         );
-        const gateway = await installCommands(page, commands, "slash-viewport-session", true);
+        const gateway = await installCommands(page, commands, "slash-viewport-session");
         const composer = await openChat(page, gateway);
         await expect.poll(() => composer.isEnabled()).toBe(true);
         await composer.fill("/viewport-");

@@ -68,6 +68,7 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
       timeoutMs?: number;
     };
     requesterOrigin?: RequesterOrigin;
+    pendingInputCancelledByUser?: true;
   };
 };
 
@@ -198,6 +199,8 @@ type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnI
 export type CreateUserTurnTranscriptRecorderParams = {
   /** Authenticated input identity independent of prepared media paths. */
   pendingInputRequestFingerprint?: string;
+  /** Durable channel source turns may reopen their own cancelled, unconsumed attempt. */
+  reclaimCancelledSourceTurn?: boolean;
   trackInputCompletion?: boolean;
   /** Trusted settle replay candidates; storage must match the complete original request hash. */
   pendingInputReplaySourceSessionKeys?: readonly string[];
@@ -223,6 +226,7 @@ export type CreateUserTurnTranscriptRecorderParams = {
 
 type UserTurnPersistenceOptions = {
   target?: UserTurnTranscriptTargetResolver;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   /** Pin admitted storage without replacing the recorder's target resolver or metadata. */
   storageTarget?: Readonly<
     Pick<UserTurnTranscriptTarget, "agentId" | "sessionKey" | "sessionId"> & { storePath: string }
@@ -264,7 +268,7 @@ export type UserTurnTranscriptRecorder = {
   withPendingInput?: <T>(run: () => T) => T;
   withPendingInputCurrent?: <T>(run: () => T) => Promise<Awaited<T>>;
   assertPendingInputLifetimeCurrent?: () => void;
-  finishPendingInput?: (disposition: "cancelled" | "interrupted") => void;
+  finishPendingInput?: (disposition: "cancelled" | "interrupted", userInitiated?: true) => void;
   /** Join accepted completion and disposition writes before releasing the turn's admission. */
   waitForPendingInputSettlement?: () => Promise<void>;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */
@@ -303,7 +307,6 @@ export type UserTurnTranscriptRecorder = {
     params?: UserTurnPersistenceOptions & {
       expectedSessionId?: string;
       expectedSessionState?: SessionTranscriptTurnExpectedState;
-      sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
       beforeFreshMessageCommit?: SessionSourceAssertion;
       /** Allow a later explicit persistence attempt when this attempt appends nothing. */
       retryIfUnpersisted?: boolean;

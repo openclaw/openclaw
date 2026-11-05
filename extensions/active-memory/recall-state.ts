@@ -184,7 +184,7 @@ export function getCachedResult(cacheKey: string): ActiveRecallResult | undefine
   if (!cached) {
     return undefined;
   }
-  if (cached.expiresAt <= Date.now()) {
+  if (cached.expiresAt <= performance.now()) {
     activeRecallCache.delete(cacheKey);
     return undefined;
   }
@@ -192,7 +192,7 @@ export function getCachedResult(cacheKey: string): ActiveRecallResult | undefine
 }
 
 export function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: number): void {
-  const now = Date.now();
+  const now = performance.now();
   if (
     activeRecallCache.size >= DEFAULT_MAX_CACHE_ENTRIES ||
     now - lastActiveRecallCacheSweepAt >= CACHE_SWEEP_INTERVAL_MS

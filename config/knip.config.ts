@@ -48,6 +48,7 @@ const repositoryScriptEntries = [
   "scripts/bench-android-release-history.mts!",
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/bench-plugin-catalog.ts!",
+  "scripts/bench-template-detail.mts!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
@@ -94,6 +95,8 @@ const repositoryScriptEntries = [
   "scripts/ci-shard-timings-refresh.mts!",
   "scripts/ci-test-observations.mjs!",
   "scripts/ci-adaptive-select.mjs!",
+  "scripts/ci-adaptive-evaluate.mjs!",
+  "scripts/ci-adaptive-jev.mjs!",
   "scripts/ci-adaptive-priors.mjs!",
   "scripts/ci-adaptive-costs.mjs!",
   // The scheduled-run execution context design invokes this development replay by path.
@@ -121,6 +124,7 @@ const repositoryScriptEntries = [
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
+  ".github/actions/setup-node-env/transform-fingerprint.mjs!",
   // setup-pnpm-store-cache invokes this helper from composite-action YAML.
   ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
@@ -435,6 +439,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/correction-review.mjs!",
   // prepare-core.sh invokes correction continuation and recovery by path.
   "scripts/pr-lib/correction-continuation.mjs!",
+  // worktree.sh executes the selected-task inventory and artifact closeout helper.
+  "scripts/pr-lib/finalized-task.mjs!",
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/materialize-dependencies.mjs!",
   "scripts/pr-lib/merge-body.mjs!",
@@ -853,6 +859,8 @@ const rootToolingAndWorkspaceDependencies = [
   "signal-utils",
   // Root declaration builds compile terminal-core source and resolve this package from root.
   "string-width",
+  // The rule-cache benchmark resolves this dependency from extensions/tokenjuice/package.json.
+  "tokenjuice",
 ] as const;
 
 function workspacePackage(packageDir: string, extraEntries: readonly string[] = []) {

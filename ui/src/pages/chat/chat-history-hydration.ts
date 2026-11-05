@@ -492,7 +492,7 @@ export async function hydrateChatHistory(
       requestAgentId,
       startup: method === "chat.startup",
       message: missingReadScope
-        ? formatMissingOperatorReadScopeMessage("existing chat history")
+        ? formatMissingOperatorReadScopeMessage("session history")
         : formatChatHistoryLoadError(err),
       retryable:
         isRetryableChatReadError(err, method) ||

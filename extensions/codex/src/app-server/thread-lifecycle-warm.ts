@@ -193,6 +193,7 @@ export async function releaseCodexBoundLiveThread(
   }
   const client = previous?.client ?? options.client;
   let threadClosed: Promise<void> | undefined;
+  let released = false;
   let stopWatching: (() => void) | undefined;
   let stopReading: (() => void) | undefined;
   if (previous) {
@@ -257,7 +258,7 @@ export async function releaseCodexBoundLiveThread(
           : `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
       );
     }
-    return await releaseCodexRetainedLiveThread({
+    released = await releaseCodexRetainedLiveThread({
       ...options,
       client,
       abandonClient: previous ? undefined : options.abandonClient,
@@ -271,6 +272,7 @@ export async function releaseCodexBoundLiveThread(
           }
         : undefined,
     });
+    return released;
   } finally {
     try {
       // Rejection must free the lane so the claimed run can still be stopped.
@@ -312,6 +314,21 @@ export async function releaseCodexBoundLiveThread(
         await options.lifecycleTiming.measure("retired-thread-runtime-release", () =>
           racePromiseWithAbortSignal(Promise.race(stopped), options.signal, exitWaitAbortError),
         );
+      } else if (released && threadClosed) {
+        // A live previous owner keeps the per-home writer lock until it unloads the thread
+        // (codex rollout/src/writer_lock.rs); managed clients unload on unsubscribe. A
+        // missed close stays visible as the resume's active-writer error.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await racePromiseWithAbortSignal(
+          Promise.race([
+            threadClosed,
+            new Promise<void>((resolve) => {
+              timer = setTimeout(resolve, CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS);
+            }),
+          ]),
+          options.signal,
+          exitWaitAbortError,
+        ).finally(() => clearTimeout(timer));
       }
     } finally {
       stopReading?.();

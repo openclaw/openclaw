@@ -11,7 +11,7 @@ import type {
 } from "./workspace-manifest.js";
 import type {
   StagedWorkerWorkspaceInventory,
-  StagedWorkerWorkspaceReadEntry,
+  StagedWorkerWorkspaceResult,
   WorkerWorkspaceGitHistory,
 } from "./workspace-result-inventory.js";
 
@@ -196,15 +196,19 @@ export type WorkspaceManifestComputationOperations = {
     };
   };
   "workspace.manifest.staged": {
-    input: { root: string; ref: string; buildCacheInputs?: string[] };
-    output: StagedWorkerWorkspaceInventory;
-  };
-  "workspace.manifest.entries": {
     input: {
       root: string;
-      entries: StagedWorkerWorkspaceReadEntry[];
+      ref: string;
+      buildCacheInputs?: string[];
+      stagingRoot?: string;
+      verifyContents?: boolean;
+      reconciliation?: { baseManifestRef: string; alreadyAccepted?: boolean };
     };
-    output: Uint8Array;
+    output: StagedWorkerWorkspaceInventory;
+  };
+  "workspace.manifest.result": {
+    input: WorkspaceManifestComputationOperations["workspace.manifest.staged"]["input"];
+    output: StagedWorkerWorkspaceResult;
   };
   "workspace.manifest.stage-input": {
     input: WorkspaceStageInput;
