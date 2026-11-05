@@ -36,11 +36,14 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
 @Observable
 final class AppAppearanceModel {
     private(set) var preference: AppAppearancePreference
+    private(set) var chatTextSize: NativeChatTextSize
 
     init(userDefaults: UserDefaults = .standard) {
         let storedPreference = userDefaults.string(forKey: AppAppearancePreference.storageKey)
             .flatMap(AppAppearancePreference.init(rawValue:))
         self.preference = AppAppearancePreference.launchArgumentPreference ?? storedPreference ?? .system
+        self.chatTextSize = userDefaults.string(forKey: NativeChatTextSize.storageKey)
+            .flatMap(NativeChatTextSize.init(rawValue:)) ?? .standard
         if AppAppearancePreference.launchArgumentPreference != nil {
             userDefaults.set(self.preference.rawValue, forKey: AppAppearancePreference.storageKey)
         }
@@ -54,6 +57,11 @@ final class AppAppearanceModel {
         withTransaction(transaction) {
             self.preference = preference
         }
+    }
+
+    func selectChatTextSize(_ size: NativeChatTextSize, userDefaults: UserDefaults = .standard) {
+        userDefaults.set(size.rawValue, forKey: NativeChatTextSize.storageKey)
+        self.chatTextSize = size
     }
 }
 

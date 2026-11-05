@@ -20,9 +20,12 @@ struct ChatProTab: View {
         case exportTranscript
         case gatewaySettings
         case newSessionOptions
+        case textSize
     }
 
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(AppAppearanceModel.self) private var appearanceModel
+    @Environment(\.dynamicTypeSize) private var systemDynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("openclaw.webchat.showAssistantTrace")
@@ -40,6 +43,7 @@ struct ChatProTab: View {
     @State private var showsTranscriptExportError = false
     @State private var showsNewSessionOptions = false
     @State private var showsChatActions = false
+    @State private var showsChatTextSize = false
     @State private var pendingChatAction: PendingChatAction?
     @State private var speech: OpenClawChatSpeechController?
     @State private var isGatewayStatusManuallyExpanded = false
@@ -106,6 +110,11 @@ struct ChatProTab: View {
                         .presentationDetents([.medium])
                         .presentationDragIndicator(.visible)
                     }
+                }
+                .sheet(isPresented: self.$showsChatTextSize) {
+                    ChatTextSizeSettingsView()
+                        .presentationDetents([.medium])
+                        .presentationDragIndicator(.visible)
                 }
                 .alert(
                     String(localized: "Unable to Export Transcript"),
@@ -176,6 +185,9 @@ struct ChatProTab: View {
                 })
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
                 .environment(\.openClawAssistantBubblesInCleanChrome, true)
+                .environment(
+                    \.dynamicTypeSize,
+                    self.appearanceModel.chatTextSize.dynamicTypeSize(relativeTo: self.systemDynamicTypeSize))
                 .environment(
                     \.openClawEmbeddedBrowserUnavailableReason,
                     self.appModel.activeGatewayConnectConfig?.ingressAuthorization == nil ? nil :
@@ -506,6 +518,11 @@ struct ChatProTab: View {
                     self.pendingChatAction = .exportTranscript
                 }
 
+                self.chatActionButton(title: String(localized: "Chat text size"), systemImage: "textformat.size") {
+                    self.pendingChatAction = .textSize
+                }
+                .accessibilityIdentifier("chat-text-size")
+
                 self.chatActionButton(title: "Gateway settings", systemImage: "network") {
                     self.pendingChatAction = .gatewaySettings
                 }
@@ -543,6 +560,8 @@ struct ChatProTab: View {
             self.openSettings()
         case .newSessionOptions:
             self.showsNewSessionOptions = true
+        case .textSize:
+            self.showsChatTextSize = true
         }
     }
 

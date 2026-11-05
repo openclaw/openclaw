@@ -1,4 +1,5 @@
 #if os(iOS)
+import SwiftUI
 import Testing
 import UIKit
 import UniformTypeIdentifiers
@@ -6,6 +7,35 @@ import UniformTypeIdentifiers
 
 @MainActor
 struct ChatComposerTextViewIOSTests {
+    @Test func `native composer follows the rendered dynamic type size`() throws {
+        func editor(in view: UIView) -> UITextView? {
+            if let editor = view as? UITextView { return editor }
+            return view.subviews.lazy.compactMap { editor(in: $0) }.first
+        }
+        var pointSizes: [CGFloat] = []
+        for size in [DynamicTypeSize.large, .xLarge, .accessibility2] {
+            let composer = ChatComposerTextViewIOS(
+                text: .constant("Native draft"),
+                focusRequested: false,
+                isEnabled: true,
+                minHeight: 22,
+                maxHeight: 120,
+                onFocusChange: { _ in },
+                onHistoryUp: { _ in false },
+                onHistoryDown: { false })
+                .environment(\.dynamicTypeSize, size)
+            let controller = UIHostingController(rootView: composer)
+            controller.view.frame = CGRect(x: 0, y: 0, width: 320, height: 160)
+            controller.view.setNeedsLayout()
+            controller.view.layoutIfNeeded()
+            let renderedEditor = try #require(editor(in: controller.view))
+            try pointSizes.append(#require(renderedEditor.font).pointSize)
+            #expect(renderedEditor.text == "Native draft")
+        }
+        #expect(pointSizes[1] > pointSizes[0])
+        #expect(pointSizes[2] > pointSizes[1])
+    }
+
     @Test func `configured composer uses native multiline input`() {
         let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
 
