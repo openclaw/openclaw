@@ -16,6 +16,7 @@ const auditSchema = z.object({
       appFrame: frameName,
       mainFrame: frameName,
       dashboardFrame: frameName.optional(),
+      completeCachedFrame: frameName.optional(),
     }),
   ),
 });
@@ -113,7 +114,16 @@ export async function applyWarmReloadPaintAudit(reportPath: string, auditPath: s
         app: await selected(observation.appFrame),
         main: await selected(observation.mainFrame),
         dashboard: observation.dashboardFrame ? await selected(observation.dashboardFrame) : null,
+        completeCached: observation.completeCachedFrame
+          ? await selected(observation.completeCachedFrame)
+          : null,
       };
+      if (
+        run.auditedPaint.completeCached &&
+        run.auditedPaint.completeCached.atMs < run.auditedPaint.app.atMs
+      ) {
+        throw new Error(`Complete cached frame precedes the first app frame: ${key}`);
+      }
       for (const prefix of ["App", "Main", "Dashboard"]) {
         const legacy = `first${prefix}CapturedPaintMs`;
         if (legacy in run) {

@@ -71,6 +71,16 @@ const SidebarOnline = lazy(() => import("./app-sidebar-online.tsx"), {
   export: "AppSidebarOnline",
 });
 
+export function preloadSidebarSnapshot(model: SidebarSnapshotModel) {
+  return model.navigationView === "pages"
+    ? SidebarPages.preload()
+    : model.navigationView === "online"
+      ? SidebarOnline.preload()
+      : model.mode === "roster"
+        ? SidebarAgentRoster.preload()
+        : Promise.resolve();
+}
+
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
   private readonly emptyNarrationLines = new Map<string, string>();
   private readonly emptyNarrationTools = new Map<string, SidebarToolActivity>();

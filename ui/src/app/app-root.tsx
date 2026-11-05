@@ -36,6 +36,7 @@ import type { FocusDashboardRouteState } from "./app-root-focus.ts";
 import { createLegacyFocusEscape } from "./app-root-lit.ts";
 import { ShellLoader } from "./app-shell-loader.tsx";
 import { adoptBootComposer } from "./boot-composer.ts";
+import { finishBootFrame } from "./boot-frame.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type {
   createSolidControlUiReadiness,
@@ -352,6 +353,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
       }
     };
     onSettled(() => {
+      finishBootFrame();
       readiness?.invalidate();
       return retire;
     });
@@ -492,6 +494,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     );
   }
   function Login(): SolidJSX.Element {
+    onSettled(finishBootFrame);
     return (
       <LazyRootBoundary fallback={<Splash />}>
         <LoginGate

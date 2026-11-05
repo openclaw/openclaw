@@ -1,14 +1,19 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import {
   controlUiSessionUrl,
   installMockGateway,
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createTeamScaleSidebarListOwner } from "../test-helpers/control-ui-sidebar-list-fixture.ts";
 import { createControlUiTeamScaleFixture } from "../test-helpers/control-ui-team-scale-fixture.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { dashboardLayout } from "./chat-layout-fixtures.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Details progress warm reload" });
 suite.define(() => {
@@ -30,6 +35,7 @@ suite.define(() => {
             detailsSessionFacts: true,
           });
           const sessionKey = fixture.selectedSessionKey;
+          const sessions = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
           await page.addInitScript(
             ({ key, settings }) => {
               for (const [name, value] of Object.entries(settings.sidebarPrefs)) {
@@ -59,11 +65,21 @@ suite.define(() => {
             { ...fixture.scenario, deferredMethods: ["connect"] },
             {
               requestHandlers: {
+                "sessions.list": (params) => sessions.list(isRecord(params) ? params : {}).result,
                 "cron.list": (params) => fixture.listCronJobs(isRecord(params) ? params : {}),
               },
             },
           );
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, face));
+          const url = controlUiSessionUrl(suite.server.baseUrl, sessionKey, face);
+          if (face === "chat" && !archived) {
+            const modules = await holdModuleResponse(page, /\/assets\/.*\.js(?:\?|$)/u);
+            await page.goto(url, { waitUntil: "commit" });
+            await modules.request;
+            await expectBrowser(page.locator("#openclaw-boot-shell")).toBeVisible();
+            modules.release();
+          } else {
+            await page.goto(url);
+          }
           await gateway.waitForRequest("connect");
           await gateway.resolveDeferred("connect");
           const details = await openChatDetails(page);
@@ -84,6 +100,10 @@ suite.define(() => {
           const loaded = archived ? null : await progress.textContent();
           await details.getByText("feature/verification", { exact: true }).waitFor();
           await page.evaluate(() => document.fonts.ready.then(() => undefined));
+          await expectBrowser(page.locator("aside.sidebar")).toHaveAttribute(
+            "data-snapshot-saved",
+            "true",
+          );
           await page.evaluate(async () => {
             await Reflect.get(
               document.querySelector(".chat-pane-cache__pane--active")!,
@@ -91,11 +111,29 @@ suite.define(() => {
             ).flush();
           });
           await page.addInitScript(() => {
+            Reflect.set(window, "firstWarmAppFrame", null);
             const frames: Array<{
               progress: string | null;
               sections: Array<{ id: string; top: number; height: number }>;
             }> = [];
             const sample = () => {
+              const visible = (selector: string) =>
+                [...document.querySelectorAll(selector)].filter((element) =>
+                  element.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
+                ).length;
+              const first = {
+                sidebar: visible("aside.sidebar [data-session-key]"),
+                transcript: visible(".chat-virtual-row"),
+                details: visible(".chat-details section.chat-details-session"),
+                header: visible(".chat-pane__header"),
+                composer: visible(".agent-chat__input, .agent-chat__disabled-banner--replacement"),
+              };
+              if (
+                Reflect.get(window, "firstWarmAppFrame") === null &&
+                Object.values(first).some((count) => count > 0)
+              ) {
+                Reflect.set(window, "firstWarmAppFrame", first);
+              }
               const panel = document.querySelector(".chat-pane-cache__pane--active .chat-details");
               const session = panel?.querySelector("section.chat-details-session");
               if (panel && session?.checkVisibility()) {
@@ -126,7 +164,16 @@ suite.define(() => {
             Reflect.set(window, "progressReloadFrames", frames);
             requestAnimationFrame(sample);
           });
-          await page.reload();
+          const modules =
+            face === "chat" && !archived
+              ? await holdModuleResponse(page, /\/assets\/.*\.js(?:\?|$)/u)
+              : undefined;
+          await page.reload({ waitUntil: "commit" });
+          if (modules) {
+            await modules.request;
+            await expectBrowser(page.locator("#openclaw-boot-shell")).toBeVisible();
+            modules.release();
+          }
           await gateway.waitForRequest("connect");
           if (!archived) {
             await progress.getByText("Synthetic project verification is in progress.").waitFor();
@@ -153,6 +200,10 @@ suite.define(() => {
               sections: Array<{ id: string; top: number; height: number }>;
             }>;
           });
+          const first = await page.evaluate(() => Reflect.get(window, "firstWarmAppFrame"));
+          for (const region of ["sidebar", "transcript", "details", "header", "composer"]) {
+            expect(first[region], `first visible app frame: ${region}`).toBeGreaterThan(0);
+          }
           expect(frames.length).toBeGreaterThan(1);
           expect(frames[0]!.sections.some((section) => section.id === "automations")).toBe(true);
           const settled = frames.at(-1)!.sections;

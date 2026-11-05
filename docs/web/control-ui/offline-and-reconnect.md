@@ -136,6 +136,12 @@ The cached agent roster supplies the conversation's agent name and text avatar
 on the first render, including when the offline shell cannot fetch bootstrap
 config. Reconnecting keeps the displayed identity until a live refresh replaces it.
 
+On a warm chat reload, the saved sidebar, conversation, and previously open
+Details appear together. The browser can keep the departing page visible during
+that preparation. If preparation takes longer, the usual loading frame appears
+until the cached page is ready. A first visit keeps its normal loading frame;
+connecting and fetching live updates continue independently.
+
 The retained identity is for local display and storage, not permission to call
 the Gateway. Reading, drafting, and queuing input remain available offline;
 sending and synchronization wait for the Gateway to revalidate the account.

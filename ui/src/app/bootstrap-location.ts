@@ -28,6 +28,7 @@ import {
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { isDefaultChatLanding } from "../pages/model-setup/first-run.ts";
 import { newSessionLocationFromSearch } from "../pages/new-session/location.ts";
+import { finishBootFrame } from "./boot-frame.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -331,6 +332,9 @@ export function subscribeForegroundChatBootstrap({
     const data = asOptionalRecord(match?.data);
     const key =
       data?.kind === "session" && typeof data.sessionKey === "string" ? data.sessionKey : null;
+    if (match && match.status !== "pending" && (!isSessionRouteId(match.routeId) || key === null)) {
+      finishBootFrame();
+    }
     // Admission previews have no transcript controller and cannot claim its
     // bootstrap priority. Resume ordinary scheduling until the real pane mounts.
     connectionBootstrap.setForegroundRoute(

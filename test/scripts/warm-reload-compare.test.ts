@@ -86,9 +86,23 @@ it("pairs warm samples, preserves missing paint evidence, and writes time-aligne
   const candidate = {
     arm: "candidate",
     route: "chat",
-    runs: [run(888, 2, false), run(90, 4), run(330, 6)],
+    runs: [
+      run(888, 2, false),
+      {
+        ...run(90, 4),
+        auditedPaint: {
+          app: { atMs: 10 },
+          main: { atMs: 10 },
+          dashboard: null,
+          completeCached: { atMs: 10 },
+        },
+      },
+      run(330, 6),
+    ],
   };
   const report = await createWarmReloadComparison([base, candidate], directory);
+  expect(report.comparisons[0]?.pairs[0]?.candidate.cachedFrameStates).toBe(1);
+  expect(report.comparisons[0]?.pairs[1]?.candidate.cachedFrameStates).toBeNull();
   expect(report.comparisons[0]?.summary).toMatchObject({
     helloHandledMs: {
       base: { median: 200, q1: 150, q3: 250, samples: 2 },
@@ -106,7 +120,7 @@ it("pairs warm samples, preserves missing paint evidence, and writes time-aligne
     },
     pixelStateOccurrences: { pairedDelta: { median: 1 } },
     unmaskedPixelStateOccurrences: { pairedDelta: { median: 1 } },
-    auditedMainPaintMs: { base: null, candidate: null, pairedDelta: null },
+    auditedMainPaintMs: { base: null, candidate: { median: 10, samples: 1 }, pairedDelta: null },
   });
   expect(report.comparisons[0]?.pairs.map((pair) => pair.deltas.helloHandledMs)).toEqual([-10, 30]);
   const firstSheet = report.comparisons[0]!.pairs[0]!.contactSheets[0]!;

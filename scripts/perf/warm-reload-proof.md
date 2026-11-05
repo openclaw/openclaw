@@ -177,6 +177,15 @@ Main content means actual transcript text; dashboard content means the fixture
 widget rather than its loading skeleton. Then compute observed paint times from
 the selected frames' original navigation-relative clocks:
 
+For a warm-frame experiment, also attest `completeCachedFrame`: the first PNG
+containing the cached sidebar, header, transcript, composer, and previously open
+Details together. `cachedFrameStates` counts distinct accepted visible states
+from the first new-document app frame through that complete frame, inclusive.
+It excludes changes to the departing document; the full visible census still
+records those and subsequent live updates. Missing complete-frame inspection
+leaves this metric null. Inspect the original frames, including the predecessor;
+DOM counts cannot supply this attestation.
+
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/warm-reload-proof.ts \
   --audit-report .local/warm-reload-proof/<run>/report.json \

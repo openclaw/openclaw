@@ -1,4 +1,5 @@
 import { mountOpenClawApp } from "./app/app-root.tsx";
+import { finishBootFrame } from "./app/boot-frame.ts";
 import type { prepareApplicationStartup } from "./app/bootstrap-connection.ts";
 import { bootstrapApplication } from "./app/bootstrap.ts";
 import type { EarlyApplicationGateway } from "./app/early-gateway.ts";
@@ -38,6 +39,7 @@ export async function startControlUi(
     bootStyles.media = "all";
   }
   installKeyboardHints();
+  if (!initial.bootRecord) finishBootFrame();
   const root = document.getElementsByTagName("openclaw-app").item(0);
   if (root instanceof HTMLElement) {
     mountOpenClawApp(root, bootstrapApplication(initial, earlyGateway));

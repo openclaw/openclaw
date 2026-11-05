@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SidebarSnapshotModel } from "../../components/sidebar-snapshot-data.ts";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import {
   MAX_CHAT_THUMBNAILS,
@@ -83,17 +84,20 @@ function readSharedPrewarm(
   return prepared;
 }
 
-export function waitForPrewarmedChatSnapshot(cacheKey: string): Promise<void> | undefined {
+export function waitForPrewarmedChatSnapshot(
+  cacheKey: string,
+  sidebar: Promise<SidebarSnapshotModel | null>,
+): Promise<SidebarSnapshotModel | null | undefined> | undefined {
   const entry = peekPrewarmedChatSnapshot();
-  if (entry?.cacheKey !== cacheKey || entry.cancelled || entry.prepared?.snapshot !== undefined) {
+  if (entry?.cacheKey !== cacheKey || entry.cancelled) {
     return undefined;
   }
   // Only this pane waits: an unavailable cache must never hold first mount indefinitely.
   let timeout: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
-    entry.ready,
-    new Promise<void>((resolve) => {
-      timeout = setTimeout(resolve, 100);
+    Promise.all([entry.ready, sidebar]).then(([, model]) => model),
+    new Promise<undefined>((resolve) => {
+      timeout = setTimeout(() => resolve(undefined), 100);
     }),
   ]).finally(() => clearTimeout(timeout));
 }

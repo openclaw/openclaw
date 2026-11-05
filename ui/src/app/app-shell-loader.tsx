@@ -5,6 +5,7 @@ import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import { t } from "../lib/reactive/i18n.ts";
 import type { OpenClawShellProps } from "./app-host.tsx";
 import { bootComposerElement } from "./boot-composer.ts";
+import { finishBootFrame } from "./boot-frame.ts";
 import {
   cancelStaleChunkRecovery,
   isStaleChunkImportError,
@@ -35,6 +36,7 @@ export function ShellLoader(props: ShellLoaderProps): SolidJSX.Element {
 function ShellLoadError(props: { error: unknown; reset: () => void }): SolidJSX.Element {
   let active = true;
   onSettled(() => {
+    finishBootFrame();
     if (isStaleChunkImportError(props.error)) {
       void scheduleStaleChunkReload({ canReload: () => active });
     }

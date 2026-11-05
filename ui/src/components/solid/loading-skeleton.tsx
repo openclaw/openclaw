@@ -11,7 +11,9 @@ import { t } from "../../lib/reactive/i18n.ts";
 // Every chat loading frame shows the document's one boot composer in its
 // composer slot, so typing continues across frames until the chat pane adopts it.
 function BootComposer() {
-  const textarea = bootComposerElement();
+  const textarea = document.documentElement.hasAttribute("data-openclaw-warm-frame")
+    ? null
+    : bootComposerElement();
   // JSX moves the existing node before the old frame's cleanup can capture it.
   snapshotBootComposerScroll();
   onSettled(() => {

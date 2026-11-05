@@ -63,6 +63,7 @@ async function fixture() {
 
 it("imports inspected pixel observations using the original capture clock and local frame provenance", async () => {
   const input = await fixture();
+  await input.writeAudit([{ ...input.observation, completeCachedFrame: "frame-00003.png" }]);
   const outputPath = await applyWarmReloadPaintAudit(input.reportPath, input.auditPath);
   const output = JSON.parse(await readFile(outputPath, "utf8"));
   expect(await readFile(input.reportPath, "utf8")).toBe(input.original);
@@ -88,6 +89,7 @@ it("imports inspected pixel observations using the original capture clock and lo
       },
       main: { frame: "dashboard/cold/frame-00003.png", atMs: 45, previousAtMs: 15 },
       dashboard: { atMs: 45 },
+      completeCached: { atMs: 45, previousAtMs: 15 },
     },
   });
   expect(Object.keys(run).filter((key) => key.endsWith("CapturedPaintMs"))).toEqual([]);
@@ -107,6 +109,7 @@ it("requires exactly one attested observation per captured reload and actual cap
     { mainFrame: "frame-00001.png" },
     { inspected: false },
     { dashboardFrame: undefined },
+    { appFrame: "frame-00003.png", completeCachedFrame: "frame-00002.png" },
   ]) {
     await input.writeAudit([{ ...input.observation, ...change }]);
     await expect(applyWarmReloadPaintAudit(input.reportPath, input.auditPath)).rejects.toThrow();

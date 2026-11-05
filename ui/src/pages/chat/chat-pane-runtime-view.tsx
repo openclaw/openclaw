@@ -10,6 +10,7 @@ import {
   Show,
 } from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
+import { finishBootFrame } from "../../app/boot-frame.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import {
   availableLinkReaders,
@@ -36,6 +37,7 @@ import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
+import { preloadChatDetails } from "./components/chat-details.tsx";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
@@ -43,6 +45,7 @@ import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-me
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
+import { readSidebarBootSnapshot } from "./session-snapshot-prewarm.ts";
 import { waitForPrewarmedChatSnapshot } from "./session-snapshot-store.ts";
 
 const ChatComposerCapabilityDialogs = lazy(() => import("./chat-composer-capability-host.tsx"), {
@@ -133,13 +136,22 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         },
         { sessionKey: runtime.sessionKey },
       ),
+      readSidebarBootSnapshot(gateway),
     );
     if (pendingSnapshot) {
-      void pendingSnapshot.then(() => {
-        if (!disposed) {
-          setReady(true);
-        }
-      });
+      const reveal = () => {
+        if (!disposed) setReady(true);
+      };
+      void Promise.all([
+        preloadChatDetails(),
+        pendingSnapshot.then(async (model) => {
+          if (model) {
+            const { preloadSidebarSnapshot } =
+              await import("../../components/app-sidebar-owner.tsx");
+            await preloadSidebarSnapshot(model);
+          }
+        }),
+      ]).then(reveal, reveal);
     } else {
       setReady(true);
     }
@@ -169,6 +181,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     adoptBootComposer(runtime);
     runtime.chatState.commitRender();
     if (runtime.presented && runtime.presentation.documentVisible) {
+      finishBootFrame();
       notifyRenderLifecycleForTest(runtime.element, "commit");
     }
     finish?.resolve(true);

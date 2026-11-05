@@ -46,6 +46,8 @@ const ChatDetailsMobileHostContent = lazy(() => import("../chat-details-mobile-h
   export: "ChatDetailsMobileHostContent",
 });
 
+export const preloadChatDetails = ChatDetailsDesktopComposition.preload;
+
 export type ChatDetailsElements = {
   pane?: HTMLElement;
   header?: HTMLElement;

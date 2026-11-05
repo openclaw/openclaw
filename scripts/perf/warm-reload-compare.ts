@@ -10,7 +10,7 @@ type Arm = "base" | "candidate";
 type Census = {
   distinctStates: number;
   lastVisualChangeMs: number | null;
-  timeline: Array<{ atMs: number; frame: string }>;
+  timeline: Array<{ atMs: number; frame: string; stateId?: number }>;
 };
 type ComparisonRun = {
   warm: boolean;
@@ -28,7 +28,12 @@ type ComparisonRun = {
     firstTranscriptDomMs?: number | null;
     firstDashboardContentDomMs?: number | null;
   };
-  auditedPaint?: { main: { atMs: number }; dashboard: { atMs: number } | null };
+  auditedPaint?: {
+    app?: { atMs: number };
+    main: { atMs: number };
+    dashboard: { atMs: number } | null;
+    completeCached?: { atMs: number } | null;
+  };
   visual: Census & { unmasked: Census; visibleChangeCensus?: Census };
 };
 type ComparisonResult = { arm: string; route: string; runs: ComparisonRun[] };
@@ -146,7 +151,21 @@ function distribution(values: number[]) {
 }
 
 function metrics(run: ComparisonRun): Record<string, number | null> {
+  const first = run.auditedPaint?.app?.atMs;
+  const complete = run.auditedPaint?.completeCached?.atMs;
+  const timeline = run.visual.visibleChangeCensus?.timeline;
+  const cachedStates =
+    first !== undefined && complete !== undefined && timeline
+      ? [
+          timeline.findLast((entry) => entry.atMs <= first),
+          ...timeline.filter((entry) => entry.atMs > first && entry.atMs <= complete),
+        ].filter((entry) => entry !== undefined)
+      : null;
   return {
+    completeCachedPaintMs: complete ?? null,
+    cachedFrameStates: cachedStates
+      ? new Set(cachedStates.map((entry) => entry.stateId ?? entry.frame)).size
+      : null,
     visibleStates: run.visual.visibleChangeCensus?.distinctStates ?? null,
     visibleStateOccurrences: run.visual.visibleChangeCensus?.timeline.length ?? null,
     pixelStates: run.visual.distinctStates,
