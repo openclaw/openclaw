@@ -160,7 +160,7 @@ async function dispatchSyntheticCommand(
     await sendMessageFeishu({
       cfg: params.cfg,
       to: resolveCallbackTarget(params.event),
-      text: "Unable to verify this conversation's chat type. Please try again.",
+      text: "⚠️ Could not verify this chat's conversation type, so this action was not run. Try clicking again later.",
       accountId: params.account.accountId,
     });
     return;
@@ -236,17 +236,16 @@ async function resolveCardActionChatType(params: {
         return resolvedChatType;
       }
       params.log(
-        `feishu[${params.account.accountId}]: card action missing chat type for chat; refusing card action`,
+        `feishu[${params.account.accountId}]: card action chat type unavailable; action refused`,
       );
     } else {
       params.log(
-        `feishu[${params.account.accountId}]: failed to resolve chat type: ${sanitizeLogValue(response.msg ?? "unknown error")}; refusing card action`,
+        `feishu[${params.account.accountId}]: card action chat type unavailable; action refused`,
       );
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "unknown";
+  } catch {
     params.log(
-      `feishu[${params.account.accountId}]: failed to resolve chat type: ${sanitizeLogValue(message)}; refusing card action`,
+      `feishu[${params.account.accountId}]: card action chat type unavailable; action refused`,
     );
   }
 
@@ -340,7 +339,7 @@ export async function handleFeishuCardAction(params: {
           await sendMessageFeishu({
             cfg,
             to: resolveCallbackTarget(event),
-            text: "Unable to verify this conversation's chat type. Please try again.",
+            text: "⚠️ Could not verify this chat's conversation type, so this action was not run. Try clicking again later.",
             accountId,
           });
           return;
