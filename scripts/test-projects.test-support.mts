@@ -2,10 +2,11 @@
 // scripts/test-projects.mts, and focused tests. Exports are intentionally
 // granular so project selection stays testable without spawning Vitest.
 import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import adaptiveMarkdownQualification from "../config/ci-adaptive-markdown.json" with { type: "json" };
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
@@ -91,6 +92,7 @@ import {
   detectChangedLanes,
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mts";
+import { isGitWorktreeRoot } from "./check-file-utils.ts";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import {
   getChangedPathFacts,
@@ -98,6 +100,7 @@ import {
   isTestOnlyPath,
   isTestSupportFileTarget,
 } from "./lib/changed-path-facts.mjs";
+import { createAdaptiveMarkdownFilter } from "./lib/ci-adaptive-markdown.mjs";
 import {
   createExtensionTestProcessTargetChunks,
   listTrackedTestPlanFiles,
@@ -174,6 +177,7 @@ type ChangedTestTargetOptions = {
   combineSiblingWithImportGraph?: boolean;
   boundedOwners?: boolean;
   aggressive?: { maxDirectImporters: number; maxDirectoryTests: number };
+  adaptiveMarkdown?: { isIndependentCompanion: (file: string) => boolean };
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
   forceFullImportGraph?: boolean;
   resolveAliases?: boolean;
@@ -1447,6 +1451,9 @@ let cachedExplicitTestTargetFiles: string[] | null = null;
 let cachedExplicitTestTargetFilesCwd: string | null = null;
 
 function listExplicitTestTargetFilesFromGit(cwd: string) {
+  if (!isGitWorktreeRoot(cwd)) {
+    return null;
+  }
   const result = spawnSync(
     "git",
     [
@@ -2225,7 +2232,7 @@ function listImportGraphGrepMatches(
   // Git's fixed-string prefilter rescans for each term. Large frontiers use the
   // source reader's single-pass multi-term matcher over the same inventory.
   const result =
-    missing.length <= 64
+    missing.length <= 64 && isGitWorktreeRoot(cwd)
       ? spawnSync(
           "git",
           ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
@@ -2791,6 +2798,56 @@ export function resolveImportGraphDependents(
   return [...seen]
     .filter((file) => !roots.has(file))
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Fingerprint current workspace inputs from the same graph that selects their consumers. */
+export function createTestInputFingerprint(cwd = process.cwd(), additionalPaths: string[] = []) {
+  let dependencies: Map<string, string[]> | undefined;
+  const hashes = new Map<string, string | null>();
+  return (roots: string[]): string | null => {
+    try {
+      if (!dependencies) {
+        dependencies = new Map();
+        const graph = getImportGraph(
+          cwd,
+          { tooling: true, resolveAliases: true, runtimeOnly: true },
+          additionalPaths,
+        );
+        for (const [dependency, importers] of graph.reverseImports) {
+          for (const importer of importers) {
+            const inputs = dependencies.get(importer) ?? [];
+            inputs.push(dependency);
+            dependencies.set(importer, inputs);
+          }
+        }
+      }
+      const inputs = new Set(roots);
+      for (const file of inputs) {
+        for (const dependency of dependencies.get(file) ?? []) {
+          inputs.add(dependency);
+        }
+      }
+      const rows = [...inputs].toSorted().map((file) => {
+        if (!hashes.has(file)) {
+          const absolute = path.join(cwd, file);
+          hashes.set(
+            file,
+            fs.lstatSync(absolute).isFile()
+              ? createHash("sha256").update(fs.readFileSync(absolute)).digest("hex")
+              : null,
+          );
+        }
+        const hash = hashes.get(file);
+        if (!hash) {
+          throw new Error("Unqualified test input");
+        }
+        return [file, hash];
+      });
+      return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+    } catch {
+      return null;
+    }
+  };
 }
 
 /** Changed resolved dependencies enter the same graph at their literal import consumers. */
@@ -4644,6 +4701,15 @@ function resolveBoundedChangedTestTargetPlan(
   const targets: string[] = [];
   const ownerTargets: string[] = [];
   const ownerAreas: string[] = [];
+  const adaptiveMarkdown =
+    options.aggressive && options.adaptiveMarkdown
+      ? createAdaptiveMarkdownFilter(
+          changedPaths,
+          createTestInputFingerprint(cwd, changedPaths),
+          adaptiveMarkdownQualification,
+          options.adaptiveMarkdown.isIndependentCompanion,
+        )
+      : (owners: string[]) => owners;
   const graphOptions = {
     tooling: true,
     resolveAliases: options.resolveAliases,
@@ -4676,11 +4742,18 @@ function resolveBoundedChangedTestTargetPlan(
           )
         : [];
     const explicitOwners = uniqueOrdered([...(mappedOwners ?? []), ...pluginPackageOwner]);
-    const conventionalOwners = resolveConventionalChangedOwnerTargets(
+    const conventionalCandidates = resolveConventionalChangedOwnerTargets(
       changedPath,
       cwd,
       options.aggressive?.maxDirectoryTests,
     );
+    const conventionalOwners = adaptiveMarkdown(conventionalCandidates);
+    const retainedConventional = new Set(conventionalOwners);
+    options.onSelection?.({
+      rule: "adaptive-qualified-unchanged",
+      input: changedPath,
+      targets: conventionalCandidates.filter((file) => !retainedConventional.has(file)),
+    });
     const owners = options.aggressive
       ? uniqueOrdered([
           ...explicitOwners,

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { getMockCallOutput } from "../cli/test-runtime-capture.js";
 import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { sessionsCompactCommand } from "./sessions-compact.js";

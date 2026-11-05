@@ -92,6 +92,80 @@ function writeTsxFixture(modulesDir: string, marker: string) {
 }
 
 describe("script direct-run entrypoints", () => {
+  it.for([
+    { outcome: "failure", code: 1 },
+    { outcome: "SIGTERM", code: 143 },
+  ])(
+    "closes singleton smoke leases before removing its home after $outcome",
+    async ({ outcome, code }) => {
+      await withShimFixture(
+        TSX_SHIM_WRAPPERS[0],
+        async ({ checkoutRoot, fixtureRoot, runNode }) => {
+          const script = "scripts/test-built-plugin-singleton.mts";
+          for (const file of [
+            script,
+            "scripts/lib/build-smoke-env.mts",
+            "scripts/lib/repo-root.mjs",
+            "scripts/process-warning-filter.mts",
+          ]) {
+            writeFileSync(path.join(checkoutRoot, file), readFileSync(file));
+          }
+          writeFileSync(path.join(checkoutRoot, "package.json"), '{"type":"module"}');
+          writeFileSync(path.join(checkoutRoot, "pnpm-workspace.yaml"), "packages: []\n");
+          // Exercise the real entrypoint teardown without building/staging plugins.
+          writeFileSync(
+            path.join(checkoutRoot, "scripts/lib/dist-artifact-ownership.mts"),
+            "export async function withDistArtifactOwnership(root, run) { return run(); }\n",
+          );
+          writeFileSync(
+            path.join(checkoutRoot, "scripts/stage-bundled-plugin-runtime.mts"),
+            "export function prepareBundledPluginRuntime() { throw new Error('unexpected staging'); }\n",
+          );
+          const entry = path.join(checkoutRoot, "dist/plugins/build-smoke-entry.js");
+          const receipt = path.join(fixtureRoot, "smoke-home");
+          mkdirSync(path.dirname(entry), { recursive: true });
+          writeFileSync(
+            entry,
+            `
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+const home = process.env.OPENCLAW_HOME;
+const db = new DatabaseSync(path.join(home, "lease.sqlite"));
+process.once("exit", () => {
+  const present = fs.existsSync(home);
+  db.close();
+  fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ home, present, closed: !db.isOpen }));
+});
+${outcome === "SIGTERM" ? 'process.emit("SIGTERM");' : 'throw new Error("fixture import failed");'}
+`,
+          );
+          const result = await runNode(
+            [path.join(checkoutRoot, script)],
+            {
+              ...testRunnerFixtureEnv(),
+              TMPDIR: fixtureRoot,
+              TMP: fixtureRoot,
+              TEMP: fixtureRoot,
+            },
+            checkoutRoot,
+          );
+          expectExit(result, code);
+          if (outcome === "failure") {
+            expect(result.stderr).toContain("fixture import failed");
+          }
+          const closed = JSON.parse(readFileSync(receipt, "utf8")) as {
+            home: string;
+            present: boolean;
+            closed: boolean;
+          };
+          expect(closed).toMatchObject({ present: true, closed: true });
+          expect(existsSync(closed.home)).toBe(false);
+        },
+      );
+    },
+  );
+
   it
     .skipIf(process.platform === "win32")
     .for(["scripts/run-vitest.mjs", "scripts/check-changed.mjs"] as const)(

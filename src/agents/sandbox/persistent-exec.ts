@@ -22,7 +22,7 @@ import {
   type SandboxPersistentExecPreparation,
   type SandboxPersistentExecStopped,
 } from "./persistent-exec.types.js";
-import { readRegistry, readRegistryEntry } from "./registry.js";
+import { readRegistry, readRegistryEntry, type SandboxRegistryEntry } from "./registry.js";
 import { assertSandboxRegistryWorkspaceBinding } from "./registry.kernel.js";
 
 const AUTHORITY_CHECK_INTERVAL_MS = 20_000;
@@ -151,23 +151,23 @@ export async function hasSandboxPersistentExecCustody(params: {
 }
 
 /** Reconcile inert allocations whose controller died before publishing the Docker response. */
-export async function recoverSandboxPersistentExecOrphans(
-  options: { env?: NodeJS.ProcessEnv } = {},
-) {
-  const store = createSandboxPersistentExecStore(options);
-  await recoverOrphanContainers(store, await store.list());
+export async function recoverSandboxPersistentExecOrphans(entries: SandboxRegistryEntry[]) {
+  const store = createSandboxPersistentExecStore();
+  await recoverOrphanContainers(store, await store.list(), entries);
 }
 
 async function recoverOrphanContainers(
   store: Store,
   records: SandboxPersistentExecRecord[],
+  entries?: SandboxRegistryEntry[],
 ): Promise<void> {
-  const registry = await readRegistry({ path: store.databasePath, env: store.environment });
+  const registry =
+    entries ?? (await readRegistry({ path: store.databasePath, env: store.environment })).entries;
   const targets = new Map<string, DockerPersistentExecTarget>();
   for (const record of records) {
     targets.set(JSON.stringify(record.backendTarget), record.backendTarget);
   }
-  for (const entry of registry.entries) {
+  for (const entry of registry) {
     if ((entry.backendId ?? "docker") === "docker" && entry.backendTarget) {
       const target = dockerPersistentTargetFromEngineTarget(entry.backendTarget);
       targets.set(JSON.stringify(target), target);

@@ -13,8 +13,9 @@ What survives a dropped connection, and how the Control UI recovers when it retu
 An initial connection has a two-second grace period before connection feedback
 appears. A failed or closed connection shows feedback immediately, and retries
 keep it visible until the Gateway connects. Cached conversations retain their
-header controls; the connection indicator fills the header's existing gap without
-moving controls or covering conversation rows. Resolving a session link or loading
+header controls; on desktop the connection indicator floats centered below the
+pane header, for example **Reconnecting… · Saved conversation**, without moving
+header controls or the transcript. Resolving a session link or loading
 history does not imply a lost connection.
 
 Returning to a suspended tab or regaining network connectivity can recover a

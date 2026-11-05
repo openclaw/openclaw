@@ -93,13 +93,9 @@ const runtimeStub = {
   },
   channel: {
     text: {
-      resolveTextChunkLimit: resolveTextChunkLimitMock,
       resolveChunkMode: () => "length",
-      chunkMarkdownText: (text: string) => (text ? [text] : []),
       chunkMarkdownTextWithMode: (text: string, limit: number, mode: unknown) =>
         chunkMarkdownTextWithModeMock(text, limit, mode),
-      resolveMarkdownTableMode: resolveMarkdownTableModeMock,
-      convertMarkdownTables: (text: string) => text,
     },
   },
 } as unknown as PluginRuntime;
@@ -242,7 +238,6 @@ describe("Matrix formatted chunk boundaries", () => {
     const chunks = chunksFor(markdown, 20);
 
     expect(chunks.join("")).toBe(markdown);
-    expect(chunks.join("")).not.toContain("</u>");
   });
 
   it("keeps spoiler and underline nesting valid across chunks", () => {

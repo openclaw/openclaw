@@ -3,7 +3,13 @@ import { createMemo, Errored, Loading, Show } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
-import { SettingsPage } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsEmpty,
+  SettingsGroup,
+  SettingsPage,
+  SettingsSection,
+  SettingsUnavailable,
+} from "../../components/solid/settings-ui.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginInstallRequest } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -22,12 +28,16 @@ import {
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
+import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 
 export type PluginCatalogDetailProps = {
   registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
   registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
   registerIcon?: (readId: () => string) => () => void;
   onAskPlugin?: () => void;
+  onSelectPrompt?: (prompt: string) => void;
+  promptBusy?: boolean;
+  promptBlockedReason?: string | null;
   busy?: boolean;
   installProgress?: PluginInstallProgress;
   message?: PluginRowMessage;
@@ -40,6 +50,7 @@ export type PluginCatalogDetailProps = {
   onBack: () => void;
   onRetry: () => void;
   canInstall: boolean;
+  installTitle?: string;
   installBlockedReason: string | null;
   onInstall: () => void;
   iconUrls: Readonly<Record<string, string>>;
@@ -61,7 +72,9 @@ export function renderPluginReadme(readme: string | undefined): JSX.Element {
       />
     </article>
   ) : (
-    <p class="plugin-catalog-detail__empty">{t("pluginsPage.detailNoReadme")}</p>
+    <SettingsGroup>
+      <SettingsEmpty message={t("pluginsPage.detailNoReadme")} />
+    </SettingsGroup>
   );
 }
 
@@ -113,6 +126,7 @@ function CatalogDetailContent(props: {
                 onButtonRef={(element) => (installButton = element)}
                 buttonClass="btn oc-action plugin-catalog-detail__install"
                 primary
+                title={props.state.installTitle}
                 disabled={!props.state.canInstall}
                 busy={Boolean(props.state.busy)}
                 progress={props.state.installProgress}
@@ -128,6 +142,19 @@ function CatalogDetailContent(props: {
       }
       identity={renderPluginPublisher(props.value)}
       sidebar={renderPluginMetadata(props.value)}
+      recommendations={
+        <PluginRecommendedPrompts
+          id={plugin().id}
+          name={plugin().catalog.name}
+          prompts={detail().recommendedPrompts}
+          iconUrl={packageIcon()}
+          registerIcon={props.state.registerIcon}
+          busy={props.state.busy || props.state.promptBusy}
+          disabled={Boolean(props.state.promptBlockedReason)}
+          disabledReason={props.state.promptBlockedReason}
+          onSelect={props.state.onSelectPrompt}
+        />
+      }
       panel={
         <>
           {renderPluginRowMessage(props.state.message, {
@@ -198,7 +225,9 @@ export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): JSX.
         >
           {read()}
           {!props.connected ? (
-            <p class="plugin-catalog-detail__empty">{t("pluginsPage.discoveryOffline")}</p>
+            <SettingsSection>
+              <SettingsUnavailable message={t("pluginsPage.discoveryOffline")} />
+            </SettingsSection>
           ) : (
             <Show when={props.result} fallback={<CatalogDetailLoading />}>
               {(result) => <CatalogDetailContent value={result()} state={props} />}

@@ -27,7 +27,6 @@ import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
 import { createUpdatePreflightDiagnostics } from "../../infra/update-failure-facts.js";
 import { normalizeUpdateFailureResult } from "../../infra/update-failure-result.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
-import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -190,6 +189,7 @@ export async function admitUpdateCommandRun(params: {
   expectedForeground?: true;
   initialization?: UpdateInitializationAdmission;
   assertCurrent?: () => void;
+  onAdmitted?: (run: NonNullable<UpdateCommandOptions["run"]>) => void | Promise<void>;
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
   assertUpdatePackageActivationAdmission(params.root, {
     serviceRoot: params.serviceRoot,
@@ -254,26 +254,7 @@ export async function admitUpdateCommandRun(params: {
     ledgerOptions,
   );
   const record = adoptUpdateRun(created.runId, ledgerOptions);
-  if (!params.opts.dryRun && !env[UPDATE_RUN_ID_ENV]?.trim()) {
-    // Create the ledger before opening its reader; later update work may relocate it.
-    await reconcileAbandonedUpdateRunsAsync(
-      { excludeRunId: record.runId },
-      { ...ledgerOptions, snapshot: true },
-    );
-    params.assertCurrent?.();
-  }
-  const requester = resolveManagedUpdateRequester(record.origin.requester);
-  const requesterAuthority = requester?.authorizationSource?.startsWith("profile:")
-    ? Object.freeze({
-        requester: Object.freeze({ ...requester }),
-        isCurrent: () => {
-          throw new Error("Profile update continuation has not acquired its native owner.");
-        },
-      })
-    : requester
-      ? await createManagedUpdateRequesterAuthority(requester, env)
-      : undefined;
-  const run = {
+  const run: NonNullable<UpdateCommandOptions["run"]> = {
     runId: record.runId,
     originalRecoveryCapture:
       params.initialization?.originalRecoveryCapture ?? params.opts.run?.originalRecoveryCapture,
@@ -284,7 +265,6 @@ export async function admitUpdateCommandRun(params: {
     meta.completionOwner === "gateway-restart"
       ? { completionOwner: "gateway-restart" as const }
       : {}),
-    ...(requesterAuthority ? { requesterAuthority } : {}),
   };
   if (
     !env[UPDATE_RUN_ID_ENV] &&
@@ -297,6 +277,29 @@ export async function admitUpdateCommandRun(params: {
       admitMutableUpdateSignalRun(run, record);
     }
   }
+  // Adoption grants this invocation the run; register its terminal owner before
+  // any fallible enrichment can strand the committed row without a result.
+  await params.onAdmitted?.(run);
+  params.assertCurrent?.();
+  if (!params.opts.dryRun && !env[UPDATE_RUN_ID_ENV]?.trim()) {
+    // Create the ledger before opening its reader; later update work may relocate it.
+    await reconcileAbandonedUpdateRunsAsync(
+      { excludeRunId: record.runId },
+      { ...ledgerOptions, snapshot: true },
+    );
+    params.assertCurrent?.();
+  }
+  const requester = resolveManagedUpdateRequester(record.origin.requester);
+  run.requesterAuthority = requester?.authorizationSource?.startsWith("profile:")
+    ? Object.freeze({
+        requester: Object.freeze({ ...requester }),
+        isCurrent: () => {
+          throw new Error("Profile update continuation has not acquired its native owner.");
+        },
+      })
+    : requester
+      ? await createManagedUpdateRequesterAuthority(requester, env)
+      : undefined;
   return run;
 }
 
@@ -693,8 +696,6 @@ export async function prepareMutableUpdateRuntime(
   fence: UpdateRecoveryFence,
 ) {
   return await withOwnedManagedUpdateEnv(env, async () => {
-    fence.assertCurrent();
-    await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
     fence.assertCurrent();
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),

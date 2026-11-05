@@ -30,7 +30,7 @@ function readSubmittedModel(value: unknown): SubmittedModel | undefined {
 export function createSubmittedModelNoticeProjector() {
   let previous: SubmittedModel | undefined;
   let hasConversation = false;
-  return (item: Extract<ChatItem, { kind: "message" }>): ChatItem | undefined => {
+  const project = (item: Extract<ChatItem, { kind: "message" }>): ChatItem | undefined => {
     const raw = asRecord(item.message);
     const metadata = asRecord(raw?.["__openclaw"]);
     if (metadata?.kind === "reset") {
@@ -81,6 +81,9 @@ export function createSubmittedModelNoticeProjector() {
       text: "",
     };
   };
+  /** Everything a later message's notice depends on. */
+  const state = () => JSON.stringify([previous, hasConversation]);
+  return Object.assign(project, { state });
 }
 
 /** Pending custody and persisted history share the same system-turn presentation. */
@@ -91,6 +94,7 @@ export function projectChatSystemNotice(
     status: PendingInputStatus;
     key: string;
     timestamp: number;
+    cancelledByUser?: true;
     retired?: NonNullable<Extract<ChatItem, { kind: "notice" }>["retiredPendingInput"]>;
   },
 ): ChatItem[] {
@@ -114,11 +118,13 @@ export function projectChatSystemNotice(
   const provenance = asRecord(raw?.provenance);
   const agentUpdate = provenance?.kind === "inter_session";
   const pendingText =
-    pending && agentUpdate && pending.status === "cancelled"
-      ? t(`chat.pendingInputs.agentUpdate.${pending.status}`)
-      : pending && pending.status !== "queued"
-        ? t(`chat.pendingInputs.${pending.status}`)
-        : undefined;
+    pending?.status === "cancelled" && pending.cancelledByUser
+      ? undefined
+      : pending && agentUpdate && pending.status === "cancelled"
+        ? t(`chat.pendingInputs.agentUpdate.${pending.status}`)
+        : pending && pending.status !== "queued"
+          ? t(`chat.pendingInputs.${pending.status}`)
+          : undefined;
   const pendingItems: ChatItem[] =
     pending && pendingText
       ? [
@@ -199,7 +205,7 @@ export function projectChatSystemNotice(
     {
       kind: "notice",
       key: item.key,
-      icon: noticeKind?.icon ?? "cpu",
+      icon: "cpu",
       ...(pending ? {} : { systemEvent: "info" as const }),
       label: noticeKind ? t(noticeKind.labelKey, { plugin: pluginName ?? "" }) : t("common.system"),
       ...(noticeKind?.startsTurn === false ? {} : { startsTurn: true }),

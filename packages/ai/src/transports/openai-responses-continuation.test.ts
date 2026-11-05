@@ -17,7 +17,10 @@ import {
   type ResponsesContinuationState,
 } from "./openai-responses-continuation.js";
 import { inputMessage as userInput } from "./openai-responses-prompt-observer.test-support.js";
-import { normalizeOpenAIResponsesFunctionCallId as normalizeCallId } from "./openai-responses-tool-call-id-shape.js";
+import {
+  normalizeOpenAIResponsesFunctionCallId as normalizeCallId,
+  splitOpenAIFunctionCallPairing,
+} from "./openai-responses-tool-call-id-shape.js";
 
 type Input = NonNullable<ResponsesContinuationRequest["input"]>;
 type Output = ResponsesContinuationState["lastResponseItems"];
@@ -293,6 +296,68 @@ describe("OpenAI Responses continuation", () => {
     }
   });
 
+  it.each([false, true])("reuses immutable sent history with rebuilt image=%s", (withImage) => {
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    runWithAiTransportHost(host, () => {
+      const rawId = "functions.gateway:0";
+      const oldCall = toolCall("call_old");
+      const image = {
+        role: "user" as const,
+        content: [
+          {
+            type: "input_image" as const,
+            detail: "auto" as const,
+            image_url: "https://example.test/image.png",
+          },
+        ],
+      };
+      const retained = freezeJsonSnapshot([firstUser, oldCall, toolOutput("call_old")]);
+      const images = withImage ? [image] : [];
+      const input = [...images, ...retained];
+      const latest = toolCall(rawId, { id: "fc_latest", status: "completed" });
+      const state = record(undefined, input, "resp_cached", [latest]);
+      const replayedId = splitOpenAIFunctionCallPairing(
+        normalizeCallId(`${rawId}|fc_latest`),
+      ).callId;
+      const result = toolOutput(replayedId);
+      const request = {
+        input: [
+          ...structuredClone(images),
+          ...retained,
+          { ...latest, call_id: replayedId },
+          result,
+        ],
+      };
+      expect(resolve(state, request).continuationStatus).toBe("continued");
+      const keys = vi.spyOn(Object, "keys");
+      try {
+        expect(resolve(state, request)).toMatchObject({
+          continuationStatus: "continued",
+          request: { previous_response_id: "resp_cached", input: [toolOutput(rawId)] },
+        });
+        expect(
+          keys.mock.calls.filter(([value]) => retained.some((item) => item === value)),
+        ).toHaveLength(0);
+      } finally {
+        keys.mockRestore();
+      }
+      expectHistoryChanged(state, { input: [...input, latest, toolOutput("unowned")] });
+      expectHistoryChanged(state, {
+        ...request,
+        input: [
+          ...images,
+          firstUser,
+          oldCall,
+          toolOutput("call_old", "edited"),
+          ...request.input.slice(input.length),
+        ],
+      });
+      expect(resolve(state, structuredClone(request)).continuationStatus).toBe("continued");
+    });
+  });
+
   it("compares mutable continuation history without materializing property-entry arrays", () => {
     const previousMessage = userInput("message 0");
     const currentMessage = structuredClone(previousMessage);
@@ -371,24 +436,82 @@ describe("OpenAI Responses continuation", () => {
       expected: { text: "wire" },
     },
   ])("compares continuation envelopes using JSON semantics: $name", ({ value, expected }) => {
-    const state = continuationState();
-    state.lastRequest.provider_options = expected;
-    const request = { ...nextRequest(), provider_options: value };
-    expect(resolve(state, request).continuationStatus).toBe("continued");
-    state.lastRequest.provider_options = { changed: true };
-    expect(resolve(state, request).continuationStatus).toBe("request_changed");
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    runWithAiTransportHost(host, () => {
+      for (const frozen of [false, true]) {
+        const state = continuationState();
+        state.lastRequest.provider_options = expected;
+        const request = {
+          ...nextRequest(),
+          provider_options: frozen ? freezeJsonSnapshot(value) : value,
+        };
+        expect(resolve(state, request).continuationStatus).toBe("continued");
+        expect(resolve(state, request).continuationStatus).toBe("continued");
+        state.lastRequest.provider_options = { changed: true };
+        expect(resolve(state, request).continuationStatus).toBe("request_changed");
+      }
+    });
   });
 
   it("rejects unserializable history without retaining a failed comparison", () => {
     const cycle: Record<string, unknown> = {};
     cycle.self = cycle;
     const state = continuationState();
-    for (const value of [cycle, 1n]) {
-      expect(() => resolve(state, { ...nextRequest(), provider_options: value })).toThrow(
-        TypeError,
-      );
-    }
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    runWithAiTransportHost(host, () => {
+      for (const value of [
+        cycle,
+        { nested: 1n },
+        freezeJsonSnapshot(cycle),
+        freezeJsonSnapshot({ nested: 1n }),
+      ]) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          expect(() => resolve(state, { ...nextRequest(), provider_options: value })).toThrow(
+            TypeError,
+          );
+        }
+      }
+    });
     expect(resolve(state, nextRequest()).continuationStatus).toBe("continued");
+  });
+
+  it("rechecks native serializers inside frozen graphs after successful comparisons", () => {
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    const before = Object.getOwnPropertyDescriptor(BigInt.prototype, "toJSON");
+    let text = "before";
+    const serializer = vi.fn(() => text);
+    // oxlint-disable-next-line no-extend-native -- JSON explicitly permits a BigInt serializer; restore it below.
+    Object.defineProperty(BigInt.prototype, "toJSON", { configurable: true, value: serializer });
+    try {
+      runWithAiTransportHost(host, () => {
+        const state = continuationState();
+        state.lastRequest.provider_options = { nested: { n: "before" } };
+        for (const nested of [{ n: 1n }, Object.assign(Object.create(null), { n: 1n })]) {
+          text = "before";
+          const request = { ...nextRequest(), provider_options: freezeJsonSnapshot({ nested }) };
+          expect(resolve(state, request).continuationStatus).toBe("continued");
+          text = "after";
+          expect(resolve(state, request).continuationStatus).toBe("request_changed");
+          serializer.mockImplementationOnce(() => {
+            throw new Error("changed serializer");
+          });
+          expect(() => resolve(state, request)).toThrow("changed serializer");
+        }
+      });
+    } finally {
+      if (before) {
+        // oxlint-disable-next-line no-extend-native -- Restore the exact original serializer descriptor.
+        Object.defineProperty(BigInt.prototype, "toJSON", before);
+      } else {
+        Reflect.deleteProperty(BigInt.prototype, "toJSON");
+      }
+    }
   });
 
   it("matches JSON wire semantics and provider-only assistant replay metadata", () => {
@@ -592,15 +715,27 @@ describe("OpenAI Responses continuation", () => {
       expectHistoryChanged(state, request);
     },
   );
-  it("rejects a changed earlier tool result when IDs share a replay shape", () => {
-    const canonicalCallId = normalizeCallId(" x");
-    const first = toolCall(canonicalCallId, { name: "first" });
-    const second = toolCall(" x", { name: "second" });
-    const originalOutput = toolOutput(canonicalCallId);
-    const state = continuationState(undefined, [firstUser, first, second, originalOutput]);
-    const changed = { ...originalOutput, call_id: " x" };
-    const request = replayRequest(state, first, second, changed, assistantOutput, secondUser);
-    expectHistoryChanged(state, request);
+  it("keeps identical sent IDs but rejects changed results sharing a replay shape", () => {
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    runWithAiTransportHost(host, () => {
+      const canonicalCallId = normalizeCallId(" x");
+      const first = toolCall(canonicalCallId, { name: "first" });
+      const second = toolCall(" x", { name: "second" });
+      const originalOutput = toolOutput(canonicalCallId);
+      const input = freezeJsonSnapshot([firstUser, first, second, originalOutput]);
+      const state = continuationState(undefined, input);
+      expect(
+        resolve(
+          state,
+          replayRequest(state, first, second, originalOutput, assistantOutput, secondUser),
+        ).continuationStatus,
+      ).toBe("continued");
+      const changed = { ...originalOutput, call_id: " x" };
+      const request = replayRequest(state, first, second, changed, assistantOutput, secondUser);
+      expectHistoryChanged(state, request);
+    });
   });
 
   it("retains pending calls when a result matches a colliding replay shape", () => {

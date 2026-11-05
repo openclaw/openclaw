@@ -106,7 +106,7 @@ type RunCapabilityResult = {
 };
 
 const loadPreparedModelCatalogApi = createLazyRuntimeModule(async () => ({
-  ...(await import("../agents/model-catalog.js")),
+  ...(await import("../agents/model-catalog-lookup.js")),
   ...(await import("../agents/prepared-model-catalog.js")),
 }));
 

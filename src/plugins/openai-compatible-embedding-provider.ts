@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -24,6 +25,7 @@ import { redactProviderResponseErrorText } from "../agents/provider-request-head
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
+import { normalizeHostname } from "../infra/net/hostname.js";
 import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
@@ -35,9 +37,11 @@ import {
   EMBEDDING_DEADLINE_CONTROL,
   type EmbeddingInput,
   type EmbeddingProvider,
-  type EmbeddingProviderAdapter,
   type EmbeddingProviderCallOptions,
-  type EmbeddingProviderCreateOptions,
+} from "./embedding-provider-runtime-types.js";
+import type {
+  EmbeddingProviderAdapter,
+  EmbeddingProviderCreateOptions,
 } from "./embedding-provider-types.js";
 
 const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
@@ -287,6 +291,11 @@ function resolveConfiguredProvider(
   return isOpenAICompatibleProviderConfig(configuredProviderId, config)
     ? { providerId: configuredProviderId, config }
     : undefined;
+}
+
+function isLoopbackBaseUrl(baseUrl: string): boolean {
+  const hostname = normalizeHostname(URL.parse(baseUrl)?.hostname ?? "");
+  return hostname === "localhost" || isLoopbackIpAddress(hostname);
 }
 
 function embeddingInputToText(input: EmbeddingInput): string {
@@ -566,6 +575,9 @@ export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter 
       runtime: {
         id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
         inlineBatchTimeoutMs: 10 * 60_000,
+        // Bound the indexing backlog for same-host servers that queue requests,
+        // preserving capacity for interactive query embeddings.
+        ...(isLoopbackBaseUrl(client.baseUrl) ? { inlineIndexConcurrency: 1 } : {}),
         cacheKeyData,
         ...(legacyHeaders
           ? {
