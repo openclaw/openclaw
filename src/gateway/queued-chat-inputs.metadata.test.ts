@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { getRequesterProfile } from "../auto-reply/requester-profile.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -7,6 +8,7 @@ import {
   appendTranscriptMessage,
   listSessionPendingInputs,
   loadSessionEntry,
+  replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { prepareSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -18,11 +20,15 @@ import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { readMentionInbox } from "./mention-inbox.test-support.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
+import { handleChatSend } from "./server-methods/chat-send-handler.js";
 import {
   setClientProfile,
   useBrowserFollowupFixture,
 } from "./server-methods/chat-send-pending-inputs.test-support.js";
-import { persistRunningSessionsForRestart } from "./session-restart-resume.js";
+import {
+  persistRunningSessionsForRestart,
+  resumeMarkedSessions,
+} from "./session-restart-resume.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "./test-helpers.js";
 
 installGatewayTestHooks();
@@ -216,5 +222,102 @@ it("publishes a retained human mention once as its freshly admitted queued princ
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
   } finally {
     await inbox.dispose();
+  }
+});
+
+it("preserves independent accepted senders in FIFO order without a generic resume for a question-owned source", async () => {
+  const { fixture: createdFixture, profile: firstProfile } = await createFixture();
+  await using fixture = createdFixture;
+  const secondProfile = ensureProfileForEmail("question-queue-second@example.test");
+  setDisplayName(secondProfile.id, "Second queued author");
+  fixture.params.message = "First independently accepted input.";
+  expectStarted(await fixture.send());
+  const secondClient = { ...fixture.client, connId: "question-second-queued-client" };
+  setClientProfile(secondClient, { ...secondProfile, updatedAt: 1 }, "Second queued author");
+  expectStarted(
+    await fixture.send(
+      undefined,
+      undefined,
+      {
+        ...fixture.params,
+        message: "Second independently accepted input.",
+        idempotencyKey: "question-second-queued-input",
+      },
+      (request) => handleChatSend({ ...request, client: secondClient }),
+    ),
+  );
+  const accepted = (await listSessionPendingInputs(fixture.scope)).items;
+  expect(accepted.map((input) => input.message.content)).toEqual([
+    "First independently accepted input.",
+    "Second independently accepted input.",
+  ]);
+  const retained = await retireOriginalInputs(fixture);
+  expect(retained.queuedInputIds).toHaveLength(2);
+  const entry = loadSessionEntry(fixture.scope);
+  if (!entry?.lifecycleRevision) {
+    throw new Error("Question fixture requires the admitted session generation");
+  }
+  await replaceSessionEntry(fixture.scope, {
+    ...entry,
+    lifecycleRunId: "question-source",
+    resumeAfterRestart: { queuedInputIds: retained.queuedInputIds },
+    durableQuestionOwners: [
+      {
+        questionId: "q1",
+        sourceRunId: "question-source",
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+      },
+    ],
+  });
+  const cfg = getRuntimeConfig();
+  setRuntimeConfigSnapshot({ ...cfg, session: { ...cfg.session, store: fixture.scope.storePath } });
+  const principals: Array<string | undefined> = [];
+  dispatchInboundMessageMock.mockImplementation(async (input) => {
+    principals.push(getRequesterProfile(input.ctx)?.id);
+    const recorder = input.replyOptions?.userTurnTranscriptRecorder;
+    if (!recorder) {
+      throw new Error("Readmitted queued input must retain its native transcript recorder");
+    }
+    await recorder.persistApproved();
+    return {};
+  });
+  const genericResume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
+  vi.mocked(fixture.context.logGateway.warn).mockClear();
+  try {
+    await resumeMarkedSessions({
+      context: fixture.context,
+      signal: retained.signal,
+      log: fixture.context.logGateway,
+    });
+    await fixture.finishDispatch();
+    expect(principals).toEqual([firstProfile.id, secondProfile.id]);
+    expect(fixture.readTranscript()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "First independently accepted input." }),
+        }),
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "Second independently accepted input." }),
+        }),
+      ]),
+    );
+    expect(genericResume).not.toHaveBeenCalled();
+    expect(fixture.context.logGateway.warn).not.toHaveBeenCalled();
+    expect((await listSessionPendingInputs(fixture.scope)).items).toEqual([]);
+    expect(loadSessionEntry(fixture.scope)?.resumeAfterRestart).toBeUndefined();
+    expect(loadSessionEntry(fixture.scope)?.durableQuestionOwners).toMatchObject([
+      { questionId: "q1" },
+    ]);
+    await resumeMarkedSessions({
+      context: fixture.context,
+      signal: retained.signal,
+      log: fixture.context.logGateway,
+    });
+    await fixture.finishDispatch();
+    expect(principals).toEqual([firstProfile.id, secondProfile.id]);
+    expect(genericResume).not.toHaveBeenCalled();
+  } finally {
+    genericResume.mockRestore();
   }
 });
