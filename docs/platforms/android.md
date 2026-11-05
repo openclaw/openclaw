@@ -697,6 +697,31 @@ Notification forwarding requires the Android Notification Listener permission. T
 
 WhatsApp, WhatsApp Business, Telegram, Telegram X, Discord, and Signal notifications are always excluded. Their messages are already owned by native OpenClaw channel sessions; forwarding the Android notification as a separate node event could route a reply through the wrong conversation.
 
+## Browser sign-in URL and recording proofs
+
+Enter a full Gateway URL as you would in a browser. HTTPS without an explicit port uses
+443; an explicit port such as https://gateway.example.test:8443/ is authoritative.
+Bare local Gateway hosts retain their existing port default of 18789. For an advanced
+port override, include it in the address; there is no separate stale port field to
+replace the port in a complete URL. HTTP URLs use port 80 only where the existing
+local-cleartext policy permits them. Provider redirect ports are not Gateway ports.
+
+The browser's compact header shows the current HTTPS security origin, including a
+nondefault port, rather than redirect paths, query strings, or state. Short landscape
+and keyboard-sized windows use compact actions; saved-session signout is under
+**More browser actions**.
+
+Browser sign-in remains capture-protected in ordinary debug and release builds.
+For a deliberately recording-enabled developer proof APK, use
+./gradlew -PopenclawBrowserSignInRecording=true :app:assembleThirdPartyDebug.
+The opt-in defaults to false, applies only to debuggable builds, and is ignored by
+release variants. Such an APK has the -debug-recording version suffix. Use synthetic
+accounts, pause recording during password entry, and redact secrets before sharing
+proof. Installing an ordinary debug APK with the same package and signer restores
+protection without clearing app data. There is no intent, deep link, JavaScript API,
+or saved preference that enables recording in a normal build.
+
+
 ## Related
 
 - [iOS app](/platforms/ios)

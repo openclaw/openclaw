@@ -166,6 +166,12 @@ val invocationBuildTimestamp =
   providers.provider { buildTimestampFormatter.format(Instant.now()) }.get()
 val openClawBuildTimestamp = explicitOpenClawBuildTimestamp ?: invocationBuildTimestamp
 
+// Recording is an explicit developer-proof opt-in, never a release capability.
+val browserSignInRecording =
+  optionalOpenClawBuildProperty("openclawBrowserSignInRecording")?.let { value ->
+    value.toBooleanStrictOrNull() ?: error("openclawBrowserSignInRecording must be true or false.")
+  } ?: false
+
 val androidStoreFile = providers.gradleProperty("OPENCLAW_ANDROID_STORE_FILE").orNull?.takeIf { it.isNotBlank() }
 val androidStorePassword = providers.gradleProperty("OPENCLAW_ANDROID_STORE_PASSWORD").orNull?.takeIf { it.isNotBlank() }
 val androidKeyAlias = providers.gradleProperty("OPENCLAW_ANDROID_KEY_ALIAS").orNull?.takeIf { it.isNotBlank() }
@@ -385,6 +391,7 @@ android {
     versionName = openClawAndroidVersionName
     buildConfigField("String", "GIT_COMMIT", "\"$openClawBuildCommit\"")
     buildConfigField("String", "BUILD_TIMESTAMP", "\"$openClawBuildTimestamp\"")
+    buildConfigField("boolean", "BROWSER_SIGN_IN_RECORDING", "false")
     ndk {
       // Support all major ABIs — native libs are tiny (~47 KB per ABI)
       abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
@@ -418,7 +425,8 @@ android {
     }
     debug {
       applicationIdSuffix = ".debug"
-      versionNameSuffix = "-debug"
+      versionNameSuffix = if (browserSignInRecording) "-debug-recording" else "-debug"
+      buildConfigField("boolean", "BROWSER_SIGN_IN_RECORDING", browserSignInRecording.toString())
       isMinifyEnabled = false
     }
   }

@@ -7,6 +7,7 @@ import ai.openclaw.app.ui.OpenClawTheme
 import ai.openclaw.app.ui.design.ClawTheme
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.net.http.SslError
 import android.os.Bundle
@@ -58,7 +59,11 @@ class BrowserSignInActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    applyBrowserSignInWindowProtection(
+      window,
+      debuggable = BuildConfig.DEBUG && (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
+      recordingOptIn = BuildConfig.BROWSER_SIGN_IN_RECORDING,
+    )
     val target = intent.getStringExtra(TARGET_URL)?.toHttpUrlOrNull()
     if (target == null || target.scheme != "https" || target.username.isNotEmpty() || target.password.isNotEmpty() || target.fragment != null) {
       finish()
@@ -74,29 +79,17 @@ class BrowserSignInActivity : ComponentActivity() {
     }
     setContent {
       OpenClawTheme {
-        Surface(Modifier.fillMaxSize(), color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
-          Column(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(nativeString("Browser sign-in"))
-            Text(nativeString("Sign in through your gateway's reverse proxy. Credentials stay in this private browser."))
-            // Keep the full current HTTPS address visible, including provider redirects and ports.
-            Text(currentUrl)
-            error?.let { Text(it) }
-            webView?.let { browser ->
-              AndroidView(factory = { browser }, modifier = Modifier.fillMaxWidth().weight(1f))
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-              TextButton(onClick = { finish() }, enabled = !busy) { Text(nativeString("Cancel")) }
-              Button(onClick = { complete(target) }, enabled = !busy && !loading && !pageFailed && returnedTo(target) && attempt != null) {
-                Text(nativeString("Continue in OpenClaw"))
-              }
-            }
-            if (app.browserSessions.hasSession(target)) {
-              TextButton(onClick = { signOut(target) }, enabled = !busy) {
-                Text(nativeString("Sign out of saved browser session"))
-              }
-            }
-          }
-        }
+        BrowserSignInScreen(
+          currentUrl = currentUrl,
+          error = error,
+          browser = webView,
+          busy = busy,
+          canContinue = !busy && !loading && !pageFailed,
+          showSignOut = app.browserSessions.hasSession(target),
+          onCancel = { finish() },
+          onContinue = { complete(target) },
+          onSignOut = { signOut(target) },
+        )
       }
     }
   }
