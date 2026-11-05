@@ -8,6 +8,7 @@ import {
   bindProviderCatalogInvocationOrigin,
   getProviderCatalogDiscoveryBudget,
   providerCatalogBudgetOriginCause,
+  recordProviderCatalogAuthCacheKeyOrigin,
   resolveProviderCatalogDiscoveryTimeoutMs,
   sampleProviderCatalogBudgetClock,
   withProviderCatalogDiscoveryBudget,
@@ -411,6 +412,15 @@ export function liveModelCatalogAuthCacheKey(
   return selectLiveModelCatalogRequestApiKey(params);
 }
 
+function observedLiveModelCatalogAuthCacheKey(params: LiveModelCatalogHeaderContext, load: object) {
+  // Observe the existing synchronous selection in place; never retain its key.
+  const before = sampleProviderCatalogBudgetClock();
+  const key = liveModelCatalogAuthCacheKey(params);
+  const after = sampleProviderCatalogBudgetClock();
+  recordProviderCatalogAuthCacheKeyOrigin(load, before, after);
+  return key;
+}
+
 export async function getCachedLiveProviderModelRows(
   params: CachedLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
@@ -427,7 +437,7 @@ export async function getCachedLiveProviderModelRows(
           params.providerId,
           "model-rows",
           params.endpoint,
-          liveModelCatalogAuthCacheKey(params),
+          observedLiveModelCatalogAuthCacheKey(params, load),
         ],
         ttlMs: params.ttlMs,
         signal: params.signal,

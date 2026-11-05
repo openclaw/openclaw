@@ -56,6 +56,62 @@ function read(options: Partial<CachedLiveProviderModelRowsParams> = {}) {
   return getCachedLiveProviderModelRows({ ...request, ...options });
 }
 
+function readDelayedAuth(at: number, key = request.apiKey) {
+  return getCachedLiveProviderModelRows({
+    ...request,
+    get apiKey() {
+      now = at;
+      return key;
+    },
+  });
+}
+
+it.each(["before", "inside"])("distinguishes delay %s the actual cache-key call", async (phase) => {
+  const error = await rejection(
+    getCachedLiveProviderModelRows({
+      ...request,
+      get cacheKeyParts() {
+        if (phase === "before") {
+          now = 5_200;
+        }
+        return undefined;
+      },
+      get apiKey() {
+        now = 5_200;
+        return request.apiKey;
+      },
+    }),
+  );
+  expect(error.cause).toMatchObject({
+    child: { constructionNow: 100, deadlineMs: 5_100 },
+    authCacheKey: {
+      beforeNow: phase === "before" ? 5_200 : 100,
+      afterNow: 5_200,
+      beforeWallNow: 1_000_000,
+      afterWallNow: 1_000_000,
+    },
+    cache: { entryNow: 5_200 },
+    binding: { sameAuthCacheKeyLoad: true, sameBudget: true, sameClockObject: true },
+  });
+  const cause = JSON.stringify(error.cause);
+  expect(cause.length).toBeLessThan(2_500);
+  expect(cause).not.toContain("secret-");
+});
+
+it("preserves a cache-key selection error without inventing a deadline cause", async () => {
+  const failure = new Error("synthetic key selection failure");
+  await expect(
+    getCachedLiveProviderModelRows({
+      ...request,
+      get apiKey(): string {
+        throw failure;
+      },
+    }),
+  ).rejects.toBe(failure);
+  expect(failure.cause).toBeUndefined();
+  expect(fetchGuard).not.toHaveBeenCalled();
+});
+
 it("distinguishes an already-expired parent from a fresh child exhausted in cache entry", async () => {
   const inherited = await withProviderCatalogDiscoveryBudget(5_000, async () => {
     now = 5_200;
@@ -73,6 +129,7 @@ it("distinguishes an already-expired parent from a fresh child exhausted in cach
   expect(exhausted.cause).toMatchObject({
     parent: { present: false, originKnown: true },
     child: { constructionNow: 100, deadlineMs: 5_100, wallNow: 1_000_000 },
+    authCacheKey: { beforeNow: "unknown", afterNow: "unknown" },
     cache: { entryNow: 100, loadNow: 5_200, ttlWallNow: 1_000_000, disposition: "new-load" },
     binding: {
       sameLoad: true,
@@ -80,6 +137,7 @@ it("distinguishes an already-expired parent from a fresh child exhausted in cach
       sameOwner: true,
       sameClockObject: true,
       sameNowFunction: true,
+      sameAuthCacheKeyLoad: "unknown",
     },
   });
   const serialized = JSON.stringify(exhausted.cause);
@@ -90,30 +148,33 @@ it("distinguishes an already-expired parent from a fresh child exhausted in cach
 });
 
 it("keeps the producing origin when a fresh caller joins its pending cache load", async () => {
-  const producer = rejection(read({ cacheKeyParts: [delayedKey("shared", 5_200)] }));
+  const producer = rejection(readDelayedAuth(5_200));
   now = 200;
-  const joiner = rejection(read({ cacheKeyParts: ["shared"] }));
+  const joiner = rejection(readDelayedAuth(5_400));
   const [first, second] = await Promise.all([producer, joiner]);
   expect(second).toBe(first);
   expect(second.cause).toMatchObject({
     child: { constructionNow: 100, deadlineMs: 5_100 },
-    cache: { entryNow: 100, loadNow: 5_200 },
-    binding: { sameLoad: true, sameBudget: true },
+    authCacheKey: { beforeNow: 100, afterNow: 5_200 },
+    cache: { entryNow: 5_200, loadNow: 5_200 },
+    binding: { sameLoad: true, sameBudget: true, sameAuthCacheKeyLoad: true },
   });
 });
 
 it("keeps concurrent acquisitions distinct without storing cache keys", async () => {
-  const first = rejection(read({ cacheKeyParts: [delayedKey("secret-first-key", 5_200)] }));
+  const first = rejection(readDelayedAuth(5_200, "secret-first-key"));
   now = 200;
-  const second = rejection(read({ cacheKeyParts: [delayedKey("secret-second-key", 5_400)] }));
+  const second = rejection(readDelayedAuth(5_400, "secret-second-key"));
   const [one, two] = await Promise.all([first, second]);
   expect(one.cause).not.toBe(two.cause);
   expect(one.cause).toMatchObject({
     child: { constructionNow: 100 },
+    authCacheKey: { beforeNow: 100, afterNow: 5_200 },
     acquisition: { derivedTimeoutMs: -100 },
   });
   expect(two.cause).toMatchObject({
     child: { constructionNow: 200 },
+    authCacheKey: { beforeNow: 200, afterNow: 5_400 },
     acquisition: { derivedTimeoutMs: -200 },
   });
   expect(JSON.stringify([one.cause, two.cause])).not.toContain("secret-");

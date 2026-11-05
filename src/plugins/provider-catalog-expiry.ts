@@ -32,6 +32,7 @@ type BudgetOrigin = {
   };
   requestedTimeout: number | null;
   clock: BudgetClock;
+  authCacheKey?: { load: WeakRef<object>; before: BudgetClock; after: BudgetClock };
 };
 type LoadOrigin = {
   budget: DiscoveryBudget | undefined;
@@ -63,6 +64,18 @@ export function sampleProviderCatalogBudgetClock() {
     clock,
     nowFunction,
   };
+}
+
+export function recordProviderCatalogAuthCacheKeyOrigin(
+  load: object,
+  before: BudgetClock,
+  after: BudgetClock,
+) {
+  const budget = getProviderCatalogDiscoveryBudget();
+  const origin = budget && budgetOrigins.budgets.get(budget);
+  if (origin) {
+    origin.authCacheKey = { load: new WeakRef(load), before, after };
+  }
 }
 
 export function recordProviderCatalogLoadOrigin(
@@ -112,8 +125,22 @@ export function providerCatalogBudgetOriginCause(
   const child = budget && budgetOrigins.budgets.get(budget);
   const invocation = budgetOrigins.requests.get(params);
   const load = invocation?.origin;
+  const keyOrigin = child?.authCacheKey;
+  const sameAuthCacheKeyLoad = keyOrigin
+    ? invocation !== undefined && keyOrigin.load.deref() === invocation.load
+    : "unknown";
+  const key = sameAuthCacheKeyLoad === true ? keyOrigin : undefined;
   const clocks =
-    child && load ? [child.clock, load.entry, load.load, acquisition, guard] : undefined;
+    child && load
+      ? [
+          child.clock,
+          ...(key ? [key.before, key.after] : []),
+          load.entry,
+          load.load,
+          acquisition,
+          guard,
+        ]
+      : undefined;
   return {
     kind: "catalog_budget_origin_v1",
     parent: {
@@ -129,6 +156,12 @@ export function providerCatalogBudgetOriginCause(
       deadlineMs: diagnosticNumber(budget?.deadlineMs),
       timeOrigin: diagnosticNumber(child?.clock.timeOrigin),
       wallNow: diagnosticNumber(child?.clock.wall),
+    },
+    authCacheKey: {
+      beforeNow: diagnosticNumber(key?.before.now),
+      afterNow: diagnosticNumber(key?.after.now),
+      beforeWallNow: diagnosticNumber(key?.before.wall),
+      afterWallNow: diagnosticNumber(key?.after.wall),
     },
     cache: {
       entryNow: diagnosticNumber(load?.entry.now),
@@ -152,6 +185,7 @@ export function providerCatalogBudgetOriginCause(
       sameLoad: invocation && load ? budgetOrigins.loads.get(invocation.load) === load : "unknown",
       sameBudget: load ? load.budget === budget : "unknown",
       sameOwner: load ? load.owner === capture : "unknown",
+      sameAuthCacheKeyLoad,
       sameClockObject: clocks
         ? clocks.every((value) => value.clock === acquisition.clock)
         : "unknown",
