@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 92855,
-  "reason": "Long-session windowing measures 92855 B startup (+380 B against d0eb40dc015): identical raw connection code and 148 source modules, with generated asset/export-name compression churn. Requests stay unchanged. Prior committed-head proof reduced direct 2000-message readiness 11422 to 1075 ms and retained heap 292 to 71 MiB; refreshed final-head proof must retain the win. Record the measured value under the campaign allowance for small boot growth accompanying a measured performance win; route remainder accepted by the coordinator for #183800.",
+  "startupJsGzipBytes": 92861,
+  "reason": "Mobile Profile status reservation removes repeated 0.0545–0.1138 CLS in ten interleaved 1x triplets. Exact-base startup is 92477 B; measured head is 92861 B. All 45 startup/Chat/New assets are identical after normalizing hashed import names, with unchanged raw bytes and requests. Accept the 384 B gzip hash variance and 86 B gzip / 398 B raw lazy CSS reservation for the measured layout-stability win; keep growth allowances unchanged.",
   "updatedAt": "2026-11-05"
 }
