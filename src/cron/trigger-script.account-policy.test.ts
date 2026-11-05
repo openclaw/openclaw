@@ -11,6 +11,9 @@ import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import * as plugins from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { linkUserChannelIdentity } from "../state/user-channel-identities.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { bindCronJobAdmittedRun, clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
@@ -38,6 +41,17 @@ it.each(["trigger", "payload"] as const)(
             },
           },
         };
+        const profile = ensureProfileForEmail("account-policy-requester@example.test");
+        for (const channelId of ["telegram", "slack"]) {
+          for (const accountId of ["work", "missing", "disabled"]) {
+            linkUserChannelIdentity(profile.id, {
+              channelId,
+              accountId,
+              senderId: "account-policy-requester",
+            });
+          }
+        }
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         configSnapshot.setRuntimeConfigSnapshot(config, config);
         const sendText = vi.fn(async (_params: { accountId?: string | null }) => ({
           channel: "telegram" as const,
@@ -95,6 +109,12 @@ it.each(["trigger", "payload"] as const)(
               version: 1,
               source: "final-executable-surface",
               callerOrigin: { kind: "external", channel },
+              channelRequester: {
+                version: 1,
+                channel,
+                accountId,
+                senderId: "account-policy-requester",
+              },
             };
           }
           const params = {
@@ -157,6 +177,15 @@ it("reuses hydrated creator origin for script admission across warm cache change
         tools: { allow: ["message"] },
         channels: { telegram: { accounts } },
       };
+      const profile = ensureProfileForEmail("script-delete-requester@example.test");
+      for (const channelId of ["telegram", "slack"]) {
+        linkUserChannelIdentity(profile.id, {
+          channelId,
+          accountId,
+          senderId: "script-delete-requester",
+        });
+      }
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       configSnapshot.setRuntimeConfigSnapshot(config, config);
       const handleAction = vi.fn(async (_context: ChannelMessageActionContext) => ({
         content: [{ type: "text" as const, text: "deleted" }],
@@ -238,6 +267,16 @@ it("reuses hydrated creator origin for script admission across warm cache change
             version: 1,
             source: "final-executable-surface",
             callerOrigin,
+            ...(callerOrigin.kind === "external"
+              ? {
+                  channelRequester: {
+                    version: 1 as const,
+                    channel: callerOrigin.channel,
+                    accountId,
+                    senderId: "script-delete-requester",
+                  },
+                }
+              : {}),
           };
         }
         try {

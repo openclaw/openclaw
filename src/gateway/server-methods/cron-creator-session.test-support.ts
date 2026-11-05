@@ -1,6 +1,12 @@
 import { expect, it, type Mock } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { CronDeliveryPreview } from "../../cron/types.js";
+import {
+  createCronCreatorAuthorityRunScope,
+  mintCronCreatorAuthorityGrant,
+  revokeCronCreatorAuthorityRunScope,
+} from "../cron-creator-authority-grant.js";
 import {
   agentTurnCronParams,
   createCronCallerClient as callerClient,
@@ -50,6 +56,55 @@ export function registerCronCreatorSessionTests(fixture: {
     expect(options.createdActor).toEqual(creator);
     expect(payload).not.toHaveProperty("createdActor");
   });
+
+  it.each([undefined, "current-local-profile", "current-operator-authority"])(
+    "captures current local creator %s instead of a reused channel actor",
+    async (profileId) => {
+      loadGatewaySessionEntry.mockReturnValue({
+        canonicalKey: "agent:ops:main",
+        entry: {
+          sessionId: "reused-session",
+          createdActor: { type: "human", source: "channel", id: "U-HISTORICAL" },
+        },
+      });
+      const client = callerClient("ops");
+      const scope = createCronCreatorAuthorityRunScope(
+        client.internal!.agentRuntimeIdentity!.operationalRunInstance.runId,
+        { kind: "local" },
+      );
+      using _ = { [Symbol.dispose]: () => revokeCronCreatorAuthorityRunScope(scope) };
+      client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant =
+        mintCronCreatorAuthorityGrant(scope, undefined, undefined, undefined, "requester");
+      if (profileId === "current-operator-authority") {
+        client.internal!.operatorRunAuthority = createAdmittedRunOperatorAuthority({
+          profileId,
+          scopes: ["operator.write"],
+          assertCurrent: () => {},
+        });
+      } else if (profileId) {
+        client.authenticatedUserProfile = {
+          profileId,
+          displayName: "Current",
+          hasAvatar: false,
+          updatedAt: 1,
+        };
+      }
+      const { context, respond } = await invokeCron(
+        "cron.add",
+        agentTurnCronParams({
+          payload: { kind: "script", script: "return {};", toolsAllow: [] },
+        }),
+        { client },
+      );
+      const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
+      if (profileId) {
+        expect(options.createdActor).toEqual({ type: "human", source: "profile", id: profileId });
+      } else {
+        expect(options).not.toHaveProperty("createdActor");
+      }
+      expectCronSuccess(respond);
+    },
+  );
 
   it.each([
     ["agent-runtime", { kind: "agentTurn", message: "report", toolsAllow: ["*"] }],

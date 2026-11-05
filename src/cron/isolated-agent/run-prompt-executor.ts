@@ -209,10 +209,13 @@ export function createCronPromptExecutor(
       scheduledExecution,
       operatorAuthority: params.operatorAuthority,
       admissionSource: params.admissionSource,
-      // A child running in its parent's workspace loses every effect once that parent resets.
-      ...(params.occurrence.childParent?.binding
-        ? { assertSourceCurrent: params.occurrence.childParent.assertCurrent }
-        : {}),
+      assertSourceCurrent: () => {
+        params.assertCreatorCurrent();
+        // A child running in its parent's workspace loses every effect once that parent resets.
+        if (params.occurrence.childParent?.binding) {
+          params.occurrence.childParent.assertCurrent();
+        }
+      },
       deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
@@ -371,6 +374,7 @@ export function createCronPromptExecutor(
           catalog: thinkingCatalog,
           agentRuntime: candidateRuntime,
         });
+        params.assertCreatorCurrent();
         inference?.assertCandidate(providerOverride, cliExecution, candidateRuntime);
         assertCronRuntimeAuthorityCandidate({
           authority: params.job.runtimeAuthority,
@@ -514,6 +518,7 @@ export function createCronPromptExecutor(
                 runId,
               },
               async (assertSettlementCurrent) => {
+                params.assertCreatorCurrent();
                 const diagnosticOwner = deferredLifecycle.handoffToCli();
                 const cliSessionBinding = params.cronSession.isNewSession
                   ? undefined
@@ -633,6 +638,7 @@ export function createCronPromptExecutor(
         const { runCronEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
+        params.assertCreatorCurrent();
         const embeddedRunParams: Parameters<CronEmbeddedRuntime["runCronEmbeddedAgent"]>[0] = {
           ...buildCommonRunParams(),
           cleanupBundleMcpOnRunEnd: params.usesDetachedRunSession,

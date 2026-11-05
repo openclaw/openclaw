@@ -289,7 +289,7 @@ it.each([
       expect(restored.state.triggerState).toEqual(job.state.triggerState);
     }
     expect(source).toThrow();
-    if (mutation === "tool policy") {
+    if (mutation === "tool policy" || mutation === "native requester") {
       expect(message).toThrow();
     } else {
       expect(message).not.toThrow();

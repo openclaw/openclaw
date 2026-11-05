@@ -281,6 +281,7 @@ async function updateLoadedJob(params: {
     id,
     patch,
     options: {
+      reauthorizeChannelRequester: opts?.reauthorizeChannelRequester,
       streamSandbox: opts?.streamSandbox,
       operatorSource: opts?.operatorSource,
       operatorSourceExecutionRevision: opts?.operatorSourceExecutionRevision,

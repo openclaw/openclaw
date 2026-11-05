@@ -14,6 +14,12 @@ import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import {
   readCronRunHistoryPageForTests,
   readCronRunRecordsForTests,
 } from "../run-history.test-support.js";
@@ -51,7 +57,11 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+});
 
 type AccountCase = [
   name: string,
@@ -79,6 +89,15 @@ it.each<AccountCase>([
   async (name, accountId, toolsAllow, fails, options = {}) => {
     const ownerSessionKey = `agent:main:whatsapp:${options.channel !== undefined ? "direct:sender" : "group:team"}`;
     const { storePath } = fixtures.makeStorePath();
+    vi.stubEnv("OPENCLAW_STATE_DIR", join(dirname(storePath), `${basename(storePath)}-state`));
+    if (options.channel === "whatsapp") {
+      const profile = ensureProfileForEmail("account-requester@example.test");
+      linkUserChannelIdentity(profile.id, {
+        channelId: "whatsapp",
+        accountId: "work",
+        senderId: "sender",
+      });
+    }
     const sessionRoot = join(dirname(storePath), basename(storePath, ".jobs.json"));
     const sessionStorePath = join(sessionRoot, "sessions.json");
     const cfg: OpenClawConfig = {
@@ -113,6 +132,16 @@ it.each<AccountCase>([
               version: 1,
               source: "final-executable-surface",
               callerOrigin: { kind: "external", channel: options.channel },
+              ...(options.channel === "whatsapp"
+                ? {
+                    channelRequester: {
+                      version: 1 as const,
+                      channel: "whatsapp",
+                      accountId: "work",
+                      senderId: "sender",
+                    },
+                  }
+                : {}),
             },
     };
     await saveCronStore(storePath, { version: 1, jobs: [job] });

@@ -12,7 +12,6 @@ import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-st
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -25,6 +24,7 @@ import { settleCurrentReadPreparations } from "../../shared/current-read-authori
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronCreatorSandbox } from "../creator-sandbox.js";
 import { cronExecutionActor } from "../human-owner.js";
 import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
@@ -240,10 +240,13 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
 
   async function prepareAdmittedSession() {
     const now = Date.now();
+    const creator = await resolveCronCreatorSandbox(runtimeCfg, input.job);
+    const assertCreatorCurrent = () => {
+      input.assertCurrent?.();
+      creator.assertCurrent();
+    };
     // A child run never runs looser than its parent.
-    const sandbox =
-      resolveCreatorSandbox(runtimeCfg, { actor: cronExecutionActor(input.job) }) ??
-      input.occurrence.childParent?.sandbox;
+    const sandbox = creator.sandbox ?? input.occurrence.childParent?.sandbox;
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
     const cronSession: MutableCronSession = await prepareCronSession({
       cfg: runtimeCfg,
@@ -312,7 +315,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       const persistCronSessionRow = createCronSessionRowWriter({
         agentId,
         agentSessionKey,
-        assertCurrent: input.assertCurrent,
+        assertCurrent: assertCreatorCurrent,
       });
       const persistSessionEntry = createPersistCronSessionEntry({
         cronSession,
@@ -693,6 +696,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
                 : undefined,
             cronSession,
             sessionPreparationEffect,
+            assertCreatorCurrent,
             persistSessionEntry,
             preRunSessionPersisted,
             runContinuationSession,

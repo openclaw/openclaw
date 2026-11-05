@@ -75,9 +75,9 @@ export function prepareCronRunAdmission(params: {
   const basePreparedRunAdmission = prepareAgentRunAdmission({
     operationalRunInstance,
     admissionSource: params.admissionSource,
-    assertSourceCurrent: params.assertSourceCurrent,
     operatorAuthority: params.operatorAuthority,
     cfg: params.cfg,
+    assertSourceCurrent: params.assertSourceCurrent,
     facts: {
       runId,
       agentId: params.agentId,

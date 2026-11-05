@@ -355,10 +355,20 @@ export async function captureCronCreatorSession(
           sourceRunId: caller.client.internal.agentRuntimeIdentity.operationalRunInstance.runId,
         })
       : undefined;
-  // Operator-supplied sessions bind delivery only; agent callers inherit creator facts.
-  const actor = callerScope
-    ? creatorSession?.createdActor
-    : resolveOperatorSessionCreation(caller.client).actor;
+  // A local authenticated turn owns creation even when it reuses a channel session.
+  // Its live operator authority supplies the profile; session history supplies no grant.
+  const localCreator = callerScope?.toolsAllowProvenance?.callerOrigin?.kind === "local";
+  if (localCreator) {
+    operatorAuthority?.assertCurrent();
+  }
+  const operatorCreation = resolveOperatorSessionCreation(caller.client);
+  const actor = localCreator
+    ? operatorAuthority
+      ? { type: "human" as const, source: "profile" as const, id: operatorAuthority.profileId }
+      : operatorCreation.actor
+    : callerScope
+      ? creatorSession?.createdActor
+      : operatorCreation.actor;
   const actorId = normalizeOptionalString(actor?.id);
   const legacyActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
   const createdActor = callerScope

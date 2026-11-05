@@ -667,6 +667,8 @@ export type CronUpdateOptions = Pick<
   | "streamSandbox"
   | "sessionEntryCurrent"
 > & {
+  /** Administrator-verified provenance-only binding; never public patch input. */
+  reauthorizeChannelRequester?: boolean;
   /** Parent incarnation recorded by `automations bind`; only fills an absent link. */
   bindSourceConversation?: NonNullable<CronStoredJob["sourceConversation"]>;
   /** Null forbids policy adoption; undefined retains in-process operator defaults. */
@@ -683,4 +685,4 @@ export type CronRemoveOptions = CronCommitGuardOptions & {
   expectedConfigRevision?: string;
 };
 /** Cron-store-locked guard evaluated against the current job before an update applies. */
-export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;
+export type CronUpdatePrecondition = (job: CronStoredJob, nowMs: number) => void | Promise<void>;

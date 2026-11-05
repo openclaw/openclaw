@@ -338,6 +338,10 @@ export const validateCronUpdateParams = createProtocolValidator(
   undefined,
   cronUpdateDiagnostics,
 );
+export const validateCronReauthorizeChannelRequesterParams = createProtocolValidator(
+  S.CronReauthorizeChannelRequesterParamsSchema,
+  Checks.isCronReauthorizeChannelRequesterParams,
+);
 export const validateCronRemoveParams = createProtocolValidator(
   S.CronRemoveParamsSchema,
   Checks.isCronRemoveParams,

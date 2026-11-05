@@ -43,6 +43,7 @@ import {
 import { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox/context.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import {
   resolveScheduledToolPolicyContext,
   type ScheduledToolPolicyContext,
@@ -72,6 +73,7 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveCronCreatorSandbox } from "./creator-sandbox.js";
 import { resolveCronAgentConfig } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
@@ -151,6 +153,9 @@ type PrepareTriggerRuntime = (params: {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   callerOrigin?: CronScheduledToolCallerOrigin;
   execTarget?: CronToolsAllowExecTarget;
+  creatorSandbox?: "required";
+  creatorProfileId?: string;
+  assertCreatorCurrent?: () => void;
   signal?: AbortSignal;
 }) => Promise<PreparedTriggerRuntime>;
 
@@ -190,6 +195,7 @@ async function prepareTriggerRuntime(
 ): Promise<PreparedTriggerRuntime> {
   const { signal: preparationSignal } = params;
   preparationSignal?.throwIfAborted();
+  params.assertCreatorCurrent?.();
   const agentId = resolveTriggerAgentId(params.runtimeConfig, params.agentId);
   const selectedAgentConfig = resolveAgentConfig(params.runtimeConfig, agentId);
   const agentConfigOverride = params.agentId?.trim() ? selectedAgentConfig : undefined;
@@ -211,9 +217,15 @@ async function prepareTriggerRuntime(
     ensureBootstrapFiles: !agentDefaults.skipBootstrap,
     skipOptionalBootstrapFiles: agentDefaults.skipOptionalBootstrapFiles,
     provisioning: workspaceProvisioning,
-    guard: { assertHost: () => preparationSignal?.throwIfAborted() },
+    guard: {
+      assertHost: () => {
+        preparationSignal?.throwIfAborted();
+        params.assertCreatorCurrent?.();
+      },
+    },
   });
   preparationSignal?.throwIfAborted();
+  params.assertCreatorCurrent?.();
   const workspaceDir = workspace.dir;
   const pluginRegistry = loadPluginRegistry({
     config,
@@ -233,6 +245,17 @@ async function prepareTriggerRuntime(
       config,
       sessionKey,
       workspaceDir,
+      assertCurrent: params.assertCreatorCurrent,
+      preparedRuntimeStatus: resolvePreparedSandboxRuntimeStatus({
+        cfg: config,
+        sessionKey,
+        preparedSessionEntry: {
+          sandbox: params.creatorSandbox,
+          ...(params.creatorProfileId
+            ? { createdActor: { type: "human", source: "profile", id: params.creatorProfileId } }
+            : {}),
+        },
+      }),
     });
     try {
       preparationSignal?.throwIfAborted();
@@ -411,6 +434,8 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       request.scheduledToolPolicy ?? null,
       request.callerOrigin ?? null,
       request.execTarget ?? null,
+      request.creatorSandbox ?? null,
+      request.creatorProfileId ?? null,
     ]);
     const cached = runtimeCache.get(request.jobId);
     if (
@@ -461,9 +486,17 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         ...runtime,
         // Per-plugin replacement disposes one instance without retiring this
         // retained registry; its stale hooks would fail every later tool call.
-        isCurrent: () =>
-          !registry ||
-          (registryCurrent?.() === true && isPluginRegistryRecordSetAdmitting(registry)),
+        isCurrent: () => {
+          try {
+            request.assertCreatorCurrent?.();
+            return (
+              !registry ||
+              (registryCurrent?.() === true && isPluginRegistryRecordSetAdmitting(registry))
+            );
+          } catch {
+            return false;
+          }
+        },
       };
     });
     const entry: TriggerRuntimeCacheEntry = {
@@ -517,8 +550,13 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     let mcp: CronScriptMcpTools | undefined;
     let releaseRuntime = () => {};
     try {
+      const runtimeConfig = selectLiveRuntimeConfig(deps.config);
+      const creator = await resolveCronCreatorSandbox(runtimeConfig, params.job);
       const request = {
-        runtimeConfig: selectLiveRuntimeConfig(deps.config),
+        runtimeConfig,
+        creatorSandbox: creator.sandbox,
+        creatorProfileId: creator.profileId,
+        assertCreatorCurrent: creator.assertCurrent,
         jobId: params.job.id,
         agentId: params.job.agentId,
         toolsAllow: params.job.payload.toolsAllow,
@@ -536,7 +574,9 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       });
       const runtime = retained.runtime;
       releaseRuntime = retained.release;
+      creator.assertCurrent();
       admission = prepareCronRunAdmission({
+        assertSourceCurrent: creator.assertCurrent,
         scheduledExecution: params.occurrence.mint({
           cfg: runtime.context.config,
           agentId: runtime.context.agentId,

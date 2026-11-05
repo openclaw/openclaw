@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
   setActiveRuntimeWebToolsMetadata,
 } from "../../secrets/runtime-web-tools-state.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import type { CronStoredJob } from "../types.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -21,6 +28,15 @@ import {
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
+    cleanup();
+  }),
+);
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const options = { timeout: 300_000 };
@@ -55,6 +71,12 @@ function runTurn(
           version: 1,
           source: "final-executable-surface",
           callerOrigin: { kind: "external", channel: "whatsapp" },
+          channelRequester: {
+            version: 1,
+            channel: "whatsapp",
+            accountId: "default",
+            senderId: "sender",
+          },
         },
         payload: { kind: "agentTurn", message: "check allowed tools", toolsAllow, ...payload },
         ...job,
@@ -66,13 +88,27 @@ function runTurn(
 describe("runCronIsolatedAgentTurn toolsAllow", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("cron-tools-requester-"));
+    const profile = ensureProfileForEmail("tools-requester@example.test");
+    linkUserChannelIdentity(profile.id, {
+      channelId: "whatsapp",
+      accountId: "default",
+      senderId: "sender",
+    });
     clearActiveRuntimeWebToolsMetadata();
     mockRunCronFallbackPassthrough();
   });
   afterEach(clearActiveRuntimeWebToolsMetadata);
 
   it("keeps accountless legacy jobs on the sender-policy path", options, async () => {
-    await runTurn(["cron"], {}, { owner: { agentId: "main", sessionKey: policy.ownerSessionKey } });
+    await runTurn(
+      ["cron"],
+      {},
+      {
+        owner: { agentId: "main", sessionKey: policy.ownerSessionKey },
+        toolsAllowProvenance: undefined,
+      },
+    );
     const call = runEmbeddedAgentMock.mock.calls[0]?.[0];
     expect(call).toBeDefined();
     expect(call.toolsAllow).toEqual(["cron"]);
@@ -110,7 +146,10 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
     { label: "runs with its owner's tools", job: {}, expected: ["*"] },
     {
       label: "keeps its list without a valid owner policy",
-      job: { owner: { agentId: "main", sessionKey: policy.ownerSessionKey } },
+      job: {
+        owner: { agentId: "main", sessionKey: policy.ownerSessionKey },
+        toolsAllowProvenance: undefined,
+      },
       expected: ["message", "read"],
     },
     {

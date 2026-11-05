@@ -24,6 +24,7 @@ type CronJobMutationOptions = Pick<
   | "toolsAllowExecTarget"
 > & {
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
+  reauthorizeChannelRequester?: boolean;
   bindSourceConversation?: NonNullable<CronStoredJob["sourceConversation"]>;
   captured: boolean;
   runtimeAuthority?: CronRuntimeAuthority;

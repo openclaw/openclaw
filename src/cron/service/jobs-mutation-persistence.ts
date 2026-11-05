@@ -44,6 +44,10 @@ export async function persistUpdatedJob(params: {
   resolveCronJobEffectiveAgentId(previousJob, defaultAgentId);
   resolveCronJobEffectiveAgentId(nextJob, defaultAgentId);
 
+  const requesterAuthorityChanged = !isDeepStrictEqual(
+    resolveCronAuthenticatedChannelRequester(previousJob),
+    resolveCronAuthenticatedChannelRequester(nextJob),
+  );
   const triggerStateChanged =
     !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
     !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState) ||
@@ -95,7 +99,10 @@ export async function persistUpdatedJob(params: {
         scheduleChanged,
       });
       try {
-        if (previousJob.ownerProfileId !== nextJob.ownerProfileId) {
+        // Sandbox policy is captured at admission; a new requester needs a new run.
+        if (requesterAuthorityChanged) {
+          requestActiveCronJobCancellation(nextJob.id, "Cron job requester authority changed.");
+        } else if (previousJob.ownerProfileId !== nextJob.ownerProfileId) {
           requestActiveCronJobCancellation(nextJob.id, "Cron job ownership transferred.");
         } else if (
           params.jobMutation.kind === "update"
