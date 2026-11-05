@@ -1,2 +1,2 @@
-# Already-gone recovery original settlement and retained-receipt negative control.
-46
+# Already-gone recovery original settlement, stored-manifest compatibility and retained-receipt negative control.
+224
