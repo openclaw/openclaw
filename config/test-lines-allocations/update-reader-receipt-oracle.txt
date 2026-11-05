@@ -1,0 +1,2 @@
+# Verify #193626's non-writing reader receipt reuse preserves source bytes and avoids reacquisition.
+4

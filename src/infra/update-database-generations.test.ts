@@ -301,21 +301,25 @@ it("refuses a generation when a writer commits during the read", () => {
   expect(fs.readdirSync(staging)).toEqual([]);
 });
 
-it("does not reuse a receipt across a reader's WAL index without refusing the source", () => {
+it("reuses a receipt across a non-writing reader's WAL index without refusing the source", () => {
   const { file, staging } = generationFixture("wal-absent");
   const receipt = readUpdatePhysicalDatabaseObservation(file).sqliteReceipt;
   if (!receipt) {
     throw new Error("Expected a successful SQLite receipt before a reader opens");
   }
+  const before = fs.readFileSync(file);
   let reader: DatabaseSync | undefined;
   duringGenerationRead(() => {
     reader = openReader(file);
   });
   try {
-    expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBeUndefined();
+    expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBe(receipt.generation);
+    expect(fs.existsSync(`${file}-shm`)).toBe(true);
   } finally {
     reader?.close();
   }
+  expect(fs.readFileSync(file)).toEqual(before);
+  expect(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).toHaveBeenCalledTimes(1);
   expect(fs.readdirSync(staging)).toEqual([]);
 });
 
