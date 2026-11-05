@@ -127,7 +127,7 @@ export async function installLaunchAgent(
   const label = resolveLaunchAgentLabel(args.env);
   const domain = resolveLaunchAgentGuiDomain();
   const serviceTarget = `${domain}/${label}`;
-  const { publication, loaded, restoreLoaded, enabled } =
+  const { publication, loaded, previousPid, restoreLoaded, enabled } =
     await withGatewayServiceInstallationRecovery(
       async () => {
         await assertExternalLaunchAgentMutation(args.env, "install");
@@ -157,6 +157,7 @@ export async function installLaunchAgent(
         return {
           publication: captured,
           loaded: wasLoaded,
+          previousPid: probe.state === "running" ? probe.runtime.pid : undefined,
           restoreLoaded: wasRestorable,
           enabled: wasEnabled,
         };
@@ -199,8 +200,8 @@ export async function installLaunchAgent(
       ? await install()
       : await withGatewayServiceInstallationRecovery(install, async () => {
           const files = publication.files;
-          // A replacement still exiting, or a failing hook, never skips restoring the previous
-          // agent; its error is thrown once that recovery is done.
+          // A booted-out process that never exits, or a failing hook, never skips restoring the
+          // previous agent; its error is thrown once that recovery is done.
           let failure: { error: unknown } | undefined;
           if (activationAttempted) {
             await files.assertCurrent();
@@ -213,21 +214,23 @@ export async function installLaunchAgent(
             if (current.state !== "not-loaded") {
               await files.assertCurrent();
               await bootoutLaunchAgent(serviceTarget);
-              // bootout can return while the job's processes are still exiting, and the hook
-              // may change files they run from, so it runs only once they are gone.
-              failure = await waitForLaunchAgentUnloaded(
-                serviceTarget,
-                current.state === "running" && current.runtime.pid ? [current.runtime.pid] : [],
-                assertGatewayServiceUpdateCurrent,
-                (pids) =>
-                  args.stdout.write(
-                    `${formatLine("Warning", `Waiting for Gateway PID ${pids.join(", ")} to exit before restoring the previous LaunchAgent.`)}\n`,
-                  ),
-              ).then(
-                () => undefined,
-                (error: unknown) => ({ error }),
-              );
             }
+            // bootout can return while a booted-out job's processes, the replacement's or the
+            // previous agent's, are still exiting, and the hook may change files they run from,
+            // so it runs only once they are gone.
+            const pids = [previousPid, current.state === "running" ? current.runtime.pid : 0];
+            failure = await waitForLaunchAgentUnloaded(
+              serviceTarget,
+              pids.filter((pid): pid is number => pid !== undefined && pid > 1),
+              assertGatewayServiceUpdateCurrent,
+              (alive) =>
+                args.stdout.write(
+                  `${formatLine("Warning", `Waiting for Gateway PID ${alive.join(", ")} to exit before restoring the previous LaunchAgent.`)}\n`,
+                ),
+            ).then(
+              () => undefined,
+              (error: unknown) => ({ error }),
+            );
             failure ??= await args.beforeRecovery?.().then(
               () => undefined,
               (error: unknown) => ({ error }),

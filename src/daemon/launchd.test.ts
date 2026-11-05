@@ -351,16 +351,20 @@ describe("launchd install", () => {
       expect(await isLaunchAgentEnabled({ env: ENV })).toBe(enabled);
     },
   );
-  it.each([true, false])(
-    "restores the previous LaunchAgent and runs the hook only once the replacement exits (exits=%s)",
-    async (exits) => {
+  it.each([
+    [true, true],
+    [true, false],
+    [false, true],
+  ])(
+    "restores the previous LaunchAgent and runs the hook only once booted-out PIDs exit (replacement loads=%s, exits=%s)",
+    async (replacementLoads, exits) => {
       const previous = setGatewayPlist(PREVIOUS_ARGS);
       Object.assign(state, {
         bootstrapError: "injected activation failure",
         bootstrapTransient: true,
-        bootstrapLoadsServiceOnFailure: true,
+        bootstrapLoadsServiceOnFailure: replacementLoads,
       });
-      // The replacement's PID outlives bootout and exits on its third liveness check, or never.
+      // The booted-out PID outlives bootout and exits on its third liveness check, or never.
       let pidChecks = 0;
       isPidDefinitelyDead.mockImplementation(() => exits && ++pidChecks > 2);
       const checksAtHook: number[] = [];
