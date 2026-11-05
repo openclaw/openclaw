@@ -1,0 +1,2 @@
+# Real-Gateway regression: Test & use shows elapsed time and times out a silent remote provider at 30 s.
+    28
