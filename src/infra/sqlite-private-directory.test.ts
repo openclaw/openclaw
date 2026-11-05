@@ -76,7 +76,10 @@ describe.skipIf(process.platform === "win32")("private creation adapter on the n
     const first = resolve(path.join(root, "first"));
     const cache = path.dirname(first);
     // Doctor's private state copy stays in its installation's swept namespace.
-    const copy = ["openclaw-sqlite-readonly-v2-aB3dE6", "openclaw-sqlite-readonly-v2-fG7hI9"];
+    const copy = [
+      "openclaw-sqlite-readonly-v2-aB3dE6",
+      "openclaw-sqlite-readonly-v2-fG7hI9",
+    ] as const;
     expect(resolve(path.join(first, ...copy, "openclaw-state"))).toBe(first);
     // A state dir that is a namespace, or sits outside one, still gets its own hash.
     const others = [first, path.join(cache, copy[0], "openclaw-state")].map(resolve);
