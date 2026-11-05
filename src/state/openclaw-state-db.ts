@@ -173,10 +173,7 @@ export async function prepareOpenClawStateDatabaseSchema(
     legacyCronDefaultStoreKey?: string;
   } = {},
   mode: "automatic" | "doctor-preparation" | "doctor" = "automatic",
-): Promise<{
-  changes: string[];
-  warnings: string[];
-}> {
+): Promise<StateSchemaRepairResult> {
   if (isStatePostgres()) {
     await openOpenClawStateDatabaseForDoctor(options);
     return { changes: [], warnings: [] };

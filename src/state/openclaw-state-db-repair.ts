@@ -138,7 +138,7 @@ export function repairDoctorStateSchema(options: DoctorRepairOptions, scope: Doc
 export async function repairDoctorStateSchemaAsync(
   options: DoctorRepairOptions,
   scope: DoctorRepairScope,
-) {
+): Promise<{ changes: string[]; warnings: string[]; failure?: unknown }> {
   const target = resolveDoctorRepairTarget(options, scope);
   return target
     ? withStateDatabaseSchemaMaintenanceAsync({ databasePath: target.pathname }, () =>
