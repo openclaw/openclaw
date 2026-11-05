@@ -162,10 +162,9 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     params.ctx.input.forceCoreDelivery === true ||
     params.ctx.input.requireQueuePersistence === true;
   const channelPlugin = params.ctx.channelPlugin;
-  const prepareSendPayload =
-    !requiresCoreDelivery && channelPlugin.outbound
-      ? channelPlugin.actions?.prepareSendPayload
-      : undefined;
+  const prepareSendPayload = channelPlugin.outbound
+    ? channelPlugin.actions?.prepareSendPayload
+    : undefined;
   const preparedPayload = prepareSendPayload
     ? await prepareSendPayload({
         ctx: createChannelActionContext({ ctx: params.ctx, action: "send", reply: params.reply }),
@@ -178,12 +177,12 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     : undefined;
   const presentation = normalizeMessagePresentation(defaultPayload.presentation);
   // A hook that declines owns the plugin action path, including presentations.
-  const corePayload = requiresCoreDelivery
-    ? defaultPayload
-    : preparedPayload ||
-      (!prepareSendPayload && presentation && hasCorePresentationDelivery(channelPlugin.outbound)
-        ? defaultPayload
-        : null);
+  const corePayload =
+    preparedPayload ??
+    (requiresCoreDelivery ||
+    (!prepareSendPayload && presentation && hasCorePresentationDelivery(channelPlugin.outbound))
+      ? defaultPayload
+      : null);
   if (!corePayload) {
     const pluginMessage = presentation
       ? materializeMessagePresentationFallback({ payload: defaultPayload, text: params.message })

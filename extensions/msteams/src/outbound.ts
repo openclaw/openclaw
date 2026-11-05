@@ -13,6 +13,7 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolvePayloadMediaUrls,
   resolveTextChunksWithFallback,
@@ -34,7 +35,7 @@ type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
 type MSTeamsSendResult = { messageId: string; conversationId: string; receipt?: MessageReceipt };
 type MSTeamsSendOptions = Pick<
   Parameters<typeof sendMessageMSTeams>[0],
-  "assertDirectAdapterHandoff" | "onPlatformSendDispatch" | "onDeliveryResult"
+  "assertDirectAdapterHandoff" | "onPlatformSendDispatch" | "onDeliveryResult" | "topLevel"
 >;
 type MSTeamsMediaSendOptions = Pick<
   Parameters<typeof sendMessageMSTeams>[0],
@@ -202,10 +203,15 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     threadId,
   }) => {
     const effectiveAccountId = normalizeAccountId(accountId ?? resolveDefaultMSTeamsAccountId(cfg));
-    const handoff = { assertDirectAdapterHandoff, onPlatformSendDispatch };
-    const acceptedResults: MSTeamsSendResult[] = [];
-    const deliveryTarget = resolveMSTeamsThreadTarget(to, threadId);
     const msteamsData = asOptionalRecord(payload.channelData?.msteams);
+    const deliveryTarget = resolveMSTeamsThreadTarget(to, threadId);
+    const topLevel = msteamsData?.topLevel === true && !/(?:^|;)messageid=/iu.test(deliveryTarget);
+    const handoff = {
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
+      ...(topLevel ? { topLevel: true } : {}),
+    };
+    const acceptedResults: MSTeamsSendResult[] = [];
     const presentationCard = asOptionalRecord(msteamsData?.presentationCard);
     if (presentationCard) {
       const result = await sendWithDeliveryResults(
@@ -229,6 +235,12 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         mediaUrl: payload.mediaUrl ?? mediaUrl,
       }),
     );
+    if (topLevel && mediaUrls.length > 1) {
+      throw new PlatformMessageNotDispatchedError(
+        "A new Teams post supports one attachment per send.",
+        { cause: undefined, retryable: false },
+      );
+    }
     if (mediaUrls.length > 0) {
       const send = resolveMSTeamsSend({ cfg, accountId: effectiveAccountId, deps });
       const result = await sendPayloadMediaSequence<MSTeamsSendResult>({
@@ -264,6 +276,12 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
           ),
         ),
       );
+      if (topLevel && chunks.length > 1) {
+        throw new PlatformMessageNotDispatchedError(
+          "Text exceeds the single Teams post limit. Use a presentation or shorten the text.",
+          { cause: undefined, retryable: false },
+        );
+      }
       let result: Awaited<ReturnType<MSTeamsSendFn>>;
       for (const chunk of chunks) {
         result = await sendWithDeliveryResults(

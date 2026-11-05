@@ -67,6 +67,56 @@ describe("msteamsOutbound cfg threading", () => {
     mocks.createPoll.mockResolvedValue(undefined);
   });
 
+  it("passes placement through the canonical message send payload", async () => {
+    const prepare = msteamsPlugin.actions!.prepareSendPayload!;
+    const text = "website update";
+    const payload = await prepare({
+      ctx: { cfg, channel: "msteams", action: "send", params: { topLevel: true } },
+      to: defaultTarget.to,
+      payload: { text },
+    });
+    assert(payload);
+
+    await sendPayload({ ...defaultTarget, text, payload });
+
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text, topLevel: true }),
+    );
+  });
+
+  it("rejects a new post that would send multiple text chunks", async () => {
+    const text = "long post ".repeat(500);
+
+    await expect(
+      sendPayload({
+        ...defaultTarget,
+        text,
+        payload: { text, channelData: { msteams: { topLevel: true } } },
+      }),
+    ).rejects.toThrow("Text exceeds the single Teams post limit");
+
+    expect(mocks.sendMessageMSTeams).not.toHaveBeenCalled();
+  });
+
+  it("sends long new-post presentations as one card", async () => {
+    const text = "long post ".repeat(500).trim();
+    const rendered = await render({
+      channelData: { msteams: { topLevel: true } },
+      presentation: { blocks: [{ type: "text", text }] },
+    });
+    assert(rendered);
+
+    await sendPayload({ ...defaultTarget, text: "", payload: rendered });
+
+    expect(mocks.sendMessageMSTeams).not.toHaveBeenCalled();
+    expect(mocks.sendAdaptiveCardMSTeams).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        topLevel: true,
+        card: expect.objectContaining({ body: [{ type: "TextBlock", text, wrap: true }] }),
+      }),
+    );
+  });
+
   it("caps lightweight and runtime outbound at 4000 characters", () => {
     const configuredCfg: OpenClawConfig = {
       channels: { msteams: { appId: "resolved-app-id", textChunkLimit: 6000 } },

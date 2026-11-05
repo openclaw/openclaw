@@ -43,6 +43,7 @@ import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-
 import { assertMSTeamsSendHandoff, type MSTeamsSendHandoff } from "./send-handoff.js";
 
 type MSTeamsSendOptions = MSTeamsSendHandoff & {
+  topLevel?: boolean;
   onDeliveryResult?: (result: SendMSTeamsMessageResult) => Promise<void> | void;
 };
 
@@ -193,6 +194,7 @@ export async function sendMessageMSTeams(
     cfg,
     accountId,
     to,
+    ...(params.topLevel ? { topLevel: true } : {}),
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
   const { conversationId, conversationType, tokenProvider, sharePointSiteId } = ctx;
@@ -469,6 +471,7 @@ export async function sendAdaptiveCardMSTeams(
     cfg,
     accountId,
     to,
+    ...(params.topLevel ? { topLevel: true } : {}),
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
   const { conversationId } = ctx;

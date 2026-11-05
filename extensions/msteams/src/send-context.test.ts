@@ -138,6 +138,25 @@ beforeEach(() => {
 });
 
 describe("resolveMSTeamsSendContext", () => {
+  it("creates a proactive root without changing normal or explicit thread placement", async () => {
+    storedChannel({ threadId: "stored-root" });
+    const cfg = createConfig({ replyStyle: "thread" });
+
+    expect(await resolveContext(cfg, { topLevel: true })).toMatchObject({
+      replyStyle: "top-level",
+    });
+    expect(await resolveContext(cfg)).toMatchObject({
+      replyStyle: "thread",
+      threadActivityId: "stored-root",
+    });
+    expect(
+      await resolveContext(cfg, {
+        to: `conversation:${conversationId};messageid=explicit-root`,
+        topLevel: true,
+      }),
+    ).toMatchObject({ replyStyle: "thread", threadActivityId: "explicit-root" });
+  });
+
   it.each([
     ["a:personal-chat", "allow-once", "Allowed once"],
     ["a:personal-chat", "deny", "Denied"],

@@ -40,6 +40,7 @@ export async function resolveMSTeamsSendContext(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;
+  topLevel?: boolean;
   /** Delivery authority for a Connector request this resolution makes itself. */
   assertDirectAdapterHandoff?: MSTeamsSendHandoff["assertDirectAdapterHandoff"];
 }) {
@@ -237,7 +238,7 @@ export async function resolveMSTeamsSendContext(params: {
       ? { replyStyle: "thread", threadActivityId: recipient.threadId }
       : ((): MSTeamsProactiveReplyTarget => {
           const threadRootId = safeRef.threadId ?? safeRef.activityId;
-          if (conversationType !== "channel" || !threadRootId) {
+          if (params.topLevel || conversationType !== "channel" || !threadRootId) {
             return { replyStyle: "top-level" };
           }
           const routeConfig = resolveMSTeamsRouteConfig({
