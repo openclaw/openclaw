@@ -19,6 +19,7 @@ import {
 import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
 import { VERSION } from "../version.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
+import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import {
   executeSqliteQuerySync,
@@ -208,9 +209,11 @@ function acquireStartupMigrationLease(
         owner,
         assertOwned: () =>
           assertStartupMigrationLeaseOwned(
-            withExistingOpenClawStateDatabaseCurrentReadOnly(
-              ({ db }) => readOpenClawStateLeaseExpiry(db, identity),
-              { env },
+            withEngineStoreAdmission(() =>
+              withExistingOpenClawStateDatabaseCurrentReadOnly(
+                ({ db }) => readOpenClawStateLeaseExpiry(db, identity),
+                { env },
+              ),
             ),
           ),
         assertOwnedInTransaction: (database, assertionParams = {}) => {
