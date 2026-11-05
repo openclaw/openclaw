@@ -208,9 +208,11 @@ Across admitted runs, core reuses a validated projection only when a fresh read
 matches the physical session identity, transcript rewrite generation, and ordered
 store-entry IDs. The cache retains at most 16 sessions and 8 MiB of accounted
 JSON and metadata; histories above 4,096 entries or 1,024 live keys are not cached.
-Session removal and database shutdown discard retained projections. Store writes,
-branch changes, and rewrites select a new projection through the same replay and
-budget checks. Loaded values remain detached copies, and persisted bytes do not change.
+Session removal and database shutdown discard retained projections. When the
+cached IDs are a prefix of the current branch, only appended entries are replayed
+into a private copy of the projection. Divergent branches and rewrites replay
+from the beginning through the same validation and budget checks. Loaded values
+remain detached copies, and persisted bytes do not change.
 
 Only a cell that settles `completed` commits its non-empty write set. Core
 appends one `custom` entry with type `openclaw.code-mode-store` through

@@ -30,7 +30,12 @@ if (typeof customElements !== "undefined") {
                       )
                     }
                   >
-                    <div class="app-toast app-toast--error app-toast--action" role="alert">
+                    <div
+                      class="app-toast app-toast--error app-toast--action"
+                      data-depth="0"
+                      data-active="true"
+                      role="alert"
+                    >
                       <div class="app-toast__content">
                         <div class="app-toast__body">
                           <span class="app-toast__message">{t("lazyView.errorTitle")}</span>

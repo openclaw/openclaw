@@ -146,7 +146,7 @@ async function runStateLeaseOwnerInScope<T>(
   const operationSignal = validated.signal
     ? AbortSignal.any([validated.signal, leaseLost.signal])
     : leaseLost.signal;
-  const heartbeatMs = Math.max(250, Math.min(30_000, Math.floor(validated.leaseMs / 3)));
+  const heartbeatMs = Math.floor(validated.leaseMs / 3);
   let cancelExpiry: (() => void) | undefined;
   let nativeTimer: ReturnType<typeof startOpenClawStateLeaseNativeHeartbeat> | undefined;
   const abortLost = (cause?: unknown) => {

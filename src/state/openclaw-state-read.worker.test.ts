@@ -174,34 +174,19 @@ it.each([
   expect(mock.unrelatedHandlerLoaded).toBe(false);
 });
 
-it("reads an absent publication receipt without loading unrelated handlers", async () => {
-  const db = openNodeSqliteDatabase(":memory:");
-  mock.database = db;
-  try {
-    const reply = await mock.handler({
-      ...request,
-      command: {
-        type: "githubPublications.sharedObservation",
-        input: {
-          session: { agentId: "main", sessionKey: "agent:main:fixture", sessionId: "fixture" },
-          selector: {},
-          entry: {},
-        },
-      },
-    });
-    expect(reply).toEqual({
-      ok: true,
-      type: "githubPublications.sharedObservation",
-      sourceAdmitted: true,
-      row: undefined,
-    });
-    expect(mock.unrelatedHandlerLoaded).toBe(false);
-  } finally {
-    db.close();
-  }
-});
-
 it.each([
+  {
+    command: {
+      type: "githubPublications.sharedObservation",
+      input: {
+        session: { agentId: "main", sessionKey: "agent:main:fixture", sessionId: "fixture" },
+        selector: {},
+        entry: {},
+      },
+    },
+    tables: [],
+    result: { row: undefined },
+  },
   {
     command: { type: "workerEnvironments.snapshot", input: {} },
     tables: [
@@ -225,6 +210,11 @@ it.each([
     command: { type: "preparedPoolPresence.read", input: undefined },
     tables: ["config_machine_state"],
     result: { demand: undefined },
+  },
+  {
+    command: { type: "sandboxRegistry.list", input: {} },
+    tables: ["sandbox_registry_entries"],
+    result: { entries: [] },
   },
 ] as const)(
   "reads startup $command.type without loading unrelated handlers",

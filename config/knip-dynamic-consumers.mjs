@@ -290,34 +290,37 @@ function emittedSelfNamedImportNames(source) {
 }
 
 function prToolingNamedImportEdges(source) {
-  // The wrapper supplies quoted argv to this specific stdin module. Keep the
+  // The wrapper supplies quoted argv to these stdin modules. Keep each
   // import and its path argument attached to the same live heredoc launch.
-  const tooling = source.match(
-    /^[ \t]*node[ \t]+--input-type=module[ \t]+-[ \t]+((?:"[^"\r\n]*"[ \t]+)+)<<'EOF_TOOLING'\r?\n([\s\S]*?)^EOF_TOOLING$/mu,
-  );
   const edges = new Map();
-  if (!tooling) {
-    return edges;
-  }
-  const args = [...tooling[1].matchAll(/"([^"\r\n]*)"/gu)].map((match) => match[1]);
-  for (const match of tooling[2].matchAll(
-    /^[ \t]*const\s*\{([^{}]+)\}\s*=\s*await\s+import\(\s*\(\s*await\s+import\(["']node:url["']\)\s*\)\.pathToFileURL\(\s*process\.argv\[(\d+)\]\s*\)\s*\)\s*;/gmu,
+  for (const [, suppliedArgs, , body] of source.matchAll(
+    /^[ \t]*node[ \t]+--input-type=module[ \t]+-[ \t]+((?:"[^"\r\n]*"[ \t]+)+)<<'(EOF_(?:TOOLING|CACHE_RECOVERY))'\r?\n([\s\S]*?)^\2$/gmu,
   )) {
-    const modulePath = args[Number(match[2]) - 2]?.match(
-      /^\$pr_bootstrap_root\/(scripts\/pr-lib\/[^"\r\n]+\.mjs)$/u,
-    )?.[1];
-    if (!modulePath) {
-      continue;
-    }
-    const target = path.resolve(modulePath);
-    const names = edges.get(target) ?? new Set();
-    for (const binding of match[1].split(",")) {
-      const name = binding.trim().split(/\s*:\s*/u)[0];
-      if (/^[A-Za-z_$][\w$]*$/u.test(name)) {
-        names.add(name);
+    const args = [...suppliedArgs.matchAll(/"([^"\r\n]*)"/gu)].map((match) => match[1]);
+    const hasUrlImport =
+      /^[ \t]*import\s*\{\s*pathToFileURL\s*\}\s*from\s*["']node:url["']\s*;/mu.test(body);
+    for (const match of body.matchAll(
+      /^[ \t]*const\s*\{([^{}]+)\}\s*=\s*await\s+import\(\s*(\(\s*await\s+import\(["']node:url["']\)\s*\)\.)?pathToFileURL\(\s*process\.argv\[(\d+)\]\s*\)\s*\)\s*;/gmu,
+    )) {
+      if (!match[2] && !hasUrlImport) {
+        continue;
       }
+      const modulePath = args[Number(match[3]) - 2]?.match(
+        /^\$(?:pr_bootstrap_root\/scripts|script_parent_dir)\/(pr-lib\/[^"\r\n]+\.mjs)$/u,
+      )?.[1];
+      if (!modulePath) {
+        continue;
+      }
+      const target = path.resolve("scripts", modulePath);
+      const names = edges.get(target) ?? new Set();
+      for (const binding of match[1].split(",")) {
+        const name = binding.trim().split(/\s*:\s*/u)[0];
+        if (/^[A-Za-z_$][\w$]*$/u.test(name)) {
+          names.add(name);
+        }
+      }
+      edges.set(target, names);
     }
-    edges.set(target, names);
   }
   return edges;
 }

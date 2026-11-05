@@ -850,8 +850,8 @@ describe("sessions view at phone width", () => {
     const onSearchChange = vi.fn();
     await renderSettled(
       [
-        createRow("agent:main:alpha", { label: "Alpha", updatedAt: Date.now() }),
-        createRow("agent:main:beta", { label: "Beta", updatedAt: Date.now() }),
+        createRow("agent:main:alpha", { label: "Alpha", updatedAt: 1 }),
+        createRow("agent:main:beta", { label: "Beta", updatedAt: 1 }),
       ],
       { onSearchChange },
     );

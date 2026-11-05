@@ -92,6 +92,9 @@ export function mergeCronDelivery(
             nextFd[field] = existingFd[field];
           }
         }
+        if (Object.hasOwn(existingFd, "threadId")) {
+          nextFd.threadId = existingFd.threadId;
+        }
         if (Object.hasOwn(existingFd, "mode")) {
           nextFd.mode = existingFd.mode;
         }
@@ -102,6 +105,9 @@ export function mergeCronDelivery(
             nextFd[field] = normalizeOptionalString(patchFd[field]);
           }
         }
+        if ("threadId" in patchFd) {
+          nextFd.threadId = normalizeOptionalThreadValue(patchFd.threadId);
+        }
         if ("mode" in patchFd) {
           const mode = normalizeOptionalString(patchFd.mode);
           nextFd.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
@@ -110,6 +116,7 @@ export function mergeCronDelivery(
       const hasFailureDestination =
         Object.hasOwn(nextFd, "channel") ||
         Object.hasOwn(nextFd, "to") ||
+        Object.hasOwn(nextFd, "threadId") ||
         Object.hasOwn(nextFd, "accountId") ||
         Object.hasOwn(nextFd, "mode");
       next.failureDestination = hasFailureDestination ? nextFd : undefined;
@@ -152,6 +159,9 @@ export function mergeCronFailureAlert(
   const base = existing === false || existing === undefined ? {} : existing;
   const next: CronFailureAlert = { ...base };
 
+  if ("threadId" in patch) {
+    next.threadId = normalizeOptionalThreadValue(patch.threadId);
+  }
   if ("after" in patch) {
     const after = typeof patch.after === "number" && Number.isFinite(patch.after) ? patch.after : 0;
     next.after = after > 0 ? Math.floor(after) : undefined;
