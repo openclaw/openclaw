@@ -400,7 +400,10 @@ describe("Codex native configuration lifecycle", () => {
 
     expect(continued).toMatchObject({ threadId: first.threadId, lifecycle: { action: "resumed" } });
     expect(continued.preparedOpenClawBaseInstructions).toBe(creationBase);
-    expect(fixture.writes.filter((line) => /"thread\/(?:start|resume)"/u.test(line))).toHaveLength(1);
+    const threadRequests = fixture.writes.filter((line) =>
+      /"thread\/(?:start|resume)"/u.test(line),
+    );
+    expect(threadRequests).toHaveLength(1);
   });
 
   it("refuses warm incognito reuse when OpenClaw's base changes beside an authored native base", async () => {
