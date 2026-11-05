@@ -29,6 +29,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import { pruneStaleControlPlaneBuckets } from "../control-plane-rate-limit.js";
 import * as mcpGrants from "../mcp-grant-store.js";
 import { json, prepareAdmission, request } from "../mcp-http-request.test-support.js";
 import { getActiveMcpLoopbackRuntime } from "../mcp-http.loopback-runtime.js";
@@ -51,6 +52,7 @@ export function installRequesterCronAuthorityTestHooks(
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(() => {
+    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
     stateDir = tempDirs.make("openclaw-requester-cron-authority-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     runtimeConfig.setRuntimeConfigSnapshot(cfg);
@@ -66,6 +68,7 @@ export function installRequesterCronAuthorityTestHooks(
   });
 
   afterEach(async () => {
+    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
     cron?.stop();
     await cron?.waitForIdle();
     revokeRequesterCronAuthority(SESSION);

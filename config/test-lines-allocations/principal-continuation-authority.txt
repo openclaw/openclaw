@@ -1,0 +1,6 @@
+# PR #193098: net regression proof for original ingress issuance, restart-before-
+# scheduling, fail-closed revocation, same-job transient retry, real admin tool
+# gates, independently scoped siblings, and principal replay anonymization.
+# Owning-boundary fixtures caught real admission and settlement defects that
+# helper-only tests missed. Preserve those distinct contracts; scalar unchanged.
+831
