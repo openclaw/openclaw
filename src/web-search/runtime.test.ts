@@ -499,6 +499,25 @@ describe("web search runtime", () => {
     );
   });
 
+  it("matches an explicit caller provider id case-insensitively", async () => {
+    const payload = { error: "missing_brave_api_key", message: "set BRAVE_API_KEY" };
+    useProviders(
+      searchProvider("brave", { createTool: () => tool(async () => payload) }),
+      searchProvider("duckduckgo"),
+    );
+    await expect(search({ providerId: "Brave" })).resolves.toEqual({
+      provider: "brave",
+      result: payload,
+    });
+  });
+
+  it("keeps the caller's casing in the unknown explicit provider error", async () => {
+    useProviders(searchProvider("google"), searchProvider("duckduckgo"));
+    await expect(search({ providerId: "Brave" })).rejects.toThrow(
+      'Unknown web_search provider "Brave".',
+    );
+  });
+
   it("honors preferRuntimeProviders during execution", async () => {
     ownerMock.mockImplementation(({ value }) => (value === "google" ? "google" : undefined));
     const configuredProvider = searchProvider("google");

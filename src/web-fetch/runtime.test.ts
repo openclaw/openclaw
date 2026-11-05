@@ -133,6 +133,16 @@ describe("web fetch runtime", () => {
     expectProvider({ config: selectedProviderConfig("firecrawl") });
   });
 
+  it("matches an explicit caller provider id case-insensitively", () => {
+    useFirecrawl({ requiresCredential: false });
+    expectProvider({ config: {}, providerId: "Firecrawl" });
+  });
+
+  it("returns no definition when an explicit caller provider id is unknown", () => {
+    useFirecrawl({ requiresCredential: false });
+    expect(resolveWebFetchDefinition({ config: {}, providerId: "Missing-Fetch" })).toBeNull();
+  });
+
   it("does not auto-detect a keyless provider without a credential", () => {
     useFirecrawl({ requiresCredential: false });
     expect(resolveWebFetchDefinition({ config: {} })).toBeNull();
