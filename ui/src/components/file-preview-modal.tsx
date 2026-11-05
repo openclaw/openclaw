@@ -77,23 +77,6 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
   const activeFile = createMemo(
     () => filteredFiles().find((file) => file.path === props.activePath) ?? filteredFiles()[0],
   );
-  const codeSource = createMemo(() => activeFile()?.contents ?? "");
-  const codeChunks = createMemo(() => chunkFileContents(codeSource()));
-  const documentHtml = createMemo(() =>
-    toSanitizedMarkdownHtml(stripFrontmatterBlock(codeSource()), {
-      mode: "document",
-      remoteImages: false,
-      codeBlockChrome: "none",
-      fileLinks: false,
-    }),
-  );
-  const contentMode = createMemo(() =>
-    activeFile()?.message
-      ? "message"
-      : props.layout === "document" && /\.md$/iu.test(activeFile()?.path ?? "")
-        ? "markdown"
-        : "code",
-  );
   // Sibling responses must not replace the settled leaf for the same request.
   const inventoryRequest = createMemo(() => ({ request: props.inventoryRequest() }), {
     equals: (previous, next) => previous.request === next.request,
@@ -432,26 +415,13 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
                                 </div>
                               </Show>
                               <div ref={capture("body")} class="detail-body">
-                                {contentMode() === "message" ? (
-                                  <p role="status">{file().message}</p>
-                                ) : contentMode() === "markdown" ? (
-                                  <SanitizedHtml
-                                    tag="article"
-                                    class="markdown"
-                                    onClick={handleDocumentLink}
-                                    html={documentHtml()}
-                                  />
-                                ) : (
-                                  <div class="code-content">
-                                    <For each={codeChunks()}>
-                                      {(chunk, index) => (
-                                        <pre class="code-chunk" data-chunk={index()}>
-                                          {chunk}
-                                        </pre>
-                                      )}
-                                    </For>
-                                  </div>
-                                )}
+                                <FilePreviewDocument
+                                  path={file().path}
+                                  content={file().contents}
+                                  message={file().message}
+                                  markdown={props.layout === "document"}
+                                  onClick={handleDocumentLink}
+                                />
                               </div>
                             </section>
                           )}
@@ -480,6 +450,45 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
         </div>
       </openclaw-modal-dialog>
     </>
+  );
+}
+
+/** Shared read-only rendering; callers retain file-read and overlay ownership. */
+export function FilePreviewDocument(props: {
+  path: string;
+  content: string;
+  message?: string;
+  markdown?: boolean;
+  onClick?: JSX.EventHandler<HTMLElement, MouseEvent>;
+}) {
+  const chunks = createMemo(() => chunkFileContents(props.content));
+  const html = createMemo(() =>
+    toSanitizedMarkdownHtml(stripFrontmatterBlock(props.content), {
+      mode: "document",
+      remoteImages: false,
+      codeBlockChrome: "none",
+      fileLinks: false,
+    }),
+  );
+  return (
+    <Show when={!props.message} fallback={<p role="status">{props.message}</p>}>
+      <Show
+        when={props.markdown && /\.md$/iu.test(props.path)}
+        fallback={
+          <div class="code-content">
+            <For each={chunks()}>
+              {(chunk, index) => (
+                <pre class="code-chunk" data-chunk={index()}>
+                  {chunk}
+                </pre>
+              )}
+            </For>
+          </div>
+        }
+      >
+        <SanitizedHtml tag="article" class="markdown" onClick={props.onClick} html={html()} />
+      </Show>
+    </Show>
   );
 }
 

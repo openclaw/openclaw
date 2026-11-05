@@ -15,6 +15,7 @@ import {
 import { handleMarkdownTableInteraction } from "../../../components/markdown-tables.ts";
 import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { createTemplateReferences } from "../../../components/template-reference-surface.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import {
   anchorFromNavigationEvent,
@@ -83,6 +84,17 @@ export function ChatThread(input: {
   historySupplement?: TranscriptHeader;
 }) {
   const mobile = useContext(ChatConversationMobile);
+  const templateReferences = createTemplateReferences({
+    get application() {
+      return input.props.applicationContext;
+    },
+    get client() {
+      return input.props.gatewayClient;
+    },
+    get sessionKey() {
+      return input.props.sessionKey;
+    },
+  });
   const [root, setRoot] = createSignal<HTMLDivElement>();
   let stopSelectionGesture: (() => void) | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
@@ -271,8 +283,16 @@ export function ChatThread(input: {
         aria-live="off"
         aria-relevant="additions"
         tabindex={0}
-        onFocusIn={(event) => current().session.handleFocusIn(event)}
-        onFocusOut={(event) => current().session.handleFocusOut(event)}
+        onPointerOver={templateReferences.onPointerOver}
+        onPointerOut={templateReferences.onPointerOut}
+        onFocusIn={(event) => {
+          templateReferences.onFocusIn(event);
+          current().session.handleFocusIn(event);
+        }}
+        onFocusOut={(event) => {
+          templateReferences.onFocusOut();
+          current().session.handleFocusOut(event);
+        }}
         onKeyDown={(event) => {
           if (
             !event.defaultPrevented &&
@@ -309,6 +329,9 @@ export function ChatThread(input: {
         onTouchEnd={(event) => input.props.onHistoryIntent?.(event)}
         onTouchCancel={(event) => input.props.onHistoryIntent?.(event)}
         onClick={(event) => {
+          if (templateReferences.onClick(event)) {
+            return;
+          }
           handleMarkdownCodeBlockClick(event);
           handleMarkdownTableInteraction(event);
           if (shouldHandleNavigationClick(event) && openManagedArtifactLink(event, input.props)) {
@@ -383,6 +406,7 @@ export function ChatThread(input: {
           )}
         </Show>
       </div>
+      <templateReferences.View />
     </div>
   );
 }

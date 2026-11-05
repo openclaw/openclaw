@@ -1471,3 +1471,24 @@
 .chat-thread .code-block-wrapper--long :is(.code-block-copy, .code-block-wrap) {
   top: calc(4px - var(--chat-thread-padding-top));
 }
+
+.markdown-template-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--bg-accent);
+  color: var(--text-strong);
+  font-weight: 600;
+  text-decoration: none;
+  vertical-align: baseline;
+}
+.markdown-template-link::before {
+  content: "◇";
+  color: var(--accent);
+  font-size: 0.9em;
+}
+.markdown-template-link:hover {
+  background: var(--bg-hover);
+}

@@ -25,6 +25,7 @@ import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks } from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
+import { installMarkdownTemplateLinks } from "./markdown-template-links.ts";
 import {
   markdownInlineChildren,
   replaceMarkdownTextMatches,
@@ -380,7 +381,11 @@ export function createMarkdownParser(): MarkdownItParser {
         }
         if (token.type === "link_open") {
           const href = String(token.attrGet("href") ?? "");
-          if (href && !token.attrGet("data-session-href")) {
+          if (
+            href &&
+            !token.attrGet("data-session-href") &&
+            !token.attrGet("data-template-package")
+          ) {
             let decodedHref = href;
             try {
               decodedHref = decodeURIComponent(href);
@@ -473,6 +478,7 @@ export function createMarkdownParser(): MarkdownItParser {
   });
 
   installMarkdownSessionLinks(markdownParser);
+  installMarkdownTemplateLinks(markdownParser);
 
   // Give bare and code-span GitHub URLs the same label; image-only links get no mark.
   markdownParser.core.ruler.after("linkify", "web-link-classes", (state) => {
