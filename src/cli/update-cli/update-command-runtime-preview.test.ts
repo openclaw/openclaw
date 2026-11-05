@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
+import { emitNodeSecurityWarning } from "../../../node-version.mjs";
 import * as runtimePaths from "../../daemon/runtime-paths.js";
 import * as daemonService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
@@ -16,6 +17,7 @@ import { runtimeFixture } from "./update-command-fixtures.test-support.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
 import * as packageUpdate from "./update-command-package.js";
+import * as commandRun from "./update-command-run.js";
 import {
   expectedRuntimeRecoverySteps,
   stubNodeRuntime,
@@ -35,6 +37,34 @@ function expectUnstaged() {
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
 });
+it("does not repeat the startup certificate warning during update preparation", async () => {
+  const runtime = stubNodeRuntime();
+  Object.defineProperty(runtime.versions, "node", { value: "24.21.0" });
+  const warningKey = Symbol.for("openclaw.nodeSecurityWarningPrinted");
+  const globals = globalThis as unknown as Record<symbol, unknown>;
+  const prior = globals[warningKey];
+  delete globals[warningKey];
+  try {
+    emitNodeSecurityWarning(runtime.versions.node, defaultRuntime.error);
+    vi.mocked(commandRun.prepareUpdateCommand).mockRestore();
+    vi.spyOn(shared, "resolveUpdateRoot").mockRejectedValue(new Error("after runtime admission"));
+    await expect(commandRun.prepareUpdateCommand({ dryRun: true, json: true })).rejects.toThrow(
+      "after runtime admission",
+    );
+    const warnings = vi
+      .mocked(defaultRuntime.error)
+      .mock.calls.filter(([message]) => String(message).includes("SECURITY WARNING"));
+    expect(warnings).toHaveLength(1);
+    expectUnstaged();
+  } finally {
+    if (prior === undefined) {
+      delete globals[warningKey];
+    } else {
+      globals[warningKey] = prior;
+    }
+  }
+});
+
 it.each([
   ["24.16.0", true],
   ["26.1.0", false],

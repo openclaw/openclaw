@@ -214,6 +214,8 @@ Markdown bullet fields and frontmatter keys are terminal: `name.absent` cannot
 match a `name` field or key.
 Recursive wildcards may consume zero segments, so `name.**` and `**.name` can
 still match it. A quoted `"**"` addresses a literal field key.
+Union alternatives keep their selector semantics: `{missing,*}` and
+`{missing,[name=value]}` can select a matching bullet field.
 For JSONL, `**` can span both the physical line and nested value keys:
 `oc://session.jsonl/**/event` finds nested `event` values inside each line.
 

@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RealtimeVoiceBridgeCreateRequest as BridgeRequest } from "../../../talk/provider-contexts.js";
 import { resolveRealtimeVoiceProviderCapabilitiesAsync } from "../../../talk/provider-resolver.js";
-import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceBridgeCreateRequest as BridgeRequest,
-} from "../../../talk/provider-types.js";
+import type { RealtimeVoiceBridge } from "../../../talk/provider-types.js";
 import { useRelayFixtures } from "./fixture.test-support.js";
 import {
   createIdleRelayProvider,

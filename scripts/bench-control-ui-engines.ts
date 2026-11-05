@@ -40,6 +40,7 @@ import {
   createEngineBootScenarios,
   type EngineScenario,
 } from "./lib/control-ui-engine-boot-scenarios.ts";
+import { createEngineCompletedRunScenarios } from "./lib/control-ui-engine-completed-run-scenarios.ts";
 import { createEngineMemoryScenarios } from "./lib/control-ui-engine-memory-scenarios.ts";
 import { createEngineMemoryCollector } from "./lib/control-ui-engine-memory.ts";
 import {
@@ -307,6 +308,7 @@ try {
   const catalog: EngineScenario[] = [
     ...createEngineBootScenarios(servers[0]!.server.baseUrl),
     ...createEngineActionScenarios(),
+    ...createEngineCompletedRunScenarios(servers[0]!.server.baseUrl),
     ...createChatComposerScenarios(),
     ...createChatMessageScenarios(),
     ...createChatPanelScenarios().map((scenario) =>
@@ -367,6 +369,9 @@ try {
           "./bench-control-ui-engines.ts",
           "./lib/control-ui-engine-metrics.ts",
           "./lib/control-ui-engine-boot-scenarios.ts",
+          "./lib/control-ui-engine-completed-run-scenarios.ts",
+          "./lib/control-ui-long-session-probe.ts",
+          "../ui/src/test-helpers/control-ui-team-scale-history-fixture.ts",
           "./lib/control-ui-chat-composer-scenarios.ts",
           "./lib/control-ui-chat-message-scenarios.ts",
           "./lib/control-ui-chat-panel-scenarios.ts",
@@ -458,7 +463,11 @@ try {
             const scenario =
               createEngineBootScenarios(slot.server.baseUrl, networkProfile.gatewayLatencyMs).find(
                 ({ id }) => id === item.id,
-              ) ?? item;
+              ) ??
+              createEngineCompletedRunScenarios(slot.server.baseUrl).find(
+                ({ id }) => id === item.id,
+              ) ??
+              item;
             const artifactPrefix = `${viewport.name}-${scenario.id}-${networkProfile.name}-${pair + 1}-${engine}-${bundle}`;
             const observation: Observation = {
               engine,
@@ -1086,7 +1095,7 @@ await writeFile(
           "",
           "## Per-page phases",
           "",
-          `CPU throttle: ${cpuThrottle}x (Chromium only). Long-task target: ${cpuThrottle === 1 ? 50 : 200} ms. CLS target: 0; all-shift sum also includes shifts within 500 ms of user input. Missing WebKit observer entries are unavailable, never zero. Inspector phases require a separate traced run and are elapsed wall time in WebKit, thread CPU in Chromium. Wall includes driver and assertions.`,
+          `CPU throttle: ${cpuThrottle}x (Chromium only). Long-task target: ${50 * cpuThrottle} ms. CLS target: 0; all-shift sum also includes shifts within 500 ms of user input. Missing WebKit observer entries are unavailable, never zero. Inspector phases require a separate traced run and are elapsed wall time in WebKit, thread CPU in Chromium. Wall includes driver and assertions.`,
           "",
           "Visit and departure comparisons use browser-local route readiness; content complete also waits for the fixture's full row/control counts. CPU and task collection spans both boundaries. Action comparisons above use native-input-to-commit timing.",
           "",

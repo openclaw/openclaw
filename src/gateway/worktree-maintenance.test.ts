@@ -1,10 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { WorktreeWarmPoolRequest } from "../agents/worktrees/template-registry.js";
-import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
+import type { ManagedWorktreeGcResult, ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import {
   getRuntimeConfigSnapshot,
   resetConfigRuntimeState,
@@ -17,6 +19,8 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { prepareScratchMaintenanceTargets } from "./scratch-maintenance-custody.js";
 import {
   notifyGatewayWorktreeArchive,
   requestGatewayWorktreeMaintenance,
@@ -28,9 +32,56 @@ vi.mock("./worker-environments/local-workspace-gc.js", () => ({
   sweepLocalWorkspaceManifests: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Run custody has its own integration suite; these fixtures own scheduling.
+vi.mock("./scratch-maintenance-custody.js", () => ({
+  prepareScratchMaintenanceTargets: vi.fn(async () => ({ targets: [], release: () => {} })),
+}));
+
+const cleanupRecord: ManagedWorktreeRecord = {
+  id: "worktree",
+  name: "expired",
+  repoFingerprint: "repository",
+  repoRoot: "/repository",
+  path: "/worktree",
+  branch: "expired",
+  baseRef: "main",
+  ownerKind: "session",
+  ownerId: "agent:main:expired",
+  createdAt: 1,
+  lastActiveAt: 1,
+};
+
 function completedResult(): ManagedWorktreeGcResult {
   return { ...new WorktreeGcProgress().result, limitsSatisfied: true };
 }
+
+it("expires disposable scratch on the existing maintenance pass and records the outcome", async () => {
+  const dirs = createTrackedTempDirs();
+  try {
+    const root = await fs.realpath(await dirs.make("worktree-maintenance-scratch-"));
+    const scratch = path.join(root, ".openclaw/tmp/proof.txt");
+    await fs.mkdir(path.dirname(scratch), { recursive: true });
+    await fs.writeFile(scratch, "proof");
+    await fs.utimes(scratch, 1, 1);
+    vi.mocked(prepareScratchMaintenanceTargets).mockResolvedValueOnce({
+      targets: [{ root, kind: "checkout", isLive: () => false }],
+      release: () => {},
+    });
+    vi.spyOn(managedWorktrees, "gc").mockResolvedValue(completedResult());
+    await using fixture = maintenanceFixture();
+    fixture.clock.setTime(1_800_000_000_000);
+    const owner = fixture.start();
+    const receipt = owner.request();
+    await fixture.run();
+    expect(owner.request({ jobId: receipt.jobId })).toMatchObject({
+      state: "completed",
+      scratch: { entriesRemoved: 1, bytesRemoved: 5, skippedLive: 0, errors: [] },
+    });
+    await expect(fs.stat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    await dirs.cleanup();
+  }
+});
 
 function maintenanceFixture(config: OpenClawConfig = {}) {
   const clock = createGatewaySchedulerClock();
@@ -326,7 +377,7 @@ it("admits only one expired checkout per minute across a cohort and subsequent s
   vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
     const progress = completedResult();
     for (let index = 0; index < 3; index++) {
-      await params.beforeRemoval?.();
+      await params.beforeRemoval?.(cleanupRecord);
       removed.push(fixture.clock.clock.now());
       progress.removed.push(String(index));
       await params.checkpoint?.(progress);
@@ -361,7 +412,7 @@ it.each(["recover", "stop", "configuration"])(
     await using fixture = maintenanceFixture(config);
     const removed = vi.fn();
     vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
-      await params.beforeRemoval!();
+      await params.beforeRemoval!(cleanupRecord);
       removed();
       return completedResult();
     });

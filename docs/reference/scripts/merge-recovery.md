@@ -29,6 +29,11 @@ Ordinary `merge-run` reconciliation checks the retained receipt head. It cannot 
 
 - Worktree cleanup (including GC dry-run and stale-entry provisioning) preserves `.local/merge-output.log` at its original path unless the corresponding outcome passes local record and retained-object validation. Empty captures and dangling capture symlinks count. Preserve the worktree, metadata, and local branches for manual reconciliation; do not trash, rename, or manufacture a receipt. `CLOSED`/`MERGED` and an absent process do not resolve dispatch uncertainty. Valid retained outcomes remain available after eligible cleanup; cleanup does not reconcile them or change process-lock recovery.
 
+An externally merged PR with no native merge operation can use
+[explicit finalized-task closeout](/reference/scripts/pr-tooling#finalized-task-closeout)
+without manufacturing a merge receipt. Exact selections and finalization intent
+do not resolve any existing native intent, capture, transition, or pending completion.
+
 ## Delayed completion
 
 Select an absolute path to a qualified wrapper from the same repository before cleanup. Follow [wrapper qualification](/reference/scripts/pr-tooling). Qualify the invoking wrapper independently of the persistent working directory. An older bootstrap can create a legacy anchor that current lifetime guards refuse. Use the qualified source checkout's wrapper instead.

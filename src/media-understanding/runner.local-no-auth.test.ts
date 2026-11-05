@@ -5,9 +5,10 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { runMediaFixture } from "./runner-case.test-support.js";
 import { buildProviderRegistry } from "./runner.js";
-import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
+import type { AudioTranscriptionRequest } from "./types.js";
 
 vi.mock("../plugins/capability-provider-runtime.js", async () => {
   const { createEmptyCapabilityProviderMockModule } = await import("./runner.test-mocks.js");

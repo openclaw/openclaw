@@ -34,7 +34,7 @@ function installed(overrides: Partial<PluginCatalogEntry>): PluginCatalogEntry {
 
 describe("plugin discovery identity and local join", () => {
   it("keeps third-party prompt text in local detail without requiring runtime inspection", () => {
-    const recommendedPrompts = ["Plan  my week.\nPrioritize commitments."];
+    const recommendedPrompts = ["Plan my week. Prioritize commitments."];
     const plugin = installed({ id: "community-planner", origin: "global", recommendedPrompts });
     const { detail } = joinLocalPluginDetail({ plugin, local: catalogState([plugin]) });
     expect(detail.recommendedPrompts).toEqual(recommendedPrompts);
