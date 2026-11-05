@@ -24,6 +24,7 @@ const { values } = parseArgs({
     "cold-driver-root": { type: "string" },
     "warm-driver-root": { type: "string" },
     "target-sha": { type: "string" },
+    "scratch-root": { type: "string" },
     "install-lock": { type: "string" },
     "pnpm-store": { type: "string" },
     mode: { type: "string", default: "count" },
@@ -68,7 +69,18 @@ assert.ok(!fs.existsSync(output), "--output must not already exist");
 fs.mkdirSync(output, { recursive: true });
 const scratchParent = process.env.TMPDIR;
 assert.ok(scratchParent, "Set TMPDIR to the lane's internal-disk scratch directory");
-const scratch = fs.mkdtempSync(path.join(scratchParent, "doctor-direct-"));
+// An explicit root is created fresh and owned by this invocation, with the same cleanup.
+const scratch = values["scratch-root"]
+  ? path.resolve(values["scratch-root"])
+  : fs.mkdtempSync(path.join(scratchParent, "doctor-direct-"));
+if (values["scratch-root"]) {
+  assert.equal(
+    path.dirname(scratch),
+    path.resolve(scratchParent),
+    "--scratch-root must be directly inside TMPDIR",
+  );
+  fs.mkdirSync(scratch, { mode: 0o700 });
+}
 for (const name of ["home", "state", "cache"]) {
   fs.mkdirSync(path.join(scratch, name));
 }
