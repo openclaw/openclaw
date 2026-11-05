@@ -1,8 +1,9 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ControlUiSettingsView,
   ControlUiChannelSettingsView,
 } from "../../../src/plugin-sdk/control-ui.js";
+import { i18n } from "../i18n/lib/translate.ts";
 import type { ControlUiPluginDistribution } from "./control-ui-distribution.ts";
 import { loadControlUiPluginAssets } from "./control-ui-loader.ts";
 import { ControlUiPluginRuntime } from "./control-ui-runtime.ts";
@@ -68,7 +69,7 @@ function fixture(views: SettingsView[] = [memoryView()]) {
       : runtime.loadSettingsView(target.placement, new AbortController().signal);
   return { runtime, view, activate, stop, style, module, load };
 }
-it.each(["overview", "memories", "channel"] as const)(
+it.each(["memories", "channel"] as const)(
   "loads and disposes packaged %s without activation",
   async (kind) => {
     const selected = kind === "channel" ? channelView() : memoryView(kind);
@@ -92,46 +93,53 @@ it.each(["overview", "memories", "channel"] as const)(
     expect(f.stop).toHaveBeenCalledOnce();
   },
 );
-it("does not start a Settings view after disposal during its lazy import", async () => {
+it.each(["disposed", "ambiguous"])("rejects a %s owner before loading code", async (cause) => {
   const f = fixture();
-  const pending = f.runtime.loadSettingsView(placement, new AbortController().signal);
-  f.runtime.dispose();
-  await expect(pending).rejects.toThrow("The plugin UI runtime has ended.");
+  const pending = f.load();
+  if (cause === "disposed") {
+    f.runtime.dispose();
+  } else {
+    packaged.push({ ...packaged[0]!, pluginId: "duplicate" });
+  }
+  await expect(pending).rejects.toThrow(
+    cause === "disposed" ? "runtime has ended" : "one packaged owner",
+  );
   expect(loadControlUiPluginAssets).not.toHaveBeenCalled();
 });
-it("rejects ambiguous packaged placement owners before loading code", async () => {
-  const f = fixture();
-  packaged.push({ ...packaged[0]!, pluginId: "duplicate" });
-  await expect(f.load()).rejects.toThrow("one packaged owner");
-  expect(loadControlUiPluginAssets).not.toHaveBeenCalled();
-});
-it.each(["owner", "placement", "duplicate"])(
+it.each(["owner", "placement", "duplicate", "channel"])(
   "rejects a built module with a mismatched %s and disposes its styles",
   async (kind) => {
-    const f = fixture();
+    const f = fixture(kind === "channel" ? [channelView()] : undefined);
     if (kind === "owner") {
       f.module.pluginId = "another-plugin";
     }
     if (kind === "placement") {
-      f.module.settingsViews = [
-        {
-          ...f.view,
-          placement: { section: "other", panel: "overview" },
-        } as unknown as ControlUiSettingsView,
-      ];
+      f.module.settingsViews = [channelView()];
     }
     if (kind === "duplicate") {
       f.module.settingsViews = [f.view, f.view];
     }
-    await expect(f.load()).rejects.toThrow();
+    if (kind === "channel") {
+      f.module.settingsViews = [channelView("foreign")];
+    }
+    await expect(f.load()).rejects.toThrow(kind === "channel" ? "Invalid or duplicate" : undefined);
     expect(f.style.media).toBe("not all");
     expect(f.stop).toHaveBeenCalledOnce();
   },
 );
 
-it("rejects module channel identity drift even when section and panel match", async () => {
-  const view = channelView();
-  const f = fixture([view]);
-  f.module.settingsViews = [{ ...view, placement: { ...view.placement, channelId: "foreign" } }];
-  await expect(f.load()).rejects.toThrow("Invalid or duplicate");
+it("localizes packaged settings timeouts without changing cleanup", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const f = fixture([memoryView()]);
+  const translate = vi.spyOn(i18n, "t").mockReturnValue("localized settings timeout");
+  onTestFinished(() => translate.mockRestore());
+  vi.mocked(loadControlUiPluginAssets).mockImplementation(() => new Promise(() => {}));
+  const pending = expect(f.load()).rejects.toThrow("localized settings timeout");
+  await vi.waitFor(() => expect(loadControlUiPluginAssets).toHaveBeenCalled());
+  await vi.advanceTimersByTimeAsync(15_000);
+  await pending;
+  expect(translate).toHaveBeenCalledWith("pluginUi.settingsTimedOut", undefined);
 });

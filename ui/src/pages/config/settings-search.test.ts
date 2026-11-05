@@ -5,6 +5,7 @@ import type { SettingsSearchBlock } from "../../app-navigation.ts";
 import { setCurrentThemeBranding } from "../../app/theme-branding.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { findSettingsSearchBlocks } from "./settings-search.ts";
 
 function object(
@@ -37,6 +38,12 @@ it("does not advertise hidden Lobsterdex choices while retaining the rest of tab
   setCurrentThemeBranding(resolveThemeBranding({ lobsterdex: true }));
   expect(search("Lobsterdex")).toContainEqual(expect.objectContaining({ routeId: "appearance" }));
 });
+it.each(["permission", "subscription", "browser support", "notification access", "blocked"])(
+  "finds Notifications by %s",
+  (query) => {
+    expect(search(query)).toContainEqual(expect.objectContaining({ routeId: "notifications" }));
+  },
+);
 it("keeps target metadata cold and loads Settings English when search opens", async () => {
   const testApiKey = Symbol.for("openclaw.i18nManagerTestApi");
   const previousTestApi = Object.getOwnPropertyDescriptor(globalThis, testApiKey);
@@ -53,7 +60,7 @@ it("keeps target metadata cold and loads Settings English when search opens", as
     "configView.autoSaveSaving",
     "configPage.themeImported",
     "configView.chatPrefs.title",
-    "updates.page.intro",
+    "updates.page.buildTitle",
     "modelProviders.title",
   ];
   try {
@@ -73,7 +80,7 @@ it("keeps target metadata cold and loads Settings English when search opens", as
         uiHints: {},
         identityAvailable: true,
       }),
-      { routeId: "profile", hash: "#settings-profile-identity" },
+      { routeId: "profile", hash: "#settings-profile-attribution" },
     );
     expectBlocks(find("collapse task progress"), { routeId: "appearance", label: "Chat" });
     expect(en.configView).toBe(configView);
@@ -99,11 +106,7 @@ it("keeps target metadata cold and loads Settings English when search opens", as
   } finally {
     await runtime.i18n.setLocale("en");
     vi.resetModules();
-    if (previousTestApi) {
-      Object.defineProperty(globalThis, testApiKey, previousTestApi);
-    } else {
-      Reflect.deleteProperty(globalThis, testApiKey);
-    }
+    restorePropertyDescriptor(globalThis, testApiKey, previousTestApi);
   }
 });
 

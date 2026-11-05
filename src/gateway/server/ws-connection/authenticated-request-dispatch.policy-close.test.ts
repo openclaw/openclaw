@@ -15,12 +15,12 @@ import { deviceHandlers } from "../../server-methods/devices.js";
 import { createSecretsHandlers } from "../../server-methods/secrets.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
 import { disconnectStaleSharedGatewayAuthClients } from "../../server-shared-auth-generation.js";
+import { dispatchProfile } from "../client-fixtures.test-support.js";
 import { holdGatewayPolicyResponse } from "../ws-policy-close.js";
 import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
-  dispatchProfile,
   requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 

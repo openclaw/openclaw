@@ -8,7 +8,6 @@ import {
   jsonUtf8BytesOrInfinity,
   type BoundedJsonUtf8Bytes,
 } from "../infra/json-utf8-bytes.js";
-import { projectAgentActivityDelegation } from "./agent-activity-delegation.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
@@ -244,18 +243,7 @@ export function capToolResultForPersistence(msg: AgentMessage, maxChars: number)
   if (sanitizedDetails === details) {
     return capped;
   }
-  // Display receipts survive the existing raw-output cap, not the mutable child registry.
-  const delegation = projectAgentActivityDelegation(capped.toolName, capped);
-  if (!delegation) {
-    return { ...capped, details: sanitizedDetails };
-  }
-  const summary = { ...asOptionalObjectRecord(sanitizedDetails), delegation };
-  return {
-    ...capped,
-    details: boundedJsonUtf8Bytes(summary, MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES).complete
-      ? summary
-      : { persistedDetailsTruncated: true, delegation },
-  };
+  return { ...capped, details: sanitizedDetails };
 }
 
 export function normalizePersistedToolResultName(

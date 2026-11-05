@@ -368,7 +368,7 @@ export function setSidebarExpanded(layout: SidebarLayout, expanded: boolean): Si
   // Restore split must reveal the side even when focus began with that panel closed.
   const next = { ...layout };
   delete next.expandedSide;
-  return { ...next, expanded, ...(expanded ? { open: true } : {}) };
+  return { ...next, expanded, open: true };
 }
 
 /**

@@ -31,7 +31,6 @@ type CurrentPluginMetadataCacheState = {
   envFingerprint: string | undefined;
   defaultDiscoveryCompatible: boolean;
   compatibleConfigFingerprints: readonly string[] | undefined;
-  revision: symbol;
   configIdentities: WeakSet<OpenClawConfig>;
 };
 

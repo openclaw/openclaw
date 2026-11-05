@@ -81,9 +81,7 @@ function pendingPlugin(pluginId = fixturePlugin, requiresStateMigration?: true) 
   };
 }
 function expectPending(env: NodeJS.ProcessEnv, ...pluginIds: string[]) {
-  expect(readPending({ env })).toEqual(
-    pluginIds.map((pluginId) => expect.objectContaining({ pluginId })),
-  );
+  expect(readPending({ env })).toMatchObject(pluginIds.map((pluginId) => ({ pluginId })));
 }
 function manifestTargets(env: NodeJS.ProcessEnv) {
   return migrationRun
@@ -234,12 +232,19 @@ it.each([
       expect(fs.existsSync(protectedSource)).toBe(true);
       expect(fs.statSync(protectedSource).nlink).toBe(1);
       expect(fs.readFileSync(protectedSource)).toEqual(originals.get(protectedSource));
-      expect(readPending({ env: state.env })).toEqual([
-        expect.objectContaining({ pluginId: fixturePlugin, requiresStateMigration: true }),
+      expect(readPending({ env: state.env })).toMatchObject([
+        { pluginId: fixturePlugin, requiresStateMigration: true },
       ]);
-      containsObjects(reportIssues(interrupted), {
-        message: expect.stringContaining("Plugin migration obligations changed"),
-      });
+      const retainedIssue = reportIssues(interrupted).find(
+        (issue) => issue.code === "plugin_migration_source_retained",
+      );
+      expect(retainedIssue?.message).toContain(
+        "Plugin migration obligations changed during session archive publication",
+      );
+      expect(retainedIssue?.message).toContain("expected=[]");
+      expect(retainedIssue?.message).toContain("current=[fixture-plugin]");
+      expect(retainedIssue?.message).toContain("changed=[]");
+      expect(retainedIssue?.message).toContain("Retained inputs remain protected");
 
       await editAndDeleteImportedSessions(scope, "edited after interrupted archival");
       expect((await run()).totals.importedEntries).toBe(0);
@@ -403,7 +408,7 @@ it.each([
       const archived = manifestTargets(state.env).filter((target) =>
         target.completedMoves.some((move) => move.sourcePath === storePath),
       );
-      expect(archived).toEqual([expect.objectContaining({ validationBeforeArchive: "passed" })]);
+      expect(archived).toMatchObject([{ validationBeforeArchive: "passed" }]);
       for (const [file, bytes] of archiveInputs) {
         expectMissing(file);
         expectArchived(archived[0]!.completedMoves, file, bytes);

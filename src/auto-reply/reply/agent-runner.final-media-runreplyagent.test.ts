@@ -1,20 +1,12 @@
 import path from "node:path";
 import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createReplyOperation } from "../../sessions/session-controller.js";
-import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
+import { createSettledExecution } from "./followup-delivery.test-helpers.js";
+import { createMockFollowupRun, createReplyParams } from "./test-helpers.js";
 
 const executeAgentTurnMock = vi.fn();
 const resolveOutboundAttachmentFromUrlMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
-
-vi.mock("../../agents/context.js", () => ({
-  resolveContextTokensForModel: () => 200_000,
-}));
-
-vi.mock("../../agents/model-selection.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/model-selection.js")>()),
-  isCliProvider: () => false,
-}));
 
 vi.mock("../../agents/sandbox/context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/sandbox/context.js")>()),
@@ -22,26 +14,9 @@ vi.mock("../../agents/sandbox/context.js", async (importOriginal) => ({
   prepareSandboxWorkspaceForSession: async () => null,
 }));
 
-vi.mock("../../infra/diagnostic-events.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/diagnostic-events.js")>()),
-  emitTrustedDiagnosticEvent: vi.fn(),
-  isDiagnosticsEnabled: () => false,
-}));
-
-vi.mock("../../infra/diagnostics-timeline.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/diagnostics-timeline.js")>()),
-  measureDiagnosticsTimelineSpan: async (_name: string, run: () => unknown) => await run(),
-}));
-
 vi.mock("../../media/outbound-attachment.js", () => ({
   resolveOutboundAttachmentFromUrl: (...args: unknown[]) =>
     resolveOutboundAttachmentFromUrlMock(...args),
-}));
-
-vi.mock("./agent-runner-failure-reply.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./agent-runner-failure-reply.js")>()),
-  buildKnownAgentRunFailureReplyPayload: vi.fn(() => undefined),
-  markPostCompactionModelFailurePayload: (_failure: true | undefined, payload: unknown) => payload,
 }));
 
 vi.mock("./agent-runner-execution.js", () => ({
@@ -69,10 +44,6 @@ vi.mock("./queue.js", async (importOriginal) => ({
   scheduleFollowupDrain: vi.fn(),
 }));
 
-vi.mock("./session-updates.js", () => ({
-  incrementCompactionCount: async () => undefined,
-}));
-
 const { runReplyAgent } = await import("./agent-runner-run.js");
 
 type AgentTurnExecutionResult = Awaited<
@@ -83,8 +54,6 @@ type AgentTurnParams = Parameters<typeof import("./agent-runner-execution.js").e
 function makeRunReplyAgentParams(
   blockStreamingEnabled = false,
 ): Parameters<typeof runReplyAgent>[0] {
-  const provider = "telegram";
-  const prompt = "generate chart";
   const replyOperation = createReplyOperation({
     sessionKey: "main",
     sessionId: "session",
@@ -92,36 +61,22 @@ function makeRunReplyAgentParams(
   });
   onTestFinished(() => replyOperation.complete());
 
-  return {
-    commandBody: prompt,
-    followupRun: createMockFollowupRun({
-      prompt,
-      run: { agentDir: "/tmp/agent", messageProvider: provider, workspaceDir: "/tmp/workspace" },
-    }),
-    queueKey: "main",
-    resolvedQueue: { mode: "interrupt" },
-    shouldSteer: false,
-    shouldFollowup: false,
-    isActive: false,
-    typing: createMockTypingController(),
+  const followupRun = createMockFollowupRun({ run: { messageProvider: "telegram" } });
+  return createReplyParams(followupRun, {
     sessionCtx: {
-      Provider: provider,
-      Surface: provider,
+      Provider: "telegram",
+      Surface: "telegram",
       To: "chat-1",
       OriginatingTo: "chat-1",
       AccountId: "default",
       MessageSid: "msg-1",
     },
     defaultModel: "anthropic/claude",
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
     blockStreamingEnabled,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
     typingMode: "instant",
     replyOperation,
     ...(blockStreamingEnabled ? { opts: { onBlockReply: vi.fn(async () => {}) } } : {}),
-  };
+  });
 }
 
 describe("runReplyAgent final MEDIA replies", () => {
@@ -140,24 +95,12 @@ describe("runReplyAgent final MEDIA replies", () => {
     { mediaUrl: "https://example.invalid/pending.png", audioAsVoice: false },
     { mediaUrl: "https://example.invalid/pending.opus", audioAsVoice: true },
   ])("keeps pending tool media after NO_REPLY: $mediaUrl", async ({ mediaUrl, audioAsVoice }) => {
-    executeAgentTurnMock.mockResolvedValueOnce({
-      runId: "silent-media-test",
-      outcome: {
-        kind: "settled",
-        status: "ok",
-        result: {
-          payloads: [{ text: "Unsent" }, { text: "Caption", mediaUrl, audioAsVoice }],
-          meta: {
-            durationMs: 0,
-            finalAssistantRawText: "NO_REPLY",
-            terminalReply: { disposition: "silent" },
-          },
-        },
-        resolved: { provider: "anthropic", model: "claude" },
-        fallback: { exhausted: false, attempts: [] },
-        autoCompactionCount: 0,
-      },
-    } satisfies AgentTurnExecutionResult);
+    const execution = createSettledExecution("NO_REPLY");
+    execution.outcome.result.payloads = [
+      { text: "Unsent" },
+      { text: "Caption", mediaUrl, audioAsVoice },
+    ];
+    executeAgentTurnMock.mockResolvedValueOnce(execution satisfies AgentTurnExecutionResult);
 
     const result = await runReplyAgent(makeRunReplyAgentParams());
     const payloads = Array.isArray(result) ? result : result ? [result] : [];
@@ -179,25 +122,21 @@ describe("runReplyAgent final MEDIA replies", () => {
       >("./agent-runner-payloads.js");
       const normalizeMediaPaths = params.replyMediaContext?.normalizePayload;
       assert(normalizeMediaPaths, "runReplyAgent must pass replyMediaContext to the agent turn");
-      const commonParams = {
-        blockStreamingEnabled: false,
-        blockReplyPipeline: null,
-        replyToMode: "all" as const,
-        normalizeMediaPaths,
-      };
-      const blockPayloads = await buildReplyPayloads({
-        ...commonParams,
-        payloads: [{ text: "block\nMEDIA:./out/chart.png" }],
-      });
-      const finalPayloads = await buildReplyPayloads({
-        ...commonParams,
-        payloads: [{ text: "final\nMEDIA:./out/chart.png" }],
-      });
-      expect(blockPayloads.replyPayloads[0]).toMatchObject({
+      const parse = async (text: string) =>
+        (
+          await buildReplyPayloads({
+            blockStreamingEnabled: false,
+            blockReplyPipeline: null,
+            replyToMode: "all",
+            normalizeMediaPaths,
+            payloads: [{ text: `${text}\nMEDIA:./out/chart.png` }],
+          })
+        ).replyPayloads[0];
+      expect(await parse("block")).toMatchObject({
         text: "block",
         mediaUrl: "/tmp/outbound-media/1-chart.png",
       });
-      const payload = finalPayloads.replyPayloads[0];
+      const payload = await parse("final");
       assert(payload, "expected parsed final payload");
       return {
         runId: "media-test",

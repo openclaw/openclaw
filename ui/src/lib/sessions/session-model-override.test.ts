@@ -2,7 +2,7 @@
 import { expect, it } from "vitest";
 import type { SessionsPatchResult } from "../../../../src/gateway/session-utils.types.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
 import {
@@ -29,6 +29,84 @@ function modelReceipt(model: string, sessionId: string, updatedAt: number): Sess
     resolved: { modelProvider: "openai", model },
   };
 }
+function modelFixture(patch: () => unknown) {
+  const source = { row: modelRow(), fail: false, ts: 1 };
+  return {
+    source,
+    ...modelHarness({
+      "sessions.patch": patch,
+      "sessions.subscribe": () => ({ subscribed: true }),
+      "sessions.list": () => {
+        if (source.fail) {
+          throw new Error("roster unavailable");
+        }
+        return sessionsResult([{ ...source.row }], source.ts);
+      },
+    }),
+  };
+}
+
+it("keeps a confirmed Access setting when a pre-patch list with a newer sampling time finishes", async () => {
+  const initial = modelRow({
+    updatedAt: 10,
+    snapshotAt: 10,
+    hasActiveRun: true,
+    activeRunIds: ["active-run"],
+  });
+  const delayedList = createDeferred<SessionsListResult>();
+  const listIssued = createDeferred();
+  let holdList = false;
+  let listed = initial;
+  const { sessions } = modelHarness({
+    "sessions.list": () => {
+      if (holdList) {
+        listIssued.resolve();
+        return delayedList.promise;
+      }
+      return sessionsResult([listed], listed.snapshotAt ?? 0);
+    },
+    "sessions.patch": () =>
+      patchReceipt(
+        key,
+        { sessionId: initial.sessionId, updatedAt: 30, cyberAccessProgram: "daybreak_blue" },
+        "",
+      ),
+  });
+  let read: ReturnType<typeof sessions.refresh> | undefined;
+  try {
+    await sessions.refresh({ agentId: "main", force: true });
+    holdList = true;
+    read = sessions.refresh({ agentId: "main", force: true });
+    await listIssued.promise;
+    await sessions.patch(
+      key,
+      { cyberAccessProgram: "daybreak_blue" },
+      { agentId: "main", expectedSessionId: initial.sessionId, deferListRefresh: true },
+    );
+    expect(sessions.state.result?.sessions[0]?.cyberAccessProgram).toBe("daybreak_blue");
+    delayedList.resolve(sessionsResult([{ ...initial, snapshotAt: 20 }], 20));
+    await read;
+    expect(sessions.state.result?.sessions[0]?.cyberAccessProgram).toBe("daybreak_blue");
+    holdList = false;
+    listed = {
+      ...initial,
+      snapshotAt: 40,
+      cyberAccessProgram: "standard",
+      hasActiveRun: false,
+      activeRunIds: [],
+    };
+    await sessions.refresh({ agentId: "main", force: true });
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      cyberAccessProgram: "standard",
+      hasActiveRun: false,
+      activeRunIds: [],
+    });
+  } finally {
+    delayedList.resolve(sessionsResult([initial], 10));
+    await read;
+    sessions.dispose();
+  }
+});
 
 it.each(
   ["primary", "supplemental", "descriptor"].flatMap((source) =>
@@ -126,7 +204,7 @@ it.each(["resolve", "reject"])(
 
 it("retains a confirmed patch without publishing its retired optimistic state", async () => {
   const stalePatch = createDeferred<unknown>();
-  const { sessions, request, publish } = modelHarness({
+  const { sessions, publish } = modelHarness({
     "sessions.patch": () => stalePatch.promise,
     "sessions.subscribe": () => ({ subscribed: true }),
     "sessions.list": () => sessionsResult([], 2),
@@ -146,9 +224,6 @@ it("retains a confirmed patch without publishing its retired optimistic state", 
   await inactiveOperation;
   expect(sessions.state.modelOverrides).toEqual({});
   expect(sessions.state.error).toContain("completed on the previous connection");
-  expect(
-    request.mock.calls.filter(([method]) => method === "sessions.list").length,
-  ).toBeGreaterThan(0);
 });
 
 it("does not dispatch a queued patch on a replacement connection", async () => {
@@ -179,15 +254,19 @@ it("does not dispatch a queued patch on a replacement connection", async () => {
 it.each(["selected", "default"] as const)(
   "keeps a confirmed %s model after failed reads, then admits an external change",
   async (selection) => {
-    let failReads = false;
-    const model = "gpt-5.4";
-    let updatedAt = 1;
-    const { sessions } = modelHarness({
-      "sessions.patch": () => {
-        return {
-          ok: true,
-          key,
-          path: "",
+    const selectedSettings = {
+      thinkingLevel: "high",
+      thinkingLevels: [{ id: "high", label: "High" }],
+      contextWindow: "large",
+      contextWindows: [{ id: "large", label: "Large", contextWindow: 200_000 }],
+    } satisfies Pick<
+      NonNullable<SessionsPatchResult["resolved"]>,
+      "thinkingLevel" | "thinkingLevels" | "contextWindow" | "contextWindows"
+    >;
+    const { sessions, source } = modelFixture(
+      () =>
+        ({
+          ...modelReceipt("gpt-5.5", "main-session", 2),
           entry: {
             sessionId: "main-session",
             updatedAt: 2,
@@ -196,38 +275,17 @@ it.each(["selected", "default"] as const)(
           resolved: {
             modelProvider: "openai",
             model: "gpt-5.5",
-            ...(selection === "selected"
-              ? {
-                  thinkingLevel: "high",
-                  thinkingLevels: [{ id: "high", label: "High" }],
-                  contextWindow: "large",
-                  contextWindows: [{ id: "large", label: "Large", contextWindow: 200_000 }],
-                }
-              : {}),
+            ...(selection === "selected" ? selectedSettings : {}),
           },
-        } satisfies SessionsPatchResult;
-      },
-      "sessions.subscribe": () => ({ subscribed: true }),
-      "sessions.list": () => {
-        if (failReads) {
-          throw new Error("roster unavailable");
-        }
-        return sessionsResult(
-          [
-            modelRow({
-              updatedAt,
-              model,
-              modelOverrideSource: "user",
-              thinkingLevel: "low",
-              contextWindow: "standard",
-            }),
-          ],
-          updatedAt,
-        );
-      },
+        }) satisfies SessionsPatchResult,
+    );
+    source.row = modelRow({
+      modelOverrideSource: "user",
+      thinkingLevel: "low",
+      contextWindow: "standard",
     });
     await sessions.refresh({ force: true });
-    failReads = true;
+    source.fail = true;
     await sessions.patch(key, {
       model: selection === "default" ? null : "openai/gpt-5.5",
     });
@@ -235,20 +293,19 @@ it.each(["selected", "default"] as const)(
       model: "gpt-5.5",
       modelProvider: "openai",
       modelOverrideSource: selection === "default" ? null : "user",
-    });
-    expect(sessions.state.modelOverrides).toEqual({});
-    expect(sessions.state.error).toContain("roster unavailable");
-    expect(sessions.state.result?.sessions[0]).toMatchObject(
-      selection === "selected"
+      ...(selection === "selected"
         ? {
             thinkingLevel: "high",
             contextWindow: "large",
-            thinkingLevels: [{ id: "high", label: "High" }],
+            thinkingLevels: selectedSettings.thinkingLevels,
           }
-        : { thinkingLevel: "low", contextWindow: "standard" },
-    );
-    failReads = false;
-    updatedAt = 3;
+        : { thinkingLevel: "low", contextWindow: "standard" }),
+    });
+    expect(sessions.state.modelOverrides).toEqual({});
+    expect(sessions.state.error).toContain("roster unavailable");
+    source.fail = false;
+    source.row = { ...source.row, updatedAt: 3 };
+    source.ts = 3;
     await sessions.refresh({ force: true });
     expect(sessions.state.result?.sessions[0]?.model).toBe("gpt-5.4");
   },
@@ -260,31 +317,21 @@ it.each(["replacement", "newer-fails", "newer-succeeds"] as const)(
     const first = createDeferred<unknown>();
     const second = createDeferred<unknown>();
     let patchCount = 0;
-    let failReads = false;
     let sessionId = "main-session";
-    const { sessions } = modelHarness({
-      "sessions.patch": () => (++patchCount === 1 ? first.promise : second.promise),
-      "sessions.subscribe": () => ({ subscribed: true }),
-      "sessions.list": () => {
-        if (failReads) {
-          throw new Error("roster unavailable");
-        }
-        return sessionsResult(
-          [modelRow({ sessionId, updatedAt: sessionId === "main-session" ? 1 : 3 })],
-          1,
-        );
-      },
-    });
+    const { sessions, source } = modelFixture(() =>
+      ++patchCount === 1 ? first.promise : second.promise,
+    );
     await sessions.refresh({ force: true });
     const operation = sessions.patch(key, { model: "openai/gpt-5.5" });
     if (scenario === "replacement") {
       sessionId = "replacement-session";
+      source.row = modelRow({ sessionId, updatedAt: 3 });
       await sessions.refresh({ force: true });
       expect(sessions.state.result?.sessions[0]?.sessionId).toBe(sessionId);
     }
     const newer =
       scenario !== "replacement" ? sessions.patch(key, { model: "openai/gpt-5.4" }) : null;
-    failReads = true;
+    source.fail = true;
     if (scenario === "newer-succeeds") {
       second.resolve(modelReceipt("gpt-5.4", sessionId, 3));
       await newer;

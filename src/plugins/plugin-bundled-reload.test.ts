@@ -11,7 +11,11 @@ import {
   bundledPluginCaptureInputs,
   resolveBundledPluginReloadSource,
 } from "./plugin-bundled-reload.js";
-import { resetPluginCache, waitForPluginCacheRetirement } from "./plugin-cache.js";
+import {
+  getPluginCacheRoot,
+  resetPluginCache,
+  waitForPluginCacheRetirement,
+} from "./plugin-cache.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -66,7 +70,11 @@ it.each(["_scriptName", "import.meta.url"])(
     const policy = resolveBundledPluginReloadSource(plugin);
     const artifact = withPluginSourceCaptureDirectory(captures, () =>
       capturePluginGenerationArtifact(
-        ...bundledPluginCaptureInputs(plugin, entry, policy, false, false),
+        ...bundledPluginCaptureInputs({
+          rootDir: plugin,
+          source: entry,
+          bundledReloadSource: policy,
+        }),
         (run) => run(),
         undefined,
         undefined,
@@ -106,7 +114,11 @@ it("leaves absolute host imports outside a captured dependency's package untouch
   const policy = resolveBundledPluginReloadSource(plugin);
   const artifact = withPluginSourceCaptureDirectory(captures, () =>
     capturePluginGenerationArtifact(
-      ...bundledPluginCaptureInputs(plugin, entry, policy, false, false),
+      ...bundledPluginCaptureInputs({
+        rootDir: plugin,
+        source: entry,
+        bundledReloadSource: policy,
+      }),
       (run) => run(),
       undefined,
       undefined,
@@ -380,6 +392,8 @@ it.each([
   };
   writeVersion("A");
   const first = create();
+  // The host package keeps its own cache facts while the plugin code is captured.
+  expect(getPluginCacheRoot(selectedRoot)).not.toBe(getPluginCacheRoot(root));
   expect(load(first).value).toBe("AA");
   expect(load(first).increment()).toBe(1);
   expect(host.count).toBe(1);

@@ -1,11 +1,11 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
-import { createKeyboardShortcutMatcher } from "./keyboard-shortcuts.js";
+import { KEYBOARD_SHORTCUT_MATCHER_SOURCE } from "./keyboard-shortcuts.generated.js";
 
-describe("serialized keyboard shortcut matcher", () => {
+describe("sandbox keyboard shortcut matcher asset", () => {
   it("preserves native Unicode and shortcut matching after widget prototype changes", () => {
     const result: unknown = runInNewContext(`
-      const matcher = (${createKeyboardShortcutMatcher.toString()})();
+      const matcher = (${KEYBOARD_SHORTCUT_MATCHER_SOURCE})();
       const event = (key, code, overrides = {}) => ({
         key, code, keyCode: 0, isComposing: false,
         metaKey: true, ctrlKey: false, altKey: false, shiftKey: false,

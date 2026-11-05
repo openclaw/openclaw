@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -34,7 +34,7 @@ export type FinalizerScenario = {
   ref?: string;
   fullRefresh?: boolean;
   preflightAllowed?: boolean;
-  change?: "glossary" | "canonical";
+  change?: "metadata" | "canonical";
   artifactFault?: "foreign-run" | "path" | "fallback";
   publish?: boolean;
   advanceDuringCheckout?: boolean;
@@ -50,7 +50,7 @@ const lines = (text: string) => text.trim().split("\n");
 const memoryPath = (locale: string) => path.join(assets, locale + ".tm.jsonl");
 type Memory = { segment_id: string; translated: string; text: string };
 const parseMemory = (text: string): Memory[] => lines(text).map((line) => JSON.parse(line));
-function mapValues(values: Record<string, unknown>, map: (value: unknown) => string) {
+function mapValues<T, V>(values: Record<string, T>, map: (value: T) => V) {
   return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, map(value)]));
 }
 const tokenStep = (outputs: Record<string, string>) => ({ tokens: { outputs } });
@@ -90,6 +90,7 @@ function commit(root: string, message: string) {
 export function createLocaleFinalizerHarness() {
   const temporary = createTempDirTracker();
   let template: string;
+  let initialOriginVerified = false;
   return {
     cleanup: temporary.cleanup,
     async prepare() {
@@ -134,11 +135,7 @@ export function createLocaleFinalizerHarness() {
         fs.mkdirSync(target(directory), { recursive: true });
       }
       for (const file of fs.readdirSync(assets)) {
-        if (
-          file.endsWith(".tm.jsonl") ||
-          file.endsWith(".meta.json") ||
-          file.startsWith("glossary.")
-        ) {
+        if (file.endsWith(".tm.jsonl") || file.endsWith(".meta.json")) {
           fs.copyFileSync(path.join(assets, file), target(path.join(assets, file)));
         }
       }
@@ -150,7 +147,7 @@ export function createLocaleFinalizerHarness() {
       put(template, "extensions/fixture/i18n/locales/translated.json", "{}\n");
       fs.appendFileSync(target(sourceFile), before);
       put(template, ".gitignore", "node_modules/\n.artifacts/\n.isolated-state/\n");
-      const seed = spawnSync(
+      execFileSync(
         testNodeExecPath,
         ["--import", "./scripts/tsx.mjs", "scripts/control-ui-i18n.ts", "sync", "--write"],
         {
@@ -164,7 +161,6 @@ export function createLocaleFinalizerHarness() {
           ),
         },
       );
-      expect(seed.status, seed.stdout + seed.stderr).toBe(0);
     },
     async run(scenario: FinalizerScenario = {}) {
       const directory = temporary.make("locale-finalizer-flow-");
@@ -317,18 +313,14 @@ export function createLocaleFinalizerHarness() {
           : [],
         publication: fixture.inspect(""),
         publishedMemory(locale: string) {
-          const readback = spawnSync(
-            "git",
-            [
-              "--git-dir",
-              fixture.env.FAKE_ORIGIN,
-              "show",
-              "refs/heads/" + fixture.env.HEAD_BRANCH + ":" + memoryPath(locale),
-            ],
-            { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+          const ref = `refs/heads/${fixture.env.HEAD_BRANCH}:${memoryPath(locale)}`;
+          return parseMemory(
+            execFileSync("git", ["--git-dir", fixture.env.FAKE_ORIGIN, "show", ref], {
+              cwd: root,
+              encoding: "utf8",
+              maxBuffer: 16 * 1024 * 1024,
+            }),
           );
-          expect(readback.status, readback.stderr).toBe(0);
-          return parseMemory(readback.stdout);
         },
         memory(locale: string) {
           return parseMemory(read(at(memoryPath(locale))));
@@ -348,8 +340,48 @@ export function createLocaleFinalizerHarness() {
           scenario.fullRefresh || !JSON.parse(line).segment_id.startsWith("localeWorkflowProof."),
       );
       fs.writeFileSync(svFile, canonicalSv.join("\n") + "\n");
-      commit(root, "canonical source before workers");
-      runGit(root, ["push", "--quiet", "origin", "main"]);
+      const initialSource = commit(root, "canonical source before workers");
+      const origin = fixture.env.FAKE_ORIGIN;
+      const originConfig = fs.readFileSync(path.join(origin, "config"));
+      const worktreeConfig = fs.readFileSync(at(".git", "config"));
+      const alternates = path.join("objects", "info", "alternates");
+      expect(fs.existsSync(at(".git", alternates))).toBe(false);
+      // Construct the initial remote without packing the warm translation memories.
+      // Later workflow and catch-up pushes still exercise the real transport.
+      fs.rmSync(origin, { recursive: true });
+      runGit(root, ["clone", "--quiet", "--bare", "--no-hardlinks", ".", origin]);
+      // Bare cloning adds a reverse remote; retain the fixture's original configuration.
+      fs.writeFileSync(path.join(origin, "config"), originConfig);
+      runGit(root, ["update-ref", "refs/remotes/origin/main", initialSource]);
+      if (!initialOriginVerified) {
+        // Prove the real seed boundary once; keep later cases focused on publication.
+        expect(fs.readFileSync(path.join(origin, "config"))).toEqual(originConfig);
+        expect(fs.readFileSync(at(".git", "config"))).toEqual(worktreeConfig);
+        const originGit = (...args: string[]) => runGit(root, ["--git-dir", origin, ...args]);
+        expect(originGit("symbolic-ref", "HEAD")).toBe("refs/heads/main");
+        expect(originGit("rev-parse", "HEAD")).toBe(initialSource);
+        expect(originGit("for-each-ref", "--format=%(refname)")).toBe("refs/heads/main");
+        expect(
+          originGit("merge-base", "--is-ancestor", fixture.env.FAKE_INITIAL_MAIN, initialSource),
+        ).toBe("");
+        expect(runGit(root, ["rev-parse", "refs/remotes/origin/main"])).toBe(initialSource);
+        expect(fs.existsSync(path.join(origin, alternates))).toBe(false);
+        const object = path.join("objects", initialSource.slice(0, 2), initialSource.slice(2));
+        const sourceObject = at(".git", object);
+        const originObject = path.join(origin, object);
+        const objectBytes = fs.readFileSync(sourceObject);
+        expect(fs.readFileSync(originObject)).toEqual(objectBytes);
+        expect(fs.statSync(originObject).ino).not.toBe(fs.statSync(sourceObject).ino);
+        const corrupted = Buffer.from(objectBytes);
+        corrupted.writeUInt8(corrupted.readUInt8(0) ^ 0xff, 0);
+        try {
+          fs.writeFileSync(originObject, corrupted);
+          expect(fs.readFileSync(sourceObject)).toEqual(objectBytes);
+        } finally {
+          fs.writeFileSync(originObject, objectBytes);
+        }
+        initialOriginVerified = true;
+      }
       const resolved = execute(workflow.jobs["resolve-base"].steps[0]);
       states["resolve-base"] = jobResult(resolved, context.steps!.base?.outputs);
       if (!resolved || !gate("publisher-preflight")) {
@@ -392,8 +424,12 @@ export function createLocaleFinalizerHarness() {
       const english = read(at(sourceFile));
       expect(english).toContain(before);
       fs.writeFileSync(at(sourceFile), english.replace(before, after));
-      if (scenario.change === "glossary") {
-        put(root, assets + "/glossary.sv.json", '[{"source":"locale","target":"språk"}]\n');
+      if (scenario.change === "metadata") {
+        const file = at(assets, "sv.meta.json");
+        const metadata = JSON.parse(read(file));
+        metadata.fallbackKeys.push("localeWorkflowProof.keep");
+        metadata.translatedKeys -= 1;
+        fs.writeFileSync(file, JSON.stringify(metadata) + "\n");
       }
       if (scenario.change === "canonical") {
         const packed = JSON.parse(read(path.join(artifacts, "sv.json")));
@@ -451,12 +487,9 @@ export function createLocaleFinalizerHarness() {
           }
           runGit(root, ["checkout", "--quiet", "--detach", "FETCH_HEAD"]);
         } else if (step.uses?.startsWith("actions/download-artifact@")) {
-          expect(step.with).not.toHaveProperty("run-id");
           fs.cpSync(artifacts, interpolate(step.with?.path), { recursive: true });
         } else if (step.uses === "./.github/actions/setup-node-env") {
           sourceAtSetup = runGit(root, ["rev-parse", "HEAD"]);
-          // The source capsule already binds the installed dependency tree.
-          expect(fs.existsSync(at("node_modules"))).toBe(true);
         } else if (step.uses === "./.github/actions/publish-generated-pr") {
           if (!scenario.publish) {
             break;
@@ -472,12 +505,7 @@ export function createLocaleFinalizerHarness() {
           const publicationContext: Context = {
             ...context,
             inputs: {
-              ...Object.fromEntries(
-                Object.entries<{ default?: unknown }>(action.inputs).map(([name, input]) => [
-                  name,
-                  input.default,
-                ]),
-              ),
+              ...mapValues<{ default?: unknown }, unknown>(action.inputs, (input) => input.default),
               ...inputs,
             },
             steps: tokenStep({

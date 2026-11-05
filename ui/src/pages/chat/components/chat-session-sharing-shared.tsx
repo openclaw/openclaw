@@ -53,6 +53,8 @@ export type ChatSessionSharingProps = {
   state: ChatSessionSharingState | undefined;
   allowedVisibilities?: readonly SessionVisibility[];
   membersAvailable?: boolean;
+  /** Display only until the admitted sharing read confirms public access. */
+  cachedPublished?: boolean;
   openDisabledReason?: string;
   visibilityDisabledReason?: string;
   memberAddDisabledReason?: string;
@@ -315,12 +317,12 @@ export function ChatSessionPublicIndicator(
         aria-label={t("chat.sessionSharing.worldReadable")}
         title={t("chat.sessionSharing.worldReadable")}
       >
+        <span aria-hidden="true">
+          <Icon name="globe" />
+        </span>
         <Show when={!props.mobile}>
-          <span aria-hidden="true">
-            <Icon name="globe" />
-          </span>
+          <span>{t("chat.sessionSharing.publicIndicator")}</span>
         </Show>
-        <span>{t("chat.sessionSharing.publicIndicator")}</span>
       </span>
     </Show>
   );

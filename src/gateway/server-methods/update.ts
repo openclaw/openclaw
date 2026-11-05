@@ -556,7 +556,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             handoff = {
               status: "already-running",
               command: started.command,
-              message: "Another managed update is already running; retry after it completes.",
+              message: started.message,
             };
           }
           result = {

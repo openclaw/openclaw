@@ -16,11 +16,12 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts"
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
+import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { ChatImageLightbox } from "../chat/components/chat-image-lightbox-view.tsx";
+import { observeIntersection } from "../../lib/reactive/observers.ts";
 import { MessageImages } from "../chat/components/chat-message-deferred.tsx";
 import {
   assistantMediaPolicyKey,
@@ -120,7 +121,6 @@ function SessionMedia(
   const mediaOwner = {};
   const [revision, setRevision] = createSignal(0);
   let visible = false;
-  let observer: IntersectionObserver | undefined;
   let entry: ImageEntry | undefined;
   let settledEntry: ImageEntry | undefined;
   let displayedImages: ImageBlock[] = [];
@@ -373,20 +373,21 @@ function SessionMedia(
     refresh,
   );
   onSettled(() => {
+    let stopObserving: (() => void) | undefined;
     // Visibility is required before transcript discovery; never fall back to an eager scan.
     if (typeof IntersectionObserver !== "undefined") {
-      observer = new IntersectionObserver(
+      stopObserving = observeIntersection(
+        [host],
         (entries) => {
           visible = entries.some((observation) => observation.isIntersecting);
           refresh();
         },
         { rootMargin: "200px" },
       );
-      observer.observe(host);
     }
     return () => {
       disposed = true;
-      observer?.disconnect();
+      stopObserving?.();
       visible = false;
       closeImage(false);
       releaseChatMediaResourceOwner(mediaOwner);
@@ -473,7 +474,7 @@ function SessionMedia(
           )}
         </div>
       )}
-      <ChatImageLightbox item={lightboxItem()} onClose={closeImage} />
+      <ImageLightboxItemView item={lightboxItem()} onClose={closeImage} />
     </openclaw-activity-session-media>
   );
 }

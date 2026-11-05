@@ -142,7 +142,6 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
       envFingerprint: undefined,
       defaultDiscoveryCompatible: false,
       compatibleConfigFingerprints: undefined,
-      revision: Symbol("plugin-metadata-snapshot"),
       configIdentities: new WeakSet(),
     },
     snapshots: new Map(),
@@ -483,7 +482,6 @@ export function getPluginCacheRoot(rootDir: string): PluginRootCacheRecord {
       files: new Map(),
       checkedEntries: new Map(),
       paths: new Map(),
-      artifactLoadsInProgress: new Set(),
       artifacts: new Map(),
       runtimeArtifacts: new Map(),
       entryBoundaries: new Map(),
@@ -524,9 +522,6 @@ export function bindPluginCacheRoot(rootDir: string, canonicalRoot: string): Plu
     mergeRootFacts(root.entryPaths, existing.entryPaths);
     root.directory ??= existing.directory;
     root.publicSurfaceBoundary ??= existing.publicSurfaceBoundary;
-    for (const artifact of existing.artifactLoadsInProgress) {
-      root.artifactLoadsInProgress.add(artifact);
-    }
     Object.assign(existing, root);
   }
   cache.roots.set(canonical, root);

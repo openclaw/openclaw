@@ -1,8 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractBalancedJsonFragments } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
 import { ignoreMissingPath } from "../infra/errno.js";
+
+function extractGeminiResponse(raw: string): string | null {
+  const fragments = extractBalancedJsonFragments(raw, {
+    openers: ["{"],
+    skipQuotedOpeners: true,
+  });
+  for (const { json } of fragments.toReversed()) {
+    try {
+      const response = asOptionalRecord(JSON.parse(json))?.response;
+      return typeof response === "string" ? response.trim() || null : null;
+    } catch {
+      // Malformed diagnostic noise is best effort; try the previous complete object.
+    }
+  }
+  return null;
+}
 
 function findArgValue(args: string[], keys: string[]): string | undefined {
   for (const [index, arg] of args.entries()) {

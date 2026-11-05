@@ -72,6 +72,14 @@ apps/ios/*.xcfilelist
 # Vendor build artifacts
 .bundle.hash
 
+# Retired A2UI build outputs (#182109). Existing Git installs keep these generated
+# files; unignored, they make `openclaw update` refuse the checkout as dirty.
+vendor/a2ui/renderers/lit/dist/
+src/canvas-host/a2ui/*.bundle.js
+src/canvas-host/a2ui/*.map
+extensions/canvas/src/host/a2ui/*.bundle.js
+extensions/canvas/src/host/a2ui/*.map
+
 # fastlane (iOS)
 apps/ios/fastlane/README.md
 apps/android/fastlane/README.md
@@ -219,6 +227,9 @@ analysis/
 /data/rtt.jsonl
 extensions/qa-lab/web/dist/
 
+# Target-specific offline node runtime dependency inputs
+/node-runtime-dependencies/
+
 # Generated bundled plugin runtime dependency manifests
 extensions/**/.openclaw-runtime-deps.json
 extensions/**/.openclaw-runtime-deps-stamp.json
@@ -233,3 +244,6 @@ extensions/discord/assets/embedded-app-sdk.mjs
 
 # Pinned Swift lint/format tools installed by scripts/install-swift-tools.sh
 .build/
+
+# Live thinking-probe records are local evidence; PRs summarize them.
+extensions/*/probes/

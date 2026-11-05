@@ -1,6 +1,6 @@
-// Covers the Windows ACL remediation facade used by security fixes.
+import { createIcaclsResetCommand, formatIcaclsResetCommand } from "@openclaw/fs-safe/advanced";
+// Covers Windows ACL command construction used by security fixes.
 import { describe, expect, it } from "vitest";
-import { createIcaclsResetCommand, formatIcaclsResetCommand } from "./windows-acl.js";
 
 const DEFAULT_ICACLS = "C:\\Windows\\System32\\icacls.exe";
 

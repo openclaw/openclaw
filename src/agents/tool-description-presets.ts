@@ -22,6 +22,7 @@ export const SUGGEST_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for ope
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
 export const SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY =
   "Save, improve, archive, and restore your learned skills.";
+export const SKILL_LIBRARY_TOOL_DISPLAY_SUMMARY = "Author skills in the personal library";
 
 export function describeAgentsListTool(sessionsSpawnAvailable: boolean): string {
   return sessionsSpawnAvailable
@@ -161,7 +162,7 @@ export function describeSessionsSpawnTool(options?: {
     visibilityLine,
     ...(options?.swarmEnabled ? [SESSIONS_SPAWN_COLLECTOR_GUIDANCE] : []),
     "Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message.",
-    ...(options?.acpAvailable === false
+    ...(options?.acpAvailable === false || options?.agentIdGuidance
       ? []
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
     describeSubagentSpawnContext(options?.subagentThreadAvailable === true),

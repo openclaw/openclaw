@@ -1,12 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
-import * as toolCallRepair from "../../../packages/tool-call-repair/src/index.js";
+import { afterEach, expect, it, vi } from "vitest";
+import * as toolCallRepair from "../../../packages/tool-call-repair/src/payload.js";
 import { assistantVisibleTextFilters, plainToolCallTextFilter } from "./assistant-visible-text.js";
-import * as codeRegions from "./code-regions.js";
+import * as codeRegions from "./code-ranges.js";
 import { findCodeRegions } from "./code-regions.js";
-import { createTextProjection } from "./text-projection.js";
+import { createTextProjection, type TextFilter } from "./text-projection.js";
 
 const reference = (text: string) =>
   toolCallRepair.stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions });
+
+function appendChunks(chunks: readonly string[], filters: readonly TextFilter[]) {
+  const projection = createTextProjection(filters);
+  for (const chunk of chunks) {
+    projection.append(chunk);
+  }
+  return projection;
+}
+
+afterEach(() => vi.restoreAllMocks());
 
 const samples = [
   '[tool:read] {}\n\n[outer [inner]\nmore\nlabel](/url "title\n`x\n[tool:read] {}\nx`")',
@@ -48,106 +58,60 @@ const samples = [
   "Intro\n\n[reference]:\n    /example\n\n[tool:read] {}\nDone.",
 ];
 
-describe("plainToolCallTextFilter streamed projection", () => {
-  it("extends protection when an indented code block grows after a whitespace chunk", () => {
-    const chunks = ["    [tool:read] {}\n", "    ", "[tool:write] {}\n"];
-    const source = chunks.join("");
-    const projection = createTextProjection([plainToolCallTextFilter]);
+it.each([
+  ["indented code after whitespace", ["    [tool:read] {}\n", "    ", "[tool:write] {}\n"], ""],
+  ["list-owned fence", ["- ```text\n  [tool:read] {}", "\n  [tool:write] {}\n"], "  "],
+] as const)("refreshes protection for a growing %s", (_name, chunks, indent) => {
+  const projection = appendChunks(chunks, [plainToolCallTextFilter]);
+  expect(projection.text).toBe(reference(chunks.join("")));
+  expect(projection.text).toContain(`${indent}[tool:read] {}`);
+  expect(projection.text).toContain(`${indent}[tool:write] {}`);
+});
 
-    for (const chunk of chunks) {
-      projection.append(chunk);
-    }
-
-    expect(projection.text).toBe(reference(source));
-    expect(projection.text).toContain("[tool:read] {}");
-    expect(projection.text).toContain("[tool:write] {}");
-  });
-
-  it("refreshes cached ranges when a list-owned fence grows", () => {
-    const chunks = ["- ```text\n  [tool:read] {}", "\n  [tool:write] {}\n"];
-    const source = chunks.join("");
-    const projection = createTextProjection([plainToolCallTextFilter]);
-
-    for (const chunk of chunks) {
-      projection.append(chunk);
-    }
-
-    expect(projection.text).toBe(reference(source));
-    expect(projection.text).toContain("  [tool:read] {}");
-    expect(projection.text).toContain("  [tool:write] {}");
-  });
-
-  it("bounds plain-tool-call parse work for citation replies in token-sized deltas", () => {
-    const source = [
-      "Here is the summary.",
-      ...Array.from(
-        { length: 600 },
-        (_value, index) => `[${index + 1}] Ordinary sentence with words and periods.`,
-      ),
-      "",
-    ].join("\n");
+const citations = Array.from(
+  { length: 600 },
+  (_, i) => `[${i + 1}] Ordinary sentence with words and periods.`,
+).join("\n");
+const continuation = `\n\n${"An ordinary explanation continues here.\n".repeat(128)}`;
+it.each([
+  ["citations", `Here is the summary.\n${citations}\n`, false],
+  ["fenced JSON", '```json\n{"name":"example","deps":{"demo":"1.0"}}\n```' + continuation, true],
+  ["fenced tool call", '```text\n[tool:read] {"path":"a.ts"}\n```' + continuation, true],
+  ["unterminated fence", '```text\n[tool:read] {"path":"a.ts"}' + continuation, true],
+] as const)(
+  "bounds sanitizer work for %s in token-sized deltas",
+  (_name, source, includeRegions) => {
     const strip = vi.spyOn(toolCallRepair, "stripPlainTextToolCallBlocks");
-    try {
-      const projection = createTextProjection(assistantVisibleTextFilters("delivery", true));
-      for (let offset = 0; offset < source.length; offset += 4) {
-        projection.append(source.slice(offset, offset + 4));
-      }
-      expect(projection.text).toBe(source.trimEnd());
-      // Count the canonical precheck too: ordinary citations no longer require Markdown parsing.
-      const parsedCharacters = strip.mock.calls.reduce(
-        (total, [parsed]) => total + parsed.length,
-        0,
-      );
-      expect(parsedCharacters).toBeLessThan(source.length * 8);
-    } finally {
-      strip.mockRestore();
-    }
-  });
+    const regions = includeRegions ? vi.spyOn(codeRegions, "findCodeRegions") : undefined;
+    const projection = appendChunks(
+      source.match(/[\s\S]{1,4}/g) ?? [],
+      assistantVisibleTextFilters("delivery", true),
+    );
+    expect(projection.text).toBe(source.trimEnd());
+    const parsed = [...strip.mock.calls, ...(regions?.mock.calls ?? [])];
+    const parsedCharacters = parsed.reduce((total, [text]) => total + text.length, 0);
+    expect(parsedCharacters).toBeLessThan(source.length * 8);
+  },
+);
 
-  it.each([
-    ["fenced JSON", '```json\n{"name":"example","deps":{"demo":"1.0"}}\n```'],
-    ["fenced tool call", '```text\n[tool:read] {"path":"a.ts"}\n```'],
-    ["unterminated fence", '```text\n[tool:read] {"path":"a.ts"}'],
-  ])("bounds sanitizer work after %s in token-sized deltas", (_name, example) => {
-    const source = `${example}\n\n${"An ordinary explanation continues here.\n".repeat(128)}`;
-    const strip = vi.spyOn(toolCallRepair, "stripPlainTextToolCallBlocks");
-    const regions = vi.spyOn(codeRegions, "findCodeRegions");
-    try {
-      const projection = createTextProjection(assistantVisibleTextFilters("delivery", true));
-      for (let offset = 0; offset < source.length; offset += 4) {
-        projection.append(source.slice(offset, offset + 4));
-      }
-      expect(projection.text).toBe(source.trimEnd());
-      const parsedCharacters = [...strip.mock.calls, ...regions.mock.calls].reduce(
-        (total, [parsed]) => total + parsed.length,
-        0,
-      );
-      expect(parsedCharacters).toBeLessThan(source.length * 8);
-    } finally {
-      strip.mockRestore();
-      regions.mockRestore();
-    }
-  });
+it("rechecks retired code markers after a source replacement", () => {
+  const projection = createTextProjection([plainToolCallTextFilter]);
+  const call = '[tool:read] {"path":"a.ts"}';
+  const fenced = `\`\`\`text\n${call}\n\`\`\`\n`;
+  expect(projection.append(fenced).text).toBe(fenced);
+  expect(projection.replace(`${call}\nDone.`).text).toBe("Done.");
+  expect(projection.replace(fenced).text).toBe(fenced);
+  expect(projection.append(`${call}\nDone.`).text).toBe(`${fenced}Done.`);
+});
 
-  it("rechecks retired code markers after a source replacement", () => {
+it.each(samples)("matches the canonical strip while streaming %#", (source) => {
+  for (const chunkSize of [1, 3, 7]) {
     const projection = createTextProjection([plainToolCallTextFilter]);
-    const call = '[tool:read] {"path":"a.ts"}';
-    const fenced = `\`\`\`text\n${call}\n\`\`\`\n`;
-    expect(projection.append(fenced).text).toBe(fenced);
-    expect(projection.replace(`${call}\nDone.`).text).toBe("Done.");
-    expect(projection.replace(fenced).text).toBe(fenced);
-    expect(projection.append(`${call}\nDone.`).text).toBe(`${fenced}Done.`);
-  });
-
-  it.each(samples)("matches the canonical strip while streaming %#", (source) => {
-    for (const chunkSize of [1, 3, 7]) {
-      const projection = createTextProjection([plainToolCallTextFilter]);
-      let accumulated = "";
-      for (let offset = 0; offset < source.length; offset += chunkSize) {
-        accumulated += source.slice(offset, offset + chunkSize);
-        projection.append(source.slice(offset, offset + chunkSize));
-        expect(projection.text).toBe(reference(accumulated));
-      }
+    let accumulated = "";
+    for (let offset = 0; offset < source.length; offset += chunkSize) {
+      accumulated += source.slice(offset, offset + chunkSize);
+      projection.append(source.slice(offset, offset + chunkSize));
+      expect(projection.text).toBe(reference(accumulated));
     }
-  });
+  }
 });

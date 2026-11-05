@@ -1,4 +1,7 @@
-import { isSessionDisplayMetadataPatch } from "../lib/sessions/patch.ts";
+import { t } from "../i18n/index.ts";
+import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
+import "../lib/sessions/session-mutation-operations.runtime.ts";
+import { isSessionDeferredPatch, type SessionPatchOptions } from "../lib/sessions/patch.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import type {
   SidebarSessionMutationResult,
@@ -9,6 +12,8 @@ import { requireSessionMutationAccess } from "./session-organizer-batch-mutation
 import type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
 import { withSessionWorkspaceRecovery } from "./session-workspace-recovery.runtime.ts";
 
+registerSessionOrganizationSharedEnglish();
+
 export async function patchSession(
   host: SessionActionHost,
   session: SessionActionRow,
@@ -17,6 +22,8 @@ export async function patchSession(
   refresh: {
     deferListRefresh?: boolean;
     sessionScope?: boolean;
+    onConfirmed?: SessionPatchOptions["onConfirmed"];
+    onDeferredSettled?: SessionPatchOptions["onDeferredSettled"];
     /** Return true when the caller presents this attempt's rejection locally. */
     handleError?: (error: unknown) => boolean;
   } = {},
@@ -37,7 +44,7 @@ export async function patchSession(
   ) {
     host.sessionData.publishSessionMutationError(
       scope,
-      "Session lifecycle action requires a durable session identity.",
+      t("sessionsView.lifecycleIdentityRequired"),
     );
     return "failed";
   }
@@ -45,7 +52,7 @@ export async function patchSession(
     !requireSessionMutationAccess(host, scope, {
       method: "sessions.patch",
       params: requestParams,
-      allowDeferred: isSessionDisplayMetadataPatch(patch),
+      allowDeferred: isSessionDeferredPatch(patch),
       sessionScope: refresh.sessionScope,
       session,
     })
@@ -53,11 +60,28 @@ export async function patchSession(
     return "failed";
   }
   try {
+    const snapshot = scope.gateway.snapshot;
+    const queuedArchive =
+      patch.archived === true &&
+      (snapshot.phase !== "connected" ||
+        snapshot.deferredIntentCount ||
+        snapshot.deferredIntentDraining);
     const request = () =>
       scope.sessions.patch(session.key, patch, {
         agentId,
         ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
         ...(refresh.deferListRefresh ? { deferListRefresh: true } : {}),
+        ...(queuedArchive || refresh.onConfirmed
+          ? {
+              onConfirmed: (result) => {
+                if (queuedArchive) {
+                  host.pruneSidebarSessionEntry(session.key);
+                }
+                refresh.onConfirmed?.(result);
+              },
+            }
+          : {}),
+        ...(refresh.onDeferredSettled ? { onDeferredSettled: refresh.onDeferredSettled } : {}),
       });
     const patched =
       patch.archived === true
@@ -81,8 +105,6 @@ export async function patchSession(
     if ("queued" in patched) {
       return "completed";
     }
-    // Personal pin references are independent of the shared session's pinnedAt.
-    // Retire this profile's reference only after the archive commits.
     if (patch.pinned === false || patch.archived === true) {
       host.pruneSidebarSessionEntry(session.key);
     }

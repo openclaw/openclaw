@@ -8,8 +8,8 @@ authoring dates (2026), not package publication dates.
 
 ## Unreleased
 
-- **Breaking:** retire A2UI widgets and remove the generic registered board-content schemas, `registeredContentKind`, and renderer labels. Stored A2UI widgets are backed up and deleted by Doctor; recreate them as HTML widgets.
-- Advance the wire protocol to v5 for the closed board-schema removal. General clients must use v5; authenticated nodes and lightweight probes retain the N-1 window at v4. Current native clients and Control UI derive their negotiation levels from the protocol owner.
+- **Breaking:** retire A2UI widgets and the generic registered-renderer API. Stored A2UI widgets are backed up and deleted by Doctor; recreate them as HTML widgets. The v4 registered-content wire declarations remain for parsing older messages and reporting the retired operation, not for rendering or persistence.
+- Keep wire protocol v4 after widget retirement. The retired `registered` widget-put shape remains wire-valid but returns an actionable HTML replacement error without mutating the board; surviving widget responses retain v4-compatible shapes. General clients remain on v4, and authenticated nodes and lightweight probes retain the v3 compatibility window.
 
 ## Deferred to a later wire version
 
@@ -17,32 +17,26 @@ Changes that are agreed but intentionally NOT shipped, because they alter the
 negotiated shape of the current wire version. A version bump is an explicit
 breaking event for third-party clients (see "Notes for external versioning"), so
 each entry stays here until its owner approves the specific removal and lands it
-with client follow-through. The v5 bump below covers only A2UI retirement. Add an
-entry whenever you defer a shape change; remove it when that change lands.
+with client follow-through. Add an entry whenever you defer a shape change;
+remove it when that change lands.
 
 - **Remove `execSecurity` / `execAsk` from `SessionsPatchMutation`.** Retired in
   favour of `permissionMode` (PR #132740, landed `a151c1e0d35`). The properties
   remain declared in the closed mutation schema so existing callers keep a
   valid request shape; the applier rejects either field before any mutation with
   guidance naming `permissionMode` and `/exec`. Deleting the properties changes
-  the closed-object shape, so this separate retirement remains deferred beyond v5. Code marker:
+  the closed-object shape, so this separate retirement remains deferred. Code marker:
   `packages/gateway-protocol/src/schema/sessions-patch.ts`.
 
-## Protocol v5 (current)
+## Protocol v4 (current)
 
-Introduced 2026-10-24 to retire registered board-widget content. `BoardWidgetContent`
-and `BoardWidgetPutContent` no longer accept `kind: "registered"`; board snapshots
-no longer expose the registered content owner, `registeredContentKind`, or
-`kindLabel`. The generic `registerBoardWidgetContentKind` plugin API is removed.
-Use HTML widgets or the existing native plugin widget surface.
+Introduced 2026-05-07 (commit `330ba1f`).
 
-Compatibility window (`version.ts`):
-- `MIN_CLIENT_PROTOCOL_VERSION = 5` — general clients must speak v5.
-- `MIN_NODE_PROTOCOL_VERSION = 4` and `MIN_PROBE_PROTOCOL_VERSION = 4` — nodes and probes retain the N-1 window during rolling upgrades.
-
-## Protocol v4
-
-Introduced 2026-05-07 (commit `330ba1f`). The preceding stable wire version.
+The A2UI retirement briefly bumped the development protocol to v5 on 2026-10-24
+(`#182109`); that bump was reverted to keep existing v4 apps connected. The
+registered widget-put request is recognized only to report its retirement. No
+registered renderer, plugin registration API, or persisted registered content
+is restored.
 
 Wire contract:
 - Frame envelopes: `req` / `res` / `event`, discriminated on `type`.
@@ -70,7 +64,7 @@ Compatibility window (`version.ts`):
   rolling upgrades. Added 2026-07-06 (#101109).
 - A transient v5 (2026-05-16, `07f05e9`) renamed `inboundTurnKind` -> `inboundEventKind`;
   it was reverted the next day (2026-05-17, `ad155fb`, "restore v4 message action
-  protocol"). That v5 experiment never shipped as a stable ceiling; v4 remained current until the A2UI retirement above.
+  protocol"). That v5 experiment never shipped as a stable ceiling.
 
 ## Protocol v3
 

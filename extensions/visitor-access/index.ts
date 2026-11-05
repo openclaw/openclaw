@@ -1,7 +1,7 @@
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import { createVisitorAccessReader } from "./src/access.js";
 import { VisitorPolicyClient } from "./src/cloudflare.js";
-import { visitorConfigSchema, visitorPluginSchema } from "./src/config.js";
+import { visitorConfigSchema, visitorLimitsSchema, visitorPluginSchema } from "./src/config.js";
 import { visitorErrorText } from "./src/errors.js";
 import type { VisitorGrant } from "./src/grant-record.js";
 import { resolveVisitorSignInUrl } from "./src/invite-result.js";
@@ -9,6 +9,7 @@ import { profileUsesVisitorRole, resolveVisitorRole } from "./src/roles.js";
 import { visitorRuntimeStore, type VisitorRuntime } from "./src/runtime.js";
 import { createVisitorTools } from "./src/tools.js";
 import { VisitorAccessService } from "./src/visitors.js";
+import { VisitorWelcome, WELCOME_ENSURE_METHOD } from "./src/welcome.js";
 
 function registerVisitorPlugin(api: OpenClawPluginApi): void {
   if (api.registrationMode === "cli-metadata") {
@@ -35,7 +36,8 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
     overflowPolicy: "reject-new",
   });
   const service = new VisitorAccessService(
-    config,
+    () =>
+      visitorLimitsSchema.parse(api.runtime.config.current().plugins?.entries?.[api.id]?.config),
     store,
     new VisitorPolicyClient(
       config,
@@ -70,6 +72,22 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
     readSignInUrl: () => resolveVisitorSignInUrl(api.runtime.config.current()),
     errorText: (error) => visitorErrorText(error, config.apiToken),
   };
+
+  // Read only while setting up a welcome session, at most once per invitation.
+  const welcome = new VisitorWelcome(
+    service,
+    api.runtime.gateway,
+    () => api.runtime.config.current({ clone: true }),
+    api.logger,
+  );
+  // Pulled by the guest Control UI on load; params select nothing (see README "Welcome session").
+  api.registerGatewayMethod(
+    WELCOME_ENSURE_METHOD,
+    async ({ client, respond }) => {
+      respond(true, await welcome.ensure(client));
+    },
+    { scope: "operator.sessions.write", profileAccess: "required" },
+  );
 
   api.registerGatewayAccessPolicy({
     resume({ profile, grantId }) {
@@ -152,5 +170,11 @@ export default definePluginEntry({
   name: "Visitor Access",
   description: "Internal Cloudflare Access visitor grants with managed expiry.",
   configSchema: visitorPluginSchema,
+  reload: {
+    hotPrefixes: [
+      "plugins.entries.visitor-access.config.maxVisitors",
+      "plugins.entries.visitor-access.config.defaultTtlDays",
+    ],
+  },
   register: registerVisitorPlugin,
 });

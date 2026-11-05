@@ -119,6 +119,8 @@ Exa, Firecrawl, Tavily, and Voyage use the corresponding monochrome `exa.svg`, `
 
 TypeSafe AI preserves the single-path header mark from [typesafe.ai](https://typesafe.ai/), with its original `0 0 16.487 24` view box. The fill is normalized to `currentColor`; geometry is unchanged.
 
+Bifrost, Levanto, oMLX, and SubQ preserve their first-party marks: the [getbifrost.ai](https://getbifrost.ai/) header symbol without its wordmark; the leading L of the [levanto.ai](https://levanto.ai/) header wordmark, which its favicon also uses; the [oMLX penguin](https://github.com/jundot/omlx/blob/3df94603c047ec77f5381d11d1d6daff75794870/apps/omlx-web/omlx_web/static/logo-light.svg) (Apache-2.0) with its original transform and without its dark-mode style; and the [subq.ai favicon](https://subq.ai/favicon.svg), whose five squares are combined into one path. Fills are normalized to `currentColor`; geometry and view boxes are unchanged.
+
 ## OpenClaw action glyphs
 
 Browser, Canvas, Diffs, and the memory family preserve the approved shapes from [`icon-data-tools.ts`](../ui/src/components/icon-data-tools.ts). The optional overrides preserve Intent, memory store/forget, file fetch/write, and directory list/fetch geometry. Lobster preserves both progress-claw paths, with a solid fill and the jaw’s resting `rotate(-10 8.6 11)` transform from [`working-indicator.css`](../ui/src/styles/chat/working-indicator.css). Linux Node reuses the existing platform silhouette from [`brand-icons.ts`](../ui/src/pages/apps/brand-icons.ts).
@@ -140,7 +142,7 @@ Other defaults are OpenClaw functional glyphs drawn for the 24-unit activity gri
 | Compute and location    | `crabbox`, `cua-computer`, `geolocation`, `gmi`, `radius`, `sglang`                                              |
 | Security and migration  | `migrate-claude`, `migrate-hermes`, `mxc`, `openshell`, `policy`, `visitor-access`                               |
 | Audio and media         | `gradium`, `inworld`, `kie`, `senseaudio`, `talk-voice`, `tts-local-cli`, `voice-call`, `vydra`                  |
-| Utilities and reports   | `parallel`, `qa-channel`, `qa-lab`, `team-reports`, `tokenjuice`                                                 |
+| Utilities and reports   | `autoreview`, `parallel`, `qa-channel`, `qa-lab`, `team-reports`, `tokenjuice`                                   |
 
 ## License notices
 

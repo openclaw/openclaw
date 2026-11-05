@@ -1,4 +1,5 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveDefaultMSTeamsAccountId } from "./accounts.js";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
@@ -16,11 +17,6 @@ import {
   type GraphResponse,
 } from "./graph.js";
 import { getMSTeamsReactionEmoji, resolveMSTeamsReactionEmoji } from "./reaction-types.js";
-
-type GraphPinnedMessage = {
-  id?: string;
-  message?: GraphMessage;
-};
 
 function stripTargetPrefix(raw: string): string {
   return raw
@@ -194,7 +190,10 @@ export async function listPinsMSTeams(params: {
   to: string;
 }) {
   const { token, basePath } = await resolveGraphPinContext(params, "list");
-  const { items } = await fetchAllGraphPages<GraphPinnedMessage>({
+  const { items } = await fetchAllGraphPages<{
+    id?: string;
+    message?: GraphMessage;
+  }>({
     token,
     path: `${basePath}/pinnedMessages?$expand=message`,
     maxPages: LIST_PINS_MAX_PAGES,
@@ -209,27 +208,8 @@ export async function listPinsMSTeams(params: {
   };
 }
 
-type GraphReaction = {
-  reactionType?: string;
-  user?: { user?: { id?: string; displayName?: string | null } | null } | null;
-  createdDateTime?: string;
-};
-
-type GraphMessageWithReactions = GraphMessage & {
-  reactions?: GraphReaction[];
-};
-
 type ReactMessageMSTeamsParams = MSTeamsMessageTarget & {
   reactionType: string;
-};
-
-type ReactionSummary = {
-  reactionType: string;
-  /** Display name for the reaction (matches reactionType for known types). */
-  name: string;
-  emoji?: string;
-  count: number;
-  users: Array<{ id: string; displayName?: string }>;
 };
 
 // Graph reaction writes use beta and prefer delegated auth, falling back to
@@ -265,7 +245,15 @@ export function unreactMessageMSTeams(params: ReactMessageMSTeamsParams): Promis
 export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
   const { token, ...conv } = await resolveGraphMessageContext(params);
   const path = resolveMessagePath(conv, params);
-  const msg = await fetchGraphJson<GraphMessageWithReactions>({ token, path });
+  const msg = await fetchGraphJson<
+    GraphMessage & {
+      reactions?: {
+        reactionType?: string;
+        user?: { user?: { id?: string; displayName?: string | null } | null } | null;
+        createdDateTime?: string;
+      }[];
+    }
+  >({ token, path });
 
   const grouped = new Map<
     string,
@@ -289,7 +277,14 @@ export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
     }
   }
 
-  const reactions: ReactionSummary[] = Array.from(grouped.entries()).map(([type, group]) => ({
+  const reactions: {
+    reactionType: string;
+    /** Display name for the reaction (matches reactionType for known types). */
+    name: string;
+    emoji?: string;
+    count: number;
+    users: Array<{ id: string; displayName?: string }>;
+  }[] = Array.from(grouped.entries()).map(([type, group]) => ({
     reactionType: type,
     name: type,
     emoji: getMSTeamsReactionEmoji(type),
@@ -342,7 +337,8 @@ export async function searchMessagesMSTeams(params: {
   const top = Number.isFinite(rawLimit)
     ? Math.min(Math.max(Math.floor(rawLimit), 1), SEARCH_MAX_LIMIT)
     : SEARCH_DEFAULT_LIMIT;
-  const query = params.query.trim().toLowerCase();
+  // Canonical forms compare equal here; message text keeps its original spelling.
+  const query = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
   const messages: Awaited<ReturnType<typeof getMessageMSTeams>>[] = [];
   let nextUrl: string | undefined;
   let truncated = false;
@@ -357,7 +353,10 @@ export async function searchMessagesMSTeams(params: {
 
     for (const message of response.value ?? []) {
       const searchText = normalizeSearchText(message);
-      if (searchText.toLowerCase().includes(query) && matchesSearchSender(message, params.from)) {
+      if (
+        normalizeLowercaseStringOrEmpty(searchText).normalize("NFC").includes(query) &&
+        matchesSearchSender(message, params.from)
+      ) {
         if (messages.length >= top) {
           return { messages, truncated: true };
         }

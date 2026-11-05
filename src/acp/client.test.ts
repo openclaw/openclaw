@@ -1,8 +1,9 @@
 import { ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import {
-  AgentSideConnection,
+  agent as createAgentApp,
+  methods,
   ndJsonStream,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
@@ -39,6 +40,15 @@ const sanitizedTitle = 'exec: [permission] Allow "safe"? (y/N) \\nnext (exec)';
 function request(toolCall: ToolCall, options = onceOptions): RequestPermissionRequest {
   return { sessionId: "session-1", toolCall: { toolCallId: "tool-1", ...toolCall }, options };
 }
+function waitForText(stream: PassThrough, text: string) {
+  const ready = createDeferred();
+  stream.on("data", (chunk: Buffer) => {
+    if (chunk.toString().includes(text)) {
+      ready.resolve();
+    }
+  });
+  return ready.promise;
+}
 
 describe("interactive ACP permissions", () => {
   const cleanups: Array<() => Promise<void>> = [];
@@ -56,11 +66,7 @@ describe("interactive ACP permissions", () => {
     const output = Object.assign(new PassThrough(), { isTTY: true });
     const fromClient = new PassThrough();
     const toClient = new PassThrough();
-    const agent = new ChildProcess();
-    Object.defineProperties(agent, {
-      stdin: { value: fromClient },
-      stdout: { value: toClient },
-    });
+    const agent = Object.assign(new ChildProcess(), { stdin: fromClient, stdout: toClient });
     const closeServer = () => {
       if (agent.exitCode !== null) {
         return;
@@ -87,52 +93,34 @@ describe("interactive ACP permissions", () => {
     const question = vi.spyOn(readline.Interface.prototype, "question");
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "log").mockImplementation(() => {});
-    const promptReady = createDeferred();
-    const permissionReady = createDeferred();
+    const promptReady = waitForText(stdout, "> ");
+    const permissionReady = waitForText(output, "[permission] Allow");
     const result = createDeferred<RequestPermissionResponse>();
-    stdout.on("data", (chunk: Buffer) => {
-      if (chunk.toString().includes("> ")) {
-        promptReady.resolve();
-      }
-    });
-    output.on("data", (chunk: Buffer) => {
-      if (chunk.toString().includes("[permission] Allow")) {
-        permissionReady.resolve();
-      }
-    });
-    const server = new AgentSideConnection(
-      (connection) => ({
-        async initialize(params) {
-          return { protocolVersion: params.protocolVersion, agentCapabilities: {} };
-        },
-        async authenticate() {},
-        async newSession() {
-          return { sessionId: permission.sessionId };
-        },
-        async prompt() {
-          const response = await connection.requestPermission(permission);
-          result.resolve(response);
-          return { stopReason: "end_turn" };
-        },
-        async cancel() {},
-      }),
-      ndJsonStream(
-        new WritableStream<Uint8Array>({
-          write(bytes) {
-            toClient.write(bytes);
-          },
-        }),
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            fromClient.on("data", (bytes: Buffer) => controller.enqueue(bytes));
-            fromClient.once("end", () => {
-              controller.close();
-              closeServer();
-            });
-          },
-        }),
-      ),
-    );
+    const server = createAgentApp()
+      .onRequest(methods.agent.initialize, ({ params }) => ({
+        protocolVersion: params.protocolVersion,
+        agentCapabilities: {},
+      }))
+      .onRequest(methods.agent.session.new, () => ({ sessionId: permission.sessionId }))
+      .onRequest(methods.agent.session.prompt, async ({ client }) => {
+        const response = await client.request(methods.client.session.requestPermission, permission);
+        result.resolve(response);
+        return { stopReason: "end_turn" };
+      })
+      .connect(
+        ndJsonStream(
+          Writable.toWeb(toClient),
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              fromClient.on("data", (bytes: Buffer) => controller.enqueue(bytes));
+              fromClient.once("end", () => {
+                controller.close();
+                closeServer();
+              });
+            },
+          }),
+        ),
+      );
     const work = runAcpClientInteractive({
       cwd: "/tmp/openclaw-acp-cwd",
       serverCommand: "fixture-acp",
@@ -147,7 +135,7 @@ describe("interactive ACP permissions", () => {
       }
     });
     await awaitGateBeforeSettlement(
-      promptReady.promise,
+      promptReady,
       work,
       "ACP client stopped before its interactive prompt",
     );
@@ -156,7 +144,7 @@ describe("interactive ACP permissions", () => {
       input,
       question,
       log,
-      permissionReady: permissionReady.promise,
+      permissionReady,
       result: result.promise,
       async finish() {
         input.end();

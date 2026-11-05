@@ -238,6 +238,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
         entry,
         undefined,
         admission,
+        "reload",
         undefined,
         undefined,
         this.transcriptMutationAt,

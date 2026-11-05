@@ -312,8 +312,7 @@ export function handleDesktopObserveUpgrade(
             resumeTimer = undefined;
             desktopSocket.resume();
           }
-        }, RESUME_CHECK_MS);
-        resumeTimer.unref?.();
+        }, RESUME_CHECK_MS).unref();
       });
       if (browserRemainder.length > 0) {
         forwardClientChunk(browserRemainder);

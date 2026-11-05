@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { SessionDiffFile } from "../../../packages/gateway-protocol/src/index.js";
 import { workerProtocolObject } from "../../worker/protocol-record.js";
+import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -10,6 +11,7 @@ export const WorkerWorkspaceGitHistorySchema = workerProtocolObject({
   baseCommit: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u),
   headCommit: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u),
   descendsFromBase: z.boolean(),
+  unavailableReason: z.string().max(512).optional(),
 });
 export type WorkerWorkspaceGitHistory = z.infer<typeof WorkerWorkspaceGitHistorySchema>;
 
@@ -18,6 +20,12 @@ export const WORKER_RESULT_REF_PREFIX = "refs/openclaw/worker-results";
 export const WORKER_RESULT_CANDIDATE_REF_PREFIX = "refs/openclaw/worker-result-candidates";
 export const WORKER_RESULT_CLEANUP_REF_PREFIX = "refs/openclaw/worker-result-cleanup";
 export const STAGED_RESULT_MESSAGE = "OpenClaw worker workspace result";
+
+/** The current manifest was rejected before writing import input or publishing a result ref. */
+export class WorkspaceStageCurrentPathError extends Error {
+  readonly code = "WORKSPACE_STAGE_CURRENT_PATH_UNSAFE";
+}
+
 const BASE_REFRESH_REF_PREFIX = "refs/openclaw/workspace-base-refresh";
 const BASE_REFRESH_REF = /^refs\/openclaw\/workspace-base-refresh\/[a-f0-9]{64}$/u;
 
@@ -55,6 +63,7 @@ export type StagedWorkerWorkspaceInventory = {
   currentManifestRef: string;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
+  reconciliation: WorkspaceReconciliationPreparation;
   changed: boolean;
   changedEntries: WorkerWorkspaceManifestEntry[];
   objectsByPath: Map<string, { mode: string; objectId: string }>;

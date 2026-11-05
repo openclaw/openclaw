@@ -12,6 +12,7 @@ import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { validateWorkerComputerParams } from "../../packages/gateway-protocol/src/index.js";
+import { RequestFrameSchema } from "../../packages/gateway-protocol/src/schema/frames.js";
 import {
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -41,10 +42,7 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import {
-  type WorkerTurnAdmissionParams,
-  WorkerTurnAdmissionRequestFrameSchema,
-} from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import * as workerTurnAdmission from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -63,6 +61,7 @@ import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { hasModelFallbackStop } from "../agents/failover-error.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
+import { createUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -87,6 +86,7 @@ import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js"
 import {
   registerWorkerBackgroundExecLifecycleTests,
   registerWorkerExecEnvironmentFinalizationTests,
+  registerWorkerManagedExecLifecycleTests,
 } from "./worker-runtime-background-exec.suite.js";
 import { registerWorkerGitHubFailureTests } from "./worker-runtime-github-failures.suite.js";
 import { registerWorkerNativeInferenceTests } from "./worker-runtime-native-inference.suite.js";
@@ -99,6 +99,9 @@ import {
   createWorkerToolSurfaceForTest,
   createWorkerHelloForTest,
   createWorkerConnectionForTest,
+  buildWorkerExecToolCall,
+  WorkerExecApprovalFixture,
+  type WorkerExecFixtureOptions,
 } from "./worker-tool-surface.test-support.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -199,20 +202,10 @@ type InferenceOutput = {
   event: (event: WorkerInferenceEventFrame["payload"]["event"]) => void;
   finish: (outcome: WorkerInferenceTerminalOutcome) => void;
 };
-const USAGE = {
-  input: 2,
-  output: 3,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 5,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const USAGE = createUsageFixture(2, 3, 5);
 
-type FakeGatewayOptions = {
+type FakeGatewayOptions = WorkerExecFixtureOptions & {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
-  backgroundCommand?: string;
-  backgroundYieldMs?: number;
-  execCommand?: string;
   execApprovals?: Parameters<typeof saveExecApprovals>[0];
   inferencePlans?: InferencePlan[];
   outageOnInferenceCancel?: boolean;
@@ -246,7 +239,7 @@ function assistantMessage(
   };
 }
 
-class FakeWorkerGateway {
+class FakeWorkerGateway extends WorkerExecApprovalFixture {
   config?: OpenClawConfig;
   toolSurface!: () => WorkerToolSurface;
   private readonly httpServer: Server;
@@ -268,7 +261,7 @@ class FakeWorkerGateway {
   readonly acceptedTranscriptRequests: WorkerTranscriptCommitParams[] = [];
   readonly liveEventRequests: WorkerLiveEventParams[] = [];
   readonly inferenceRequests: WorkerInferenceStartParams[] = [];
-  readonly turnAdmissionRequests: WorkerTurnAdmissionParams[] = [];
+  readonly turnAdmissionRequests: workerTurnAdmission.WorkerTurnAdmissionParams[] = [];
   readonly gatewayToolRequests: WorkerGatewayToolInvokeParams[] = [];
   readonly computerRequests: WorkerComputerParams[] = [];
   readonly applicationOrder: string[] = [];
@@ -286,6 +279,7 @@ class FakeWorkerGateway {
   }
 
   constructor(private readonly options: FakeGatewayOptions = {}) {
+    super(options);
     this.httpServer = createServer();
     this.webSocketServer = new WebSocketServer({ server: this.httpServer });
     this.webSocketServer.on("connection", (socket) => this.accept(socket));
@@ -341,25 +335,31 @@ class FakeWorkerGateway {
     if (Value.Check(WorkerLiveEventRequestFrameSchema, parsed)) {
       return this.handleLiveEvent(socket, parsed);
     }
-    if (Value.Check(WorkerTurnAdmissionRequestFrameSchema, parsed)) {
-      this.methods.push(parsed.method);
-      this.turnAdmissionRequests.push(structuredClone(parsed.params));
-      this.applicationOrder.push("admission");
-      const lastTranscript = this.acceptedTranscriptRequests.at(-1);
-      // This fixture starts with admitted input; only worker output advances its leaf.
-      this.reply(socket, parsed.id, {
-        outcome: "allow",
-        baseLeafId: lastTranscript ? `leaf-${lastTranscript.seq}` : "leaf-base",
-      });
-      return;
-    }
     if (Value.Check(WorkerInferenceStartRequestFrameSchema, parsed)) {
       return this.handleInference(socket, parsed);
     }
     if (Value.Check(WorkerInferenceCancelRequestFrameSchema, parsed)) {
       return this.handleInferenceCancel(socket, parsed);
     }
-    if (isRecord(parsed) && parsed.type === "req" && typeof parsed.id === "string") {
+    if (Value.Check(RequestFrameSchema, parsed)) {
+      if (
+        parsed.method === workerTurnAdmission.WORKER_TURN_ADMISSION_METHOD &&
+        workerTurnAdmission.validateWorkerTurnAdmissionParams(parsed.params)
+      ) {
+        this.methods.push(parsed.method);
+        this.turnAdmissionRequests.push(structuredClone(parsed.params));
+        this.applicationOrder.push("admission");
+        const lastTranscript = this.acceptedTranscriptRequests.at(-1);
+        // This fixture starts with admitted input; only worker output advances its leaf.
+        this.reply(socket, parsed.id, {
+          outcome: "allow",
+          baseLeafId: lastTranscript ? `leaf-${lastTranscript.seq}` : "leaf-base",
+        });
+        return;
+      }
+      if (this.handleExecApproval(parsed, (id, payload) => this.reply(socket, id, payload))) {
+        return;
+      }
       if (parsed.method === "worker.gatewayTool.cancel") {
         this.methods.push(parsed.method);
         this.send(socket, { type: "res", id: parsed.id, ok: true, payload: { cancelled: false } });
@@ -409,9 +409,8 @@ class FakeWorkerGateway {
         return;
       }
     }
-    const unsupported: unknown = parsed;
-    if (isRecord(unsupported) && typeof unsupported.method === "string") {
-      this.methods.push(unsupported.method);
+    if (isRecord(parsed) && typeof parsed.method === "string") {
+      this.methods.push(parsed.method);
     }
     socket.close(1008, "invalid-frame");
   }
@@ -689,31 +688,7 @@ class FakeWorkerGateway {
     output: InferenceOutput,
     options: { background: boolean; safe: boolean },
   ): void {
-    const toolCallId = "local-exec-call";
-    const args = options.background
-      ? {
-          // POSIX sleep avoids Node startup; Windows keeps the portable Node fixture.
-          command:
-            this.options.backgroundCommand ??
-            (process.platform === "win32"
-              ? `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
-                  "setInterval(() => undefined, 1000)",
-                )}`
-              : "exec sleep 60"),
-          ...(this.options.backgroundYieldMs === undefined
-            ? { background: true }
-            : { yieldMs: this.options.backgroundYieldMs }),
-        }
-      : {
-          command:
-            this.options.execCommand ??
-            (options.safe ? "wc -c" : "printf worker-local > local-proof.txt"),
-        };
-    this.sendToolCallTurn(output, {
-      args,
-      toolCallId,
-      toolName: "exec",
-    });
+    this.sendToolCallTurn(output, buildWorkerExecToolCall(this.options, options));
   }
 
   private sendToolCallTurn(output: InferenceOutput, tool: ToolCallPlan): void {
@@ -1381,123 +1356,13 @@ it.each(["oversized-text", "oversized-error"] as const)(
   },
 );
 
-it.each(["running", "completed", "cancelled", "ordinary-yield"] as const)(
-  "keeps completed-turn commands controllable in the managed environment (%s)",
-  async (scenario) => {
-    const processState = scenario === "ordinary-yield" ? "running" : scenario;
-    const { gateway, launch, workspaceDir } = await setup({
-      inferencePlans: [
-        "background-tool",
-        "text",
-        ...(processState === "cancelled" ? ["hold" as const] : []),
-        "process-poll",
-        ...(processState === "completed" ? [] : ["process-kill" as const]),
-        "text",
-      ],
-      ...(processState === "completed"
-        ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-release.cjs` }
-        : {}),
-      ...(scenario === "ordinary-yield" ? { backgroundYieldMs: 10 } : {}),
-    });
-    const releaseBackground = createDeferred();
-    let completionServer: Server | undefined;
-    if (processState === "completed") {
-      completionServer = createServer((_request, response) => {
-        void releaseBackground.promise.then(() => response.end("background-finished"));
-      });
-      const listening = once(completionServer, "listening");
-      completionServer.listen(0, "127.0.0.1");
-      await listening;
-      const address = completionServer.address();
-      if (!address || typeof address === "string") {
-        throw new Error("background completion server did not allocate a TCP port");
-      }
-      // An explicit response also releases a child that starts after the turn finishes.
-      // Filesystem watch notifications can be lost while this shared machine is busy.
-      await writeFile(
-        path.join(workspaceDir, "finish-on-release.cjs"),
-        `require('node:http').get('http://127.0.0.1:${address.port}', response => response.pipe(process.stdout));`,
-      );
-    }
-    const { send, cancel, waitResults, results, settled, scopeKey, close } = managedCommand();
-
-    try {
-      send(launch);
-      await waitResults(1);
-      expect(results[0]).toMatchObject({
-        turnId: launch.assignment.turnId,
-        result: { status: "completed" },
-        retainWorker: true,
-      });
-      const running = workerSessions();
-      expect(running).toHaveLength(1);
-      const sessionId = running[0]!.id;
-      const messages = gateway.messages;
-      expect(messages.at(-1)).toMatchObject({
-        role: "assistant",
-        content: [{ type: "text", text: expect.stringContaining("still running") }],
-      });
-      expect(JSON.stringify(messages.at(-1))).toContain(sessionId);
-      expect(gateway.inferenceRequests).toHaveLength(2);
-      expect(
-        gateway.liveEventRequests.findLast(({ event }) => event.kind === "assistant"),
-      ).toMatchObject({ event: { payload: { text: expect.stringContaining("still running") } } });
-      expect(settled).not.toHaveBeenCalled();
-      if (processState === "completed") {
-        releaseBackground.resolve();
-        await waitForExecScope(scopeKey);
-        await waitForFast(() => expect(workerSessions()).toHaveLength(0));
-        expect(settled).not.toHaveBeenCalled();
-      }
-
-      const nextTurnId = send(nextTurn(launch, gateway, 2));
-      if (processState === "cancelled") {
-        await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(3), {
-          timeout: 30_000,
-        });
-        cancel(nextTurnId);
-        await waitResults(2);
-        expect(results[1]).toMatchObject({
-          result: { status: "failed", reason: "turn-failed" },
-          retainWorker: true,
-        });
-        send(nextTurn(launch, gateway, 3));
-      }
-      const turnCount = processState === "cancelled" ? 3 : 2;
-      await waitResults(turnCount);
-      expect(gateway.connectionCount).toBe(turnCount);
-      const processResults = gateway.messages.filter(
-        (message) => message.role === "toolResult" && message.toolName === "process",
-      );
-      if (processState !== "completed") {
-        expect(processResults).toMatchObject([
-          { details: { status: "running", sessionId } },
-          { details: { status: "completed" } },
-        ]);
-      } else {
-        expect(processResults).toMatchObject([
-          {
-            content: [{ type: "text", text: expect.stringContaining("background-finished") }],
-            details: { status: "completed", exitCode: 0 },
-          },
-        ]);
-        expect(results[1]?.retainWorker).toBe(false);
-      }
-    } finally {
-      releaseBackground.resolve();
-      try {
-        await close();
-      } finally {
-        if (completionServer) {
-          await new Promise<void>((resolve, reject) => {
-            completionServer.close((error) => (error ? reject(error) : resolve()));
-          });
-        }
-      }
-    }
-    expect(workerSessions()).toHaveLength(0);
-  },
-);
+registerWorkerManagedExecLifecycleTests({
+  setup,
+  managedCommand,
+  nextTurn,
+  workerSessions,
+  waitForFast,
+});
 
 registerWorkerExecEnvironmentFinalizationTests({
   runExecProcess,

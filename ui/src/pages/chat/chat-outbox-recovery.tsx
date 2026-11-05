@@ -350,14 +350,6 @@ function preview(entry: RecoveryEntry) {
   }
   return t("chat.outboxRecoveryQueued");
 }
-function unconfirmed(entry: RecoveryEntry) {
-  return (
-    "id" in entry &&
-    entry.session.queue?.some(
-      (item) => (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed",
-    )
-  );
-}
 function details(entry: RecoveryEntry) {
   const session = "id" in entry ? entry.session : null;
   const text = "id" in entry ? entry.session.draft : entry.text;
@@ -381,7 +373,6 @@ function details(entry: RecoveryEntry) {
         : "",
       item.attachmentStorageError ? t("chat.outboxRecoveryAttachmentMissing") : "",
     ]),
-    unconfirmed(entry) ? t("chat.outboxRecoveryUnconfirmed") : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -434,11 +425,6 @@ function RecoveryRow(props: {
         {t(view().queued ? "chat.outboxRecoveryQueued" : "chat.outboxRecoveryDraft")}
       </span>
       <span class="chat-outbox-recovery__preview">{preview(props.entry)}</span>
-      {unconfirmed(props.entry) ? (
-        <span class="chat-outbox-recovery__warning" title={t("chat.outboxRecoveryUnconfirmed")}>
-          {t("chat.outboxRecoveryUnconfirmedLabel")}
-        </span>
-      ) : null}
       {view().source ? (
         <span class="chat-outbox-recovery__source">
           {t("chat.outboxRecoverySource", {

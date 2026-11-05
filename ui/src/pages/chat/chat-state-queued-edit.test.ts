@@ -7,10 +7,10 @@ import {
 } from "../../app/document-reload-guard.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
-import { createInitializationContext } from "./chat-pane.test-support.ts";
 import { enqueueChatMessage } from "./chat-queue.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR as storageError } from "./chat-send-support.ts";
+import { chatOfflineQueueStorageError as storageError } from "./chat-send-support.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
@@ -51,8 +51,8 @@ function createControllerFixture(withClient = false) {
 
 it.each([
   [conflict, conflict, null, null],
-  [conflict, storageError, null, storageError],
-  [historyError, storageError, historyError, storageError],
+  [conflict, storageError(), null, storageError()],
+  [historyError, storageError(), historyError, storageError()],
 ] as const)(
   "clears only edit feedback (%s, %s)",
   (lastError, chatError, expectedLastError, expectedChatError) => {

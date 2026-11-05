@@ -6,9 +6,9 @@ import {
 import { createOpenAiResponsesTextEvent } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 
 const checkpointWork = vi.hoisted(() => ({ characters: 0 }));
-vi.mock("../../packages/tool-call-repair/src/index.js", async (importOriginal) => {
+vi.mock("../../packages/tool-call-repair/src/payload.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../../packages/tool-call-repair/src/index.js")>();
+    await importOriginal<typeof import("../../packages/tool-call-repair/src/payload.js")>();
   return {
     ...actual,
     projectPlainTextToolCallBlocks(
@@ -27,7 +27,8 @@ it("bounds list checkpoint work through the subscriber handler", async () => {
       ? `- Step ${index}: run \`pnpm test\` and read [the guide](https://example.test/guide)\n  - Verify the result`
       : `- Step ${index} keeps the operator rollback path visible and the retry budget honest`,
   );
-  const source = `\`\`\`json\n{"enabled":true}\n\`\`\`\n\n${items.join("\n")}\n`;
+  const visible = `\`\`\`json\n{"enabled":true}\n\`\`\`\n\n${items.join("\n")}\n`;
+  const source = `[tool:read] {"path":"notes.md"}\n${visible}`;
   // Match the coalesced chunk size measured in the contributor's Gateway trace.
   const chunk = 98;
   const ctx = createMessageUpdateContext();
@@ -46,7 +47,7 @@ it("bounds list checkpoint work through the subscriber handler", async () => {
       }),
     );
   }
-  expect(ctx.state.assistantStream?.text).toBe(source.trim());
+  expect(ctx.state.assistantStream?.text).toBe(visible.trim());
   expect(checkpointWork.characters).toBeGreaterThan(0);
   expect(checkpointWork.characters).toBeLessThan(source.length * 64);
 });

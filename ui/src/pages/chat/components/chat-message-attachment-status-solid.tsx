@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { For, Repeat, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
@@ -33,6 +33,7 @@ export type AssistantAttachmentStatusCardProps = {
   reason?: string;
   onRetry?: () => void;
   onOpen?: () => void;
+  onFindWorkspaceFile?: () => void;
   onAllow?: () => void;
   path?: string;
 };
@@ -42,11 +43,11 @@ export function AssistantAttachmentStatusCard(
 ): JSX.Element {
   const copyRef = attachmentContextCopyRef(() => ({ name: props.label }));
   const unavailable = () => props.reason !== undefined;
-  const action = () => props.onAllow ?? props.onRetry ?? props.onOpen;
+  const action = () => props.onAllow ?? props.onRetry ?? props.onFindWorkspaceFile ?? props.onOpen;
   const statusClass = () =>
     !unavailable()
       ? "chat-assistant-attachment-card--checking"
-      : props.onRetry || props.onAllow || props.onOpen
+      : props.onRetry || props.onAllow || props.onFindWorkspaceFile || props.onOpen
         ? "chat-assistant-attachment-card--recoverable"
         : "chat-assistant-attachment-card--definitive";
   return (
@@ -120,6 +121,11 @@ export function AssistantAttachmentStatusCard(
               },
             ]}
             type="button"
+            aria-label={
+              !props.onAllow && !props.onRetry && props.onFindWorkspaceFile
+                ? t("chat.attachments.findInFilesFor", { name: props.label })
+                : undefined
+            }
             onClick={() => action()?.()}
           >
             <Show when={!props.onAllow && Boolean(props.onRetry)}>
@@ -129,7 +135,9 @@ export function AssistantAttachmentStatusCard(
               ? t("chat.attachments.allowImage")
               : props.onRetry
                 ? t("common.retry")
-                : t("chat.attachments.openOriginal")}
+                : props.onFindWorkspaceFile
+                  ? t("chat.attachments.findInFiles")
+                  : t("chat.attachments.openOriginal")}
           </button>
         </Show>
       </div>
@@ -143,5 +151,36 @@ export function AssistantAttachmentStatusCard(
         </button>
       </Show>
     </div>
+  );
+}
+
+export function PairingQrNotices(props: { count: number }) {
+  return (
+    <Show when={props.count > 0}>
+      <div class="chat-pairing-qr-notices">
+        <Repeat count={props.count}>
+          {() => (
+            <div class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked chat-pairing-qr-expired">
+              <span class="chat-pairing-qr-expired__icon" aria-hidden="true">
+                <Icon name="alertTriangle" />
+              </span>
+              <div class="chat-pairing-qr-expired__content">
+                <div class="chat-pairing-qr-expired__heading">
+                  <span class="chat-pairing-qr-expired__title">
+                    {t("chat.pairingQrExpired.title")}
+                  </span>
+                  <span class="chat-pairing-qr-expired__badge">
+                    {t("chat.pairingQrExpired.badge")}
+                  </span>
+                </div>
+                <div class="chat-assistant-attachment-card__reason">
+                  {t("chat.pairingQrExpired.reason")}
+                </div>
+              </div>
+            </div>
+          )}
+        </Repeat>
+      </div>
+    </Show>
   );
 }

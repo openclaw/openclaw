@@ -3,7 +3,8 @@ import { createMemo, For, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
-import { ChatModelSearchContext, handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
+import { handleModelOptionMouseEnter } from "./chat-model-picker-search-view.ts";
+import { ChatModelSearchContext } from "./chat-model-picker-search.ts";
 import type { ModelPickerRowRenderer } from "./chat-model-picker-window.tsx";
 
 export function ChatModelAccountSectionView(
@@ -57,7 +58,13 @@ export function ChatModelAccountSectionView(
                   <button
                     ref={search?.rowRef(() => `account:${option().value}`)}
                     id={search?.optionId(`account:${option().value}`)}
-                    class="chat-controls__inline-select-option chat-controls__model-option"
+                    class={[
+                      "chat-controls__inline-select-option chat-controls__model-option",
+                      {
+                        "chat-controls__inline-select-option--selected":
+                          option().value === props.currentValue,
+                      },
+                    ]}
                     type="button"
                     role="option"
                     aria-selected={option().value === props.currentValue ? "true" : "false"}
@@ -68,7 +75,7 @@ export function ChatModelAccountSectionView(
                     data-chat-model-key={`account:${option().value}`}
                     data-chat-model-rank={search?.row(`account:${option().value}`)?.rank}
                     data-chat-model-highlighted={
-                      search?.highlighted() === `account:${option().value}` ? "" : undefined
+                      search?.isHighlighted(`account:${option().value}`) ? "" : undefined
                     }
                     style={{ "--chat-model-rank": search?.row(`account:${option().value}`)?.rank }}
                     data-chat-model-index={props.startIndex + index()}

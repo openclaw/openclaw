@@ -200,6 +200,7 @@ it("returns content ownership and valid update paths in model-visible snapshot d
     { name: "custom-html", contentOwner: "html" },
     { name: "trusted-plugin", contentOwner: "plugin" },
     { name: "mcp-app", contentOwner: "mcp-app" },
+    { name: "retired", contentOwner: "registered" },
   ] as const;
   const widget = (fields: (typeof ownership)[number]): Widget => ({
     tabId: "main",
@@ -208,7 +209,7 @@ it("returns content ownership and valid update paths in model-visible snapshot d
     position: 0,
     grantState: "none",
     revision: 1,
-    contentKind: fields.contentOwner,
+    contentKind: fields.contentOwner === "registered" ? "plugin" : fields.contentOwner,
     ...fields,
   });
   const harness = recorder({ ...snapshot, widgets: ownership.map(widget) });
@@ -220,6 +221,7 @@ it("returns content ownership and valid update paths in model-visible snapshot d
       html: expect.stringMatching(/authoring.*tool catalog.*same name/i),
       plugin: expect.stringMatching(/widget_put.*same name.*pluginKind/i),
       "mcp-app": expect.stringMatching(/MCP app/i),
+      registered: expect.stringMatching(/retired.*recreate.*HTML/i),
     },
   });
   expect(result.content[0]).toMatchObject({

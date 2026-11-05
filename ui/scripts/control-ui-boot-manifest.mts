@@ -19,6 +19,7 @@ import {
   resolvePlaywrightChromiumExecutablePath,
 } from "../src/test-helpers/control-ui-e2e.ts";
 import controlUiViteConfig from "../vite.config.ts";
+import { deferControlUiBootSpeculation } from "./control-ui-boot-capture.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const manifestPath = path.join(repoRoot, "ui", "config", "control-ui-boot-modules.json");
@@ -26,7 +27,10 @@ const SETTLE_MS = 3_000;
 const READY_TIMEOUT_MS = 60_000;
 // Idle decoration must not become a route preload just because the capture
 // waits for background work to settle after the composer is already visible.
-const idleEntries = new Set(["ui/src/components/lobster-pet.tsx"]);
+const idleEntries = new Set([
+  "ui/src/app/app-shell-idle.runtime.ts",
+  "ui/src/components/lobster-pet.tsx",
+]);
 
 const mime: Record<string, string> = {
   ".html": "text/html",
@@ -104,7 +108,12 @@ async function collectBootChunkPaths(
       // the next capture. Keep cold sign-in and authorized warm boot distinct.
       const context = await browser.newContext({ serviceWorkers: "block" });
       try {
+        await context.addInitScript(deferControlUiBootSpeculation);
         const page = await context.newPage();
+        // Capture required boot code, not the shell's optional idle menu/route warmups.
+        // Removing navigation metadata alone does not disable registered menu warmups.
+        const protocol = await context.newCDPSession(page);
+        await protocol.send("Emulation.setDataSaverOverride", { dataSaverEnabled: true });
         page.on("request", (request) => {
           const { pathname } = new URL(request.url());
           if (pathname.startsWith("/assets/") && pathname.endsWith(".js")) {

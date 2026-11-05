@@ -6,6 +6,8 @@ import type {
 import { admitStoreSearch } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   ensureMemoryIndexSchema,
+  readRepairedMemoryIndexSchema,
+  publishRepairedMemoryIndexSchema,
   loadSqliteVecExtensionFromPath,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
@@ -36,6 +38,7 @@ import {
   tableExists,
   withSqliteDatabaseWriteScope,
   type SqliteWorkerBackend,
+  type SynchronousSqliteCallback,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
@@ -268,7 +271,7 @@ function createPublicationBackend(
     }
   };
   const write = <T>(
-    run: () => T,
+    run: SynchronousSqliteCallback<T>,
     scopes = [MEMORY_INDEX_WRITE_SCOPE],
   ): MemoryPublicationResult<T> =>
     transact((hooks) =>
@@ -282,7 +285,9 @@ function createPublicationBackend(
         { withCommit: hooks.withCommit },
       ),
     );
-  const writeSingleStatement = <T>(statement: () => T): MemoryPublicationResult<T> => {
+  const writeSingleStatement = <T>(
+    statement: SynchronousSqliteCallback<T>,
+  ): MemoryPublicationResult<T> => {
     let committed = false;
     try {
       admit("transaction");
@@ -322,10 +327,16 @@ function createPublicationBackend(
         : {}),
     };
   };
-  const cacheSize = () => {
-    const token = readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE);
+  const cacheSize = (
+    recountBelow?: number,
+    token = readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE),
+  ) => {
     let retained = embeddingCacheSizes.get(db);
-    if (!retained || retained.token !== token) {
+    if (
+      !retained ||
+      retained.token !== token ||
+      (recountBelow !== undefined && retained.size <= recountBelow)
+    ) {
       retained = { size: countMemoryEmbeddingCache(db), exact: true, token };
       embeddingCacheSizes.set(db, retained);
     }
@@ -333,9 +344,14 @@ function createPublicationBackend(
   };
   const writeCache = (
     run: (size: MemoryEmbeddingCacheSize) => MemoryEmbeddingCacheSize,
+    recountBelow?: number,
   ): MemoryPublicationResult<boolean> => {
-    const size = cacheSize();
-    const result = write(() => run(size), [MEMORY_EMBEDDING_CACHE_WRITE_SCOPE]);
+    // Register the scope before write decides whether this connection tracks scoped receipts.
+    const token = readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE);
+    const result = write(
+      () => run(cacheSize(recountBelow, token)),
+      [MEMORY_EMBEDDING_CACHE_WRITE_SCOPE],
+    );
     if (!result.ok) {
       return result;
     }
@@ -395,15 +411,29 @@ function createPublicationBackend(
         return readMemoryIndex(db, command).value;
       }
       if (command.type === "schema.admit") {
+        // Request-owned managers reopen this worker for every search. Retain repair
+        // proof on the existing database admission, invalidated by index/import writes.
+        // The existing writer reservation still owns serialization; a receipt is not a lock.
+        admit("transaction");
+        const schema = { ...command.input, db };
+        const writeToken = readSqliteDatabaseScopedWriteToken(db, MEMORY_INDEX_WRITE_SCOPE);
+        const repaired = readRepairedMemoryIndexSchema(schema, writeToken);
         // Storage/STRICT migration must disable foreign keys before BEGIN.
-        db.exec("PRAGMA foreign_keys = OFF");
+        if (!repaired) {
+          db.exec("PRAGMA foreign_keys = OFF");
+        }
         try {
-          const result = write(() => {
-            stageOpenClawAgentDatabaseSchemaExtension(db);
-            return ensureMemoryIndexSchema({ ...command.input, db });
-          });
-          if (result.ok) {
+          const result = repaired
+            ? { ok: true as const, value: repaired, writeToken }
+            : write(() => {
+                stageOpenClawAgentDatabaseSchemaExtension(db);
+                return ensureMemoryIndexSchema(schema);
+              });
+          if (result.ok && !repaired) {
             admitSqliteSchema(db);
+            if (!schema.ftsEnabled || result.value.ftsAvailable) {
+              publishRepairedMemoryIndexSchema(schema, result.writeToken);
+            }
           }
           const published = withFacts(result, true);
           return published.ok && "kind" in input
@@ -421,7 +451,7 @@ function createPublicationBackend(
               }
             : published;
         } finally {
-          if (db.isOpen) {
+          if (!repaired && db.isOpen) {
             db.exec(`PRAGMA foreign_keys = ${input.pragmas.foreign_keys}`);
           }
         }
@@ -467,17 +497,19 @@ function createPublicationBackend(
         return undefined;
       }
       if (command.type === "cache.prune") {
-        if (cacheSize().size <= command.input.maxEntries) {
+        const { maxEntries, recount, unreferencedFirst } = command.input;
+        if (!recount && cacheSize().size <= maxEntries) {
           return { ok: true, value: false };
         }
-        return writeCache((size) =>
-          pruneMemoryEmbeddingCache(
-            db,
-            size,
-            command.input.maxEntries,
-            command.input.unreferencedFirst,
-          ),
+        let exceedsCap = false;
+        const result = writeCache(
+          (size) => {
+            exceedsCap = size.size > maxEntries;
+            return pruneMemoryEmbeddingCache(db, size, maxEntries, unreferencedFirst);
+          },
+          recount ? maxEntries : undefined,
         );
+        return result.ok ? { ...result, value: exceedsCap } : result;
       }
       if (command.type === "cache.clear") {
         return writeCache((size) => ({

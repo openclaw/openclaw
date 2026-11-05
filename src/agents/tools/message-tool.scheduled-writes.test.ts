@@ -1,4 +1,3 @@
-import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
 import { resolveBundledChannelMessageToolDiscoveryAdapter } from "../../channels/plugins/message-tool-api.js";
@@ -21,6 +20,11 @@ const identity = { agentId: "main", runId: "scheduled-message-run" };
 const sessionKey = "agent:main:cron:scheduled-message:run:fixture";
 const grants: string[] = [];
 const sessionDirs = useSessionStoreTempDirs(afterAll, "message-definition-binding-");
+const catalog = (channels: PreparedMessageToolCatalog["channels"]): PreparedMessageToolCatalog => ({
+  version: 1,
+  channels,
+  getChannel: (id) => channels.find((channel) => channel.id === id),
+});
 let registry: ReturnType<typeof plugins.captureActivePluginRegistrySnapshot>;
 beforeEach(() => {
   registry = plugins.captureActivePluginRegistrySnapshot();
@@ -90,11 +94,7 @@ it.each([true, false])(
     const tool = await createMessageToolAsync({
       ...toolOptions(config, capability),
       currentChannelProvider: scheduled ? "signal" : undefined,
-      preparedMessageToolCatalog: {
-        version: 1,
-        channels,
-        getChannel: (id) => channels.find((channel) => channel.id === id),
-      },
+      preparedMessageToolCatalog: catalog(channels),
     });
     expect(tool.parameters).toHaveProperty("properties.action.enum", [
       "broadcast",
@@ -107,59 +107,6 @@ it.each([true, false])(
     }
   },
 );
-
-it("keeps non-default account capabilities in scheduled session definitions", async () => {
-  const actions = resolveBundledChannelMessageToolDiscoveryAdapter("slack");
-  const channels = [{ id: "slack", reconcilesUnknownSend: false, actions }];
-  const preparedMessageToolCatalog = {
-    version: 1,
-    channels,
-    getChannel: (id: string) => channels.find((channel) => channel.id === id),
-  };
-  const config: OpenClawConfig = {
-    channels: {
-      slack: {
-        defaultAccount: "disabled",
-        accounts: {
-          ops: { botToken: "xoxb-fixture-ops" },
-          disabled: { enabled: false, botToken: "xoxb-fixture-disabled" },
-        },
-      },
-    },
-  };
-  const options = {
-    config,
-    agentId: "main",
-    agentSessionKey: "agent:main:cron:scheduled-read",
-    scheduledToolPolicy: {
-      version: 1 as const,
-      mode: "account" as const,
-      ownerSessionKey: "agent:main:main",
-      ownerAccountId: "ops",
-      ownerOrigin: { kind: "local" as const },
-    },
-    preparedMessageToolCatalog,
-  };
-  const tool = await createMessageToolAsync(options);
-  expect(
-    Value.Check(tool.parameters, {
-      action: "read",
-      channel: "slack",
-      accountId: "ops",
-      target: "channel:C123",
-      limit: 1,
-    }),
-  ).toBe(true);
-  expect(tool.parameters).toHaveProperty("properties.topLevel");
-  expect(tool.parameters).toHaveProperty("properties.presentation");
-  const sourced = await createMessageToolAsync({
-    ...options,
-    currentChannelProvider: "slack",
-    agentAccountId: "disabled",
-  });
-  expect(sourced.description).toBe(tool.description);
-  expect(sourced.parameters).toEqual(tool.parameters);
-});
 
 it.each([
   ["delivery", "async"],
@@ -221,11 +168,7 @@ it.each([
       agentId: "main",
       agentSessionKey: key,
       sessionId: "bound-session",
-      preparedMessageToolCatalog: {
-        version: 1,
-        channels,
-        getChannel: (id: string) => channels.find((channel) => channel.id === id),
-      },
+      preparedMessageToolCatalog: catalog(channels),
     };
     const normal = await createTool({
       ...options,

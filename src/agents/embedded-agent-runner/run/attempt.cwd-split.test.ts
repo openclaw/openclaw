@@ -54,13 +54,6 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       spawnWorkspaceDir: bootstrap.workspaceDir,
       requireWorkspaceOnly: true,
       runtimeToolAllowlist: [...allowed, "tool_search", "tool_describe", "dispatch_action"],
-      toolConstructionPlan: {
-        includeBaseCodingTools: true,
-        includeShellTools: true,
-        includeChannelTools: false,
-        includeOpenClawTools: false,
-        includePluginTools: false,
-      },
     });
     expect(
       hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0]?.customTools?.map((tool) => tool.name),
@@ -161,12 +154,8 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       workspaceDir: worktree,
     });
     await run({ workspaceDir: worktree, cwd: worktree });
-    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: worktree, workspaceDir: worktree }),
-      undefined,
-      undefined,
-      undefined,
-      expect.objectContaining({ assertCurrent: expect.any(Function) }),
-    );
+    const call = hoisted.createOpenClawCodingToolsMock.mock.calls[0];
+    expect(call?.[0]).toMatchObject({ cwd: worktree, workspaceDir: worktree });
+    expect(call?.[4]).toHaveProperty("assertCurrent", expect.any(Function));
   });
 });

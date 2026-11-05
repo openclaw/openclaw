@@ -7,8 +7,10 @@ import {
   type NodeWorkerWorkspaceExecResult,
 } from "../../worker/node-workspace-protocol.js";
 import { NODE_WORKSPACE_EMPTY_MANIFEST_REF } from "../../worker/node-workspace-transfer-protocol.js";
-import { prepareRepositoryPublicationRestore } from "../github-repository-publication-restore.js";
-import { createNodeWorkerRepositoryPreparation } from "./node-worker-repository-preparation.js";
+import {
+  createNodeWorkerRepositoryPreparation,
+  restoreNodeWorkerRepositoryCheckpoint,
+} from "./node-worker-repository-preparation.js";
 import type { NodeWorkerWorkspaceBinding } from "./node-worker-tunnel.types.js";
 import {
   createNodeWorkerWorkspaceFallback,
@@ -31,12 +33,8 @@ import { boundedWorkerError } from "./worker-error.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
 import type { WorkspaceHashMemo } from "./workspace-hash-memo.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
-import {
-  decodeWorkspaceManifest,
-  serializeWorkspaceManifest,
-} from "./workspace-manifest-worker.js";
+import { serializeWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
-import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 import { captureRemoteWorkspaceManifest } from "./workspace-sync-helpers.js";
 
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
@@ -189,11 +187,14 @@ export function createNodeWorkerWorkspaceActions(params: {
       throw new Error("Repository checkpoint source is required");
     }
     const { authorize, markPhase } = request.source;
+    const transferBaseRef = request.source.acceptedManifestRef ?? request.baseManifestRef;
+    const resultVersion = (await params.supportsGitResults?.()) ? 2 : undefined;
     authorize?.();
     const token = params.workspaceTransfer.prepareUpload(
       params.environmentId,
-      request.baseManifestRef,
+      transferBaseRef,
       authorize,
+      resultVersion,
     );
     let preparedCheckpoint: { discard: () => Promise<void> } | undefined;
     try {
@@ -202,16 +203,14 @@ export function createNodeWorkerWorkspaceActions(params: {
         {
           direction: "upload",
           token,
-          baseManifestRef: request.baseManifestRef,
+          ...(resultVersion ? { resultVersion } : {}),
+          baseManifestRef: transferBaseRef,
           referenceManifestRef: request.source.referenceManifestRef,
         },
         "Node repository checkpoint upload failed",
         { assertCurrent: authorize },
       );
-      const uploaded = params.workspaceTransfer.takeUpload(
-        params.environmentId,
-        request.baseManifestRef,
-      );
+      const uploaded = params.workspaceTransfer.takeUpload(params.environmentId, transferBaseRef);
       try {
         const verifyStable = async () => {
           markPhase?.("repositoryVerification");
@@ -230,6 +229,16 @@ export function createNodeWorkerWorkspaceActions(params: {
           authorize?.();
           if (observed !== uploaded.currentManifestRef) {
             throw new Error("Repository workspace changed during checkpoint capture");
+          }
+          if (uploaded.gitHistory && !uploaded.gitHistory.unavailableReason) {
+            const head = await exec({
+              argv: ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+              transportRetry: "never",
+              assertCurrent: authorize,
+            });
+            if (head.code !== 0 || head.stdout.trim() !== uploaded.gitHistory.headCommit) {
+              throw new Error("Repository Git HEAD changed during checkpoint capture");
+            }
           }
         };
         await verifyStable();
@@ -297,6 +306,8 @@ export function createNodeWorkerWorkspaceActions(params: {
             currentManifestRaw: uploaded.currentRaw,
             baseManifestRef: uploaded.baseManifestRef,
             currentManifestRef: uploaded.currentManifestRef,
+            gitHistory: uploaded.gitHistory,
+            gitPackPath: uploaded.gitPackPath,
           });
           preparedCheckpoint = prepared;
           return {
@@ -389,7 +400,7 @@ export function createNodeWorkerWorkspaceActions(params: {
         if (observed !== expectedRemoteRef) {
           throw new Error("Cloud workspace changed during final reconciliation");
         }
-        if (uploaded.gitHistory) {
+        if (uploaded.gitHistory && !uploaded.gitHistory.unavailableReason) {
           const head = await exec({
             argv: ["git", "rev-parse", "--verify", "HEAD^{commit}"],
             transportRetry: "never",
@@ -482,64 +493,16 @@ export function createNodeWorkerWorkspaceActions(params: {
     });
     let manifestRef = baseline.manifestRef;
     if (source.checkpoint) {
-      const checkpoint = source.checkpoint;
-      const decodedBase = await decodeWorkspaceManifest(
-        checkpoint.baseManifestRaw,
-        undefined,
-        params.ownerSignal,
-      );
-      if (decodedBase.manifestRef !== baseManifestRef) {
-        throw new Error("Repository checkpoint baseline differs from its cloned commit");
-      }
-      const decoded = await decodeWorkspaceManifest(
-        checkpoint.currentManifestRaw,
-        undefined,
-        params.ownerSignal,
-      );
-      manifestRef = decoded.manifestRef;
-      const manifest = decoded.manifest;
-      const base = decodedBase.manifest;
-      const token = params.workspaceTransfer.publishSnapshot(
-        params.environmentId,
-        {
-          manifest,
-          manifestRef,
-          rawManifest: checkpoint.currentManifestRaw,
-          root: checkpoint.stagingRoot,
-          blobPaths: new Set(workerWorkspaceTransferPaths(manifest, base, params.ownerSignal)),
-        },
-        request.authorize,
-      );
-      try {
-        await transfer(
-          {
-            direction: "download",
-            token,
-            manifestRef,
-            checkpointBaseManifestRef: baseManifestRef,
-          },
-          "Repository checkpoint restore failed",
-          { assertCurrent: request.authorize },
-        );
-        for (const command of await prepareRepositoryPublicationRestore({
-          ...checkpoint,
-          current: manifest,
-        })) {
-          const restored = await exec({
-            ...command,
-            timeoutMs: 60_000,
-            transportRetry: "never",
-            assertCurrent: request.authorize,
-          });
-          if (restored.code !== 0 || restored.termination !== "exit") {
-            throw new Error(
-              "Repository publication paths could not be restored; retry workspace preparation",
-            );
-          }
-        }
-      } finally {
-        await params.workspaceTransfer.revoke(params.environmentId, token);
-      }
+      manifestRef = await restoreNodeWorkerRepositoryCheckpoint({
+        checkpoint: source.checkpoint,
+        baseManifestRef,
+        environmentId: params.environmentId,
+        workspaceTransfer: params.workspaceTransfer,
+        signal: params.ownerSignal,
+        authorize: request.authorize,
+        exec,
+        transfer,
+      });
     } else if (source.runSetupScript) {
       const setup = await exec({
         argv: [
@@ -697,11 +660,11 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
         throw error;
       }
     },
-    quiesceWorkspace: (remoteWorkspaceDir: string) => {
+    quiesceWorkspace: (remoteWorkspaceDir: string, authorize?: () => void) => {
       if (deviceFolder !== undefined) {
         return Promise.reject(new Error("Device folders do not support workspace quiescence"));
       }
-      return quiesceWorkspace(remoteWorkspaceDir);
+      return quiesceWorkspace(remoteWorkspaceDir, authorize);
     },
     reconcileWorkspace,
   };

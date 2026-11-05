@@ -2,8 +2,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import type { Page } from "playwright";
 import { inject } from "vitest";
-import { extractControlUiStartupAssetPaths } from "../../../scripts/check-control-ui-performance.mts";
 import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
+import { extractControlUiStartupAssetPaths } from "../../config/control-ui-startup-assets.ts";
 
 export async function failControlUiModuleForDocuments(
   page: Page,

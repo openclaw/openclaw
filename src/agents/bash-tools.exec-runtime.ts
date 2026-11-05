@@ -23,7 +23,7 @@ import { resolveHostExecMemoryLimit } from "../process/child-memory.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
-import type { SpawnInput } from "../process/supervisor/types.js";
+import type { ProcessExtinctionResult, SpawnInput } from "../process/supervisor/types.js";
 import type {
   SecretEgressProcessGrant,
   SecretEgressSentinelBinding,
@@ -43,12 +43,12 @@ import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
 } from "./agent-tool-source-execution-guard.js";
+import { createProcessSessionId } from "./bash-process-id.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
   appendOutput,
   createProcessSession,
-  isProcessSessionIdTaken,
   markCancellationRequested,
   resolveProcessCleanupMs,
   waitForExecSession,
@@ -65,12 +65,12 @@ import {
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { DurableExecOptions, ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
+import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { createSessionSlug } from "./session-slug.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 import {
   getGatewayToolCallerIdentity,
@@ -107,6 +107,8 @@ export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
+const UNCONFIRMED_DESCENDANT_CLEANUP_NOTE =
+  "OpenClaw could not confirm that every process started by this command stopped; a detached process (such as a daemon or tmux server) may still be running. Use background: true for long-running services.";
 
 /** Live handle returned after an exec process has started. */
 export type ExecProcessHandle = {
@@ -206,9 +208,12 @@ export async function runExecProcess({
   ...opts
 }: {
   command: string;
+  durable?: DurableExecOptions;
+  sessionId?: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
   // Used to sanitize safeBins execution while preserving the original user input.
   execCommand?: string;
+  approvalTransport?: ExecApprovalTransport;
   workdir: string;
   env: Record<string, string>;
   secretEgressBindings?: readonly SecretEgressSentinelBinding[];
@@ -259,7 +264,7 @@ export async function runExecProcess({
   const operatorSignal = operatorAuthority?.signal;
   let releaseOperatorAuthority: (() => void) | undefined;
   const startedAt = Date.now();
-  const sessionId = createSessionSlug(isProcessSessionIdTaken);
+  const sessionId = createProcessSessionId();
   const execCommand = opts.execCommand ?? opts.command;
   const diagnosticTarget = opts.sandbox ? "sandbox" : "host";
   const supervisor = getProcessSupervisor();
@@ -312,7 +317,18 @@ export async function runExecProcess({
   // Clearing the callback also releases the completed turn's captured authority.
   let onUpdate = initialOnUpdate && AsyncLocalStorage.bind(initialOnUpdate);
   let beforeSpawn = initialBeforeSpawn;
-  let assertPolicyCurrent = initialAssertCurrent;
+  let assertPolicyCurrent: (() => void) | undefined = opts.approvalTransport
+    ? () => {
+        initialAssertCurrent?.();
+        opts.approvalTransport?.assertExecution({
+          command: opts.command,
+          execCommand,
+          cwd: opts.workdir,
+          env: opts.env,
+          pty: opts.usePty,
+        });
+      }
+    : initialAssertCurrent;
   let onSettledBeforeNotify = initialOnSettledBeforeNotify;
 
   const emitUpdate = () => {
@@ -409,8 +425,30 @@ export async function runExecProcess({
       if (!opts.sandbox && managedRun?.waitForExtinction) {
         // Root completion does not release descendants that retained the group's lineage fd.
         managedRun.cancel();
-        const extinction = await managedRun.waitForExtinction();
-        session.cleanupUncertain = extinction?.status === "uncertain";
+        let extinction: ProcessExtinctionResult | undefined;
+        try {
+          extinction = await managedRun.waitForExtinction();
+        } catch (error) {
+          if (outcome.status !== "completed" || session.requestCancelled) {
+            throw error;
+          }
+          // The observed exit stays the result. A descendant that left the owned
+          // group (e.g. a daemonized tmux server) only leaves cleanup unconfirmed.
+          session.cleanupUncertain = true;
+          recordAgentCleanupFailure();
+          logWarn(
+            `exec: descendant cleanup after completion was not confirmed (${redactToolPayloadText(formatErrorMessage(error))}).`,
+          );
+          appendOutput(session, "stderr", `\n${UNCONFIRMED_DESCENDANT_CLEANUP_NOTE}\n`);
+          finalOutcome = {
+            ...outcome,
+            aggregated: joinExecFailureOutput(
+              outcome.aggregated,
+              UNCONFIRMED_DESCENDANT_CLEANUP_NOTE,
+            ),
+          };
+        }
+        session.cleanupUncertain ||= extinction?.status === "uncertain";
         if (session.requestCancelled && session.cleanupUncertain) {
           throw new Error("Command descendant cleanup could not be confirmed");
         }
@@ -444,7 +482,11 @@ export async function runExecProcess({
       if (outcome.status === "completed") {
         finalOutcome = runtimeErrorOutcome(detail);
       } else {
-        finalOutcome = { ...outcome, reason: joinExecFailureOutput(outcome.reason, detail) };
+        finalOutcome = {
+          ...outcome,
+          message: joinExecFailureOutput(outcome.message, detail),
+          reason: joinExecFailureOutput(outcome.reason, detail),
+        };
         logWarn(`exec: finalization after process failure failed (${detail}).`);
       }
       // Failed commands retain cleanup failures in the same bounded tool output.
@@ -542,11 +584,31 @@ export async function runExecProcess({
       // Source authority covers construction; approval policy ends at native launch.
       assertCurrent();
       assertHostPolicyCurrent?.();
+      if (opts.durable && (opts.sandbox || opts.usePty || opts.secretEgressBindings?.length)) {
+        throw new Error(
+          "Durable exec requires noninteractive Gateway-host execution without secret-egress proxy grants. Use non-durable background exec or a directly provided credential.",
+        );
+      }
       const grant = opts.secretEgressBindings
         ? await registerSecretEgressProxyProcess(opts.secretEgressBindings)
         : undefined;
       secretEgressGrant = grant;
       try {
+        if (opts.durable) {
+          const { startDurableExecProcess } = await import("./bash-process-durable.js");
+          return await startDurableExecProcess(
+            session,
+            opts.sessionId,
+            {
+              ...input,
+              env: resolveExecLaunchEnv(input.env, false),
+              assertCurrent,
+              beforeSpawn: assertHostPolicyCurrent,
+              initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
+            },
+            opts.durable,
+          );
+        }
         return await withChildProcessOperation("agent.exec", () =>
           withoutGatewayToolCallerIdentity(() =>
             supervisor.spawn({
@@ -575,6 +637,8 @@ export async function runExecProcess({
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
+      executionIntent: "agent-tool" as const,
+      executionScopeKey: opts.sessionKey ?? opts.scopeKey,
       runId: sessionId,
       ...(opts.sandbox ? { cleanupOwnership: "external" as const, exactEnv: true as const } : {}),
       scopeKey: opts.scopeKey,
@@ -617,6 +681,9 @@ export async function runExecProcess({
         argv: spawnSpec.argv,
         stdinMode: spawnSpec.stdinMode,
       });
+    }
+    if (opts.durable && requestSignal?.aborted) {
+      managedRun.cancel("manual-cancel");
     }
     // Background execution outlives the turn, but never its original access grant.
     operatorSignal?.addEventListener("abort", onOperatorRevoked, { once: true });

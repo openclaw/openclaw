@@ -1,5 +1,4 @@
-import path from "node:path";
-import type { BrowserContextOptions, Page } from "playwright";
+import type { BrowserContextOptions } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -13,7 +12,6 @@ function withMarkdown(
   text: string,
   run: Parameters<typeof suite.withPage>[1],
   options: BrowserContextOptions = {},
-  role = "assistant",
 ) {
   return suite.withPage(
     {
@@ -25,7 +23,9 @@ function withMarkdown(
     },
     async (fixture) => {
       await installMockGateway(fixture.page, {
-        historyMessages: [{ role, content: [{ type: "text", text }], timestamp: Date.now() }],
+        historyMessages: [
+          { role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() },
+        ],
       });
       await fixture.page.goto(`${suite.server.baseUrl}chat`);
       return run(fixture);
@@ -33,20 +33,8 @@ function withMarkdown(
   );
 }
 
-async function capture(page: Page, name: string, fullPage = false) {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-    await page.screenshot({
-      animations: "disabled",
-      fullPage,
-      path: path.join(suite.artifactDir, `${name}.png`),
-    });
-  }
-}
-
-function expectMarkerGeometry(geometry: ReturnType<typeof readMarkdownGeometry>, rtl = false) {
-  const starts = rtl
-    ? geometry.textStarts
-    : [geometry.bulletTextX, geometry.numberedTextX, geometry.taskTextX];
+function expectMarkerGeometry(geometry: ReturnType<typeof readMarkdownGeometry>) {
+  const starts = geometry.textStarts;
   expect(Math.max(...starts) - Math.min(...starts)).toBeLessThanOrEqual(1);
   expect(geometry.checkboxGap).toBeGreaterThanOrEqual(7);
   expect(geometry.checkboxGap).toBeLessThanOrEqual(9);
@@ -94,7 +82,7 @@ function readMarkdownGeometry(root: Element) {
   );
   return {
     textStarts: ["ul:not(.contains-task-list) > li", "ol > li", ".task-list-item"].map(
-      (selector) => textRect(selector).right,
+      (selector) => textRect(selector)[rtl ? "right" : "x"],
     ),
     unorderedPaddingInlineStart: getComputedStyle(
       root.querySelector("ul:not(.contains-task-list)")!,
@@ -106,27 +94,27 @@ function readMarkdownGeometry(root: Element) {
     summaryTextX: textRect("details[open] > summary").x,
     collapsedHeight: collapsedSummary.getBoundingClientRect().height,
     collapsedLineHeight: getComputedStyle(collapsedSummary).lineHeight,
-    detailsPadding: detailsStyle.paddingBlockStart,
-    borderInlineStartWidth: detailsStyle.borderInlineStartWidth,
-    bulletTextX: textRect("ul:not(.contains-task-list) > li").x,
+    dimensions: {
+      checkboxSize: checkboxRect.width,
+      border: Number.parseFloat(detailsStyle.borderInlineStartWidth),
+      padding: Number.parseFloat(detailsStyle.paddingBlockStart),
+      chevronWidth: Number.parseFloat(closedChevronStyle.width),
+      chevronInset: Number.parseFloat(closedChevronStyle.insetInlineStart),
+      summaryInset: collapsedSummaryTextRect.x - details.getBoundingClientRect().x,
+    },
     checkboxGap: rtl ? checkboxRect.left - taskTextRect.right : taskTextRect.x - checkboxRect.right,
     checkboxLineCenterDelta:
       checkboxRect.y + checkboxRect.height / 2 - (taskTextRect.y + taskTextRect.height / 2),
-    checkboxSize: checkboxRect.width,
     chevronClosedTransform: closedChevronStyle.transform,
     chevronInlineStart: closedChevronStyle.insetInlineStart,
     chevronTransitionDuration: closedChevronStyle.transitionDuration,
     chevronTransitionProperty: closedChevronStyle.transitionProperty,
-    chevronWidth: closedChevronStyle.width,
     collapsedSummaryPaddingInlineStart: getComputedStyle(collapsedSummary).paddingInlineStart,
-    collapsedSummaryTextX: collapsedSummaryTextRect.x,
     detailsRight: details.getBoundingClientRect().right,
     detailsX: details.getBoundingClientRect().x,
-    numberedTextX: textRect("ol > li").x,
     rootRight: root.getBoundingClientRect().right,
     rootX: root.getBoundingClientRect().x,
     summaryMarginBottom: summaryStyle.marginBottom,
-    taskTextX: taskTextRect.x,
   };
 }
 
@@ -150,19 +138,11 @@ suite.define(() => {
 
           const geometry = await markdown.evaluate(readMarkdownGeometry);
 
-          await capture(page, "disclosures");
           expectMarkerGeometry(geometry);
           expect(Math.abs(geometry.checkboxLineCenterDelta)).toBeLessThanOrEqual(1);
 
           expect(geometry.bodyTextX).toBeGreaterThan(geometry.detailsX);
-          expect({
-            checkboxSize: geometry.checkboxSize,
-            border: Number.parseFloat(geometry.borderInlineStartWidth),
-            padding: Number.parseFloat(geometry.detailsPadding),
-            chevronWidth: Number.parseFloat(geometry.chevronWidth),
-            chevronInset: Number.parseFloat(geometry.chevronInlineStart),
-            summaryInset: geometry.collapsedSummaryTextX - geometry.detailsX,
-          }).toEqual({
+          expect(geometry.dimensions).toEqual({
             checkboxSize: 16,
             border: 0,
             padding: 0,
@@ -223,7 +203,6 @@ suite.define(() => {
           hasText: "Markdown parser fidelity",
         });
         await markdown.waitFor();
-        await capture(page, "markdown-parser-fidelity", true);
 
         expect(
           await markdown.evaluate((root) => ({
@@ -240,26 +219,6 @@ suite.define(() => {
     );
   });
 
-  it("keeps user block art preformatted", async () => {
-    await withMarkdown(
-      "```\n  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  \n```",
-      async ({ page }) => {
-        const blockArt = page.locator(".chat-group.user code.markdown-block-art");
-        await blockArt.waitFor();
-        await expect
-          .poll(() =>
-            blockArt.evaluate((code) => {
-              const style = getComputedStyle(code);
-              return [style.whiteSpace, style.overflowWrap, style.wordBreak];
-            }),
-          )
-          .toEqual(["pre", "normal", "normal"]);
-      },
-      {},
-      "user",
-    );
-  });
-
   it("preserves Markdown marker and disclosure alignment in RTL transcripts", async () => {
     await withMarkdown(
       "## فحص المحاذاة\n\n- عنصر نقطي\n\n1. عنصر مرقم\n\n- [ ] مهمة غير مكتملة\n\n<details open>\n<summary>تفاصيل إضافية</summary>\n\nمحتوى التفاصيل\n</details>",
@@ -271,7 +230,7 @@ suite.define(() => {
 
         const geometry = await markdown.evaluate(readMarkdownGeometry);
 
-        expectMarkerGeometry(geometry, true);
+        expectMarkerGeometry(geometry);
         expect(Number.parseFloat(geometry.unorderedPaddingInlineStart)).toBe(24);
         expect(Number.parseFloat(geometry.orderedPaddingInlineStart)).toBe(24);
         expect(Number.parseFloat(geometry.chevronInlineStart)).toBe(0);

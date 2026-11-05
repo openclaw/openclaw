@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -90,34 +91,6 @@ const DEFAULT_MODELS_REPLACE_PATHS = [
   "agents.defaults.utilityModel.fallbacks",
 ];
 
-function buildDefaultsPatch(
-  params: Omit<DefaultModelSelection, "fallbacks"> &
-    ModelBehaviorConfig & {
-      fallbacks: readonly string[];
-    },
-) {
-  return {
-    agents: {
-      defaults: {
-        ...(params.primary
-          ? {
-              model:
-                params.fallbacks.length > 0
-                  ? { primary: params.primary, fallbacks: [...params.fallbacks] }
-                  : params.primary,
-            }
-          : {}),
-        utilityModel: modelSettingPatch(params.utilityModel),
-        ...(params.decisionModel !== undefined ? { decisionModel: params.decisionModel } : {}),
-        thinkingDefault:
-          params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
-        fastModeDefault:
-          params.fastModeOverridden && params.fastMode !== undefined ? params.fastMode : null,
-      },
-    },
-  };
-}
-
 const PROBE_FAILURE_PRIORITY: readonly ModelsProbeResult["status"][] = [
   "auth",
   "billing",
@@ -201,6 +174,7 @@ export function runModelProviderDefaultsMutation(
   ) {
     return Promise.resolve(null);
   }
+  const params = owner.defaults;
   return runModelProviderConfigMutation(
     {
       runtimeConfig: context.runtimeConfig,
@@ -210,7 +184,26 @@ export function runModelProviderDefaultsMutation(
       setMessage: owner.setMessage,
     },
     {
-      raw: buildDefaultsPatch(owner.defaults),
+      raw: {
+        agents: {
+          defaults: {
+            ...(params.primary
+              ? {
+                  model:
+                    params.fallbacks.length > 0
+                      ? { primary: params.primary, fallbacks: [...params.fallbacks] }
+                      : params.primary,
+                }
+              : {}),
+            utilityModel: modelSettingPatch(params.utilityModel),
+            ...(params.decisionModel !== undefined ? { decisionModel: params.decisionModel } : {}),
+            thinkingDefault:
+              params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
+            fastModeDefault:
+              params.fastModeOverridden && params.fastMode !== undefined ? params.fastMode : null,
+          },
+        },
+      },
       note: t("modelProviders.notes.defaultModel"),
       replacePaths: DEFAULT_MODELS_REPLACE_PATHS,
     },
@@ -225,7 +218,11 @@ export function modelProviderConfigMutationBlockedReason(
     return t("modelProviders.readOnly.disconnected");
   }
   if (context.runtimeConfig.canPatch !== true) {
-    return t("modelProviders.readOnly.adminRequired");
+    return t(
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
+        ? "modelProviders.configUnavailable"
+        : "modelProviders.readOnly.adminRequired",
+    );
   }
   const config = context.runtimeConfig.state;
   if (!snapshot.client || config.client !== snapshot.client || !currentConfigObject(config)) {
@@ -235,7 +232,9 @@ export function modelProviderConfigMutationBlockedReason(
 }
 
 export function modelProviderErrorMessage(error: unknown): string {
-  return formatUiError(error, t("modelProviders.requestFailed"));
+  const summary = t("modelProviders.requestFailed");
+  const detail = formatUiError(error, summary);
+  return detail === summary ? summary : `${summary} ${detail}`;
 }
 
 export async function modelProviderMutationWarnings(

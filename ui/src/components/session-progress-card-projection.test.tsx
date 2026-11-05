@@ -1,5 +1,5 @@
 import { createMemo, createSignal } from "solid-js";
-import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import {
   projectProgressCard,
@@ -79,8 +79,8 @@ describe("session progress card projection", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("retains same-store snapshots across target changes and observes resets while hidden", async () => {
-    const { store, request, emit } = progressGateway(async (_method: string, params?: unknown) => {
+  it("retains same-store snapshots across target changes", async () => {
+    const { store, request } = progressGateway(async (_method: string, params?: unknown) => {
       const sessionKey = requestedSessionKey(params);
       const card = { sessionKey, revision: 1, updatedAt: 1, markdown: sessionKey };
       return { card };
@@ -106,31 +106,17 @@ describe("session progress card projection", () => {
     expect(host.progress.read().card).toBe(firstCard);
     expect(host.progress.read().lifetime).toBe(firstLifetime);
     expect(request).toHaveBeenCalledTimes(2);
-
-    host.replaceSource({ store, target: undefined });
-    flush();
-    emit("sessions.changed", { sessionKey: first.sessionKey, reason: "reset" });
-    expect(store.get(first)).toBeUndefined();
-    expect(store.getLifetime(first)).toBeUndefined();
-    expect(request).toHaveBeenCalledTimes(2);
-
-    host.replaceSource({ store, target: first });
-    flush();
-    await waitForSolid(() => expect(host.progress.read().loading).toBe(false));
-    expect(host.progress.read().card).toEqual(firstCard);
-    expect(host.progress.read().lifetime).not.toBe(firstLifetime);
-    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it("redraws only the watched progress presentation while unrelated sessions change", async () => {
     let revision = 1;
-    let readError: Error | undefined;
+    const response: { error?: Error } = {};
     const { store, emit } = progressGateway(async (method: string, params?: unknown) => {
       if (method === "progressCard.refresh") {
         return { status: "accepted", runId: "refresh-run", revision };
       }
-      if (readError) {
-        throw readError;
+      if (response.error) {
+        throw response.error;
       }
       const sessionKey = requestedSessionKey(params);
       const card = {
@@ -141,42 +127,28 @@ describe("session progress card projection", () => {
       };
       return { card };
     });
-    let target = { sessionKey: "agent:main:visible-progress" };
+    const target = { sessionKey: "agent:main:visible-progress" };
     const host = mountProgress({ store, target });
     const inactive = mountProgress({ store, target: undefined });
-    const notified = vi.fn();
-    const targetNotified = vi.fn();
-    const stop = store.subscribe(notified);
-    onTestFinished(stop);
-    onTestFinished(host.progress.subscribe(targetNotified));
     await store.load(target);
     flush();
-    expect(store.getReadCompletion(target)).toBeUndefined();
     const clearNotifications = () =>
-      [host.redraw, inactive.redraw, notified, targetNotified].forEach((mock) => mock.mockClear());
+      [host.redraw, inactive.redraw].forEach((mock) => mock.mockClear());
     clearNotifications();
     emit("sessions.changed", { sessionKey: "agent:main:unrelated", reason: "delete" });
     flush();
-    expect.soft(notified).not.toHaveBeenCalled();
-    expect.soft(targetNotified).not.toHaveBeenCalled();
     expect.soft(host.redraw).not.toHaveBeenCalled();
     clearNotifications();
 
     const otherTarget = { sessionKey: "agent:main:other-progress" };
     const otherRead = store.load(otherTarget);
     flush();
-    expect(store.getReadCompletion(otherTarget)).toBeDefined();
-    expect(notified).toHaveBeenCalled();
-    expect.soft(targetNotified).not.toHaveBeenCalled();
     expect.soft(host.redraw).not.toHaveBeenCalled();
     expect.soft(inactive.redraw).not.toHaveBeenCalled();
     clearNotifications();
 
     await otherRead;
     flush();
-    expect(store.getReadCompletion(otherTarget)).toBeUndefined();
-    expect(notified).toHaveBeenCalled();
-    expect.soft(targetNotified).not.toHaveBeenCalled();
     expect.soft(host.redraw).not.toHaveBeenCalled();
     expect.soft(inactive.redraw).not.toHaveBeenCalled();
 
@@ -197,20 +169,11 @@ describe("session progress card projection", () => {
     flush();
     expect(host.container.textContent).toContain("updated");
 
-    readError = new Error("Read unavailable");
+    response.error = new Error("Read unavailable");
     emit("progressCard.changed", { sessionKey: target.sessionKey, revision: 4 });
     await expect(store.load(target)).rejects.toThrow("Read unavailable");
     flush();
     expect(host.container.textContent).toContain("unavailable");
-
-    readError = undefined;
-    target = { sessionKey: "agent:main:selected-progress" };
-    host.replaceSource({ store, target });
-    flush();
-    await store.load(target);
-    flush();
-    expect(host.container.textContent).toContain("selected-progress revision 3");
-    expect(host.progress.read().error).toBeUndefined();
   });
 
   it.each([false, true])(

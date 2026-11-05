@@ -18,6 +18,11 @@ token. Keep that binding explicitly associated with the OpenClaw session, and
 keep mirroring user-visible assistant/tool output into the OpenClaw
 transcript.
 
+`resolveActiveEmbeddedRunSessionId(sessionKey, target?, { executionStartedOnly: true })`
+from `openclaw/plugin-sdk/agent-harness-runtime` excludes queued admission when
+checking for active execution. Execution remains started during later lane waits;
+omitting the option retains the default observation of all active ownership.
+
 The OpenClaw transcript remains the compatibility layer for:
 
 - channel-visible session history
@@ -309,6 +314,14 @@ The callback is a separate capability, not another ordinary attempt. It must:
 - refuse to run if its selected transcript/isolation strategy cannot enforce
   those restrictions.
 
+The built-in runtime reopens the session for finalization within the same
+replay byte bound as ordinary attempts (eight bytes per context token), with
+`toolResultOverflow: "omit"`: when large tool results such as screenshots would
+push the turn's request out of that bound, their bodies are replaced with an
+omission notice before older messages are dropped. If the notices alone exceed
+the bound, older messages can still be dropped. The stored transcript is
+unchanged.
+
 OpenClaw invokes the callback once as a terminal sub-operation, outside the
 ordinary attempt and retry loop. A failure ends the run with the
 side-effect-aware incomplete-turn warning; it cannot enter ordinary
@@ -322,6 +335,13 @@ finalization prompt tells the model it was cut off and must say what was not
 finished. OpenClaw also adds a host notice under the recovered answer saying
 that the turn was cut off and some work may be unfinished, because a tool-free
 summary cannot show that the interrupted work completed.
+
+An answered finalizer after a non-visible `length` stop preserves that original
+stop reason in terminal and completion metadata and records an `incomplete_turn`
+failure. The summary and notice remain deliverable, while CLI exits, HTTP/ACP
+results, channel reactions, session status, and scheduled tasks reflect the
+incomplete work. A tool-free answer provides a summary without proving task completion.
+Summary recovery after a normally completed turn remains successful.
 
 The callback returns `AgentHarnessSettledTurnFinalizationResult`, not an
 ordinary attempt result. Its public fields are limited to the completed

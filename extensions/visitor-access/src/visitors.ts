@@ -16,12 +16,11 @@ import {
   type ActiveVisitorInvitation,
   visitorIdentityKeys,
   type VisitorGrant,
-  type VisitorIdentity,
   type VisitorInvitationContext,
   type VisitorOnboardingCompareAndSet,
   type VisitorOnboardingUpdate,
 } from "./grant-record.js";
-import { expiryText, visitorInviteResult } from "./invite-result.js";
+import { accountSeatsText, expiryText, visitorInviteResult } from "./invite-result.js";
 import type {
   VisitorInviteDetails,
   VisitorListDetails,
@@ -47,7 +46,7 @@ export class VisitorAccessService {
   private closed = false;
 
   constructor(
-    private readonly config: VisitorAccessConfig,
+    private readonly readLimits: () => Pick<VisitorAccessConfig, "maxVisitors" | "defaultTtlDays">,
     private readonly store: PluginStateKeyedStore<VisitorGrant>,
     private readonly policy: VisitorPolicyClient,
     private readonly logger: PluginLogger,
@@ -113,39 +112,37 @@ export class VisitorAccessService {
   }
 
   /** The first current grant among target keys, optionally with an exact grantId. */
-  private findActiveGrant(keys: readonly string[], grantId?: string): LiveVisitorGrant | undefined {
+  private findActiveGrant(keys: Iterable<string>, grantId?: string): LiveVisitorGrant | undefined {
     this.assertOpen();
     if (!this.ready) {
       throw new VisitorAccessError("Visitor access is starting; retry shortly.");
     }
     const now = Date.now();
-    return keys
-      .map((key) => this.grants.get(key))
-      .find(
-        (entry): entry is LiveVisitorGrant =>
-          entry !== undefined &&
-          grantIdSchema.safeParse(entry.grant.grantId).success &&
-          (grantId === undefined || entry.grant.grantId === grantId) &&
-          !entry.controller.signal.aborted &&
-          (entry.grant.expiresAt === null || entry.grant.expiresAt > now),
-      );
+    for (const key of keys) {
+      const entry = this.grants.get(key);
+      if (
+        entry !== undefined &&
+        (grantId === undefined || entry.grant.grantId === grantId) &&
+        grantIdSchema.safeParse(entry.grant.grantId).success &&
+        !entry.controller.signal.aborted &&
+        (entry.grant.expiresAt === null || entry.grant.expiresAt > now)
+      ) {
+        return entry;
+      }
+    }
+    return undefined;
   }
 
   /** Plugin-internal onboarding API; see README "Onboarding record". */
-  findActiveInvitation(identity: VisitorIdentity): ActiveVisitorInvitation | undefined {
-    const state = this.findActiveGrant(visitorIdentityKeys(identity));
-    return (
-      state && {
-        ...structuredClone(state.grant),
-        grantId: grantIdSchema.parse(state.grant.grantId),
-      }
-    );
+  findActiveInvitation(grantId: string): ActiveVisitorInvitation | undefined {
+    const state = this.findActiveGrant(this.grants.keys(), grantId);
+    return state && { ...structuredClone(state.grant), grantId };
   }
 
   /** Plugin-internal onboarding API; see README "Onboarding record". */
   compareAndSetOnboarding(params: VisitorOnboardingCompareAndSet) {
     return this.serialize(async (): Promise<VisitorOnboardingUpdate> => {
-      const state = this.findActiveGrant([...this.grants.keys()], params.grantId);
+      const state = this.findActiveGrant(this.grants.keys(), params.grantId);
       if (!state) {
         return { applied: false, reason: "inactive" };
       }
@@ -361,7 +358,7 @@ export class VisitorAccessService {
       if (input.forever && input.days !== undefined) {
         throw new VisitorAccessError("Choose days or forever: true, not both.");
       }
-      const days = input.days ?? this.config.defaultTtlDays;
+      const days = input.days ?? this.readLimits().defaultTtlDays;
       let expiresAt: number | null = null;
       if (!input.forever) {
         if (!days) {
@@ -388,6 +385,8 @@ export class VisitorAccessService {
         createdAt: previous?.createdAt ?? now,
         expiresAt,
       };
+      // Observe before effects: a completed grant must still settle if authority closes afterward.
+      const accountSeats = await this.policy.readAccountSeats(assertCurrent);
       let gatewayAccess = "";
       await this.policy.update(async (targets) => {
         const entries = await store.entries();
@@ -395,9 +394,10 @@ export class VisitorAccessService {
           ...targets.map(visitorTargetKey),
           ...entries.map((entry) => entry.key),
         ]);
-        if (!known.has(key) && known.size >= this.config.maxVisitors) {
+        const { maxVisitors } = this.readLimits();
+        if (!known.has(key) && known.size >= maxVisitors) {
           throw new VisitorAccessError(
-            `Visitor limit (${this.config.maxVisitors}) reached. Revoke an existing visitor before inviting another.`,
+            `Visitor limit (${maxVisitors}) reached. Revoke an existing visitor before inviting another.`,
           );
         }
         const access = await this.readAccess(typeof target === "number" ? [target] : []);
@@ -416,6 +416,10 @@ export class VisitorAccessService {
         (previous.expiresAt === null || previous.expiresAt > Date.now());
       const grantId = continuous ? grantIdSchema.parse(previous.grantId) : randomUUID();
       grant.grantId = grantId;
+      if (!continuous) {
+        // Welcome setup belongs to one grant; a new invitation after an ended one starts over.
+        grant.onboarding = { state: "pending", updatedAt: now };
+      }
       await this.registerGrant(
         grant,
         continuous
@@ -430,6 +434,7 @@ export class VisitorAccessService {
           : store,
       );
       return visitorInviteResult({
+        accountSeats,
         renewed: previous !== undefined,
         target,
         grant: { ...grant, grantId },
@@ -578,18 +583,22 @@ export class VisitorAccessService {
       const unmanaged = policyTargets
         .filter((target) => !managed.has(visitorTargetKey(target)))
         .toSorted((left, right) => visitorTargetKey(left).localeCompare(visitorTargetKey(right)));
+      const { maxVisitors } = this.readLimits();
       const displayedTargets = [
         ...entries.map(({ value }) => visitorGrantTarget(value)),
         ...unmanaged,
-      ].slice(0, this.config.maxVisitors);
+      ].slice(0, maxVisitors);
       const access = await this.readAccess([
         ...new Set(displayedTargets.filter((target) => typeof target === "number")),
       ]);
       assertCurrent();
       const missing = entries.filter((entry) => !targetKeys.has(entry.key)).length;
+      const accountSeats = await this.policy.readAccountSeats(assertCurrent);
+      this.assertOpen();
       const summary = `Visitors: ${entries.length} recorded; ${targetKeys.size} in policy. Drift: ${unmanaged.length} unmanaged, ${missing} missing from policy.`;
-      const lines = [summary];
+      const lines = [summary, accountSeatsText(accountSeats)];
       const details: VisitorListDetails = {
+        accountSeats,
         counts: {
           recorded: entries.length,
           inPolicy: targetKeys.size,
@@ -616,8 +625,18 @@ export class VisitorAccessService {
         const gatewayAccess = access.describe(target);
         const githubLogin = access.githubLogin(target);
         const github = `Verified GitHub: ${githubLogin ? `@${githubLogin}` : "unavailable"}`;
+        // Grants recorded before onboarding metadata have no welcome progress until first sign-in.
+        const welcome = grant.onboarding && {
+          state: grant.onboarding.state,
+          ...(grant.onboarding.welcomeSessionKey
+            ? { sessionKey: grant.onboarding.welcomeSessionKey }
+            : {}),
+        };
+        const welcomeText = welcome
+          ? ` | welcome ${welcome.state}${welcome.sessionKey ? ` ${welcome.sessionKey}` : ""}`
+          : "";
         return {
-          line: `${visitorTargetKey(target)} | ${github}${profileId ? ` | profileId ${profileId}` : ""}${grant.grantId ? ` | grantId ${grant.grantId}` : ""} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state} | ${gatewayAccess}`,
+          line: `${visitorTargetKey(target)} | ${github}${profileId ? ` | profileId ${profileId}` : ""}${grant.grantId ? ` | grantId ${grant.grantId}` : ""} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state}${welcomeText} | ${gatewayAccess}`,
           grant: {
             ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
             ...(grant.grantId ? { grantId: grant.grantId } : {}),
@@ -626,6 +645,7 @@ export class VisitorAccessService {
             invitedAt: new Date(grant.createdAt).toISOString(),
             expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
             state: missingFromPolicy ? "missing_from_policy" : expired ? "expired" : "managed",
+            ...(welcome ? { welcome } : {}),
             gatewayAccess,
           },
         };
@@ -642,9 +662,9 @@ export class VisitorAccessService {
           };
         }),
       );
-      let length = summary.length;
+      let length = lines.join("\n").length;
       let shown = 0;
-      for (const row of rows.slice(0, this.config.maxVisitors)) {
+      for (const row of rows.slice(0, maxVisitors)) {
         if (length + row.line.length + 1 > LIST_MAX_CHARS - 120) {
           break;
         }

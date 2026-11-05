@@ -22,7 +22,10 @@ import { isGatewayServiceStateLive } from "../../daemon/service-runtime.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { readGatewayLockProcessCmdline } from "../../infra/gateway-lock-process.js";
-import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import {
+  readActiveGatewayLockIdentity,
+  type GatewayLockIdentity,
+} from "../../infra/gateway-lock.js";
 import { classifyOpenClawArgv } from "../../infra/gateway-process-argv.js";
 import { createUpdatePreflightDiagnostics } from "../../infra/update-failure-facts.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
@@ -81,33 +84,26 @@ function matchesStoppedService(
   );
 }
 
-/** Native inspection cannot authorize publication over a live or unverified state owner. */
-export async function assertUnavailableGatewayPackageConsumerStopped(params: {
+/** Unavailable package inspection still requires an offline owner; Git reports a restart warning. */
+export async function inspectGatewayArtifactConsumer(params: {
   roots: readonly string[];
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
   assertCurrent: () => void;
-  verdict: Extract<ManagedGatewayUpdateVerdict, { kind: "unavailable" }>;
-}): Promise<void> {
-  const refuse = (cause?: unknown): never => {
-    const failure = createUpdatePreflightFailure("gateway-stop-unverified", params.verdict.message);
-    throw new UpdatePreMutationError("gateway-stop-unverified", failure.message, {
-      failureFacts: [
-        ...failure.failureFacts,
-        ...(collectServiceInspectionFailureFacts(params.verdict) ?? []),
-      ],
-      cause,
-    });
-  };
+  verdict?: Extract<ManagedGatewayUpdateVerdict, { kind: "unavailable" }>;
+}): Promise<string | undefined> {
+  let owner: GatewayLockIdentity | undefined;
+  let packageRoot: string | undefined;
+  let cause: unknown;
   try {
-    const owner = await readActiveGatewayLockIdentity({
+    owner = await readActiveGatewayLockIdentity({
       env: params.env,
       requireInspection: true,
       timeoutMs: params.timeoutMs,
     });
     params.assertCurrent();
     if (!owner) {
-      return;
+      return undefined;
     }
     const argv = readGatewayLockProcessCmdline(
       owner.pid,
@@ -122,15 +118,26 @@ export async function assertUnavailableGatewayPackageConsumerStopped(params: {
     });
     // A rewritten title loses the installation path, not the recorded ownership.
     // Only a positively identified disjoint installation can be ignored.
-    const packageRoot = entry.kind === "openclaw" ? entry.packageIdentity?.root : undefined;
-    if (packageRoot && params.roots.every((root) => !updateInstallRootsMatch(root, packageRoot))) {
-      return;
+    const ownerRoot = entry.kind === "openclaw" ? entry.packageIdentity?.root : undefined;
+    packageRoot = ownerRoot;
+    if (ownerRoot && params.roots.every((root) => !updateInstallRootsMatch(root, ownerRoot))) {
+      return undefined;
     }
   } catch (error) {
     params.assertCurrent();
-    refuse(error);
+    cause = error;
   }
-  refuse();
+  if (params.verdict) {
+    const failure = createUpdatePreflightFailure("gateway-stop-unverified", params.verdict.message);
+    throw new UpdatePreMutationError("gateway-stop-unverified", failure.message, {
+      failureFacts: [
+        ...failure.failureFacts,
+        ...(collectServiceInspectionFailureFacts(params.verdict) ?? []),
+      ],
+      cause,
+    });
+  }
+  return `Git update is continuing in ${packageRoot ?? params.roots.join(", ")} while a Gateway${owner ? ` (PID ${owner.pid})` : " owner"} is live or its persisted ownership cannot be verified. The Gateway keeps running the previous runtime and may fail to load lazily loaded chunks until restarted. After the update, restart it through its actual service manager, or press Ctrl+C in its original terminal and rerun the original Gateway command.`;
 }
 
 /** Observe other consumers; discovery never grants permission to stop them. */
@@ -144,12 +151,12 @@ export async function assertManagedGatewayArtifactPublication(params: {
   shouldRestart: boolean;
   phase?: "before-stop" | "publication";
   inspectOverlap?: typeof gatewayServiceCommandOverlapsPhysicalInstallation;
-}): Promise<void> {
+}): Promise<string | undefined> {
   params.assertCurrent();
   const serving = params.selected;
   const servingVerdict = serving?.serviceUpdateVerdict;
   if (params.updateInstallKind === "package" && servingVerdict?.kind === "unavailable") {
-    await assertUnavailableGatewayPackageConsumerStopped({ ...params, verdict: servingVerdict });
+    await inspectGatewayArtifactConsumer({ ...params, verdict: servingVerdict });
   }
   if (
     (params.phase !== "before-stop" || !params.shouldRestart) &&
@@ -164,6 +171,10 @@ export async function assertManagedGatewayArtifactPublication(params: {
       `Cannot replace Git runtime artifacts in ${servingVerdict.root}: its Gateway${serving.servicePid === undefined ? "" : ` (PID ${serving.servicePid})`} is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun \`${formatCliCommand("openclaw update", serving.serviceEnv)}\` without \`--no-restart\`. The serving runtime was left unchanged.`,
     );
   }
+  const warning =
+    params.updateInstallKind === "git" && params.phase !== "before-stop"
+      ? await inspectGatewayArtifactConsumer(params)
+      : undefined;
   const bindings = await discoverManagedGatewayBindings(params.env);
   params.assertCurrent();
   const readBinding = async (binding: ManagedGatewayBinding) => {
@@ -288,6 +299,7 @@ export async function assertManagedGatewayArtifactPublication(params: {
     }
   }
   params.assertCurrent();
+  return warning;
 }
 
 export async function revalidateManagedGatewayServiceAfterUpdate(params: {

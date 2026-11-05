@@ -307,7 +307,7 @@ function collectArtifactsFromMessage(
       download: { mode: previewOnly ? "unsupported" : download.mode },
       ...(imageUrl ? { image: { url: imageUrl } } : {}),
       ...(download.data !== undefined ? { data: download.data } : {}),
-      ...(download.url ? { url: download.url } : {}),
+      ...(params.includeDownloadData !== false && download.url ? { url: download.url } : {}),
     };
     params.collection.artifacts.push(summary);
   }

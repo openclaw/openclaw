@@ -105,12 +105,8 @@ export function formatAgentEnvelopeTimestamp(
     });
   }
   const formatted = formatUtcTimestamp(date, { displaySeconds: true });
-  try {
-    utcWeekdayFormatter ??= new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" });
-    return `${utcWeekdayFormatter.format(date)} ${formatted}`;
-  } catch {
-    return formatted;
-  }
+  utcWeekdayFormatter ??= new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" });
+  return `${utcWeekdayFormatter.format(date)} ${formatted}`;
 }
 
 /** Formats the generic bracketed envelope prepended to agent-visible messages. */

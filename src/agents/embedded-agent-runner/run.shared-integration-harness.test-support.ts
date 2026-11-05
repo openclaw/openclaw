@@ -6,6 +6,7 @@ import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   createOverflowRunParams,
+  resetSharedRunIntegrationHarnessMocks,
   warmRunOverflowCompactionHarness,
   type TestRunEmbeddedAgent,
 } from "./run.overflow-compaction.harness.js";
@@ -14,6 +15,15 @@ import { guardRunWorkspaceOwnership } from "./run.workspace-ownership.test-suppo
 let sharedRunEmbeddedAgent: Promise<TestRunEmbeddedAgent> | undefined;
 let sharedSessionState: Promise<OpenClawTestState> | undefined;
 let sessionSequence = 0;
+
+export async function createFreshRunIntegrationState(label: string) {
+  resetSharedRunIntegrationHarnessMocks();
+  const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+  const state = await createOpenClawTestState({ label });
+  const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+  setRuntimeConfigSnapshot({});
+  return state;
+}
 
 /** Warm the cross-owner module graph once, before per-case mocks and state. */
 export function loadSharedRunIntegrationHarness(): Promise<TestRunEmbeddedAgent> {

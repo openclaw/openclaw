@@ -1,6 +1,3 @@
-// Control UI tests cover Automations form select display state.
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
@@ -17,8 +14,6 @@ import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 const suite = createControlUiE2eSuite({
   name: "Control UI cron select values mocked Gateway E2E",
   startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
 const gardenMessage = "Summarize the fictional garden inventory.";
@@ -71,13 +66,18 @@ suite.define(() => {
                 : '[data-test-id="cron-new-task"]',
             )
             .click();
+          if (narrow && mode === "edit") {
+            // Include validation help when exercising a wrapped edit footer.
+            await page.locator("#cron-name").fill("");
+            await page.locator(".cron-submit-reason").waitFor({ state: "visible" });
+          }
           await page.evaluate(() => document.fonts.ready);
           if (narrow) {
             const footer = page.locator(".cron-editor-actions");
             const originalHeight = await footer.evaluate(
               (element) => element.getBoundingClientRect().height,
             );
-            await page.setViewportSize({ width: 390, height: 707 });
+            await page.setViewportSize({ width: mode === "edit" ? 320 : 390, height: 707 });
             await expect
               .poll(() => footer.evaluate((element) => element.getBoundingClientRect().height))
               .toBeGreaterThan(originalHeight);
@@ -111,6 +111,14 @@ suite.define(() => {
             await page.locator("#cron-name").fill("Garden keyboard task");
           }
           await page.keyboard.press("Tab");
+          if (mode === "edit") {
+            await page.keyboard.press("Tab");
+            expect(
+              await page
+                .locator("#cron-owner-profile-id")
+                .evaluate((element) => element.matches(":focus")),
+            ).toBe(true);
+          }
           await page.keyboard.press("Tab");
           await page.keyboard.press("Tab");
           const interval = page.locator('[data-test-id="cron-schedule-kind-every"]');
@@ -119,7 +127,6 @@ suite.define(() => {
           const once = page.locator('[data-test-id="cron-schedule-kind-at"]');
           await page.locator("#cron-schedule-at").waitFor({ state: "visible" });
           expect(await once.evaluate((element) => element.matches(":focus-within"))).toBe(true);
-          await page.screenshot({ path: path.join(suite.artifactDir, "keyboard-once.png") });
           const geometry = await once.evaluate((element) => {
             const choice = element.getBoundingClientRect();
             const actions = document.querySelector(".cron-editor-actions");
@@ -137,14 +144,9 @@ suite.define(() => {
               footerTop: footer.top,
               footerBottom: footer.bottom,
               scrollportBottom: document.querySelector(".content")!.getBoundingClientRect().bottom,
-              footerHeight: footer.height,
               reachable: hit === element || (hit !== null && element.contains(hit)),
             };
           });
-          writeFileSync(
-            path.join(suite.artifactDir, "keyboard-geometry.json"),
-            JSON.stringify(geometry, null, 2),
-          );
           expect(geometry.top).toBeGreaterThanOrEqual(0);
           expect(geometry.bottom).toBeLessThanOrEqual(geometry.footerTop);
           expect(geometry.reachable).toBe(true);
@@ -225,9 +227,6 @@ suite.define(() => {
         );
         expect(await page.locator('[data-test-id="cron-submit"]').isDisabled()).toBe(true);
         expect(await gateway.getRequests("cron.update")).toHaveLength(0);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "delivery-repair-required.png"),
-        });
 
         await mode.click();
         await page.getByRole("option", { name: "None (internal)", exact: true }).click();
@@ -291,6 +290,16 @@ suite.define(() => {
       await page.getByRole("option", { name: "Post to main timeline", exact: true }).click();
       await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("systemEvent");
       await expect.poll(() => pickerValue("#cron-session-target")).toBe("main");
+      await expect
+        .poll(() =>
+          page
+            .getByText(
+              "Main adds the task to the agent’s timeline. Isolated starts a reply in a separate session.",
+              { exact: true },
+            )
+            .isVisible(),
+        )
+        .toBe(true);
 
       const target = page.locator("#cron-session-target");
       await target.click();

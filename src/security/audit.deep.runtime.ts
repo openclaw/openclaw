@@ -1,19 +1,14 @@
 /** Deep audit implementation for code-safety scans loaded only when requested. */
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeStringEntries,
-  normalizeTrimmedStringList,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readRegularFile, statRegularFile } from "../infra/fs-safe.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { loadSkillRootRecords } from "../skills/loading/skill-root-loader.js";
 import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
-import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
@@ -21,8 +16,6 @@ import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
 type SkillScanSummary = Awaited<
   ReturnType<typeof import("../skills/security/scanner.js").scanDirectoryWithSummary>
 >;
-
-export type CodeSafetySummaryCache = Map<string, Promise<SkillScanSummary>>;
 
 const loadSkillScannerModule = createLazyRuntimeModule(
   () => import("../skills/security/scanner.js"),
@@ -130,40 +123,17 @@ function appendCodeSafetySummaryFindings(
   });
 }
 
-async function getCodeSafetySummary(params: {
-  dirPath: string;
-  includeFiles?: string[];
-  summaryCache?: CodeSafetySummaryCache;
-}): Promise<SkillScanSummary> {
-  const includeFiles = normalizeStringEntries(params.includeFiles);
-  const includeKey = includeFiles.length > 0 ? includeFiles.toSorted().join("\u0000") : "";
-  const cacheKey = `${params.dirPath}\u0000${includeKey}`;
-  const scan = async () => {
-    const skillScanner = await loadSkillScannerModule();
-    return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
-      includeFiles: params.includeFiles,
-    });
-  };
-  return params.summaryCache
-    ? await getOrCreatePromise(params.summaryCache, cacheKey, scan)
-    : await scan();
-}
-
 async function getSkillCodeSafetySummary(params: {
   dirPath: string;
   skillFilePath: string;
-  summaryCache?: CodeSafetySummaryCache;
 }): Promise<SkillScanSummary> {
-  const [summary, skillContent, skillScanner] = await Promise.all([
-    getCodeSafetySummary({
-      dirPath: params.dirPath,
-      summaryCache: params.summaryCache,
-    }),
+  const skillScanner = await loadSkillScannerModule();
+  const [summary, skillContent] = await Promise.all([
+    skillScanner.scanDirectoryWithSummary(params.dirPath),
     readRegularFile({
       filePath: params.skillFilePath,
       maxBytes: MAX_SKILL_AUDIT_FILE_BYTES,
     }).then(({ buffer }) => buffer.toString("utf-8")),
-    loadSkillScannerModule(),
   ]);
   const skillFindings = [
     ...skillScanner.scanSkillContent(skillContent, params.skillFilePath),
@@ -183,7 +153,6 @@ async function getSkillCodeSafetySummary(params: {
 
 export async function collectPluginsCodeSafetyFindings(params: {
   stateDir: string;
-  summaryCache?: CodeSafetySummaryCache;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const { extensionsDir, pluginDirs } = await listInstalledPluginDirs({
@@ -219,7 +188,7 @@ export async function collectPluginsCodeSafetyFindings(params: {
         remediation:
           "Inspect the plugin package.json for syntax errors. If the plugin is untrusted, remove it from your OpenClaw extensions state directory.",
       });
-      // Continue — getCodeSafetySummary below still scans the plugin directory
+      // Continue — the code scan below still scans the plugin directory.
     }
     const forcedScanEntries: string[] = [];
     const escapedEntries: string[] = [];
@@ -253,21 +222,21 @@ export async function collectPluginsCodeSafetyFindings(params: {
       });
     }
 
-    const summary = await getCodeSafetySummary({
-      dirPath: pluginPath,
-      includeFiles: forcedScanEntries,
-      summaryCache: params.summaryCache,
-    }).catch((err: unknown) => {
-      findings.push({
-        checkId: "plugins.code_safety.scan_failed",
-        severity: "warn",
-        title: `Plugin "${pluginName}" code scan failed`,
-        detail: `Static code scan could not complete: ${String(err)}`,
-        remediation:
-          "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
+    const summary = await loadSkillScannerModule()
+      .then((skillScanner) =>
+        skillScanner.scanDirectoryWithSummary(pluginPath, { includeFiles: forcedScanEntries }),
+      )
+      .catch((err: unknown) => {
+        findings.push({
+          checkId: "plugins.code_safety.scan_failed",
+          severity: "warn",
+          title: `Plugin "${pluginName}" code scan failed`,
+          detail: `Static code scan could not complete: ${String(err)}`,
+          remediation:
+            "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
+        });
+        return null;
       });
-      return null;
-    });
     if (!summary) {
       continue;
     }
@@ -281,7 +250,6 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
   workspaceDir?: string;
-  summaryCache?: CodeSafetySummaryCache;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
@@ -306,7 +274,12 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const entries = [...workspaceDirs].flatMap((workspaceDir) =>
     loadWorkspaceSkills(workspaceDir, { config: params.cfg }),
   );
-  const { listAgentIds } = await import("../agents/agent-scope.js");
+  const [{ listAgentIds }, { resolveAgentDir }, { resolvePluginMetadataSnapshotRequiredRuntime }] =
+    await Promise.all([
+      import("../agents/agent-scope.js"),
+      import("../agents/agent-scope-config.js"),
+      import("../plugins/plugin-metadata-snapshot-required.js"),
+    ]);
   const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
   const reportWorkshopScanFailure = (filePath: string, error: unknown) => {
     findings.push({
@@ -321,18 +294,38 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   // Installed-code audit includes hidden and shadowed Workshop skills, not only
   // the merged prompt inventory. Prompt discovery limits must not hide installed
   // artifacts from the audit.
+  // Disabled plugins keep their learned skills on disk, so every declared folder is installed code.
+  let agentSkillsDirs: string[] = [];
+  try {
+    const metadataSnapshot = resolvePluginMetadataSnapshotRequiredRuntime({
+      workspaceDir: [...workspaceDirs][0] ?? params.stateDir,
+      config: params.cfg,
+      env,
+    });
+    agentSkillsDirs = [
+      ...new Set(
+        metadataSnapshot.manifestRegistry.plugins.flatMap((record) =>
+          record.agentSkillsDir ? [record.agentSkillsDir] : [],
+        ),
+      ),
+    ];
+  } catch (error) {
+    reportWorkshopScanFailure(path.join(params.stateDir, "agents"), error);
+  }
   for (const agentId of listAgentIds(params.cfg)) {
-    const workshopDir = resolveWorkshopSkillsDir(params.cfg, agentId, env);
-    entries.push(
-      ...loadSkillRootRecords({
-        dir: workshopDir,
-        source: "openclaw-workshop",
-        config: params.cfg,
-        mode: "audit",
-        rejectHardlinks: true,
-        onDiagnostic: ({ path: filePath, message }) => reportWorkshopScanFailure(filePath, message),
-      }),
-    );
+    for (const name of agentSkillsDirs) {
+      entries.push(
+        ...loadSkillRootRecords({
+          dir: path.join(resolveAgentDir(params.cfg, agentId, env), name),
+          source: "openclaw-workshop",
+          config: params.cfg,
+          mode: "audit",
+          rejectHardlinks: true,
+          onDiagnostic: ({ path: filePath, message }) =>
+            reportWorkshopScanFailure(filePath, message),
+        }),
+      );
+    }
   }
   for (const entry of entries) {
     if (resolveSkillSource(entry.skill) === "openclaw-bundled") {
@@ -353,7 +346,6 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
     const summary = await getSkillCodeSafetySummary({
       dirPath: skillDir,
       skillFilePath: entry.skill.filePath,
-      summaryCache: params.summaryCache,
     }).catch((err: unknown) => {
       findings.push({
         checkId: "skills.code_safety.scan_failed",

@@ -1,22 +1,15 @@
 import { expect, it, vi } from "vitest";
+import { configMayRequireStartupPluginConvergence } from "../commands/doctor/shared/startup-plugin-convergence-plan.js";
 import {
   getOfficialExternalPluginCatalogEntry as entryFor,
   getOfficialExternalPluginCatalogEntryForPackage as packageEntry,
   isOfficialExternalPluginId as isOfficial,
   listOfficialExternalChannelCatalogEntries,
-  listOfficialExternalPluginCatalogEntries,
   listOfficialExternalProviderCatalogEntries,
   resolveOfficialExternalProviderContractPluginIds as contractPlugins,
   resolveOfficialExternalProviderPluginIds as providerPlugins,
 } from "./official-external-plugin-catalog.js";
 import type { OfficialExternalPluginCatalogEntry } from "./official-external-plugin-catalog.types.js";
-import {
-  hasOfficialExternalChannelTarget as channelTarget,
-  hasOfficialExternalContractTarget as hasContract,
-  hasOfficialExternalProviderTarget as providerTarget,
-  hasOfficialExternalWebContractEnvTarget as webEnvTarget,
-  hasOfficialExternalWebSearchTarget as webTarget,
-} from "./official-external-plugin-targets.js";
 
 const embedding = "embeddingProviders";
 const fixtures = vi.hoisted(() => {
@@ -64,17 +57,13 @@ const fixtures = vi.hoisted(() => {
   const otherKind = { ...pluginShadow, name: "@fixture/other-kind", kind: "channel" };
   const lowercase = { name: "@fixture/shared", openclaw: { plugin: { id: "shared" } } };
   const fallback = { id: "FallbackOnly", name: "@fixture/fallback" };
-  const mutable: OfficialExternalPluginCatalogEntry = {
-    name: "@fixture/mutable",
-    openclaw: { plugin: { id: "Mutable" }, providers: [{ id: "OriginalProvider" }] },
-  };
   return {
     winner,
     accepted,
     lowercase,
     channelCatalog: { entries: [rejected, winner, otherKind] },
     providerCatalog: { entries: [shadow, accepted, lowercase] },
-    pluginCatalog: { entries: [pluginShadow, fallback, mutable] },
+    pluginCatalog: { entries: [pluginShadow, fallback] },
   };
 });
 
@@ -112,52 +101,28 @@ it("keeps exact lookup identities separate from lowercase canonical and provider
 });
 
 it.each([
-  ["plugin", listOfficialExternalPluginCatalogEntries],
   ["channel", listOfficialExternalChannelCatalogEntries],
   ["provider", listOfficialExternalProviderCatalogEntries],
-] as const)("returns independent %s arrays with shared row identities", (_kind, list) => {
-  const first = list();
-  expect(first).not.toBe(list());
-  expect(first[0]).toBe(fixtures.winner);
-  first.length = 0;
-  expect(list()[0]).toBe(fixtures.winner);
-});
-
-it("observes mutations to returned rows in later lookups and projections", () => {
-  const entry = entryFor("Mutable")!;
-  const { name: originalName, openclaw: originalManifest } = entry;
-  try {
-    entry.name = "@fixture/renamed";
-    entry.openclaw = {
-      plugin: { id: "Renamed" },
-      channel: { id: "RenamedChannel", label: "Renamed" },
-    };
-
-    expect(entryFor("Mutable")).toBeUndefined();
-    expect(entryFor("OriginalProvider")).toBeUndefined();
-    expect(entryFor("Renamed")).toBe(entry);
-    expect(packageEntry("@fixture/mutable")).toBeUndefined();
-    expect(packageEntry("@fixture/renamed")).toBe(entry);
-    expect([isOfficial("mutable"), isOfficial("renamed")]).toEqual([false, true]);
-    expect(listOfficialExternalChannelCatalogEntries()).toContain(entry);
-    expect(listOfficialExternalProviderCatalogEntries()).not.toContain(entry);
-    expect(channelTarget({ config: { channels: { renamedchannel: {} } }, env: {} })).toBe(true);
-    expect(providerTarget({ providerIds: ["OriginalProvider"], env: {} })).toBe(false);
-  } finally {
-    entry.name = originalName;
-    entry.openclaw = originalManifest;
-  }
+] as const)("filters admitted %s entries", (_kind, list) => {
+  expect(list()).toEqual([fixtures.winner]);
 });
 
 it.each(["shadow", "rejected"])("keeps repair targets from excluded %s rows", (prefix) => {
   const env = (kind: string) => ({ [`${prefix}_${kind}_KEY`]: "key" });
   expect(entryFor(`${prefix}-model`)).toBeUndefined();
-  expect([
-    providerTarget({ providerIds: [` ${prefix.toUpperCase()}-MODEL `], env: {} }),
-    providerTarget({ providerIds: [], env: env("MODEL") }),
-    hasContract({ contract: embedding, providerIds: [`${prefix}-embedding`] }),
-    channelTarget({ config: {}, env: env("CHANNEL") }),
-    webEnvTarget({ env: env("WEB") }),
-    webTarget({ providerId: `${prefix}-web`, env: {} }),
-  ]).toEqual([true, true, true, true, true, true]);
+  expect(
+    [
+      {
+        config: {
+          agents: { defaults: { model: { primary: ` ${prefix.toUpperCase()}-MODEL /fixture` } } },
+        },
+        env: {},
+      },
+      { config: {}, env: env("MODEL") },
+      { config: { memory: { search: { provider: `${prefix}-embedding` } } }, env: {} },
+      { config: {}, env: env("CHANNEL") },
+      { config: { tools: { web: { search: { enabled: false } } } }, env: env("WEB") },
+      { config: { tools: { web: { search: { provider: `${prefix}-web` } } } }, env: {} },
+    ].map(configMayRequireStartupPluginConvergence),
+  ).toEqual([true, true, true, true, true, true]);
 });

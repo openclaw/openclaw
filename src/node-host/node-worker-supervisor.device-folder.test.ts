@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
@@ -16,7 +16,6 @@ import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useStateDatabaseTempDirs();
-afterEach(() => vi.restoreAllMocks());
 
 function fixture() {
   const value = writeNodeWorkerFixture(tempDirs.make("device-folder-launch-"));

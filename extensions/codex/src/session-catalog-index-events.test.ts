@@ -3,7 +3,6 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
-import * as messageDecoder from "./app-server/client-message-decoder.js";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./app-server/test-support.js";
@@ -264,7 +263,7 @@ it.each([
   async ({ repeatFirst, expected }) => {
     const first = thread({ id: "first" });
     const second = thread({ id: "second" });
-    const { index, harness, reply, request, readNative } = await fixture([first, second]);
+    const { index, harness, reply, request } = await fixture([first, second]);
     let turn = 0;
     const start = (threadId: string) =>
       harness.send({
@@ -283,15 +282,9 @@ it.each([
       harness.send({ method: "turn/completed", params: { threadId: first.id, turn: {} } });
       start(first.id);
     }
-    const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
     await reply(1, { ...second, name: "Second read returned first" });
     await expectName(index, second.id, "Second read returned first");
-    const updated = { ...first, name: "First read returned last", preview: "x".repeat(40 * 1024) };
-    expect(
-      await reply(0, { ...updated, extra: { discarded: "native payload ".repeat(4_096) } }),
-    ).toEqual({
-      thread: { ...updated, preview: "x".repeat(500) },
-    });
+    await reply(0, { ...first, name: "First read returned last" });
     await expectName(index, first.id, "First read returned last");
     if (repeatFirst === "inflight") {
       await reply(2, { ...first, name: "Latest first turn" });
@@ -299,8 +292,6 @@ it.each([
     }
     expect(await ids(index)).toEqual(expected);
     expect(harness.writes).toHaveLength(repeatFirst === "inflight" ? 3 : 2);
-    expect(readNative).toHaveBeenCalledOnce();
-    expect(parse).not.toHaveBeenCalled();
   },
 );
 

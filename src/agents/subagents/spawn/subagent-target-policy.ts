@@ -138,7 +138,7 @@ export function describeSubagentSpawnTargetParameter(params: {
     if (!hasOtherConfiguredAgent && !params.requireAgentId && !collectClause) {
       return undefined;
     }
-    return `Only the requester agent is allowed as a target; no other agentId is configured. ${omitClause}${collectClause}`;
+    return `Only the requester agent is allowed as a target. ${omitClause}${collectClause}`;
   }
   return `${describeTargetIdList("Configured agent to target", allowed.allowedIds)} ${omitClause}${collectClause}`;
 }

@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   validatePushTestParams,
   validateWebPushSubscribeParams,
   validateWebPushPreferencesGetParams,
@@ -59,7 +58,7 @@ type PushRequestOptions = Omit<GatewayRequestHandlerOptions, "context"> & {
 };
 
 function respondWebPushForbidden(respond: PushRequestOptions["respond"], message: string) {
-  respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, message));
+  respondError(respond, ErrorCodes.FORBIDDEN, message);
 }
 
 function hasValidWebPushQuietHoursTimeZone(preferences: {
@@ -283,22 +282,19 @@ export const pushHandlers = {
 
       const deviceId = normalizeOptionalString(client?.connect.device?.id);
       if (!deviceId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "paired browser device identity required"),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "paired browser device identity required",
         );
         return;
       }
       const userProfileId = normalizeOptionalString(client?.authenticatedUserProfile?.profileId);
       if (context.getRuntimeConfig().gateway?.roles && !userProfileId) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Web Push requires an authenticated user profile when Gateway roles are enabled",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Web Push requires an authenticated user profile when Gateway roles are enabled",
         );
         return;
       }
@@ -390,13 +386,10 @@ export const pushHandlers = {
         }
         if (params.scope === "user") {
           if (!currentProfileId) {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                "user defaults require a durable authenticated profile",
-              ),
+            respondError(
+              respond,
+              ErrorCodes.INVALID_REQUEST,
+              "user defaults require a durable authenticated profile",
             );
             return undefined;
           }
@@ -461,13 +454,9 @@ export const pushHandlers = {
           return;
         }
         if (!results.some((result) => result.ok)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, "all web push deliveries failed", {
-              details: { results },
-            }),
-          );
+          respondError(respond, ErrorCodes.UNAVAILABLE, "all web push deliveries failed", {
+            details: { results },
+          });
           return;
         }
         respond(true, { results }, undefined);

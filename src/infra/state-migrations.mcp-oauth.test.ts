@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { root } from "@openclaw/fs-safe";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
@@ -15,19 +14,18 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withRestoredMocks } from "../test-utils/vitest-spies.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 import {
   measureMcpMigrationHostSql,
   observeLegacyMcpOAuthImport,
 } from "./state-migrations.mcp-oauth-faults.test-support.js";
 import { isDefinitelyStaleLegacyMcpOAuthLock } from "./state-migrations.mcp-oauth-lock-stale.js";
-import { withRootBoundedLegacyFileLock } from "./state-migrations.mcp-oauth-lock.js";
 import {
   detectLegacyMcpOAuthStores,
   migrateLegacyMcpOAuthStores,
@@ -61,6 +59,7 @@ beforeEach(() => {
 function database() {
   return openOpenClawStateDatabase({ env }).db;
 }
+const sql = () => getNodeSqliteKysely<MigrationDatabase>(database());
 
 async function writeLegacy(params: LegacySource = {}): Promise<string> {
   const sourcePath = path.join(stateDir, "mcp-oauth", params.fileName ?? DEFAULT_FILE_NAME);
@@ -113,26 +112,21 @@ function validStore(overrides: Record<string, unknown> = {}) {
 }
 
 function storeRow(storeKey = DEFAULT_FILE_NAME.slice(0, -5)) {
-  const db = database();
   return executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<MigrationDatabase>(db)
-      .selectFrom("mcp_oauth_stores")
-      .selectAll()
-      .where("store_key", "=", storeKey),
+    database(),
+    sql().selectFrom("mcp_oauth_stores").selectAll().where("store_key", "=", storeKey),
   );
 }
 
 function receipt(sourcePath?: string) {
-  const db = database();
-  let query = getNodeSqliteKysely<MigrationDatabase>(db)
+  const query = sql()
     .selectFrom("migration_sources")
     .selectAll()
     .where("migration_kind", "=", "legacy-mcp-oauth-json");
-  if (sourcePath) {
-    query = query.where("source_path", "=", sourcePath);
-  }
-  return executeSqliteQueryTakeFirstSync(db, query);
+  return executeSqliteQueryTakeFirstSync(
+    database(),
+    sourcePath ? query.where("source_path", "=", sourcePath) : query,
+  );
 }
 
 const stored = (storeKey?: string) => JSON.parse(storeRow(storeKey)?.store_json ?? "null");
@@ -168,10 +162,9 @@ function seedCanonical(
   store: Record<string, unknown>,
   storeKey = DEFAULT_FILE_NAME.slice(0, -5),
 ): void {
-  const db = database();
   executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<MigrationDatabase>(db)
+    database(),
+    sql()
       .insertInto("mcp_oauth_stores")
       .values({
         store_key: storeKey,
@@ -183,11 +176,7 @@ function seedCanonical(
 }
 
 function deleteCanonical(): void {
-  const db = database();
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<MigrationDatabase>(db).deleteFrom("mcp_oauth_stores"),
-  );
+  executeSqliteQuerySync(database(), sql().deleteFrom("mcp_oauth_stores"));
 }
 
 async function migrate(
@@ -230,14 +219,10 @@ it("imports validated fields, preserves SDK extensions, drops dead state, and re
   const row = storeRow();
   expect(row?.format_version).toBe(1);
   const imported = JSON.parse(row?.store_json ?? "null");
-  expect(imported).toMatchObject({
-    clientInformation: { vendor_extension: "preserve-client-extension" },
-    tokens: { vendor_extension: "preserve-token-extension" },
-    discoveryState: {
-      authorizationServerMetadata: { vendor_extension: "preserve-metadata-extension" },
-      resourceMetadata: { vendor_extension: "preserve-resource-extension" },
-    },
-  });
+  const expected = Object.fromEntries(
+    Object.entries(validStore()).filter(([key]) => key !== "state"),
+  );
+  expect(imported).toEqual(expected);
   expect(imported).not.toHaveProperty("state");
   expect(receipt(sourcePath)).toMatchObject({
     removed_source: 1,
@@ -368,7 +353,6 @@ it("merges legacy credentials into challenge-only SQLite state", async () => {
   const result = await migrate();
 
   expect(result.warnings).toEqual([]);
-  expect(result.changes).toContain(`Migrated MCP OAuth store ${DEFAULT_FILE_NAME} to SQLite.`);
   expect(stored()).toMatchObject({
     pendingAuthorizationChallenge,
     tokens: { access_token: "test-token-placeholder", refresh_token: "test-auth-token" },
@@ -426,8 +410,7 @@ it("rejects malformed and unexpected store shapes without mutation", async () =>
   expect(result.warnings.join("\n")).toContain("unexpected field");
   expect(result.warnings.join("\n")).not.toContain(privateMarker);
   expectFiles([malformedPath, unexpectedPath, invalidJsonPath]);
-  expect(storeRow()).toBeUndefined();
-  expect(receipt()).toBeUndefined();
+  expect([storeRow(), receipt()]).toEqual([undefined, undefined]);
 });
 
 it("drops an orphaned legacy token expiry during import", async () => {
@@ -468,18 +451,6 @@ it.skipIf(process.platform === "win32").each([
   expect(storeRow()).toBeUndefined();
 });
 
-it("restores a source changed before Doctor could claim it", async () => {
-  const sourcePath = await writeLegacy();
-
-  const result = await migrate({ beforeClaim: (candidate) => fs.appendFileSync(candidate, " ") });
-
-  expect(result.warnings[0]).toContain("changed before Doctor could claim it");
-  expect(fs.existsSync(sourcePath)).toBe(true);
-  expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
-  expect(storeRow()).toBeUndefined();
-  expect(receipt()).toBeUndefined();
-});
-
 it("imports a valid interrupted claim", async () => {
   const sourcePath = await writeLegacy();
   const claimPath = `${sourcePath}.doctor-importing`;
@@ -490,17 +461,6 @@ it("imports a valid interrupted claim", async () => {
   expect(result.warnings).toEqual([]);
   expect(storeRow()).toBeDefined();
   expectFiles([], [sourcePath, claimPath]);
-});
-
-it("refuses source and interrupted claim together without a receipt", async () => {
-  const sourcePath = await writeLegacy();
-  await fsp.copyFile(sourcePath, `${sourcePath}.doctor-importing`);
-
-  const result = await migrate();
-
-  expect(result.warnings[0]).toContain("source and interrupted claim both exist");
-  expect(storeRow()).toBeUndefined();
-  expect(receipt()).toBeUndefined();
 });
 
 it("uses the receipt for cleanup-only retries and cannot resurrect deleted canonical state", async () => {
@@ -530,52 +490,52 @@ it("uses the receipt for cleanup-only retries and cannot resurrect deleted canon
   expect(receipt(sourcePath)).toMatchObject({ removed_source: 1 });
 });
 
-it.each(["symlink", "hardlink", "oversized", "invalid-utf8"])(
-  "rejects %s sources",
-  async (kind) => {
-    let sourcePath: string;
-    if (kind === "symlink" || kind === "hardlink") {
-      const target = path.join(stateDir, "outside.json");
-      await fsp.writeFile(target, JSON.stringify(validStore()), "utf8");
-      sourcePath = path.join(stateDir, "mcp-oauth", DEFAULT_FILE_NAME);
-      await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
-      await (kind === "symlink" ? fsp.symlink(target, sourcePath) : fsp.link(target, sourcePath));
-    } else {
-      sourcePath = await writeLegacy({
-        bytes:
-          kind === "oversized"
-            ? Buffer.alloc(4 * 1024 * 1024 + 1, 0x20)
-            : Buffer.from([0xff, 0xfe]),
-      });
-    }
-    const result = await migrate();
-    expect(result.warnings[0]).toContain("Failed reading legacy MCP OAuth store");
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(receipt()).toBeUndefined();
-  },
-);
-
-it("requires exclusive state ownership", async () => {
-  const sourcePath = await writeLegacy();
-  const gatewayLock = await acquireGatewayLock({
-    allowInTests: true,
-    env,
-    pollIntervalMs: 10,
-    port: 18_790,
-    timeoutMs: 100,
+it.each([
+  "symlink",
+  "hardlink",
+  "oversized",
+  "invalid-utf8",
+  "changed",
+  "duplicate",
+  "busy",
+] as const)("rejects %s sources", async (kind) => {
+  const sourcePath = await writeLegacy({
+    bytes:
+      kind === "oversized"
+        ? Buffer.alloc(4 * 1024 * 1024 + 1, 0x20)
+        : kind === "invalid-utf8"
+          ? Buffer.from([0xff, 0xfe])
+          : undefined,
   });
-  if (!gatewayLock) {
-    throw new Error("expected test Gateway lock");
+  if (kind === "symlink" || kind === "hardlink") {
+    const target = path.join(stateDir, "outside.json");
+    await fsp.writeFile(target, JSON.stringify(validStore()), "utf8");
+    await fsp.unlink(sourcePath);
+    await (kind === "symlink" ? fsp.symlink(target, sourcePath) : fsp.link(target, sourcePath));
   }
-  let result: Awaited<ReturnType<typeof migrateLegacyMcpOAuthStores>>;
-  try {
-    result = await migrate();
-  } finally {
-    await gatewayLock.release();
+  if (kind === "duplicate") {
+    await fsp.copyFile(sourcePath, `${sourcePath}.doctor-importing`);
   }
-
-  expect(result.warnings[0]).toContain("OpenClaw state database is busy");
-  expect(fs.existsSync(sourcePath)).toBe(true);
+  const run = () =>
+    migrate(
+      kind === "changed"
+        ? {
+            beforeClaim: (candidate) => fs.appendFileSync(candidate, " "),
+          }
+        : {},
+    );
+  const result = await (kind === "busy" ? withGatewayLockHeld(env, 18_790, run) : run());
+  const warning =
+    kind === "changed"
+      ? "changed before Doctor could claim it"
+      : kind === "duplicate"
+        ? "source and interrupted claim both exist"
+        : kind === "busy"
+          ? "OpenClaw state database is busy"
+          : "Failed reading legacy MCP OAuth store";
+  expect(result.warnings[0]).toContain(warning);
+  expectFiles([sourcePath], kind === "changed" ? [`${sourcePath}.doctor-importing`] : []);
+  expect([storeRow(), receipt()]).toEqual([undefined, undefined]);
 });
 
 function lockPayload(overrides: Record<string, unknown> = {}): string {
@@ -609,22 +569,18 @@ it("fails closed for live, young, and malformed owner evidence", () => {
 });
 
 it("reports a stale sidecar without unlinking a replacement-prone path", async () => {
-  const targetRelativePath = path.join("mcp-oauth", DEFAULT_FILE_NAME);
-  const lockPath = path.join(stateDir, `${targetRelativePath}.lock`);
-  await fsp.mkdir(path.dirname(lockPath), { recursive: true });
+  const sourcePath = await writeLegacy();
+  const lockPath = `${sourcePath}.lock`;
   const raw = lockPayload({
     pid: 2 ** 30,
     createdAt: new Date(Date.now() - 120_000).toISOString(),
     starttime: 1,
   });
   await fsp.writeFile(lockPath, raw);
-  const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
-  let entered = false;
-  await expect(
-    withRootBoundedLegacyFileLock({ stateRoot, targetRelativePath }, async () => {
-      entered = true;
-    }),
-  ).rejects.toMatchObject({ code: "file_lock_stale" });
-  expect(entered).toBe(false);
+  const result = await migrate();
+  expect(result.changes).toEqual([]);
+  expect(result.warnings[0]).toContain("Verify no older OpenClaw process is running");
+  expectFiles([sourcePath], [`${sourcePath}.doctor-importing`]);
+  expect([storeRow(), receipt()]).toEqual([undefined, undefined]);
   expect(await fsp.readFile(lockPath, "utf8")).toBe(raw);
 });

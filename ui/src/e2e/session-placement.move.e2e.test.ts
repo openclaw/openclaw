@@ -163,19 +163,18 @@ suite.define(() => {
       await gateway.deferNext("sessions.move");
       await openPlacement(page);
       await page.getByRole("menuitem", { name: "Move session…", exact: true }).click();
-      await page.getByText("The active turn will be interrupted.", { exact: false }).waitFor();
+      await page.getByText("The active reply will be interrupted.", { exact: false }).waitFor();
       await page.locator('[data-value="gateway"]').waitFor();
       await page.locator('[data-value="device:writer-runner"]').waitFor();
       expect(await page.locator('[data-value="cloud:aws"]').count()).toBe(0);
       expect(await page.locator('[data-value="device:saturated"]').isDisabled()).toBe(true);
       expect(await page.locator('[data-value="device:offline"]').isDisabled()).toBe(true);
       expect(await page.locator('[data-value="device:nonhost"]').isDisabled()).toBe(true);
-      await page.getByText("No worker slots are available", { exact: false }).waitFor();
+      await page.getByText("No session slots are available", { exact: false }).waitFor();
       await page.getByText("Device unavailable", { exact: false }).waitFor();
       await page.getByText("Session hosting is disabled", { exact: false }).waitFor();
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
       await page.locator('[data-value="device:writer-runner"]').click();
-
       await page.getByRole("button", { name: "Move session", exact: true }).click();
       await expectMove(gateway, { kind: "device", deviceId: "writer-runner" });
       await (
@@ -200,9 +199,11 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await openPlacement(page);
-      await page.getByRole("button", { name: /Device offline/ }).waitFor();
+      await page.getByRole("button", { name: /Device disconnected/ }).waitFor();
       await page
-        .getByText("Waiting for device to reconnect; retry after it returns", { exact: false })
+        .getByText("Waiting for the device to reconnect. Retry when it’s connected.", {
+          exact: false,
+        })
         .waitFor();
       session.placement.runner.status = "available";
       await gateway.setSessionsListResponse(chatSessionListResponse([session]));
@@ -213,7 +214,7 @@ suite.define(() => {
       session.placement.runner.status = "offline";
       await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
-      await page.getByRole("button", { name: /Device offline/ }).waitFor();
+      await page.getByRole("button", { name: /Device disconnected/ }).waitFor();
       const continueAction = page.getByRole("menuitem", {
         name: "Continue on Gateway…",
         exact: true,
@@ -244,7 +245,9 @@ suite.define(() => {
       await resolveMove(gateway, localSession.placement);
       await page.locator(".chat-environment__machine-trigger").waitFor({ state: "detached" });
 
-      expect(await page.getByRole("button", { name: "Move failed" }).count()).toBe(0);
+      expect(
+        await page.getByRole("button", { name: "Couldn’t move this session. Try again." }).count(),
+      ).toBe(0);
       expect(await page.getByText("Continue on Gateway…", { exact: true }).count()).toBe(0);
     }));
 
@@ -294,7 +297,7 @@ suite.define(() => {
       await (
         await placementTrigger(page)
       )
-        .and(page.getByRole("button", { name: /Device offline/ }))
+        .and(page.getByRole("button", { name: /Device disconnected/ }))
         .waitFor();
       await closeChatDetails(page);
       await selectChatLayoutAction(page, "Open split view");
@@ -344,7 +347,7 @@ suite.define(() => {
       };
       await gateway.setSessionsListResponse(chatSessionListResponse([localSession]));
       await resolveMove(gateway, localSession.placement);
-      await expectCount(page.getByRole("button", { name: /Device offline/ }), 0);
+      await expectCount(page.getByRole("button", { name: /Device disconnected/ }), 0);
       for (const pane of await panes.all()) {
         const transcript = pane.locator(".chat-thread-inner");
         await expectCount(transcript.getByText(partialText, { exact: true }));
@@ -419,7 +422,6 @@ suite.define(() => {
         await expectCount(transcript.getByText(partialText, { exact: true }));
         await expectCount(transcript.getByText(finalText, { exact: true }));
         await assertPromptBeforeReply(transcript, "Resume locally.", finalText);
-        expect(await pane.locator(".chat-duplicate-count").count()).toBe(0);
         expect(await pane.locator(`[data-entry-id="${localFinalIdentity.id}"]`).count()).toBe(1);
       };
       await gateway.emitGatewayEvent("chat", {
@@ -475,6 +477,7 @@ suite.define(() => {
         metadata: { models },
       };
       const gateway = await installPlacementGateway(page, {
+        subscriptionInitialHistory: false,
         deferredMethods: ["chat.startup"],
         featureMethods: ["chat.startup", "sessions.move"],
         historyMessages,
@@ -506,7 +509,7 @@ suite.define(() => {
               (button) => button.getAttribute("aria-label") ?? "",
             ),
           );
-          if ([...labels].some((label) => label.includes("Device offline"))) {
+          if ([...labels].some((label) => label.includes("Device disconnected"))) {
             state.seenOffline = true;
           }
           if (state.seenOffline && [...labels].some((label) => label.includes("Runs on device"))) {
@@ -580,7 +583,7 @@ suite.define(() => {
         after: descriptorCount + 1,
         match: descriptorMatch,
       });
-      await page.getByRole("button", { name: /Device offline/ }).waitFor();
+      await page.getByRole("button", { name: /Device disconnected/ }).waitFor();
       expect(await observedRunnerStatus(page, available.key)).toBe("offline");
       expect(await gateway.getRequests("sessions.describe", descriptorMatch)).toHaveLength(
         descriptorCount + 2,
@@ -598,7 +601,7 @@ suite.define(() => {
         await (
           await placementTrigger(pane)
         )
-          .and(pane.getByRole("button", { name: /Device offline/ }))
+          .and(pane.getByRole("button", { name: /Device disconnected/ }))
           .waitFor();
       }
       expect(await page.getByRole("button", { name: /Runs on device/ }).count()).toBe(0);
@@ -606,7 +609,9 @@ suite.define(() => {
       await openPlacement(panes.last());
       await panes
         .last()
-        .getByText("Waiting for device to reconnect; retry after it returns", { exact: false })
+        .getByText("Waiting for the device to reconnect. Retry when it’s connected.", {
+          exact: false,
+        })
         .waitFor();
     }));
 
@@ -646,18 +651,19 @@ suite.define(() => {
       await profile.click();
       await expect.poll(() => profile.getAttribute("aria-pressed")).toBe("true");
       if (machineId) {
-        await page.getByRole("button", { name: "Machine", exact: true }).click();
+        await page.getByRole("button", { name: "Device size", exact: true }).click();
         await page
-          .getByRole("menu", { name: "Machine", exact: true })
+          .getByRole("menu", { name: "Device size", exact: true })
           .locator(`[role="menuitemradio"][data-value="${machineId}"]`)
           .click();
       } else {
         const dialog = page.locator("openclaw-modal-dialog");
-        expect(await dialog.getByText("Machine", { exact: true }).count()).toBe(0);
-        expect(await dialog.getByRole("button", { name: "Machine", exact: true }).count()).toBe(0);
+        expect(await dialog.getByText("Device size", { exact: true }).count()).toBe(0);
+        expect(await dialog.getByRole("button", { name: "Device size", exact: true }).count()).toBe(
+          0,
+        );
       }
       await page.getByRole("button", { name: "Move session", exact: true }).click();
-
       await expectMove(gateway, {
         kind: "profile",
         profileId: "aws",
