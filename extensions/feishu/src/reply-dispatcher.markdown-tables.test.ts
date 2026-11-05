@@ -353,16 +353,24 @@ describe("createFeishuReplyDispatcher markdown table modes", () => {
     });
 
     // Rows: "<tables> | <script after the opening preview> | <chat>". X is a fenced example whose rows
-    // equal the table, and K a code block the posted block opens with.
+    // equal the table, K a code block the posted block opens with, and Y a wider fence around K and
+    // the table.
     it.each([
       "off | preview P+X+T; block T; preview P+X+T+S | om_stream:P+X om-1:T@ om-2:S@",
       "block | preview P+G; block G; preview P+G+Q+X+T; block T; preview P+G+Q+X+T+S | om_stream:P om-1:G#@ om-2:Q+X+T# om-3:S@",
       "block | preview P+X; block T; idle; preview P+X+T+S | om_stream:P+X om-1:T#@ om-2:S@",
       "off | preview P+T+X; block T; preview P+T+X+S | om_stream:P om-1:T@ om-2:X+S@",
       "off | preview P+K+T; block K+T; preview P+K+T+S | om_stream:P om-1:K+T@ om-2:S@",
-    ])("posts the table rather than a fenced copy of it, %s", async (row) => {
+      "off | preview P+Y+K+T; block K+T; preview P+Y+K+T+S | om_stream:P+Y om-1:K+T@ om-2:S@",
+      "off | preview P+T+Q+T; block T; preview P+T+Q+T+S | om_stream:P om-1:T@ om-2:Q+T+S@",
+    ])("posts the table rather than a fenced or a later copy of it, %s", async (row) => {
       const [tables, script, chat] = row.split(" | ") as ["block" | "off", string, string];
-      const fenced = { X: `\`\`\`md\n${shape.text}\n\`\`\``, K: "```js\nconst a = 1;\n```" };
+      const code = "```js\nconst a = 1;\n```";
+      const fenced = {
+        X: `\`\`\`md\n${shape.text}\n\`\`\``,
+        K: code,
+        Y: `\`\`\`\`md\n${code}\n\n${shape.text}\n\`\`\`\``,
+      };
       expect((await drive(tables, `preview P; ${script}; end`, { names: fenced })).chat).toBe(chat);
     });
 
