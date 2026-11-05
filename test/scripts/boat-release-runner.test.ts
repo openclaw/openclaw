@@ -8,7 +8,9 @@ const linuxRunnerTest = it.skipIf(process.platform === "win32");
 
 const roots: string[] = [];
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 function fixture(mode = "") {
@@ -36,7 +38,9 @@ if (args[0] === "actions" && args[1] === "unregister" && process.env.FIXTURE_MOD
 if (args.includes("info")) console.log(JSON.stringify({sandbox: {id: "bx_owned", createdAt: process.env.FIXTURE_MODE === "changed-vm" ? "2000-01-01T00:00:00Z" : state.createdAt}}));
 if (args.includes("delete")) console.log(JSON.stringify({operation: {id: "bdop_" + "a".repeat(32), kind: "sandbox", targetId: "bx_owned", status: "completed", completedAt: new Date().toISOString()}}));
 `;
-  for (const name of ["crabbox", "boat"]) writeFileSync(join(root, name), binary, { mode: 0o755 });
+  for (const name of ["crabbox", "boat"]) {
+    writeFileSync(join(root, name), binary, { mode: 0o755 });
+  }
   const output = join(root, "output");
   writeFileSync(output, "");
   const env = {
@@ -78,7 +82,7 @@ linuxRunnerTest("publishes only public identities and cleans up both resources",
   const f = fixture();
   expect(f.run("provision").status).toBe(0);
   const vm = f.values().vm;
-  expect(Object.keys(JSON.parse(vm)).sort()).toEqual(["createdAt", "id", "leaseID"]);
+  expect(Object.keys(JSON.parse(vm)).toSorted()).toEqual(["createdAt", "id", "leaseID"]);
   expect(vm).not.toMatch(/fixture-secret|fixture-private-key/);
   expect(f.run("register", { BOAT_VM_RECEIPT: vm }).status).toBe(0);
   expect(f.values().label).toBe(JSON.parse(f.values().runner).name);

@@ -22,7 +22,9 @@ for (const name of [
   "GITHUB_RUN_ATTEMPT",
   "RUNNER_TEMP",
 ]) {
-  if (!env[name]) throw new Error(`Missing ${name}`);
+  if (!env[name]) {
+    throw new Error(`Missing ${name}`);
+  }
 }
 const org = env.GITHUB_REPOSITORY.split("/")[0];
 const identity = [
@@ -56,14 +58,14 @@ const childEnv = {
   BOAT_NO_UPDATE: "1",
 };
 
-function run(binary, args, timeout = 180_000, input) {
+function run(binary, args, timeout, input) {
   // Provider diagnostics can include private connection URLs. Report the phase
   // and exit code here; never put captured stdout/stderr in Actions logs.
   return spawnSync(binary, args, {
     env: childEnv,
     input,
     encoding: "utf8",
-    timeout,
+    timeout: timeout ?? 180_000,
     maxBuffer: 1024 * 1024,
   });
 }
@@ -77,7 +79,9 @@ function checked(binary, args, timeout) {
   return result.stdout;
 }
 function output(name, value) {
-  if (!env.GITHUB_OUTPUT) throw new Error("Missing GITHUB_OUTPUT");
+  if (!env.GITHUB_OUTPUT) {
+    throw new Error("Missing GITHUB_OUTPUT");
+  }
   appendFileSync(
     env.GITHUB_OUTPUT,
     `${name}=${typeof value === "string" ? value : JSON.stringify(value)}\n`,
@@ -87,7 +91,7 @@ function vmReceipt(text) {
   const receipt = JSON.parse(text);
   if (
     !receipt ||
-    Object.keys(receipt).sort().join(",") !== "createdAt,id,leaseID" ||
+    Object.keys(receipt).toSorted().join(",") !== "createdAt,id,leaseID" ||
     receipt.leaseID !== leaseID ||
     !/^bx_[A-Za-z0-9_-]+$/.test(receipt.id) ||
     !Number.isFinite(Date.parse(receipt.createdAt))
@@ -98,7 +102,7 @@ function vmReceipt(text) {
 }
 function runnerReceipt(text) {
   const receipt = JSON.parse(text);
-  const fields = receipt && Object.keys(receipt).sort().join(",");
+  const fields = receipt && Object.keys(receipt).toSorted().join(",");
   if (
     fields !== "leaseID,name,runnerID,scope,version" ||
     receipt.version !== 1 ||
@@ -114,10 +118,12 @@ function runnerReceipt(text) {
 }
 
 if (command === "provision") {
-  if (!env.BOAT_API_KEY || !env.BOAT_ORG)
+  if (!env.BOAT_API_KEY || !env.BOAT_ORG) {
     throw new Error("Set BOAT_API_KEY and BOAT_ORG before provisioning.");
-  if (!env.BOAT_RUNNER_GROUP)
+  }
+  if (!env.BOAT_RUNNER_GROUP) {
     throw new Error("Set the release organization runner group before provisioning.");
+  }
   const help = run(crabbox, ["actions", "register", "--help"]);
   if (help.error || help.status !== 0 || !`${help.stdout}\n${help.stderr}`.includes("--receipt")) {
     throw new Error(
@@ -177,12 +183,14 @@ if (command === "provision") {
   } else {
     throw new Error("Boat VM identity is unconfirmed; inspect the task lease before retrying.");
   }
-  if (acquired.error || acquired.status !== 0)
+  if (acquired.error || acquired.status !== 0) {
     throw new Error("Boat warmup failed after acquiring its VM; cleanup is required.");
+  }
 } else if (command === "register") {
   vmReceipt(env.BOAT_VM_RECEIPT || "null");
-  if (!env.BOAT_RUNNER_GROUP)
+  if (!env.BOAT_RUNNER_GROUP) {
     throw new Error("Set the release organization runner group before registering.");
+  }
   const result = run(
     crabbox,
     [
@@ -205,11 +213,15 @@ if (command === "provision") {
     ],
     5 * 60_000,
   );
-  if (existsSync(receiptPath)) output("runner", runnerReceipt(readFileSync(receiptPath, "utf8")));
-  if (result.error || result.status !== 0)
+  if (existsSync(receiptPath)) {
+    output("runner", runnerReceipt(readFileSync(receiptPath, "utf8")));
+  }
+  if (result.error || result.status !== 0) {
     throw new Error("Boat runner registration failed; cleanup is required.");
-  if (!existsSync(receiptPath))
+  }
+  if (!existsSync(receiptPath)) {
     throw new Error("Crabbox did not publish an Actions cleanup receipt.");
+  }
   output("label", label);
 } else {
   const failures = [];
@@ -226,14 +238,18 @@ if (command === "provision") {
   if (env.BOAT_VM_RECEIPT) {
     try {
       const receipt = vmReceipt(env.BOAT_VM_RECEIPT);
-      if (!env.BOAT_API_KEY || !env.BOAT_ORG) throw new Error("Missing Boat cleanup credentials.");
+      if (!env.BOAT_API_KEY || !env.BOAT_ORG) {
+        throw new Error("Missing Boat cleanup credentials.");
+      }
       const login = run(
         "boat",
         ["--no-update", "--json", "login", "--key-stdin"],
         60_000,
         env.BOAT_API_KEY,
       );
-      if (login.error || login.status !== 0) throw new Error("Boat cleanup authentication failed.");
+      if (login.error || login.status !== 0) {
+        throw new Error("Boat cleanup authentication failed.");
+      }
       const actual = JSON.parse(
         checked("boat", ["--no-update", "--json", "info", receipt.id]),
       ).sandbox;
@@ -275,5 +291,7 @@ if (command === "provision") {
       failures.push(error.message);
     }
   }
-  if (failures.length) throw new Error(failures.join("\n"));
+  if (failures.length) {
+    throw new Error(failures.join("\n"));
+  }
 }
