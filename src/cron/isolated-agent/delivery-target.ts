@@ -255,11 +255,9 @@ export async function resolveDeliveryTarget(
     typeof jobPayload.accountId === "string" ? jobPayload.accountId.trim() || undefined : undefined;
   let accountId = explicitAccountId ?? resolved.accountId;
   if (!accountId && channel) {
-    accountId = deliveryTargetRuntime.resolveFirstBoundAccountId({
-      cfg,
-      channelId: channel,
-      agentId,
-    });
+    accountId =
+      deliveryTargetRuntime.resolveFirstBoundAccountId({ cfg, channelId: channel, agentId }) ??
+      deliveryTargetRuntime.resolveChannelDefaultAccountIdForDelivery({ cfg, channel, agentId });
   }
 
   if (!channel) {
