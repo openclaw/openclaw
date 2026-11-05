@@ -65,7 +65,7 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
     Object.assign(harness.process, { pid: 12345 });
     const snapshot = vi
       .spyOn(processSnapshot, "readCodexAppServerProcessSnapshot")
-      .mockRejectedValue(new processSnapshot.ProcessInspectionError("unexpected containment"));
+      .mockRejectedValue(new processSnapshot.ProcessInspectionError("unavailable"));
     const state = getSharedCodexAppServerClientState();
     const entry = getOrCreateSharedClientEntry(state, "delayed-clean-exit");
     entry.client = harness.client;
