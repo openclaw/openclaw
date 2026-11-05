@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ExtraGatewayService } from "../daemon/inspect.js";
 import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
+import { removeBootedOutLaunchAgentPlist } from "../daemon/launchd-service-files.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { sleep } from "../utils/sleep.js";
 
@@ -44,13 +45,6 @@ async function cleanupLegacyLaunchdService(params: {
     return { status: "failed", reason: "launchctl could not confirm unload" };
   }
 
-  const trashDir = path.join(os.homedir(), ".Trash");
-  try {
-    await fs.mkdir(trashDir, { recursive: true });
-  } catch {
-    // ignore
-  }
-
   try {
     await fs.access(params.plistPath);
   } catch (error) {
@@ -60,10 +54,10 @@ async function cleanupLegacyLaunchdService(params: {
     return { status: "failed", reason: "could not inspect plist" };
   }
 
-  const dest = path.join(trashDir, `${params.label}-${Date.now()}.plist`);
+  const dest = path.join(os.homedir(), ".Trash", `${params.label}-${Date.now()}.plist`);
   try {
-    await fs.rename(params.plistPath, dest);
-    return { status: "removed", destination: dest };
+    const { trashed } = await removeBootedOutLaunchAgentPlist(params.plistPath, dest);
+    return trashed ? { status: "removed", destination: dest } : { status: "removed" };
   } catch {
     return { status: "failed", reason: "could not move plist" };
   }
