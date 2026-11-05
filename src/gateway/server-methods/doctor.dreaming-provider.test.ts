@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getActiveMemoryProviderCore,
   getRuntimeConfig,
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
@@ -9,6 +10,7 @@ import {
   respondPayload,
   makeDreamingStats,
   makeDreamingEntry,
+  resolveActiveMemoryBackendConfig,
   useMemoryManagerFixture,
 } from "./doctor.test-support.js";
 
@@ -173,6 +175,59 @@ describe("doctor.memory.status with a memory slot owner's dreaming provider", ()
     // Presence is what locks the page's switch; enablement stays unknown.
     expect(dreaming.reportedByProvider).toBe(true);
     expect(dreaming).not.toHaveProperty("reportedEnabled");
+  });
+
+  it("composes the slot owner's report into a provider-runtime health reply", async () => {
+    const health = vi.fn().mockResolvedValue({ status: "ready" });
+    const close = vi.fn().mockResolvedValue(undefined);
+    resolveActiveMemoryBackendConfig.mockReturnValue({
+      backend: "provider-runtime",
+      providerId: "records",
+    });
+    getActiveMemoryProviderCore.mockResolvedValue({
+      providerId: "records",
+      provider: { health, close },
+    });
+    resolveActiveMemoryDreamingStatus.mockResolvedValueOnce({
+      enabled: true,
+      phases: { rem: { enabled: true, scheduled: true, cron: "15 1 * * *" } },
+      stats: { promotedToday: 4 },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemory("doctor.memory.status", respond, { params: {} });
+
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+    expect(health).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    const payload = respondPayload(respond) as Record<string, any>;
+    expect(payload).toMatchObject({ provider: "records", health: { status: "ready" } });
+    expect(payload.dreaming).toMatchObject({
+      reportedByProvider: true,
+      reportedEnabled: true,
+      reportedStats: { promotedToday: 4 },
+      promotedToday: 0,
+    });
+    expect(payload.dreaming.phases.rem).toMatchObject({
+      cron: "15 1 * * *",
+      managedCronPresent: true,
+    });
+  });
+
+  it("keeps a provider-runtime health reply unchanged when no dreaming provider reports", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue({
+      backend: "provider-runtime",
+      providerId: "records",
+    });
+    getActiveMemoryProviderCore.mockResolvedValue({
+      providerId: "records",
+      provider: { health: vi.fn().mockResolvedValue({ status: "ready" }), close: vi.fn() },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemory("doctor.memory.status", respond, { params: {} });
+
+    expect((respondPayload(respond) as Record<string, unknown>).dreaming).toBeUndefined();
   });
 
   it("keeps the no-manager response unchanged when no dreaming provider reports", async () => {

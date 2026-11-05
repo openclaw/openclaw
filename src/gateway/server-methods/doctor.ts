@@ -301,6 +301,28 @@ async function resolveManagedDreamingCronStatus(
   }
 }
 
+/**
+ * Dreaming section for status paths without memory-core's store: a slot owner
+ * may report dreaming while it runs no search manager or answers through its
+ * own provider runtime. Its report is then the only dreaming data; without one
+ * the response stays exactly as it was.
+ */
+async function resolveReportedOnlyDreaming(
+  cfg: OpenClawConfig,
+  agentId: string,
+  context: GatewayRequestContext,
+): Promise<DoctorMemoryStatusPayload["dreaming"]> {
+  const reported = await resolveActiveMemoryDreamingStatus({ cfg, agentId });
+  if (!reported) {
+    return undefined;
+  }
+  return composeDreamingPayload(
+    { ...resolveDreamingConfig(cfg), ...mergeDreamingStoreStats([]) },
+    await resolveManagedDreamingCronStatus(context),
+    reported,
+  );
+}
+
 export const createDoctorHandlers = (): GatewayRequestHandlers => ({
   "doctor.memory.status": async ({
     respond,
@@ -321,6 +343,7 @@ export const createDoctorHandlers = (): GatewayRequestHandlers => ({
         cfg,
         agentId,
         providerId: backend.providerId,
+        dreaming: await resolveReportedOnlyDreaming(cfg, agentId, context),
         respond,
         context,
         client,
@@ -335,10 +358,7 @@ export const createDoctorHandlers = (): GatewayRequestHandlers => ({
       purpose: "status",
     });
     if (!manager) {
-      // A slot owner may report dreaming without registering search. Its
-      // report is the only dreaming data on this path; without one the
-      // response stays exactly as it was.
-      const reportedDreaming = await resolveActiveMemoryDreamingStatus({ cfg, agentId });
+      const dreaming = await resolveReportedOnlyDreaming(cfg, agentId, context);
       const payload: DoctorMemoryStatusPayload = {
         agentId,
         searchRuntimeRegistered,
@@ -346,15 +366,7 @@ export const createDoctorHandlers = (): GatewayRequestHandlers => ({
           ok: false,
           error: error ?? "memory search unavailable",
         },
-        ...(reportedDreaming
-          ? {
-              dreaming: composeDreamingPayload(
-                { ...resolveDreamingConfig(cfg), ...mergeDreamingStoreStats([]) },
-                await resolveManagedDreamingCronStatus(context),
-                reportedDreaming,
-              ),
-            }
-          : {}),
+        ...(dreaming ? { dreaming } : {}),
       };
       respond(true, payload, undefined);
       return;
