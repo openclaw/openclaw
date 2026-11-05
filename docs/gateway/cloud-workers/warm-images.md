@@ -194,3 +194,18 @@ openclaw doctor --fix
 ```
 
 This recovery deletes only the unchanged legacy row matching that selector. It does not establish provider absence or clean up a machine for you. Keep the row when cleanup is uncertain. Checkpoints already forgotten by older code are not rediscovered; reconcile those manually through Crabbox. Do not run older and newer writers against the same state or downgrade while allocations, captures, or retirements remain unresolved.
+
+### Prepared project capture verification
+
+A claimed prepared-project capture verifies its completed workspace again after
+runtime preparation and credential scrubbing, before native checkpoint creation
+or node enrollment. It retains only the selected Git seed and current source and
+prepared manifests. Ordinary enrolled-workspace inspection does not remove caches.
+Unknown namespaces, unexpected prepared-project entries, symlinks, and hardlinked
+manifest files stop capture before any obsolete cache is removed. Rebuild the
+prepared worker when capture reports a cache verification failure.
+
+Cache failures expose only a bounded check and cache kind, never a path, directory
+listing, or verifier output. Provisioning logs record fixed phase names, durations,
+and outcomes for project preparation, snapshot verification, node enrollment, and
+node readiness. Runtime contents remain verified by the runtime installer.

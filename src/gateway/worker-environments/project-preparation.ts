@@ -13,6 +13,7 @@ import {
   createProjectSetupScript,
   type PreparedProjectVerification,
 } from "./project-setup-script.js";
+import { measureProjectProvisionPhase } from "./provision-timing.js";
 import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 import {
   prepareWorkerWorkspaceGitPack,
@@ -412,6 +413,26 @@ export function createWorkerProjectPreparation(params: {
               purpose: preparation.purpose,
               demandAtMs: preparation.demandAtMs,
             },
+            prepareSnapshot: async (transport: {
+              runScript: (script: string, signal: AbortSignal) => Promise<string>;
+            }) =>
+              measureProjectProvisionPhase("project.snapshot", async () => {
+                requireCurrent();
+                const inspected: unknown = JSON.parse(
+                  await transport.runScript(
+                    createProjectSetupScript(
+                      { ...sourceInput, ...preparationInput, snapshot: true },
+                      true,
+                    ),
+                    signal,
+                  ),
+                );
+                requireCurrent();
+                if (!isRecord(inspected) || inspected.baseCommit !== sourceInput.baseCommit) {
+                  throw new Error("Project snapshot has no matching completed workspace");
+                }
+                preparedWorkspace = readPreparedWorkspace(inspected);
+              }),
             inspectPreparedWorkspace: async (transport: {
               runScript: (script: string, signal: AbortSignal) => Promise<string>;
             }) => {
@@ -434,7 +455,9 @@ export function createWorkerProjectPreparation(params: {
       assertCurrent: requireCurrent,
       prepare: (transport) => {
         requireCurrent();
-        return (active ??= prepare(transport));
+        return (active ??= measureProjectProvisionPhase("project.prepare", () =>
+          prepare(transport),
+        ));
       },
     },
     close: () =>

@@ -3,6 +3,7 @@ import { gitMaintenanceEnvironmentExpression } from "../../infra/git-maintenance
 import type { WorkerProvider } from "../../plugins/capability-provider.types.js";
 import type { EnvironmentRecipe, LifecycleCommand } from "./environment-recipe.js";
 import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH } from "./node-toolchain.js";
+import { NORMALIZE_PROJECT_SNAPSHOT_CACHES_JS } from "./project-snapshot-caches.js";
 import { PREPARE_REPOSITORY_NODE_JS } from "./repository-node-toolchain.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -232,7 +233,16 @@ const runSetup = (command, workspaceDir, homeDir) => {
     manifestEntries(sourceBytes, baseCommit);
     if (verified === undefined && manifest(workspaceDir, baseCommit, [preparedManifestRef, sourceManifestRef], homeDir) !== preparedManifestRef) throw new Error("Prepared project completed workspace changed");
     previous = { workspaceDir, homeDir, sourceManifestRef, preparedManifestRef, baseCommit, sourceBytes, preparedBytes, completedManifest, completionDirectory, manifestRoot };
-    if (inspectOnly) return { workspaceDir, homeDir, sourceManifestRef, preparedManifestRef, baseCommit };
+    if (inspectOnly) {
+      if (input.snapshot) {
+        readManifest(path.join(workerRoot, "manifests", sourceManifestRef.slice(7) + ".json"), sourceManifestRef);
+        readManifest(path.join(workerRoot, "manifests", preparedManifestRef.slice(7) + ".json"), preparedManifestRef);
+        (${NORMALIZE_PROJECT_SNAPSHOT_CACHES_JS})(workerRoot, input, sourceManifestRef, preparedManifestRef, (seed) => {
+          if (git(seed, ["rev-parse", "HEAD"]) !== input.baseCommit || git(seed, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Project snapshot seed changed");
+        });
+      }
+      return { workspaceDir, homeDir, sourceManifestRef, preparedManifestRef, baseCommit };
+    }
   }
   const seeds = ownedDirectory(ownedDirectory(workerRoot, "git-seeds"), input.namespace);
   const seed = ownedDirectory(seeds, input.seedKey);
@@ -343,6 +353,7 @@ export function createProjectSetupScript(
     timeoutMs?: number;
     setupEnv?: Record<string, string>;
     verifiedRetained?: PreparedProjectVerification | null;
+    snapshot?: true;
   },
   inspectOnly = false,
 ): string {
@@ -360,7 +371,10 @@ node <<'PROJECT_SETUP_SCRIPT'
   .then((result) => {
     process.stdout.write(JSON.stringify(result ?? null));
   })
-  .catch((error) => { console.error(error.message); process.exitCode = 1; });
+  .catch((error) => {
+    console.error(${input.snapshot ? 'JSON.stringify(error.snapshotDiagnostic ?? { schema: "openclaw.project-snapshot-diagnostic.v1", cacheCheck: "verification", cacheKind: "project" })' : "error.message"});
+    process.exitCode = 1;
+  });
 PROJECT_SETUP_SCRIPT`;
 }
 
