@@ -18,6 +18,7 @@ type ReaderAnchorHost = {
   readonly initialRange: { readonly pending: boolean };
   readonly prependAnchor: { readonly messageKey: string | null };
   readonly headerHeight: number;
+  isEndAnchored(): boolean;
   readonly scrollElement: HTMLDivElement | null;
   readonly contentElement: HTMLDivElement | null;
 };
@@ -76,14 +77,10 @@ export class TranscriptReaderAnchor {
 
   /** Native receipts and the virtual range must describe the same measurement batch. */
   get rowsMeasured(): boolean {
-    return this.host.virtualizer.getVirtualItems().every(({ key }) => {
+    return this.host.virtualizer.getVirtualItems().every(({ key, size }) => {
       const row = this.host.virtualizer.elementsCache.get(key);
       const height = row && this.heights.get(row);
-      return (
-        row?.isConnected === true &&
-        height !== undefined &&
-        Math.abs(height - (this.host.virtualizer.itemSizeCache.get(key) ?? -1)) < 0.5
-      );
+      return row?.isConnected === true && height !== undefined && Math.abs(height - size) < 0.5;
     });
   }
 
@@ -146,6 +143,8 @@ export class TranscriptReaderAnchor {
       .toSorted((left, right) => left.top - right.top);
     let moved = 0;
     let correction = 0;
+    // A measured end absorbs known growth before paint; shrink already clamps at the end.
+    const followingEnd = this.host.isEndAnchored() && this.rowsMeasured;
     for (const { entry, row, top } of rows) {
       const key = row.dataset.virtualRowKey;
       const box = entry.borderBoxSize?.[0];
@@ -170,7 +169,8 @@ export class TranscriptReaderAnchor {
         index < range.startIndex - overscan ||
         index > range.endIndex + overscan ||
         Math.abs(delta) < 0.5 ||
-        !isAboveReader(previousTop, previous, first, readerTop)
+        (!isAboveReader(previousTop, previous, first, readerTop) &&
+          !(followingEnd && !first && delta > 0))
       ) {
         continue;
       }

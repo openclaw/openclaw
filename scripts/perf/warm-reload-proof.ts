@@ -152,7 +152,6 @@ async function readProbe(page: Page) {
     data.stopped = true;
     return {
       ...data,
-      transcriptStability: Reflect.get(window, "__activeTranscriptReload")?.read(),
       paneChrome: Reflect.get(window, "__paneChrome").read(data.firstTranscriptDomMs),
       timeOrigin: performance.timeOrigin,
       capturedUntilMs: performance.now(),

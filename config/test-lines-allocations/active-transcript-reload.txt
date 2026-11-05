@@ -1,2 +1,2 @@
-200
-# Native active-reload fixture and frame regression cover retained reader geometry and one-step end following with full cached replies and separate history and tool-completion rounds.
+206
+# Active-reload fixtures cover retained geometry, zero backtracking, separate history/tool rounds, and automatic following when native row sizes equal estimates.

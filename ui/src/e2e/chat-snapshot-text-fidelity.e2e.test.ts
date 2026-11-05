@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import { installWarmReloadTranscriptProbe } from "../../../scripts/perf/warm-reload-browser-probe.ts";
+import { installWarmReloadTranscriptProbe } from "../../../scripts/perf/warm-reload-transcript-probe.ts";
 import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-projection.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
@@ -135,6 +135,7 @@ suite.define(() => {
               JSON.stringify(frames),
             ).toBe(true);
           } else {
+            expect(result.excessMovementPx).toBe(0);
             expect(
               new Set(frames.map((frame) => frame.scrollTop)).size,
               JSON.stringify(result),

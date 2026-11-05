@@ -785,5 +785,3 @@ export function installWarmReloadBrowserProbe(
   requestAnimationFrame(sample);
   return data;
 }
-
-export { installWarmReloadTranscriptProbe } from "./warm-reload-transcript-probe.ts";

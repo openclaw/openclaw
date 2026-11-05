@@ -1,15 +1,10 @@
-/** Synthetic warm-reload attribution, shared by the benchmark and browser regression. */
+/** Retained-row geometry shared by warm-reload proof and browser regressions. */
 export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end") {
   const frames: Array<{
     atMs: number;
     scrollTop: number;
     distanceFromEnd: number;
-    scrollHeight: number;
-    clientHeight: number;
-    rangeHeight: string;
-    columnMargin: string;
-    blockTop: string;
-    rows: Array<{ key: string; y: number; height: number; characters: number; expanded: number }>;
+    rows: Array<{ key: string; y: number; height: number; characters: number }>;
   }> = [];
   let anchor: string | undefined;
   let previous = "";
@@ -49,18 +44,11 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
           y: rect.y,
           height: rect.height,
           characters: row.textContent?.length ?? 0,
-          expanded: row.querySelectorAll("[aria-expanded='true'], details[open]").length,
         };
       });
       const state = {
         scrollTop: thread.scrollTop,
         distanceFromEnd: thread.scrollHeight - thread.clientHeight - thread.scrollTop,
-        scrollHeight: thread.scrollHeight,
-        clientHeight: thread.clientHeight,
-        rangeHeight: inner.style.height,
-        columnMargin:
-          inner.querySelector<HTMLElement>(".chat-virtual-sizer")?.style.marginTop ?? "",
-        blockTop: inner.querySelector<HTMLElement>(".chat-virtual-block")?.style.top ?? "",
         rows,
       };
       const rowSignature = rows

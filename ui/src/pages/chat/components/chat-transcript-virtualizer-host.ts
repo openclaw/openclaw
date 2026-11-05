@@ -83,6 +83,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.scheduleEndReconcile();
   };
   readonly layout = new TranscriptLayoutOwner(this.recordEndLayoutCorrection);
+  readonly isEndAnchored = () => this.canAutoFollow() && this.endAnchor.atEnd;
   private readonly reconcileEnd = () => {
     if (this.connected && !this.offsetState.pendingInteractionAnchor) {
       this.commitComposerResize(true);
@@ -509,10 +510,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       (rows.length !== this.rowKeys.length ||
         rows.some((row, index) => row.key !== this.rowKeys[index]));
     const nextKeys = rowModelChanged ? rows.map((row) => row.key) : this.rowKeys;
-    const virtualizer = this.virtualizer;
     const nextRowKeys = rowModelChanged
       ? nextKeys
-      : virtualizer.getVirtualItems().map(({ index }) => rows[index]!.key);
+      : this.virtualizer.getVirtualItems().map(({ index }) => rows[index]!.key);
     return this.mcpAppUnmountGate.render(
       nextRowKeys,
       () => {
@@ -547,7 +547,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           this.syncRows(nextKeys);
         } else {
           this.appliedHeaderHeight = reconcileTranscriptHeaderMargin(
-            virtualizer,
+            this.virtualizer,
             this.headerHeight,
             this.appliedHeaderHeight,
           );
