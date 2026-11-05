@@ -100,6 +100,10 @@ own input readiness pending until its retained inputs are admitted. This also
 applies when several logical agents share the same physical store. Database
 reads and writes retain their normal admission rules; recovery does not borrow
 startup's temporary database access or wait for model executions to finish.
+Crash recovery waits for preparation to settle without an interactive request
+deadline. Slow preparation does not disqualify interrupted work; failed preparation
+still prevents unmarked adoption and reports the normal admission diagnostics.
+This requires the updated Gateway, with no marker or schema migration.
 
 <a id="graceful-restarts-drain-first" />
 
