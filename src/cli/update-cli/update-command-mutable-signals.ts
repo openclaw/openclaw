@@ -11,6 +11,7 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
+import { getCliPluginInvocationResources } from "../runtime-cleanup-scope.js";
 import {
   registerSignalExitBarrier,
   registerSignalExitGate,
@@ -149,13 +150,22 @@ export function retainMutableUpdateSignalWrite(
   void retained.then(release, release);
 }
 
+/**
+ * A signal cancels the CLI's command work. Rollback must outlive that: its state-ownership
+ * reads see the cancelled scope otherwise and the update leaves the Gateway stopped.
+ */
+export function runMutableUpdateRecovery<T>(operation: () => Promise<T>): Promise<T> {
+  const resources = getCliPluginInvocationResources();
+  return resources ? resources.runCleanup(operation) : operation();
+}
+
 /** Retain rollback work without retaining a potentially unbounded forward command. */
 export function captureMutableUpdateCompensation(opts: UpdateCommandOptions) {
   const run = opts.run;
   const admission = run ? admissions.get(run) : undefined;
   return async <T>(operation: () => Promise<T>): Promise<T> => {
     if (!admission) {
-      return await operation();
+      return await runMutableUpdateRecovery(operation);
     }
     if (!admission.active || admission.sealed) {
       throw new Error("Update compensation admission is no longer current.");
@@ -164,7 +174,7 @@ export function captureMutableUpdateCompensation(opts: UpdateCommandOptions) {
     // The admission owner joins this settlement after the compensation operation resolves.
     void trackSignalSettlement(admission, completion.promise);
     try {
-      const result = await operation();
+      const result = await runMutableUpdateRecovery(operation);
       completion.resolve();
       return result;
     } catch (error) {

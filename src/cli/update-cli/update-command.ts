@@ -417,6 +417,7 @@ async function updateCommandInternal(
       continueMigratedUpdateInFreshProcess,
       inspectActivatedUpdateState,
       restoreFailedUpdateDatabases,
+      runMutableUpdateRecovery,
       createUpdateCommandFinalizationFence,
     } = await import("./update-execution.runtime.js");
 
@@ -584,14 +585,17 @@ async function updateCommandInternal(
         progress.pendingSteps,
       );
       if (continued.databaseRollbackAvailable && finalization.databaseBackup) {
-        const restored = await restoreFailedUpdateDatabases({
-          backup: finalization.databaseBackup,
-          result: continued.result,
-          runId: run.runId,
-          env: ownedManagedUpdateContext?.env ?? run.env,
-          assertCurrent: assertRollbackCurrent,
-          progress,
-        });
+        const backup = finalization.databaseBackup;
+        const restored = await runMutableUpdateRecovery(() =>
+          restoreFailedUpdateDatabases({
+            backup,
+            result: continued.result,
+            runId: run.runId,
+            env: ownedManagedUpdateContext?.env ?? run.env,
+            assertCurrent: assertRollbackCurrent,
+            progress,
+          }),
+        );
         if (!restored) {
           throw new UpdateCommandPendingRecoveryFailure(
             continued.result,

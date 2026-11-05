@@ -17,4 +17,5 @@ export {
 export { finishUpdate } from "./update-command-post-update.js";
 export { resumePostCoreUpdate } from "./update-command-resume.js";
 export { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
+export { runMutableUpdateRecovery } from "./update-command-mutable-signals.js";
 export { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
