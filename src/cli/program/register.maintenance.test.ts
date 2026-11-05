@@ -324,7 +324,7 @@ describe("registered maintenance commands", () => {
     expectFailure(message, json);
   });
 
-  // Other commands keep the inherited hangup disposition, so nohup still applies to them.
+  // Other commands keep the default disposition; Node already resets an inherited ignore.
   it.each([
     {
       case: "triage drains cleanup and exits 129",
