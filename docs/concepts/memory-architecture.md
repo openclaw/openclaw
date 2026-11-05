@@ -256,8 +256,11 @@ Writers store both signals as trailing comments on the same `MEMORY.md` or
 - Keep the gateway on loopback. <!-- trigger: gateway setup, network safety --> <!-- importance: 9 -->
 ```
 
-Trigger phrases are comma- or semicolon-separated. Importance is an integer
-from 1 to 10. When either annotation is absent, the index keeps its column
+Trigger phrases are comma- or semicolon-separated. A trigger word matches a
+whole word of the message; a word containing CJK (Han, Hiragana, Katakana,
+or Hangul) matches anywhere in the message, because those scripts do not
+separate words with spaces. One-character words are ignored. Importance is
+an integer from 1 to 10. When either annotation is absent, the index keeps its column
 `NULL`, so older entries remain neutral and never become trigger candidates
 until a writer adds metadata.
 
