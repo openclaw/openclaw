@@ -337,7 +337,10 @@ until their dependent enforcement changes land.
   "<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
   Actions job ID. Get the child key and exact name from `frv status --json`.
   GitHub also reruns dependent jobs. The controller waits only for that child
-  before sending the request; it does not retry unrelated failures.
+  before sending the request; it does not retry unrelated failures. Without
+  `--no-follow` it then follows the whole tree through the parent reseal; pass
+  `--no-follow` to return once the new attempt is observed, then run
+  `continue --failed` to reseal.
 - `pnpm frv rerun --run <parent-run-id> --child <child-key|run-id>
   [--max-attempts N]` records one bounded exact-job rerun. It waits for the
   child to finish, requires exactly one blocking failed job, sends one request
@@ -359,6 +362,17 @@ until their dependent enforcement changes land.
   to restore the same immutable plan and seal the updated all-group manifest.
   An early retry can invalidate the original Decision/Drain pairing; the final
   reseal and strict verification own completion.
+- GitHub ghost jobs (runnerless queued copies of the same job name) can follow
+  any rerun request, single-job or batched, and make that attempt unsealable.
+  Send at most one rerun request per child, only after the child is terminal;
+  never stack separate job reruns on one child. Duplicates can settle within
+  the controller's 60-second reconciliation window; once a command reports
+  ghost jobs (duplicates that persisted), stop rerunning that FRV: cancel the
+  attempt and start a fresh all-group FRV.
+- `continue --failed` reruns each failed child once per invocation. If a child
+  it reran fails again, it exits immediately with the attempt and remaining
+  rerun budget instead of waiting for siblings; rerun `continue --failed` only
+  for a confirmed flake within the flake budget above.
 - Each child or parent rerun mutation is sent exactly once per invocation;
   ambiguous transport failures trigger bounded read-only reconciliation. Do
   not blindly repeat an interrupted or timed-out command: inspect exact
@@ -728,7 +742,11 @@ for publication ordering and prepared/direct recovery.
   plugin npm and ClawHub retain target-serialized slots and refuse before any
   new dispatch if cancellation remains unconfirmed. Legacy unidentified ClawHub
   children or live publishers also retain the dispatch guard. A parent failure
-  cancels its own waiting npm children. To clean up as a reviewer, list
+  cancels its own waiting npm children and its recorded unfinished ClawHub
+  children; it rejects a recorded child's pending gate first, because a cancel
+  request alone leaves a Plugin ClawHub New child waiting on
+  `clawhub-plugin-bootstrap`. A 403 rejection warns with the reviewer commands.
+  To clean up as a reviewer, list
   `workflow_dispatch` runs by `github-actions[bot]` created for this release,
   reject their gate, cancel:
 
