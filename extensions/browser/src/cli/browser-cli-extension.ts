@@ -2,7 +2,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Command } from "commander";
 import { runCommandWithRuntime, theme } from "openclaw/plugin-sdk/cli-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { defaultRuntime, info } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveBrowserConfig,
@@ -38,7 +38,7 @@ import { runBrowserCliCommand, type BrowserParentOpts } from "./browser-cli-shar
 
 /** Resolve safe v2 metadata, with an explicit gated legacy credential escape hatch. */
 async function buildCdpEndpoint(legacyBearer: boolean) {
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const token = await ensureExtensionRelayToken();
   const profileName = resolveFirstExtensionProfileName(resolved);
@@ -119,7 +119,7 @@ export function registerBrowserExtensionCommands(
             nativeHostExecutable: opts.nativeHostExecutable,
             bundledDir,
             pluginRoot: resolvedPluginRoot,
-            cfg: getRuntimeConfig(),
+            cfg: await captureRuntimeConfigAsyncReader()(),
             profile: opts.browserProfile ?? parentOpts(command).browserProfile,
             waitMs: normalizeExtensionInstallWaitMs(opts.waitMs),
           });
@@ -357,7 +357,7 @@ export function registerBrowserExtensionCommands(
     .action(async (opts, command) => {
       await runBrowserCliCommand(async () => {
         const json = opts.json === true || parentOpts(command).json === true;
-        const cfg = getRuntimeConfig();
+        const cfg = await captureRuntimeConfigAsyncReader()();
         const localGateway = opts.localGateway === true;
         if (localGateway && opts.gatewayUrl !== undefined) {
           throw new Error("--local-gateway cannot be combined with --gateway-url");

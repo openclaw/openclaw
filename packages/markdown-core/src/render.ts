@@ -1,13 +1,14 @@
 import { applyConstructFallbacks } from "./construct-fallbacks.js";
 import type { FormatCapabilityProfile } from "./format-capabilities.js";
+import type { MarkdownIRWithMetadata } from "./ir-metadata.js";
 import {
   copyMarkdownLinkSpan,
   isAutoLinkedMarkdownLink,
+  MARKDOWN_STYLE_ORDER as STYLE_ORDER,
   type MarkdownAnnotationSpan,
 } from "./ir-spans.js";
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
 
-/** Marker pair used to wrap a styled Markdown span in the target renderer. */
 export type RenderStyleMarker = {
   open: string | ((span: MarkdownStyleSpan) => string);
   close: string;
@@ -16,7 +17,6 @@ export type RenderStyleMarker = {
 /** Optional marker map; omitted styles are emitted as plain escaped text. */
 export type RenderStyleMap = Partial<Record<MarkdownStyle, RenderStyleMarker>>;
 
-/** Marker pair used to render a semantic Markdown annotation. */
 type RenderAnnotationMarker = {
   open: string | ((span: MarkdownAnnotationSpan) => string);
   close: string;
@@ -36,10 +36,11 @@ export type RenderLink = {
 
 type MarkdownLinkOrigin = "authored" | "linkify";
 
-/** Renderer hooks for converting Markdown IR into a marker-based target format. */
 export type RenderOptions = {
   styleMarkers: RenderStyleMap;
   annotationMarkers?: RenderAnnotationMap;
+  /** Line-oriented targets repeat this before each nonempty blockquote line. */
+  blockquotePrefix?: string;
   escapeText: (text: string) => string;
   buildLink?: (
     link: MarkdownLinkSpan,
@@ -47,23 +48,6 @@ export type RenderOptions = {
     context: { origin: MarkdownLinkOrigin },
   ) => RenderLink | null;
 };
-
-const STYLE_ORDER: MarkdownStyle[] = [
-  "blockquote",
-  "code_block",
-  "code",
-  "heading_1",
-  "heading_2",
-  "heading_3",
-  "heading_4",
-  "heading_5",
-  "heading_6",
-  "bold",
-  "italic",
-  "underline",
-  "strikethrough",
-  "spoiler",
-];
 
 const STYLE_RANK = new Map<MarkdownStyle, number>(
   STYLE_ORDER.map((style, index) => [style, index]),
@@ -212,6 +196,37 @@ export function renderMarkdownWithMarkers(
     ...new Set(annotated.flatMap((span) => [span.start, span.end])),
   ].toSorted((a, b) => a - b);
   const boundaries = new Set([0, text.length]);
+  const blockquotePrefix = options.blockquotePrefix ?? "";
+  const quoteLineStarts =
+    blockquotePrefix && projected.styles.some((span) => span.style === "blockquote")
+      ? new Map<number, number>()
+      : undefined;
+  if (quoteLineStarts) {
+    const codeBlocks = projected.styles.filter((span) => span.style === "code_block");
+    const metadataIR: MarkdownIRWithMetadata = projected;
+    const quotes: { start: number; end: number; blockquoteDepth?: number }[] =
+      metadataIR.blocks?.filter((block) => block.kind === "blockquote") ??
+      projected.styles.filter((span) => span.style === "blockquote");
+    for (const quote of quotes) {
+      for (let start = quote.start; start < quote.end;) {
+        if (
+          text[start] !== "\n" &&
+          !codeBlocks.some((code) => code.start < start && start < code.end)
+        ) {
+          quoteLineStarts.set(
+            start,
+            Math.max(quoteLineStarts.get(start) ?? 0, quote.blockquoteDepth ?? 1),
+          );
+          boundaries.add(start);
+        }
+        const newline = text.indexOf("\n", start);
+        if (newline === -1) {
+          break;
+        }
+        start = newline + 1;
+      }
+    }
+  }
 
   const startsAt = new Map<number, MarkdownStyleSpan[]>();
   for (const span of projected.styles) {
@@ -305,6 +320,10 @@ export function renderMarkdownWithMarkers(
           stack.push(item);
         }
       }
+    }
+    const quoteDepth = quoteLineStarts?.get(pos);
+    if (quoteDepth) {
+      out += blockquotePrefix.repeat(quoteDepth);
     }
 
     const openingItems: OpeningItem[] = [];

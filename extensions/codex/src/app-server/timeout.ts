@@ -1,4 +1,7 @@
-import { withTimeout as withSharedTimeout } from "openclaw/plugin-sdk/time-runtime";
+import {
+  racePromiseWithAbortSignal,
+  withTimeout as withSharedTimeout,
+} from "openclaw/plugin-sdk/time-runtime";
 
 function resolveAbortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error
@@ -60,22 +63,17 @@ export async function waitForPromiseOrAbort(
   if (signal.aborted) {
     return false;
   }
-  let removeAbort: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      promise.then(() => true),
-      new Promise<boolean>((resolve) => {
-        const onAbort = () => resolve(false);
-        signal.addEventListener("abort", onAbort, { once: true });
-        removeAbort = () => signal.removeEventListener("abort", onAbort);
-        if (signal.aborted) {
-          onAbort();
-        }
-      }),
-    ]);
-  } finally {
-    removeAbort?.();
-  }
+  const aborted = Symbol("codex-promise-aborted");
+  return await racePromiseWithAbortSignal(
+    promise.then(() => true),
+    signal,
+    () => aborted,
+  ).catch((error: unknown) => {
+    if (error !== aborted) {
+      throw error;
+    }
+    return false;
+  });
 }
 
 export function abortReason(signal: AbortSignal): Error {

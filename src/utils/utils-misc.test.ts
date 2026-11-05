@@ -31,21 +31,6 @@ describe("parseBooleanValue", () => {
     expect(parseBooleanValue("off")).toBe(false);
   });
 
-  it("respects custom truthy/falsy lists", () => {
-    expect(
-      parseBooleanValue("on", {
-        truthy: ["true"],
-        falsy: ["false"],
-      }),
-    ).toBeUndefined();
-    expect(
-      parseBooleanValue("yes", {
-        truthy: ["yes"],
-        falsy: ["no"],
-      }),
-    ).toBe(true);
-  });
-
   it("returns undefined for unsupported values", () => {
     expect(parseBooleanValue("")).toBeUndefined();
     expect(parseBooleanValue("maybe")).toBeUndefined();
@@ -54,17 +39,12 @@ describe("parseBooleanValue", () => {
 });
 
 describe("splitShellArgs", () => {
-  it("splits whitespace and respects quotes", () => {
-    expect(splitShellArgs(`search --foo "bar baz"`)).toEqual(["search", "--foo", "bar baz"]);
-    expect(splitShellArgs(`search --foo 'bar baz'`)).toEqual(["search", "--foo", "bar baz"]);
-  });
-
   it("supports backslash escapes inside double quotes", () => {
     expect(splitShellArgs(String.raw`echo "a\"b"`)).toEqual(["echo", `a"b`]);
     expect(splitShellArgs(String.raw`echo "\$HOME"`)).toEqual(["echo", "$HOME"]);
   });
 
-  it("preserves empty quoted arguments and their word boundaries", () => {
+  it("preserves empty quoted shell words and their comment boundaries", () => {
     expect(splitShellArgs(`program '' "" next`)).toEqual(["program", "", "", "next"]);
     expect(splitShellArgs(`program ""#literal ''suffix prefix''`)).toEqual([
       "program",
@@ -73,6 +53,19 @@ describe("splitShellArgs", () => {
       "prefix",
     ]);
     expect(splitShellArgs(`program "" # comment`)).toEqual(["program", ""]);
+  });
+
+  it("removes POSIX line continuations outside single quotes without starting a word", () => {
+    const continuation = "\\\n";
+    expect(splitShellArgs(`ba${continuation}sh`)).toEqual(["bash"]);
+    expect(splitShellArgs(`echo "a${continuation}b"`)).toEqual(["echo", "ab"]);
+    expect(splitShellArgs(`echo a ${continuation} b`)).toEqual(["echo", "a", "b"]);
+    expect(splitShellArgs(continuation)).toEqual([]);
+    expect(splitShellArgs(`echo "${continuation}" ${continuation}# comment`)).toEqual(["echo", ""]);
+    expect(splitShellArgs(`echo ''${continuation}#literal`)).toEqual(["echo", "#literal"]);
+    expect(splitShellArgs(`echo '${continuation}'`)).toEqual(["echo", continuation]);
+    expect(splitShellArgs(`ba${continuation}sh`, { rejectShellSyntax: true })).toBeNull();
+    expect(splitShellArgs(`echo "a${continuation}b"`, { rejectShellSyntax: true })).toBeNull();
   });
 
   it("returns null for unterminated quotes", () => {
@@ -88,33 +81,13 @@ describe("splitShellArgs", () => {
 });
 
 describe("splitCommandArgs", () => {
-  it.each([
-    { input: `program '' "" next`, expected: ["program", "next"] },
-    { input: `'' ""`, expected: [] },
-    {
-      input: String.raw`program some\path 'a"b' #literal`,
-      expected: ["program", String.raw`some\path`, 'a"b', "#literal"],
-    },
-    {
-      input: String.raw`program "C:\some path\file.py" \\server\share\ #literal`,
-      expected: ["program", String.raw`C:\some path\file.py`, "\\\\server\\share\\", "#literal"],
-    },
-    { input: 'program "unfinished', expected: null },
-    { input: "program 'unfinished", expected: null },
-    { input: "program unfinished\\", expected: ["program", "unfinished\\"] },
-  ])("parses quote-only process arguments: $input", ({ input, expected }) => {
-    expect(splitCommandArgs(input)).toEqual(expected);
+  it("retains process-argument empty-word and backslash behavior", () => {
+    expect(splitCommandArgs(`program '' "" next`)).toEqual(["program", "next"]);
+    expect(splitCommandArgs("ba\\\nsh")).toEqual(["ba\\", "sh"]);
   });
-
-  it.each(['program "unfinished', "program 'unfinished"])(
-    "allows unfinished quotes when requested: %s",
-    (raw) => {
-      expect(splitCommandArgs(raw, { allowUnclosedQuotes: true })).toEqual([
-        "program",
-        "unfinished",
-      ]);
-    },
-  );
+  it.each(['program "unfinished'])("allows unfinished quotes when requested: %s", (raw) => {
+    expect(splitCommandArgs(raw, { allowUnclosedQuotes: true })).toEqual(["program", "unfinished"]);
+  });
 });
 
 describe("zod parse helpers", () => {

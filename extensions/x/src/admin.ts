@@ -1,7 +1,12 @@
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { listXAccountIds, resolveDefaultXAccountId, resolveXAccount } from "./accounts.js";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  listXAccountIds,
+  listXRuntimeAccountIds,
+  resolveXAccount,
+  resolveXAccountKey,
+} from "./accounts.js";
 import {
   mergeXAllowlist,
   normalizeXUserId,
@@ -10,6 +15,8 @@ import {
 } from "./allowlist.js";
 import { getXApi } from "./client.js";
 import { getXGuestStatus } from "./guests.js";
+import { openXSpend, XBudgetExceededError, type XSpendStatus } from "./spend.js";
+import { getXGitHubStatus } from "./verified-github.js";
 
 type Request = Parameters<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>[0];
 
@@ -18,6 +25,8 @@ export type XAllowlistSnapshot = {
   accounts: Array<{ accountId: string; username: string }>;
   entries: XEffectiveAllowlistEntry[];
   guests: Awaited<ReturnType<typeof getXGuestStatus>>;
+  spend: XSpendStatus;
+  verifiedFromGitHub?: Awaited<ReturnType<typeof getXGitHubStatus>>;
 };
 
 class XAdminError extends Error {
@@ -43,6 +52,13 @@ function assertAdmin(request: Request) {
   request.sessionMutationCommitGuard?.();
 }
 
+// Requests carry normalized ids; named account keys may keep their authored case.
+function hasXAccount(cfg: OpenClawConfig, accountId: string) {
+  return (
+    listXAccountIds(cfg).includes(accountId) || resolveXAccountKey(cfg, accountId) !== undefined
+  );
+}
+
 function callerIdentity(request: Request): string {
   const client = request.client;
   if (!client) {
@@ -59,6 +75,7 @@ export function registerXAllowlistMethods(
   api: Pick<OpenClawPluginApi, "registerGatewayMethod" | "logger"> & {
     runtime: {
       state: Pick<OpenClawPluginApi["runtime"]["state"], "openKeyedStore" | "resolveStateDir">;
+      logging: Pick<OpenClawPluginApi["runtime"]["logging"], "getChildLogger">;
     };
   },
 ) {
@@ -70,11 +87,11 @@ export function registerXAllowlistMethods(
     if (raw !== undefined && (typeof raw !== "string" || !raw.trim())) {
       throw new XAdminError("INVALID_REQUEST", "accountId must be a nonempty string.");
     }
-    const accountId = normalizeAccountId(raw ?? resolveDefaultXAccountId(cfg));
-    if (!listXAccountIds(cfg).includes(accountId)) {
+    const account = resolveXAccount(cfg, raw);
+    if (!hasXAccount(cfg, account.accountId)) {
       throw new XAdminError("INVALID_REQUEST", "The X account is not configured.");
     }
-    return { cfg, account: resolveXAccount(cfg, accountId) };
+    return { cfg, account };
   };
   const snapshot = async (
     request: Request,
@@ -84,19 +101,28 @@ export function registerXAllowlistMethods(
     const account = selectedAccountId
       ? resolveXAccount(cfg, selectedAccountId)
       : accountFor(request, cfg).account;
-    const [entries, guests] = await Promise.all([
+    const readConfig = createRuntimeConfigReader(cfg);
+    const [entries, guests, spend, verifiedFromGitHub] = await Promise.all([
       getAllowlist().list(account.accountId),
       getXGuestStatus(api.runtime, account, cfg),
+      openXSpend(
+        api.runtime,
+        account.accountId,
+        () => resolveXAccount(readConfig(), account.accountId).costLimits,
+      ).status(),
+      getXGitHubStatus(api.runtime, account),
     ]);
     assertAdmin(request);
     return {
       accountId: account.accountId,
-      accounts: listXAccountIds(cfg).map((accountId) => ({
+      accounts: listXRuntimeAccountIds(cfg).map((accountId) => ({
         accountId,
         username: resolveXAccount(cfg, accountId).username,
       })),
       entries: mergeXAllowlist(account.config.allowFrom ?? [], entries),
       guests,
+      spend,
+      verifiedFromGitHub,
     };
   };
   const handlers: Record<string, (request: Request) => Promise<unknown>> = {
@@ -114,10 +140,11 @@ export function registerXAllowlistMethods(
         mutate: (draft) => {
           assertAdmin(request);
           const channel = draft.channels?.x;
-          if (!channel || !listXAccountIds(draft).includes(account.accountId)) {
+          if (!channel || !hasXAccount(draft, account.accountId)) {
             throw new XAdminError("INVALID_REQUEST", "The X account is no longer configured.");
           }
-          const target = channel.accounts?.[account.accountId] ?? channel;
+          const key = resolveXAccountKey(draft, account.accountId);
+          const target = (key === undefined ? undefined : channel.accounts?.[key]) ?? channel;
           target.guests = { ...target.guests, enabled };
         },
       });
@@ -135,7 +162,11 @@ export function registerXAllowlistMethods(
       const { cfg, account } = accountFor(request);
       const client = await getXApi(account.accountId, cfg);
       assertAdmin(request);
-      const user = await client.getUserByUsername(username, request.signal);
+      const user = await client.getUserByUsername(
+        username,
+        request.signal,
+        () => () => assertAdmin(request),
+      );
       assertAdmin(request);
       await getAllowlist().put(
         account.accountId,
@@ -173,6 +204,8 @@ export function registerXAllowlistMethods(
         } catch (error) {
           if (error instanceof XAdminError) {
             request.respond(false, undefined, { code: error.code, message: error.message });
+          } else if (error instanceof XBudgetExceededError) {
+            request.respond(false, undefined, { code: "UNAVAILABLE", message: error.message });
           } else {
             api.logger.error(
               `X replies operation failed (${method}): ${error instanceof Error ? error.message : String(error)}`,

@@ -52,24 +52,6 @@ function pickBestDirectoryMatch(
   };
 }
 
-async function readCachedMatches(
-  cache: Map<string, ChannelDirectoryEntry[]>,
-  query: string,
-  lookup: (query: string) => Promise<ChannelDirectoryEntry[]>,
-): Promise<ChannelDirectoryEntry[]> {
-  const key = normalizeOptionalLowercaseString(query);
-  if (!key) {
-    return [];
-  }
-  const cached = cache.get(key);
-  if (cached) {
-    return cached;
-  }
-  const matches = await lookup(query.trim());
-  cache.set(key, matches);
-  return matches;
-}
-
 export async function resolveMatrixTargets(params: {
   cfg: unknown;
   accountId?: string | null;
@@ -99,14 +81,17 @@ export async function resolveMatrixTargets(params: {
       continue;
     }
     try {
-      const matches = await readCachedMatches(lookupCache, trimmed, (query) =>
-        lookup({
+      const key = trimmed.toLowerCase();
+      let matches = lookupCache.get(key);
+      if (!matches) {
+        matches = await lookup({
           cfg: params.cfg,
           accountId: params.accountId,
-          query,
+          query: trimmed,
           limit: 5,
-        }),
-      );
+        });
+        lookupCache.set(key, matches);
+      }
       const { best, note } = pickBestDirectoryMatch(matches, trimmed, params.kind);
       results.push({
         input,

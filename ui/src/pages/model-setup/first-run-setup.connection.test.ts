@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { createHarness } from "../model-providers/model-providers-page.test-support.ts";
+import { createHarness } from "../model-providers/model-providers-page.test-support.tsx";
 import { captureModelSetupConnection, reconcileModelSetupConnection } from "./first-run-setup.ts";
 
 function connection() {

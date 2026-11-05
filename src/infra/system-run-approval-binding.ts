@@ -26,7 +26,11 @@ import {
   looksLikeExplicitPathToken,
   pathLooksMutableForShellPayloadSync,
 } from "./system-run-mutable-file-policy.js";
-import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
+import {
+  normalizeNonEmptyString,
+  normalizeStringArray,
+  readNonBlankString,
+} from "./system-run-normalize.js";
 import { hasPosixShellStartupEnvironment } from "./system-run-shell-file-operand.js";
 import { analyzeWindowsShellCommand } from "./windows-shell-command.js";
 
@@ -76,7 +80,7 @@ export function buildSystemRunApprovalBinding(params: {
   return {
     binding: {
       argv: normalizeStringArray(params.argv),
-      cwd: normalizeNonEmptyString(params.cwd),
+      cwd: readNonBlankString(params.cwd) ?? null,
       agentId: normalizeNonEmptyString(params.agentId),
       sessionKey: normalizeNonEmptyString(params.sessionKey),
       envHash: envBinding.envHash,
@@ -119,39 +123,6 @@ function requestMismatch(details?: Record<string, unknown>): SystemRunApprovalMa
   };
 }
 
-function matchSystemRunApprovalEnvHash(params: {
-  expectedEnvHash: string | null;
-  actualEnvHash: string | null;
-  actualEnvKeys: string[];
-}): SystemRunApprovalMatchResult {
-  // Fail closed if callers provide inconsistent hash/key state. This guards against
-  // normalization drift between approval and execution paths.
-  if (!params.expectedEnvHash) {
-    if (params.actualEnvHash || params.actualEnvKeys.length > 0) {
-      return {
-        ok: false,
-        code: "APPROVAL_ENV_BINDING_MISSING",
-        message: "approval id missing env binding for requested env overrides",
-        details: { envKeys: params.actualEnvKeys },
-      };
-    }
-    return { ok: true };
-  }
-  if (params.expectedEnvHash !== params.actualEnvHash) {
-    return {
-      ok: false,
-      code: "APPROVAL_ENV_MISMATCH",
-      message: "approval id env binding mismatch",
-      details: {
-        envKeys: params.actualEnvKeys,
-        expectedEnvHash: params.expectedEnvHash,
-        actualEnvHash: params.actualEnvHash,
-      },
-    };
-  }
-  return { ok: true };
-}
-
 export function matchSystemRunApprovalBinding(params: {
   expected: SystemRunApprovalBinding;
   actual: SystemRunApprovalBinding;
@@ -165,11 +136,32 @@ export function matchSystemRunApprovalBinding(params: {
   ) {
     return requestMismatch();
   }
-  return matchSystemRunApprovalEnvHash({
-    expectedEnvHash: params.expected.envHash,
-    actualEnvHash: params.actual.envHash,
-    actualEnvKeys: params.actualEnvKeys,
-  });
+  // Fail closed if callers provide inconsistent hash/key state. This guards against
+  // normalization drift between approval and execution paths.
+  if (!params.expected.envHash) {
+    if (params.actual.envHash || params.actualEnvKeys.length > 0) {
+      return {
+        ok: false,
+        code: "APPROVAL_ENV_BINDING_MISSING",
+        message: "approval id missing env binding for requested env overrides",
+        details: { envKeys: params.actualEnvKeys },
+      };
+    }
+    return { ok: true };
+  }
+  if (params.expected.envHash !== params.actual.envHash) {
+    return {
+      ok: false,
+      code: "APPROVAL_ENV_MISMATCH",
+      message: "approval id env binding mismatch",
+      details: {
+        envKeys: params.actualEnvKeys,
+        expectedEnvHash: params.expected.envHash,
+        actualEnvHash: params.actual.envHash,
+      },
+    };
+  }
+  return { ok: true };
 }
 
 export function missingSystemRunApprovalBinding(params: {
@@ -240,7 +232,7 @@ export type SystemRunMutableFileBinding = {
 
 type SystemRunMutableFileBindingCommand =
   | { kind: "argv"; argv: string[]; shellCommand?: string | null }
-  | { kind: "segments"; segments: ExecCommandSegment[] }
+  | { kind: "segments"; segments: ExecCommandSegment[]; shellCommand?: boolean }
   | { kind: "shell"; text: string };
 
 type SystemRunMutableFileBindingResult =
@@ -253,6 +245,8 @@ const SHELL_BUILTIN_DISPATCHERS = new Set(["builtin", "command"]);
 function prepareMutableFileBindingsForArgv(params: {
   commands: readonly string[][];
   cwd?: string;
+  shellCommand?: string | null;
+  allowCommandTextBinding?: boolean;
 }): SystemRunMutableFileBindingResult {
   const operands: SystemRunMutableFileBinding["operands"] = [];
   const commands: string[][] = [];
@@ -267,10 +261,11 @@ function prepareMutableFileBindingsForArgv(params: {
     const prepared = resolveMutableFileOperandSnapshotSync({
       argv,
       cwd: params.cwd,
-      shellCommand: extractShellCommandFromArgv(argv),
+      shellCommand: params.shellCommand ?? extractShellCommandFromArgv(argv),
     });
     if (!prepared.ok) {
       if (
+        params.allowCommandTextBinding !== false &&
         prepared.reason === "unsupported-command-shape" &&
         isSystemRunCommandTextBoundInterpreterInvocation(argv)
       ) {
@@ -292,6 +287,7 @@ function prepareMutableFileBindingsForSegments(params: {
   segments: ExecCommandSegment[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  shellCommand?: boolean;
 }): SystemRunMutableFileBindingResult {
   if (params.segments.length === 0) {
     return {
@@ -350,7 +346,10 @@ function prepareMutableFileBindingsForSegments(params: {
   if (!ordinary.ok) {
     return ordinary;
   }
-  const executables = prepareSystemRunExecutableIdentityBinding({ ...params, shellCommand: true });
+  const executables = prepareSystemRunExecutableIdentityBinding({
+    ...params,
+    shellCommand: params.shellCommand ?? true,
+  });
   if (!executables.ok) {
     return executables;
   }
@@ -466,29 +465,19 @@ export async function prepareSystemRunMutableFileBinding(params: {
   platform?: NodeJS.Platform;
 }): Promise<SystemRunMutableFileBindingResult> {
   if (params.command.kind === "argv") {
-    const prepared = resolveMutableFileOperandSnapshotSync({
-      argv: params.command.argv,
+    return prepareMutableFileBindingsForArgv({
+      commands: [params.command.argv],
       cwd: params.cwd,
-      shellCommand: params.command.shellCommand ?? extractShellCommandFromArgv(params.command.argv),
+      shellCommand: params.command.shellCommand,
+      allowCommandTextBinding: false,
     });
-    if (!prepared.ok) {
-      return prepared;
-    }
-    return {
-      ok: true,
-      binding: {
-        commands: [[...params.command.argv]],
-        operands: prepared.snapshot
-          ? [{ kind: "mutable", argv: [...params.command.argv], snapshot: prepared.snapshot }]
-          : [],
-      },
-    };
   }
   if (params.command.kind === "segments") {
     return prepareMutableFileBindingsForSegments({
       segments: params.command.segments,
       cwd: params.cwd,
       env: params.env,
+      shellCommand: params.command.shellCommand,
     });
   }
 
@@ -554,6 +543,14 @@ export async function revalidateSystemRunMutableFileBinding(params: {
   binding: SystemRunMutableFileBinding;
   cwd?: string;
 }): Promise<{ ok: true } | { ok: false; message: string }> {
+  return revalidateSystemRunMutableFileBindingSync(params);
+}
+
+/** Commit guards use the same file checks without yielding their current authority. */
+export function revalidateSystemRunMutableFileBindingSync(params: {
+  binding: SystemRunMutableFileBinding;
+  cwd?: string;
+}): { ok: true } | { ok: false; message: string } {
   // Carry the prepared argv forward instead of reparsing after the approval;
   // parser drift must not change which executable operands were authorized.
   const current = prepareMutableFileBindingsForArgv({

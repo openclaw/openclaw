@@ -1,9 +1,7 @@
 // Covers plugin config policy validation and ownership decisions.
 import { describe, expect, it } from "vitest";
-import {
-  normalizePluginsConfigWithResolver,
-  resolvePolicyPluginActivationState,
-} from "./config-policy.js";
+import { resolvePluginActivationStateShared } from "./config-activation-shared.js";
+import { normalizePluginsConfigWithResolver } from "./config-policy.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 
 describe("normalizePluginsConfigWithResolver", () => {
@@ -27,7 +25,7 @@ describe("normalizePluginsConfigWithResolver", () => {
   });
 });
 
-describe("resolvePolicyPluginActivationState", () => {
+describe("metadata plugin activation policy", () => {
   it.each([
     {
       name: "keeps metadata allowlists strict while runtime honors explicit channel activation",
@@ -58,7 +56,7 @@ describe("resolvePolicyPluginActivationState", () => {
       activated: runtime.enabled,
       explicitlyEnabled: true,
     });
-    expect(resolvePolicyPluginActivationState(params)).toEqual({
+    expect(resolvePluginActivationStateShared(params)).toEqual({
       ...policy,
       activated: policy.enabled,
       explicitlyEnabled: true,

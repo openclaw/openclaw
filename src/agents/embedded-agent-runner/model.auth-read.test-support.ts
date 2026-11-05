@@ -1,14 +1,16 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { Model } from "../../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.owner.js";
 import {
   createEmptyPreparedModelRuntimeFixture,
   type guardModelFixtureAuth,
 } from "./model.fixture.test-support.js";
 import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
+import type { ProviderRuntimeHooks } from "./model.provider-hooks.js";
 import type { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 import { makeModel } from "./model.test-harness.js";
 
@@ -30,22 +32,36 @@ export function registerModelAuthReadTests({
     expected: Record<string, unknown>,
   ) => Record<string, unknown>;
 }) {
-  it("consumes a directly prepared model through configured overrides and normalization", async () => {
-    const preparedModel = {
-      ...makeModel("prepared-model"),
-      provider: "acme",
-      name: "Prepared Model",
-      api: "openai-completions" as const,
-      baseUrl: "https://discovered.example/v1",
-      input: ["text" as const],
-      contextWindow: 65_536,
-      maxTokens: 8_192,
-    };
-    const prepareProviderDynamicModel = vi.fn(async () => {
+  const discoveredModel = (id: string) => ({
+    ...makeModel(id),
+    provider: "acme",
+    api: "openai-completions" as const,
+    baseUrl: "https://discovered.example/v1",
+    input: ["text" as const],
+    contextWindow: 65_536,
+    maxTokens: 8_192,
+  });
+  const prepareWithoutRereadingAuth = (model?: Model) =>
+    vi.fn(async () => {
       getAuthSpy().mockImplementation(() => {
         throw new Error("Auth storage became unavailable after model preparation");
       });
-      return preparedModel;
+      return model;
+    });
+  const resolve = (
+    id: string,
+    cfg: OpenClawConfig | undefined,
+    hooks: Partial<ProviderRuntimeHooks>,
+  ) =>
+    resolveModelAsync("acme", id, getAgentDir(), cfg, {
+      runtimeHooks: { ...createRuntimeHooks(), ...hooks },
+      skipAgentDiscovery: true,
+    });
+
+  it("consumes a directly prepared model through configured overrides and normalization", async () => {
+    const prepareProviderDynamicModel = prepareWithoutRereadingAuth({
+      ...discoveredModel("prepared-model"),
+      name: "Prepared Model",
     });
     const runProviderDynamicModel = vi.fn(() => undefined);
     const normalizeProviderResolvedModelWithPlugin = vi.fn(
@@ -60,14 +76,10 @@ export function registerModelAuthReadTests({
       headers: { "X-Tenant": "tenant-a" },
     });
 
-    const result = await resolveModelAsync("acme", "prepared-model", getAgentDir(), cfg, {
-      runtimeHooks: {
-        ...createRuntimeHooks(),
-        prepareProviderDynamicModel,
-        runProviderDynamicModel,
-        normalizeProviderResolvedModelWithPlugin,
-      },
-      skipAgentDiscovery: true,
+    const result = await resolve("prepared-model", cfg, {
+      prepareProviderDynamicModel,
+      runProviderDynamicModel,
+      normalizeProviderResolvedModelWithPlugin,
     });
 
     expectRecordFields(expectResolvedModel(result), {
@@ -90,35 +102,20 @@ export function registerModelAuthReadTests({
   it.each(["auth", "suppressed auth", "prepared miss", "prepared model"] as const)(
     "rejects retired run authority after %s before invoking another provider hook",
     async (stage) => {
-      const entered = createDeferred();
-      const release = createDeferred();
+      const preparationGate = createEnteredGate();
       const expired = new Error("The model resolution owner retired.");
       let current = true;
-      const pause = async () => {
-        entered.resolve();
-        await release.promise;
-      };
       getAuthSpy().mockImplementation(async () => {
         if (stage === "auth" || stage === "suppressed auth") {
-          await pause();
+          await preparationGate.wait();
         }
         return { version: 1, profiles: {} };
       });
       const prepareProviderDynamicModel = vi.fn(async () => {
         if (stage === "prepared miss" || stage === "prepared model") {
-          await pause();
+          await preparationGate.wait();
         }
-        return stage === "prepared model"
-          ? {
-              ...makeModel("candidate"),
-              provider: "acme",
-              api: "openai-completions" as const,
-              baseUrl: "https://discovered.example/v1",
-              input: ["text" as const],
-              contextWindow: 65_536,
-              maxTokens: 8_192,
-            }
-          : undefined;
+        return stage === "prepared model" ? discoveredModel("candidate") : undefined;
       });
       const runProviderDynamicModel = vi.fn(() => makeModel("candidate"));
       const normalizeProviderResolvedModelWithPlugin = vi.fn(() => undefined);
@@ -144,14 +141,13 @@ export function registerModelAuthReadTests({
         },
       );
       try {
-        await Promise.race([
-          entered.promise,
-          resolution.then(() => {
-            throw new Error("Model resolution settled before the preparation barrier.");
-          }),
-        ]);
+        await awaitGateBeforeSettlement(
+          preparationGate.entered,
+          resolution,
+          "Model resolution settled before the preparation barrier.",
+        );
         current = false;
-        release.resolve();
+        preparationGate.release();
         await expect(resolution.then(() => "resolved")).rejects.toBe(expired);
         expect(prepareProviderDynamicModel).toHaveBeenCalledTimes(
           stage.startsWith("prepared") ? 1 : 0,
@@ -159,7 +155,7 @@ export function registerModelAuthReadTests({
         expect(runProviderDynamicModel).not.toHaveBeenCalled();
         expect(normalizeProviderResolvedModelWithPlugin).not.toHaveBeenCalled();
       } finally {
-        release.resolve();
+        preparationGate.release();
         await resolution.catch(() => {});
       }
     },
@@ -167,12 +163,7 @@ export function registerModelAuthReadTests({
 
   it("reuses an empty auth result when async model preparation falls back to the sync hook", async () => {
     getAuthSpy().mockResolvedValueOnce({ version: 1, profiles: {} });
-    const prepareProviderDynamicModel = vi.fn(async () => {
-      getAuthSpy().mockImplementation(() => {
-        throw new Error("Auth storage became unavailable after model preparation");
-      });
-      return undefined;
-    });
+    const prepareProviderDynamicModel = prepareWithoutRereadingAuth();
     const runProviderDynamicModel = vi.fn(() => ({
       ...makeModel("fallback-model"),
       provider: "acme",
@@ -180,13 +171,9 @@ export function registerModelAuthReadTests({
       baseUrl: "https://discovered.example/v1",
     }));
 
-    const result = await resolveModelAsync("acme", "fallback-model", getAgentDir(), undefined, {
-      runtimeHooks: {
-        ...createRuntimeHooks(),
-        prepareProviderDynamicModel,
-        runProviderDynamicModel,
-      },
-      skipAgentDiscovery: true,
+    const result = await resolve("fallback-model", undefined, {
+      prepareProviderDynamicModel,
+      runProviderDynamicModel,
     });
 
     expectRecordFields(expectResolvedModel(result), {

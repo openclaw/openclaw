@@ -265,7 +265,7 @@ struct ChatCommandPalette: View {
     private func searchThreads() async {
         guard !Task.isCancelled else { return }
         let request = self.request
-        let generation = self.search.begin(request, owner: self.viewModel.sidebarData)
+        self.search.begin(request, owner: self.viewModel.sidebarData)
         guard !request.query.isEmpty else { return }
         do {
             try await Task.sleep(for: .milliseconds(250))
@@ -273,7 +273,7 @@ struct ChatCommandPalette: View {
             let rows = await self.viewModel.fetchSessionList(search: request.query, archived: false)
             try Task.checkCancellation()
             guard self.request == request else { return }
-            self.search.complete(rows, generation: generation)
+            self.search.complete(rows)
         } catch {
             // The replacement task (or dismissed sheet) owns the presentation.
         }

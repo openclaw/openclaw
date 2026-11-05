@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
-import type { NpmIntegrityDriftPayload } from "../infra/npm-integrity.js";
 import { isPackageVersionDowngrade } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import { installPluginFromClawHub } from "./clawhub.js";
 import { installPluginFromGitSpec } from "./git-install.js";
+import { installWithChannelFallback, installWithSourceFallback } from "./install-channel-specs.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
@@ -73,33 +73,23 @@ export function formatClawHubInstallFailure(params: {
   return `Failed to ${params.phase} ${params.pluginId}: ${params.error} (ClawHub ${params.spec}).`;
 }
 
-export function readClawHubTrustErrorCode(result: {
-  code?: string;
+export function resolveClawHubTrustSkipCode(params: {
+  result: { ok: false; code?: string; version?: string };
+  currentVersion: string | undefined;
 }): ClawHubTrustErrorCode | undefined {
+  const { result, currentVersion } = params;
+  if (!currentVersion) {
+    return undefined;
+  }
   if (
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED ||
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE ||
+    (result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED &&
+      result.version &&
+      result.version !== currentVersion)
   ) {
     return result.code;
   }
   return undefined;
-}
-
-export function shouldSkipClawHubTrustFailureForExistingInstall(params: {
-  result: { ok: false; code?: string; version?: string };
-  currentVersion: string | undefined;
-}): boolean {
-  if (params.result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE) {
-    return Boolean(params.currentVersion);
-  }
-  if (params.result.code !== CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED) {
-    return false;
-  }
-  return Boolean(
-    params.result.version &&
-    params.currentVersion &&
-    params.result.version !== params.currentVersion,
-  );
 }
 
 export function buildClawHubTrustSkippedOutcome(params: {
@@ -113,7 +103,7 @@ export function buildClawHubTrustSkippedOutcome(params: {
   return {
     pluginId: params.pluginId,
     status: "skipped",
-    ...(params.code ? { code: params.code } : {}),
+    code: params.code,
     ...(params.currentVersion ? { currentVersion: params.currentVersion } : {}),
     ...(params.warning ? { warning: params.warning } : {}),
     message: `Skipped ${params.pluginId} ClawHub ${params.phase}: ${params.error} Existing installed plugin left unchanged.`,
@@ -126,32 +116,6 @@ export function isClawHubTrustSkippedOutcome(outcome: { status: string; code?: s
     (outcome.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED ||
       outcome.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE)
   );
-}
-
-function createPluginUpdateIntegrityDriftHandler(params: {
-  pluginId: string;
-  dryRun: boolean;
-  logger: PluginUpdateLogger;
-  onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
-}) {
-  return async (drift: NpmIntegrityDriftPayload) => {
-    const payload: PluginUpdateIntegrityDriftParams = {
-      pluginId: params.pluginId,
-      spec: drift.spec,
-      expectedIntegrity: drift.expectedIntegrity,
-      actualIntegrity: drift.actualIntegrity,
-      resolvedSpec: drift.resolution.resolvedSpec,
-      resolvedVersion: drift.resolution.version,
-      dryRun: params.dryRun,
-    };
-    if (params.onIntegrityDrift) {
-      return await params.onIntegrityDrift(payload);
-    }
-    params.logger.warn?.(
-      `Integrity drift for "${params.pluginId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
-    );
-    return false;
-  };
 }
 
 type PluginUpdateSpecPlan = {
@@ -187,22 +151,14 @@ type PluginUpdateSuccess = Extract<PluginUpdateInstallResult, { ok: true }>;
 
 type PluginUpdateAttemptState = {
   activeClawHubInstallSpec?: string;
+  npmFallbackSpec?: string;
   channelFallbackSuffix: string;
 };
 
-type PluginUpdateAttemptResult =
-  | { kind: "exception"; message: string; error: unknown }
-  | ({ kind: "result"; result: PluginUpdateInstallResult } & PluginUpdateAttemptState);
-
-function isPluginUpdateUnchanged(
-  params: Parameters<typeof buildPluginUpdateVersionOutcome>[0],
-): boolean {
-  const { record, result, currentVersion, nextVersion } = params;
-  const nextCommit = record.source === "git" && "git" in result ? result.git.commit : undefined;
-  return record.gitCommit && nextCommit
-    ? record.gitCommit === nextCommit
-    : Boolean(currentVersion && nextVersion && currentVersion === nextVersion);
-}
+type PluginUpdateAttemptResult = {
+  kind: "result";
+  result: PluginUpdateInstallResult;
+} & PluginUpdateAttemptState;
 
 type PluginUpdateVersionOutcomeParams = {
   pluginId: string;
@@ -216,12 +172,6 @@ type PluginUpdateVersionOutcomeParams = {
   timeoutMs?: number;
 };
 
-export async function buildPluginUpdateVersionOutcome(
-  params: PluginUpdateVersionOutcomeParams,
-): Promise<PluginUpdateOutcome> {
-  return await buildPluginUpdateOutcome(params, "update");
-}
-
 export async function buildDryRunPluginUpdateOutcome(
   params: Omit<PluginUpdateVersionOutcomeParams, "nextVersion"> & {
     effectiveSpec?: string;
@@ -234,20 +184,25 @@ export async function buildDryRunPluginUpdateOutcome(
     params.result.version ??
     npmProbeVersion ??
     (params.record.source === "npm" ? resolveExactNpmSpecVersion(params.effectiveSpec) : undefined);
-  return await buildPluginUpdateOutcome(
+  return await buildPluginUpdateVersionOutcome(
     { ...params, nextVersion: resolvedProbeVersion },
     "check",
     npmProbeVersion,
   );
 }
 
-async function buildPluginUpdateOutcome(
+export async function buildPluginUpdateVersionOutcome(
   params: PluginUpdateVersionOutcomeParams & { hasSpecOverride?: boolean },
-  phase: "check" | "update",
+  phase: "check" | "update" = "update",
   npmProbeVersion?: string,
 ): Promise<PluginUpdateOutcome> {
   const currentLabel = params.currentVersion ?? "unknown";
-  const unchanged = isPluginUpdateUnchanged(params);
+  const { record, result, currentVersion, nextVersion } = params;
+  const nextCommit = record.source === "git" && "git" in result ? result.git.commit : undefined;
+  const unchanged =
+    record.gitCommit && nextCommit
+      ? record.gitCommit === nextCommit
+      : Boolean(currentVersion && nextVersion && currentVersion === nextVersion);
   const newerExactPinnedDefaultLine =
     phase === "check" && unchanged && params.record.source === "npm" && !params.hasSpecOverride
       ? await resolveNewerExactPinnedNpmDefaultLine({
@@ -322,6 +277,7 @@ export async function runPluginUpdateAttempt(params: {
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   expectedIntegrity?: string;
   clawhubSpecs?: PluginUpdateSpecPlan;
+  officialNpmFallback?: { installSpec: string; recordSpec: string; expectedIntegrity?: string };
   trustedSourceLinkedOfficialInstall: boolean;
   expectedReplacementPluginId?: string;
   onNpmInstall: () => void;
@@ -329,7 +285,6 @@ export async function runPluginUpdateAttempt(params: {
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateAttemptResult> {
   const dryRunOption = params.dryRun ? { dryRun: true } : {};
-  const phase = params.dryRun ? "check" : "update";
   const commonInstallOptions = copyPluginInstallTransactionRequest(params, {
     config: params.config,
     mode: "update" as const,
@@ -342,75 +297,111 @@ export async function runPluginUpdateAttempt(params: {
     expectedPluginId: params.pluginId,
     logger: params.logger,
   });
-  let result: PluginUpdateInstallResult;
-  try {
-    if (params.record.source === "npm" && !params.dryRun) {
-      params.onNpmInstall();
-    }
-    result =
-      params.record.source === "npm"
-        ? await installPluginFromNpmSpec({
-            spec: params.effectiveSpec!,
-            npmMetadata: params.npmMetadata,
-            ...commonInstallOptions,
-            trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-            expectedReplacementPluginId: params.expectedReplacementPluginId,
-            expectedIntegrity: params.expectedIntegrity,
-            onIntegrityDrift: createPluginUpdateIntegrityDriftHandler(params),
-          })
-        : params.record.source === "clawhub"
-          ? await installPluginFromClawHub({
-              spec: params.effectiveSpec ?? `clawhub:${params.record.clawhubPackage!}`,
-              baseUrl: params.record.clawhubUrl,
-              ...commonInstallOptions,
-            })
-          : params.record.source === "git"
-            ? await installPluginFromGitSpec({
-                spec: params.effectiveSpec!,
-                ...commonInstallOptions,
-              })
-            : await installPluginFromMarketplace({
-                marketplace: params.record.marketplaceSource!,
-                plugin: params.record.marketplacePlugin!,
-                ...commonInstallOptions,
-              });
-  } catch (error) {
-    return {
-      kind: "exception",
-      message: `Failed to ${phase} ${params.pluginId}: ${String(error)}`,
-      error,
-    };
+  if (params.record.source === "npm" && !params.dryRun) {
+    params.onNpmInstall();
   }
-
+  const clawhubFallbackSpec = params.clawhubSpecs?.fallbackSpec;
   let activeClawHubInstallSpec = params.effectiveSpec;
   let channelFallbackSuffix = "";
+  const result: PluginUpdateInstallResult =
+    params.record.source === "npm"
+      ? await installPluginFromNpmSpec({
+          spec: params.effectiveSpec!,
+          npmMetadata: params.npmMetadata,
+          ...commonInstallOptions,
+          trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+          expectedReplacementPluginId: params.expectedReplacementPluginId,
+          expectedIntegrity: params.expectedIntegrity,
+          onIntegrityDrift: async (drift) => {
+            const payload: PluginUpdateIntegrityDriftParams = {
+              pluginId: params.pluginId,
+              spec: drift.spec,
+              expectedIntegrity: drift.expectedIntegrity,
+              actualIntegrity: drift.actualIntegrity,
+              resolvedSpec: drift.resolution.resolvedSpec,
+              resolvedVersion: drift.resolution.version,
+              dryRun: params.dryRun,
+            };
+            if (params.onIntegrityDrift) {
+              return await params.onIntegrityDrift(payload);
+            }
+            params.logger.warn?.(
+              `Integrity drift for "${params.pluginId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
+            );
+            return false;
+          },
+        })
+      : params.record.source === "clawhub"
+        ? await installWithChannelFallback({
+            installSpec: params.effectiveSpec ?? `clawhub:${params.record.clawhubPackage!}`,
+            fallbackSpec: clawhubFallbackSpec,
+            install: (spec) =>
+              installPluginFromClawHub({
+                spec,
+                baseUrl: params.record.clawhubUrl,
+                ...commonInstallOptions,
+              }),
+            isRetryable: (attempt) => !attempt.ok && isUnavailableClawHubTarget(attempt),
+            onFallback: () => {
+              channelFallbackSuffix = formatBetaChannelFallbackOutcomeSuffix({
+                fallbackLabel: params.clawhubSpecs?.fallbackLabel ?? params.effectiveSpec,
+                fallbackSpec: clawhubFallbackSpec,
+                verb: params.dryRun ? "would use" : "used",
+              });
+              params.logger.info?.(
+                `Plugin "${params.pluginId}" has no beta ClawHub release for ${params.clawhubSpecs?.fallbackLabel ?? params.effectiveSpec}; using ${clawhubFallbackSpec} instead. Core update can still complete.`,
+              );
+              activeClawHubInstallSpec = clawhubFallbackSpec;
+            },
+          })
+        : params.record.source === "git"
+          ? await installPluginFromGitSpec({
+              spec: params.effectiveSpec!,
+              ...commonInstallOptions,
+            })
+          : await installPluginFromMarketplace({
+              marketplace: params.record.marketplaceSource!,
+              plugin: params.record.marketplacePlugin!,
+              ...commonInstallOptions,
+            });
 
-  if (
-    !result.ok &&
-    params.record.source === "clawhub" &&
-    params.clawhubSpecs?.fallbackSpec &&
-    isUnavailableClawHubTarget(result)
-  ) {
-    channelFallbackSuffix = formatBetaChannelFallbackOutcomeSuffix({
-      fallbackLabel: params.clawhubSpecs.fallbackLabel ?? params.effectiveSpec,
-      fallbackSpec: params.clawhubSpecs.fallbackSpec,
-      verb: params.dryRun ? "would use" : "used",
-    });
-    params.logger.info?.(
-      `Plugin "${params.pluginId}" has no beta ClawHub release for ${params.clawhubSpecs.fallbackLabel ?? params.effectiveSpec}; using ${params.clawhubSpecs.fallbackSpec} instead. Core update can still complete.`,
-    );
-    result = await installPluginFromClawHub({
-      spec: params.clawhubSpecs.fallbackSpec,
-      baseUrl: params.record.clawhubUrl,
-      ...commonInstallOptions,
-    });
-    activeClawHubInstallSpec = params.clawhubSpecs.fallbackSpec;
-  }
-
-  return {
+  const attempt: PluginUpdateAttemptResult = {
     kind: "result",
     result,
     activeClawHubInstallSpec,
     channelFallbackSuffix,
   };
+  const fallback = params.officialNpmFallback;
+  if (params.record.source !== "clawhub" || !fallback || !activeClawHubInstallSpec) {
+    return attempt;
+  }
+  const selected = await installWithSourceFallback<PluginUpdateAttemptResult>({
+    sources: [
+      { source: "clawhub", spec: activeClawHubInstallSpec },
+      { source: "npm", spec: fallback.installSpec },
+    ],
+    install: async (source) => {
+      if (source.source === "clawhub") {
+        return attempt;
+      }
+      const npmAttempt = await runPluginUpdateAttempt(
+        copyPluginInstallTransactionRequest(params, {
+          ...params,
+          record: { source: "npm", spec: fallback.recordSpec },
+          effectiveSpec: fallback.installSpec,
+          npmMetadata: undefined,
+          expectedIntegrity: fallback.expectedIntegrity,
+          trustedSourceLinkedOfficialInstall: true,
+          officialNpmFallback: undefined,
+        }),
+      );
+      return { ...npmAttempt, npmFallbackSpec: fallback.recordSpec, channelFallbackSuffix };
+    },
+    result: (entry) => entry.result,
+    onFallback: (message) => {
+      channelFallbackSuffix += ` ${message}`;
+      params.logger.warn?.(message);
+    },
+  });
+  return selected.attempt;
 }

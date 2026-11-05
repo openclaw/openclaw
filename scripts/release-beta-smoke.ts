@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { shellEscapeBackslash as shellQuote } from "../src/shared/shell-quote.ts";
 import {
   booleanFlag,
   parseFlagArgs,
@@ -12,15 +13,7 @@ import {
 } from "./lib/arg-utils.mts";
 import { sleep as delay } from "./lib/sleep.mjs";
 
-type Options = {
-  beta: string;
-  model: string;
-  providerMode: string;
-  ref: string;
-  repo: string;
-  skipParallels: boolean;
-  skipTelegram: boolean;
-};
+type Options = ReturnType<typeof parseArgs>;
 
 export type RunOptions = {
   capture?: boolean;
@@ -57,11 +50,11 @@ Options:
 `;
 }
 
-export function parseArgs(argv: string[]): Options {
+export function parseArgs(argv: string[]) {
   const args = stripLeadingPackageManagerSeparator(argv);
   const terminatorIndex = args.indexOf("--");
   const cliArgs = terminatorIndex === -1 ? args : args.slice(0, terminatorIndex);
-  const options: Options = {
+  const options = {
     beta: "beta",
     model: "openai/gpt-5.4",
     providerMode: "mock-openai",
@@ -164,10 +157,6 @@ export function run(command: string, args: string[], input?: RunOptions): string
     throw new Error(`${command} ${args.join(" ")} failed with ${reason}${stderr}`);
   }
   return result.stdout ?? "";
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 const TELEGRAM_BETA_WORKFLOW_FILE = "npm-telegram-beta-e2e.yml";

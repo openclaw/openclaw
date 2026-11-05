@@ -1,11 +1,11 @@
 import type { Command } from "commander";
-import type { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   callGoogleMeetGateway,
   parseOptionalNumber,
   type ResolveSpaceOptions,
 } from "./cli-shared.js";
 import type { GoogleMeetConfig } from "./config.js";
+import type { GoogleMeetOAuthRuntime } from "./oauth-owner.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export function addGoogleMeetOAuthOptions(command: Command): Command {
@@ -42,8 +42,8 @@ export type GoogleMeetCliCommandContext = {
   root: Command;
   config: GoogleMeetConfig;
   ensureRuntime: () => Promise<GoogleMeetRuntime>;
-  callGateway: typeof callGatewayFromCli;
   operationTimeoutMs: number;
+  oauthRuntime?: GoogleMeetOAuthRuntime;
 };
 
 export function resolveCliMeetingInput(config: GoogleMeetConfig, value?: string): string {
@@ -69,7 +69,6 @@ export async function callGoogleMeetRuntime<Result>(
   timeoutMs?: number,
 ): Promise<Result> {
   const delegated = await callGoogleMeetGateway({
-    callGateway: context.callGateway,
     method,
     payload,
     timeoutMs,

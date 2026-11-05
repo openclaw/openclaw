@@ -39,20 +39,9 @@ type GoogleMeetCalendarEvent = {
   };
 };
 
-export type GoogleMeetCalendarLookupResult = {
-  calendarId: string;
-  event: GoogleMeetCalendarEvent;
-  meetingUri: string;
-};
-
-type GoogleMeetCalendarEventsResult = {
-  calendarId: string;
-  events: Array<{
-    event: GoogleMeetCalendarEvent;
-    meetingUri: string;
-    selected: boolean;
-  }>;
-};
+export type GoogleMeetCalendarLookupResult = Awaited<
+  ReturnType<typeof findGoogleMeetCalendarEvent>
+>;
 
 function normalizeGoogleMeetCalendarUri(value: string | undefined): string | undefined {
   if (!value?.trim()) {
@@ -121,10 +110,7 @@ function extractGoogleMeetUriFromCalendarEvent(event: GoogleMeetCalendarEvent): 
   );
 }
 
-export function buildGoogleMeetCalendarDayWindow(now = new Date()): {
-  timeMin: string;
-  timeMax: string;
-} {
+export function buildGoogleMeetCalendarDayWindow(now = new Date()) {
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
   const end = new Date(start);
@@ -154,9 +140,7 @@ type GoogleMeetCalendarQuery = {
   timeMax?: string;
 };
 
-async function fetchGoogleCalendarEvents(
-  params: GoogleMeetCalendarQuery,
-): Promise<{ calendarId: string; events: GoogleMeetCalendarEvent[]; now: Date }> {
+async function fetchGoogleCalendarEvents(params: GoogleMeetCalendarQuery) {
   const calendarId = params.calendarId?.trim() || "primary";
   const now = new Date();
   const defaultTimeMax = new Date(now);
@@ -192,11 +176,9 @@ async function fetchGoogleCalendarEvents(
   );
 }
 
-export async function listGoogleMeetCalendarEvents(
-  params: GoogleMeetCalendarQuery,
-): Promise<GoogleMeetCalendarEventsResult> {
+export async function listGoogleMeetCalendarEvents(params: GoogleMeetCalendarQuery) {
   const { calendarId, events, now } = await fetchGoogleCalendarEvents(params);
-  const meetEvents: GoogleMeetCalendarEventsResult["events"] = [];
+  const meetEvents = [];
   let best: GoogleMeetCalendarEvent | undefined;
   let bestRank = Number.POSITIVE_INFINITY;
   for (const event of events) {
@@ -219,9 +201,7 @@ export async function listGoogleMeetCalendarEvents(
   return { calendarId, events: meetEvents };
 }
 
-export async function findGoogleMeetCalendarEvent(
-  params: GoogleMeetCalendarQuery,
-): Promise<GoogleMeetCalendarLookupResult> {
+export async function findGoogleMeetCalendarEvent(params: GoogleMeetCalendarQuery) {
   const result = await listGoogleMeetCalendarEvents(params);
   const selected = result.events.find((event) => event.selected) ?? result.events[0];
   if (!selected) {

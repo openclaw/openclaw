@@ -5,18 +5,6 @@ import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
 import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 import { isPluginTrustRefusalError } from "../plugins/plugin-trust.js";
 
-/** Patch emitted when a channel connection is established. */
-type ConnectedChannelStatusPatch = {
-  connected: true;
-  lastConnectedAt: number;
-  lastEventAt: number;
-};
-
-/** Patch emitted when a channel transport reports activity without reconnecting. */
-type TransportActivityChannelStatusPatch = {
-  lastTransportActivityAt: number;
-};
-
 type ReadyChannelStatusPatch = {
   running: true;
   connected: true;
@@ -51,20 +39,16 @@ type StoppedChannelStatusExtras = Partial<
 >;
 
 /** Creates a connected-channel status patch with matching connection/event timestamps. */
-export function createConnectedChannelStatusPatch(
-  at: number = Date.now(),
-): ConnectedChannelStatusPatch {
+export function createConnectedChannelStatusPatch(at: number = Date.now()) {
   return {
-    connected: true,
+    connected: true as const,
     lastConnectedAt: at,
     lastEventAt: at,
   };
 }
 
 /** Creates a transport-activity patch for health/activity monitors. */
-export function createTransportActivityStatusPatch(
-  at: number = Date.now(),
-): TransportActivityChannelStatusPatch {
+export function createTransportActivityStatusPatch(at: number = Date.now()) {
   return {
     lastTransportActivityAt: at,
   };

@@ -4,11 +4,8 @@ import path from "node:path";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
-  DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_SOUL_FILENAME,
-  DEFAULT_USER_FILENAME,
+  GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
 } from "./workspace-bootstrap-policy.js";
 import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
 import {
@@ -27,13 +24,7 @@ export async function copyWorkspaceBootstrapFiles(
   await fs.mkdir(workspaceDir, { recursive: true });
   assertCurrent();
   if (seed) {
-    const files = [
-      DEFAULT_AGENTS_FILENAME,
-      DEFAULT_SOUL_FILENAME,
-      DEFAULT_IDENTITY_FILENAME,
-      DEFAULT_USER_FILENAME,
-      DEFAULT_BOOTSTRAP_FILENAME,
-    ];
+    const files = [...GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES, DEFAULT_BOOTSTRAP_FILENAME];
     for (const name of files) {
       const src = path.join(seed, name);
       const dest = path.join(workspaceDir, name);

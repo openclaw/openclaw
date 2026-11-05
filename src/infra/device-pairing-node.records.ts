@@ -216,15 +216,12 @@ export function samePendingApprovalSurface(
   existing: PairedDevicePendingNodeSurface,
   incoming: NodePairingRequestInput,
 ): boolean {
-  const incomingCaps = normalizeArrayBackedTrimmedStringList(incoming.caps) ?? existing.caps;
-  const incomingCommands =
-    normalizeArrayBackedTrimmedStringList(incoming.commands) ?? existing.commands;
-  const incomingPermissions = incoming.permissions ?? existing.permissions;
   return (
     // Metadata-only reconnects may refresh one pending request; approval-surface changes supersede.
-    sameNodeApprovalSurfaceSet(existing.caps, incomingCaps) &&
-    sameNodeApprovalSurfaceSet(existing.commands, incomingCommands) &&
-    sameNodePermissionSurface(existing.permissions, incomingPermissions)
+    (!Array.isArray(incoming.caps) || sameNodeApprovalSurfaceSet(existing.caps, incoming.caps)) &&
+    (!Array.isArray(incoming.commands) ||
+      sameNodeApprovalSurfaceSet(existing.commands, incoming.commands)) &&
+    sameNodePermissionSurface(existing.permissions, incoming.permissions ?? existing.permissions)
   );
 }
 

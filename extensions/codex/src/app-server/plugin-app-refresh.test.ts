@@ -56,7 +56,7 @@ describe("explicit Codex plugin app refresh", () => {
     const request = vi.fn(async (method, params) =>
       codexAppInventoryResponse(method, [connectedApp], params),
     );
-    await appCache.refreshNow({ key, request });
+    const previousSnapshot = await appCache.refreshNow({ key, request });
     const failure = new Error("Hosted connector refresh unavailable");
 
     await expect(
@@ -72,6 +72,9 @@ describe("explicit Codex plugin app refresh", () => {
 
     const cached = appCache.read({ key, request });
     expect(cached.state).toBe("stale");
-    expect(cached.diagnostic?.message).toBe(failure.message);
+    expect(cached.snapshot?.apps).toEqual(previousSnapshot.apps);
+    expect(cached.snapshot?.installedApps).toEqual(previousSnapshot.installedApps);
+    expect(cached.snapshot?.targetAppIds).toEqual(previousSnapshot.targetAppIds);
+    expect(cached.snapshot?.expiresAtMs).toBe(previousSnapshot.expiresAtMs);
   });
 });

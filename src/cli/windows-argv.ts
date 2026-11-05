@@ -3,7 +3,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 
 const CONTROL_CHARS = new RegExp(String.raw`[\u0000-\u001f\u007f]`, "g");
 
-/** Remove duplicated Windows node launcher argv entries while preserving normal POSIX argv. */
 export function normalizeWindowsArgv(
   argv: string[],
   options: {

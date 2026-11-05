@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import type {
   PaginatedSessionHistory,
   SessionHistoryMessage,
@@ -14,10 +16,10 @@ import {
   projectChatDisplayMessagesWithState,
   createCurrentUserProfileMessageProjector,
 } from "./chat-display-projection.core.js";
+import { prepareForwardedMessageCronJobNameResolver } from "./chat-display-projection.cron.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
 import {
   createSubagentCoordinationHistoryProjection,
-  prepareForwardedMessageCronJobNameResolver,
   projectForwardedMessages,
 } from "./chat-display-projection.history.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
@@ -25,15 +27,16 @@ import {
   createPreparedSessionHistorySubagentProjection,
   readSessionHistorySubagentLookup,
 } from "./session-history-delta-visibility.js";
+import { readSessionHistorySnapshotKernel } from "./session-history-snapshot.js";
 import {
   buildPaginatedSessionHistory,
-  readSessionHistorySnapshotKernel,
-} from "./session-history-snapshot.js";
-import { readChatHistoryMessageSeq as resolveMessageSeq } from "./session-history-tail.js";
+  readChatHistoryMessageSeq as resolveMessageSeq,
+} from "./session-history-tail.js";
 import {
   readTranscriptMessageIdempotencyKey,
   attachOpenClawTranscriptMeta,
 } from "./session-transcript-entry-message.js";
+import { createSessionActorTranscriptReader } from "./session-transcript-memory-reader.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
@@ -47,6 +50,21 @@ type InlineSessionHistoryAppend = {
 export async function readSessionHistorySnapshotAsync(
   params: SessionHistoryReadParams,
 ): Promise<SessionHistorySnapshot> {
+  const memory = captureSessionActorTranscriptRead(params.target);
+  if (memory) {
+    const snapshot = await readSessionHistorySnapshotKernel(params, {
+      readers: createSessionActorTranscriptReader(memory),
+      readOnly: true,
+      resolveCurrentUserProfileDisplay,
+      resolveCronJobName: () => undefined,
+    });
+    const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+      snapshot.history.messages,
+    );
+    const messages = projectForwardedMessages(snapshot.history.messages, resolveCronJobName);
+    memory.assertCurrent();
+    return { ...snapshot, history: { ...snapshot.history, items: messages, messages } };
+  }
   if (
     !params.target.storePath ||
     params.target.sessionEntry?.incognito ||
@@ -106,12 +124,18 @@ export class SessionHistorySseState {
   private transcriptPath: string | undefined;
 
   static fromSnapshot(
-    params: SessionHistoryReadParams & { snapshot: SessionHistorySnapshot },
+    params: SessionHistoryReadParams & {
+      snapshot: SessionHistorySnapshot;
+    },
   ): SessionHistorySseState {
     return new SessionHistorySseState(params);
   }
 
-  private constructor(params: SessionHistoryReadParams & { snapshot: SessionHistorySnapshot }) {
+  private constructor(
+    params: SessionHistoryReadParams & {
+      snapshot: SessionHistorySnapshot;
+    },
+  ) {
     this.target = params.target;
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     this.limit = params.limit;
@@ -162,8 +186,14 @@ export class SessionHistorySseState {
       ...(idempotencyKey ? { idempotencyKey } : {}),
       seq: messageSeq,
     });
+    const memory = captureSessionActorTranscriptRead(this.target);
+    const readers = memory && createSessionActorTranscriptReader(memory);
     let subagentCoordination: SubagentCoordinationDisplayResolver | undefined;
     const lookup = readSessionHistorySubagentLookup(message);
+    if (readers && lookup) {
+      await readers.prepareVisibility([message]);
+      subagentCoordination = readers.subagentCoordination;
+    }
     if (
       lookup &&
       this.target.storePath &&
@@ -186,8 +216,15 @@ export class SessionHistorySseState {
       message,
     ]);
     // The stream queue retains ordering; its publisher reauthorizes before applying this transition.
-    return () =>
-      this.appendInlineMessage(message, messageSeq, subagentCoordination, resolveCronJobName);
+    return () => {
+      memory?.assertCurrent();
+      return this.appendInlineMessage(
+        message,
+        messageSeq,
+        subagentCoordination,
+        resolveCronJobName,
+      );
+    };
   }
 
   private appendInlineMessage(
@@ -237,7 +274,13 @@ export class SessionHistorySseState {
       isDeepStrictEqual(projectedPrefix, this.sentHistory.messages)
     ) {
       const addedMessages = projectedMessages.slice(this.sentHistory.messages.length);
-      if (hadPendingTurnBoundary && !this.turnBoundaryPending) {
+      // The full projection no longer contains the hidden input that armed the
+      // boundary. Copy the flag only when this append itself carried it.
+      // A visible user consumes the flag without carrying it.
+      const attachedPendingBoundary = nextProjection.messages.some(
+        (projected) => asOptionalRecord(projected["__openclaw"])?.turnBoundary === true,
+      );
+      if (attachedPendingBoundary) {
         const firstAdded = attachOpenClawTranscriptMeta(addedMessages[0], {
           turnBoundary: true,
         }) as SessionHistoryMessage;

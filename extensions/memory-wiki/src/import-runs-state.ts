@@ -310,38 +310,9 @@ export function configureMemoryWikiImportRunStateStore(
   configuredImportRunStore = store;
 }
 
-function resolveImportRunStore(store = configuredImportRunStore): MemoryWikiImportRunStateStore {
-  if (!store) {
+export function getMemoryWikiImportRunStateStore(): MemoryWikiImportRunStateStore {
+  if (!configuredImportRunStore) {
     throw new Error("Memory Wiki import run state store is not configured.");
   }
-  return store;
-}
-
-export async function readMemoryWikiImportRunRecord(
-  vaultRoot: string,
-  runId: string,
-  store?: MemoryWikiImportRunStateStore,
-): Promise<ChatGptImportRunRecord | null> {
-  return await resolveImportRunStore(store).read(vaultRoot, runId);
-}
-
-export async function writeMemoryWikiImportRunRecord(
-  vaultRoot: string,
-  record: ChatGptImportRunRecord,
-  store?: MemoryWikiImportRunStateStore,
-): Promise<void> {
-  await resolveImportRunStore(store).write(vaultRoot, record);
-}
-
-export async function listMemoryWikiImportRunRecords(
-  vaultRoot: string,
-  store?: MemoryWikiImportRunStateStore,
-): Promise<ChatGptImportRunRecord[]> {
-  return await resolveImportRunStore(store).list(vaultRoot);
-}
-
-export async function countMemoryWikiImportRunStateRows(
-  store?: MemoryWikiImportRunStateStore,
-): Promise<number> {
-  return await resolveImportRunStore(store).rowCount();
+  return configuredImportRunStore;
 }

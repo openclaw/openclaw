@@ -40,11 +40,8 @@ extension ControlUIDocumentHost {
             // Explicit absence retires an earlier shared login at this browser origin.
             payload = ["gatewayUrl": gatewayURL, "token": NSNull(), "password": NSNull()]
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let json = String(data: data, encoding: .utf8)
-        else {
-            return nil
-        }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return nil }
+        let json = String(bytes: data, encoding: .utf8)!
         let script = """
         (() => {
           try {

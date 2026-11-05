@@ -10,28 +10,22 @@ export interface CodexWebSocketAuthority {
   normalizedHeaders: ReadonlyArray<readonly [string, string]>;
 }
 
-function createCodexWebSocketAuthority(
-  transportHost: AiTransportHost,
-  baseUrl: string | undefined,
-  headers: Headers,
-): CodexWebSocketAuthority {
-  return {
-    transportHost,
-    url: resolveCodexWebSocketUrl(baseUrl),
-    headers,
-    normalizedHeaders: Array.from(headers.entries()).filter(([name]) => name !== "traceparent"),
-  };
-}
-
 export function resolveCodexWebSocketAuthority(params: {
   transport: string;
   transportHost: AiTransportHost;
   baseUrl: string | undefined;
   headers: () => Headers;
 }): CodexWebSocketAuthority | undefined {
-  return params.transport === "sse"
-    ? undefined
-    : createCodexWebSocketAuthority(params.transportHost, params.baseUrl, params.headers());
+  if (params.transport === "sse") {
+    return undefined;
+  }
+  const headers = params.headers();
+  return {
+    transportHost: params.transportHost,
+    url: resolveCodexWebSocketUrl(params.baseUrl),
+    headers,
+    normalizedHeaders: Array.from(headers.entries()).filter(([name]) => name !== "traceparent"),
+  };
 }
 
 export function buildCodexWebSocketHeaders(baseHeaders: Headers, requestId: string): Headers {
@@ -59,49 +53,4 @@ export function matchesCodexWebSocketAuthority(
         value === requested.normalizedHeaders[index]?.[1],
     )
   );
-}
-
-const MAX_SSE_FALLBACK_AUTHORITIES_PER_SESSION = 8;
-export type CodexWebSocketSseFallbacks = Map<string, CodexWebSocketAuthority[]>;
-
-export function hasCodexWebSocketSseFallback(
-  fallbacksBySession: CodexWebSocketSseFallbacks,
-  sessionId: string | undefined,
-  authority: CodexWebSocketAuthority,
-): boolean {
-  return Boolean(
-    sessionId &&
-    fallbacksBySession
-      .get(sessionId)
-      ?.some((fallback) => matchesCodexWebSocketAuthority(fallback, authority)),
-  );
-}
-
-export function addCodexWebSocketSseFallback(
-  fallbacksBySession: CodexWebSocketSseFallbacks,
-  sessionId: string,
-  authority: CodexWebSocketAuthority,
-): void {
-  const fallbacks = fallbacksBySession.get(sessionId) ?? [];
-  if (fallbacks.some((fallback) => matchesCodexWebSocketAuthority(fallback, authority))) {
-    return;
-  }
-  if (fallbacks.length === MAX_SSE_FALLBACK_AUTHORITIES_PER_SESSION) {
-    fallbacks.shift();
-  }
-  fallbacks.push(authority);
-  if (!fallbacksBySession.has(sessionId)) {
-    fallbacksBySession.set(sessionId, fallbacks);
-  }
-}
-
-export function clearCodexWebSocketSseFallback(
-  fallbacksBySession: CodexWebSocketSseFallbacks,
-  sessionId?: string,
-): void {
-  if (sessionId) {
-    fallbacksBySession.delete(sessionId);
-    return;
-  }
-  fallbacksBySession.clear();
 }

@@ -1,4 +1,3 @@
-// Decides which built-in and plugin commands need registration for one CLI invocation.
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 

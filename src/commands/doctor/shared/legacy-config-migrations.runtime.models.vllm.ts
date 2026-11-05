@@ -7,7 +7,7 @@ import {
   hasInvalidThinkingFormat,
   hasStaleContextWindowValue,
 } from "./legacy-config-migrations.runtime.models.catalog.js";
-import { visitAgentEntries } from "./legacy-config-record-shared.js";
+import { someAgentEntry, visitAgentEntries } from "./legacy-config-record-shared.js";
 
 const QWEN_THINKING_FORMAT_KEYS = ["qwenThinkingFormat", "qwen_thinking_format"] as const;
 
@@ -39,13 +39,7 @@ function normalizeLegacyVllmQwenThinkingFormat(
   }
 }
 
-function getLegacyVllmQwenThinkingFormat(params: Record<string, unknown>):
-  | {
-      key: (typeof QWEN_THINKING_FORMAT_KEYS)[number];
-      value: unknown;
-      compat: "qwen" | "qwen-chat-template" | undefined;
-    }
-  | undefined {
+function getLegacyVllmQwenThinkingFormat(params: Record<string, unknown>) {
   for (const key of QWEN_THINKING_FORMAT_KEYS) {
     if (Object.hasOwn(params, key)) {
       return {
@@ -89,14 +83,6 @@ function hasLegacyVllmQwenThinkingModelParams(models: unknown): boolean {
 function hasLegacyVllmQwenThinkingParams(params: unknown): boolean {
   const record = getRecord(params);
   return Boolean(record && getLegacyVllmQwenThinkingFormat(record));
-}
-
-function hasLegacyVllmQwenThinkingAgentParams(agents: unknown): boolean {
-  let found = false;
-  visitAgentEntries({ agents }, (agent) => {
-    found ||= hasLegacyVllmQwenThinkingParams(agent.params);
-  });
-  return found;
 }
 
 type ModelTarget = { model: Record<string, unknown>; index: number };
@@ -324,7 +310,8 @@ export const LEGACY_VLLM_QWEN_THINKING_FORMAT_RULES: LegacyConfigRule[] = [
     path: ["agents"],
     message:
       'agents.entries.*.params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.vllm.models[].compat.thinkingFormat.',
-    match: hasLegacyVllmQwenThinkingAgentParams,
+    match: (value) =>
+      someAgentEntry(value, (agent) => hasLegacyVllmQwenThinkingParams(agent.params)),
   },
 ];
 

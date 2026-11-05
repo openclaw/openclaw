@@ -1,27 +1,23 @@
-import type { DatabaseSync } from "node:sqlite";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
-import type { IncognitoSessionAuthority } from "../../config/sessions/session-incognito-contract.js";
+import {
+  captureSessionActorStorageOwner,
+  type SessionActorStorageBinding,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import type { SqliteWorkerCommand, SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
-import { recordContextEngineTurnOutboxSchemaCommitted } from "../../state/openclaw-agent-context-engine-turn-outbox-schema.js";
+import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import {
-  runOpenClawAgentWriteTransaction,
-  withOpenClawAgentDatabaseAsync,
-} from "../../state/openclaw-agent-db.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
+  resolveExplicitIncognitoAgentSqliteTarget,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import {
-  executeContextEngineTurnOutboxCommand,
-  type ContextEngineTurnOutboxStore,
-  type ContextEngineTurnOutboxWorkerOperations,
+import { openMemoryContextEngineTurnOutboxStore } from "./context-engine-turn-outbox-memory.js";
+import type {
+  ContextEngineTurnOutboxWorkerStore,
+  ContextEngineTurnOutboxWorkerOperations,
 } from "./context-engine-turn-outbox.js";
 
 type OutboxCommand = SqliteWorkerCommand<ContextEngineTurnOutboxWorkerOperations>;
@@ -35,6 +31,9 @@ async function runContextEngineTurnOutboxCommand(
   target: { agentId: string; path: string },
   command: OutboxCommand,
 ): Promise<unknown> {
+  if (resolveExplicitIncognitoAgentSqliteTarget(target.path, { agentId: target.agentId })) {
+    throw new IncognitoSessionMissingError();
+  }
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const options = {
@@ -42,187 +41,43 @@ async function runContextEngineTurnOutboxCommand(
     env,
     path: resolveOpenClawAgentSqlitePath({ agentId: target.agentId, env, path: target.path }),
   };
-  if (isIncognitoOpenClawAgentSqlitePath(options.path, options)) {
-    // Incognito retains its sole in-memory owner until that owner is migrated as a whole.
-    let committedDb: DatabaseSync | undefined;
-    const result = await runOpenClawAgentWriteAdmission(
-      options,
-      () =>
-        runOpenClawAgentWriteTransaction(
-          ({ db }) => {
-            committedDb = db;
-            return executeContextEngineTurnOutboxCommand(db, command);
-          },
-          options,
-          { operationLabel: `context-engine.turn-outbox.${command.type}` },
-        ),
-      true,
-    );
-    // The transaction committed its lazy DDL; later commands on this connection skip it.
-    if (committedDb) {
-      recordContextEngineTurnOutboxSchemaCommitted(committedDb);
-    }
-    return result;
-  }
-  // Retain the lifecycle before queuing so close cannot turn waiting work into a fresh open.
   const execution = captureOpenClawAgentDatabaseExecution(options);
-  const assertCurrent = () => execution.assertCurrent();
   try {
-    return await runOpenClawAgentWriteAdmission(
-      options,
-      () =>
-        withOpenClawAgentDatabaseAsync(
-          options,
-          async ({ db }) => {
-            assertCurrent();
-            const worker =
-              await openOpenClawAgentSqliteWorkerStore<ContextEngineTurnOutboxWorkerOperations>(
-                options,
-                db,
-                {
-                  moduleUrl: resolveRuntimeWorkerUrl(
-                    runtimeProcessEntrypoints.contextEngineTurnOutbox,
-                  ),
-                  input: undefined,
-                },
-              );
-            try {
-              return await worker.execute(command, assertCurrent);
-            } finally {
-              await worker.close();
-            }
-          },
-          assertCurrent,
-        ),
-      true,
-    );
+    const worker =
+      await openOpenClawAgentSqliteWorkerStore<ContextEngineTurnOutboxWorkerOperations>(
+        options,
+        { execution },
+        {
+          moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.contextEngineTurnOutbox),
+          input: undefined,
+        },
+      );
+    try {
+      return await worker.execute(command, () => execution.assertCurrent());
+    } finally {
+      await worker.close();
+    }
   } finally {
     await execution.release();
   }
 }
 
-/** The durable context-engine turn outbox of one agent database, executed in its worker. */
-export type ContextEngineTurnOutboxWorkerStore = ContextEngineTurnOutboxStore &
-  Readonly<{
-    [
-      Type in
-        | "prepareRun"
-        | "enqueueIntent"
-        | "acceptIntent"
-        | "publishClosedTurn"
-        | "discardIntent"
-    ]: (
-      input: ContextEngineTurnOutboxWorkerOperations[Type]["input"],
-    ) => Promise<
-      ContextEngineTurnOutboxWorkerOperations[Type]["output"] extends undefined
-        ? void
-        : ContextEngineTurnOutboxWorkerOperations[Type]["output"]
-    >;
-  }>;
-
 export function openContextEngineTurnOutboxWorkerStore(target: {
   agentId: string;
   path: string;
-  incognito?: {
-    actor: IncognitoAgentDatabaseExecution;
-    authority: IncognitoSessionAuthority;
-    sessionKey: string;
-    sessionId: string;
-  };
+  sessionKey?: string;
+  sessionId?: string;
+  sessionActor?: SessionActorStorageBinding;
 }): ContextEngineTurnOutboxWorkerStore {
-  const captured = { ...target, incognito: target.incognito ? { ...target.incognito } : undefined };
-  const incognito = captured.incognito;
-  if (
-    incognito &&
-    (incognito.actor.agentId !== captured.agentId || incognito.actor.path !== captured.path)
-  ) {
-    throw new Error("Outbox target differs from its captured incognito actor");
+  const scope = { ...target, storePath: target.path };
+  const memory = captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} });
+  if (memory) {
+    return openMemoryContextEngineTurnOutboxStore(scope, memory);
   }
-  const executeActor =
-    incognito &&
-    (() => {
-      const { actor, authority, sessionKey, sessionId } = incognito;
-      const scoped = <Input extends object>(input: Input) => ({ ...input, sessionKey, sessionId });
-      const commands: {
-        [Key in keyof ContextEngineTurnOutboxWorkerOperations]: (
-          input: ContextEngineTurnOutboxWorkerOperations[Key]["input"],
-        ) => Promise<ContextEngineTurnOutboxWorkerOperations[Key]["output"]>;
-      } = {
-        prepareRun: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.prepareRun",
-            input: scoped(input),
-          }),
-        listPendingSessions: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.listPendingSessions",
-            input: scoped(input),
-          }),
-        readNextPending: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.readNextPending",
-            input: scoped(input),
-          }),
-        complete: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.complete",
-            input: scoped(input),
-          }),
-        recordFailure: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.recordFailure",
-            input: scoped(input),
-          }),
-        hasPending: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.hasPending",
-            input: scoped(input),
-          }),
-        enqueueIntent: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.enqueueIntent",
-            input: scoped(input),
-          }),
-        acceptIntent: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.acceptIntent",
-            input: scoped(input),
-          }),
-        publishClosedTurn: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.publishClosedTurn",
-            input: scoped(input),
-          }),
-        discardIntent: (input) =>
-          actor.sessions.outbox(authority, {
-            type: "session.outbox.discardIntent",
-            input: scoped(input),
-          }),
-      };
-      const execute: SqliteWorkerStore<ContextEngineTurnOutboxWorkerOperations>["execute"] = ({
-        type,
-        input,
-      }) => {
-        if (
-          ("sessionId" in input &&
-            input.sessionId !== undefined &&
-            input.sessionId !== sessionId) ||
-          ("sessionKey" in input &&
-            input.sessionKey !== undefined &&
-            input.sessionKey !== sessionKey)
-        ) {
-          throw new Error("Outbox command differs from its captured incognito session");
-        }
-        return commands[type](input);
-      };
-      return execute;
-    })();
+  const captured = { ...target };
   const run = <Type extends OutboxCommand["type"]>(
     command: Extract<OutboxCommand, { type: Type }>,
   ) => {
-    if (executeActor) {
-      return executeActor<Type>(command);
-    }
     // SAFETY: executeContextEngineTurnOutboxCommand returns each command type's declared output.
     return runContextEngineTurnOutboxCommand(captured, command) as Promise<
       ContextEngineTurnOutboxWorkerOperations[Type]["output"]

@@ -4,13 +4,6 @@ import Foundation
 import OSLog
 import Security
 
-@_silgen_name("csops")
-private func portGuardianCSOps(
-    _: pid_t,
-    _: UInt32,
-    _: UnsafeMutableRawPointer?,
-    _: Int) -> Int32
-
 actor PortGuardian {
     static let shared = PortGuardian()
     static let portGuardianStorageVersion = 2
@@ -374,7 +367,7 @@ actor PortGuardian {
         }
         #endif
         guard let listener = await self.listeners(on: port).first else { return nil }
-        let path = Self.executablePath(for: listener.pid)
+        let path = ProcessIdentity.executablePath(pid: listener.pid)
         return Descriptor(pid: listener.pid, command: listener.command, executablePath: path)
     }
 
@@ -510,24 +503,12 @@ actor PortGuardian {
         mode: AppState.ConnectionMode,
         tunnelHealthy: Bool?) -> PortReport
     {
-        let expectedDesc: String
-        let okPredicate: (Listener) -> Bool
-        let expectedCommands = ["node", "openclaw", "tsx", "pnpm", "bun"]
-
-        switch mode {
-        case .remote:
-            expectedDesc = "Remote gateway (SSH tunnel, Docker, or direct)"
-            okPredicate = { _ in true }
-        case .local:
-            expectedDesc = "Gateway websocket (node/tsx)"
-            okPredicate = { listener in
-                let c = listener.command.lowercased()
-                return expectedCommands.contains { c.contains($0) }
-            }
-        case .unconfigured:
-            expectedDesc = "Gateway not configured"
-            okPredicate = { _ in false }
+        let expectedDesc = switch mode {
+        case .remote: "Remote gateway (SSH tunnel, Docker, or direct)"
+        case .local: "Gateway websocket (node/tsx)"
+        case .unconfigured: "Gateway not configured"
         }
+        let expectedCommands = ["node", "openclaw", "tsx", "pnpm", "bun"]
 
         if listeners.isEmpty {
             let text = "Nothing is listening on \(port) (\(expectedDesc))."
@@ -536,11 +517,14 @@ actor PortGuardian {
 
         let tunnelUnhealthy = mode == .remote && tunnelHealthy == false
         let reportListeners = listeners.map { listener in
-            ReportListener(
+            let expected = mode == .remote || mode == .local && expectedCommands.contains {
+                listener.command.lowercased().contains($0)
+            }
+            return ReportListener(
                 pid: listener.pid,
                 command: listener.command,
                 fullCommand: listener.fullCommand,
-                expected: okPredicate(listener) && !tunnelUnhealthy)
+                expected: expected && !tunnelUnhealthy)
         }
 
         let offenders = reportListeners.filter { !$0.expected }
@@ -558,16 +542,6 @@ actor PortGuardian {
             expected: expectedDesc,
             status: status,
             listeners: reportListeners)
-    }
-
-    private static func executablePath(for pid: Int32) -> String? {
-        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
-        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
-        guard length > 0 else { return nil }
-        // Drop trailing null and decode as UTF-8.
-        let trimmed = buffer.prefix { $0 != 0 }
-        let bytes = trimmed.map { UInt8(bitPattern: $0) }
-        return String(bytes: bytes, encoding: .utf8)
     }
 
     private func probeGatewayHealthIfNeeded(
@@ -695,21 +669,13 @@ actor PortGuardian {
                   &information) == errSecSuccess,
               SecCodeCheckValidity(code, SecCSFlags(), nil) == errSecSuccess,
               let information,
-              let runningHash = self.runningCodeDirectoryHash(pid: pid),
+              let runningHash = ProcessIdentity.codeDirectoryHash(pid: pid),
               let signedHash = (information as NSDictionary)[kSecCodeInfoUnique] as? Data,
               self.codeDirectoryHashesMatch(running: runningHash, signed: signedHash),
               let securedInfo = (information as NSDictionary)[kSecCodeInfoPList] as? NSDictionary,
               let version = securedInfo["OpenClawPortGuardianStorageVersion"] as? NSNumber
         else { return nil }
         return version.intValue
-    }
-
-    private nonisolated static func runningCodeDirectoryHash(pid: pid_t) -> Data? {
-        var bytes = [UInt8](repeating: 0, count: 20)
-        let result = bytes.withUnsafeMutableBytes {
-            portGuardianCSOps(pid, 5, $0.baseAddress, $0.count)
-        }
-        return result == 0 ? Data(bytes) : nil
     }
 
     nonisolated static func codeDirectoryHashesMatch(running: Data?, signed: Data?) -> Bool {

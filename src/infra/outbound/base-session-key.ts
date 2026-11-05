@@ -9,14 +9,12 @@ export function buildOutboundBaseSessionKey(params: {
   accountId?: string | null;
   peer: RoutePeer;
 }): string {
+  const { cfg, ...route } = params;
   return buildAgentSessionKey({
-    agentId: params.agentId,
-    mainKey: params.cfg.session?.mainKey,
-    channel: params.channel,
-    accountId: params.accountId,
-    peer: params.peer,
-    dmScope: params.cfg.session?.dmScope ?? "main",
-    groupScope: params.cfg.session?.groupScope ?? "per-group",
-    identityLinks: params.cfg.session?.identityLinks,
+    ...route,
+    mainKey: cfg.session?.mainKey,
+    dmScope: cfg.session?.dmScope ?? "main",
+    groupScope: cfg.session?.groupScope ?? "per-group",
+    identityLinks: cfg.session?.identityLinks,
   });
 }

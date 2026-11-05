@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { writeFile } from "node:fs/promises";
+import { statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
@@ -10,7 +11,14 @@ import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-res
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
+import { readSqliteCleanCloseSeal } from "../src/infra/sqlite-clean-close-seal.js";
+import { sqliteDatabaseSealSchemaFor } from "../src/state/openclaw-database-seal-schema.js";
+import { writeRestartPlugin, connectRestartClient } from "./gateway-restart.test-support.js";
+import {
+  GATEWAY_RESTART_TEST_KILL_MS,
+  GATEWAY_RESTART_TEST_SHUTDOWN_MS as APPLICATION_STOP_MS,
+  GATEWAY_RESTART_TEST_STOP_MS as NATIVE_STOP_MS,
+} from "./helpers/gateway-restart-budget.js";
 import { startGatewayRestartProvider } from "./helpers/gateway-restart-provider.js";
 import {
   createOpenClawTestInstance,
@@ -20,8 +28,6 @@ import { awaitGateBeforeSettlement, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
-const NATIVE_STOP_MS = 46_000;
-const APPLICATION_STOP_MS = 41_000;
 const SERVICE_ID = "restart-handoff-pending-service";
 const SERVICE_STOP = "RESTART_HANDOFF_SERVICE_STOP_ENTERED";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -33,7 +39,7 @@ function journal(logs: string) {
       if (!isRecord(row) || typeof row.time !== "string" || typeof row.message !== "string") {
         return [];
       }
-      return [{ message: row.message, path: row.path, at: Date.parse(row.time) }];
+      return [{ message: row.message, path: row.path, check: row.check, at: Date.parse(row.time) }];
     } catch {
       return [];
     }
@@ -42,9 +48,11 @@ function journal(logs: string) {
 
 // The real CLI process, model transport, exec subprocesses, and native deadline belong in E2E.
 it.skipIf(process.platform !== "linux")(
-  "writes a clean restart receipt with six pending runs, two background execs, and unfinished plugin cleanup",
+  "hands off within five seconds of its clean-close receipt after plugin cleanup",
   { timeout: 180_000 },
   async ({ signal }) => {
+    const beforeExit = <T>(pending: Promise<T>, closed: Promise<unknown>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(pending, closed, message), signal);
     const provider = await startGatewayRestartProvider(signal);
     let instance: OpenClawTestInstance | undefined;
     let client: GatewayClient | undefined;
@@ -52,28 +60,23 @@ it.skipIf(process.platform !== "linux")(
     await runQaGatewayFixture(
       async () => {
         const pluginDir = tempDirs.make("restart-handoff-plugin-");
-        await writeFile(
-          path.join(pluginDir, "openclaw.plugin.json"),
-          JSON.stringify({
+        await writeRestartPlugin(
+          pluginDir,
+          {
             id: SERVICE_ID,
             activation: { onStartup: true },
             configSchema: { type: "object", additionalProperties: false, properties: {} },
-          }),
-        );
-        await writeFile(
-          path.join(pluginDir, "index.js"),
+          },
           `module.exports = {
           id: ${JSON.stringify(SERVICE_ID)},
           register(api) {
             api.registerService({
               id: ${JSON.stringify(SERVICE_ID)}, start() {},
-              stop() {
-                api.logger.info(${JSON.stringify(SERVICE_STOP)});
-                return new Promise(() => {});
-              }
+              stop() { api.logger.info(${JSON.stringify(SERVICE_STOP)}); }
             });
           }
         };\n`,
+          "index.js",
         );
         const model = buildMockOpenAiResponsesProvider(provider.baseUrl, "gpt-5.6-luna");
         const modelRef = `openai/${model.modelId}`;
@@ -81,6 +84,7 @@ it.skipIf(process.platform !== "linux")(
           name: "restart-handoff",
           signal,
           startTimeoutMs: 120_000,
+          gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
           gatewayCommandPrefix: [
             process.execPath,
             "--import",
@@ -95,7 +99,6 @@ it.skipIf(process.platform !== "linux")(
               defaults: {
                 maxConcurrent: 12,
                 timeoutSeconds: 3600,
-                heartbeat: { every: "0m" },
                 model: { primary: modelRef },
                 models: {
                   [modelRef]: {
@@ -143,53 +146,36 @@ it.skipIf(process.platform !== "linux")(
           },
         });
         await instance.startGateway();
-        expect(
-          journal(instance.logs()).some(
-            (row) =>
-              row.message.includes("shutdown budget at startup:") &&
-              row.message.includes("shutdown=41000ms") &&
-              row.message.includes("TimeoutStopUSec=46000ms"),
-          ),
-          instance.logs(),
-        ).toBe(true);
-        const child = instance.child;
-        if (!child) {
-          throw new Error("Gateway exited before restart proof");
-        }
+        const child = expectDefined(instance.child, "Gateway process before restart proof");
         const closed = once(child, "close");
-        client = await acquireGatewayTestClient(
-          {
-            url: instance.url,
-            token: instance.gatewayToken,
-            clientName: "gateway-client",
-            mode: "backend",
-            clientDisplayName: "restart-handoff-proof",
-            clientVersion: "test",
-            platform: "linux",
-            role: "operator",
-            scopes: ["operator.admin", "operator.read", "operator.write"],
-            deviceIdentity: loadOrCreateDeviceIdentity({
-              path: instance.state.path("client-device.sqlite"),
-            }),
-          },
-          {
-            timeoutMs: 30_000,
-            timeoutMessage: "restart proof client did not connect",
-            closeMessage: "restart proof client closed",
-            signal,
-          },
-        );
+        const gateway = instance;
         const sessionKeys = Array.from(
           { length: 6 },
           (_, index) => `agent:main:restart-handoff-${index}`,
         );
+        const connect = () =>
+          connectRestartClient(
+            gateway,
+            {
+              mode: "backend",
+              clientDisplayName: "restart-handoff-proof",
+              clientVersion: "test",
+              platform: "linux",
+              role: "operator",
+              deviceIdentity: loadOrCreateDeviceIdentity({
+                path: gateway.state.path("client-device", "client", "credentials.sqlite"),
+              }),
+            },
+            signal,
+          );
+        client = await connect();
         for (const key of sessionKeys) {
           await client.request("sessions.create", { agentId: "main", key });
         }
         const connection = client;
-        const accepted = await Promise.all(
-          sessionKeys.map((sessionKey, index) =>
-            connection.request<{ runId: string }>(
+        const runIds = await Promise.all(
+          sessionKeys.map(async (sessionKey, index) => {
+            const { runId } = await connection.request<{ runId: string }>(
               "chat.send",
               {
                 sessionKey,
@@ -198,21 +184,16 @@ it.skipIf(process.platform !== "linux")(
                 deliver: false,
               },
               { expectFinal: false },
-            ),
-          ),
+            );
+            expect(runId).toEqual(expect.any(String));
+            return runId;
+          }),
         );
-        const runIds = accepted.map((result) => {
-          expect(result.runId).toEqual(expect.any(String));
-          return result.runId;
-        });
         expect(new Set(runIds).size).toBe(6);
-        await withinTest(
-          awaitGateBeforeSettlement(
-            provider.ready,
-            closed,
-            "Gateway exited before all six model calls and two exec sessions were pending",
-          ),
-          signal,
+        await beforeExit(
+          provider.ready,
+          closed,
+          "Gateway exited before all six model calls and two exec sessions were pending",
         );
         expect(
           writeGatewayRestartIntentSync({
@@ -229,90 +210,72 @@ it.skipIf(process.platform !== "linux")(
         // Enforce the emulated native supervisor deadline independently of Gateway's own timer.
         nativeDeadline = setTimeout(() => child.kill("SIGKILL"), NATIVE_STOP_MS);
         expect(child.kill("SIGTERM")).toBe(true);
-        await withinTest(closed, signal);
+        const exit = await withinTest(closed, signal);
         clearTimeout(nativeDeadline);
         const rows = journal(instance.logs()).filter(
           (row) => row.at >= signaledAt && row.at <= exitedAt,
         );
         const agentPath = path.join(instance.state.agentDir(), "openclaw-agent.sqlite");
-        const receipt = rows.find(
-          (row) => row.path === agentPath && row.message.includes("clean-close receipt: written"),
-        );
-        const abort = rows.find((row) =>
-          /restart drain budget.*exhausted|aborted for restart/.test(row.message),
-        );
+        // stdout and stderr are captured separately; accepted writes can also
+        // reopen an idle-closed database and invalidate an earlier receipt.
+        const cleanReceipts = rows
+          .filter(
+            (row) => row.path === agentPath && row.message.includes("clean-close receipt: written"),
+          )
+          .toSorted((left, right) => left.at - right.at);
+        const receipt = cleanReceipts.at(-1);
         const deadline = rows.find((row) => row.message.includes("shutdown deadline reached"));
         const serviceStop = rows.find((row) => row.message.includes(SERVICE_STOP));
-        expect(serviceStop, instance.logs()).toBeDefined();
+        expect(exit, instance.logs()).toEqual([0, null]);
         expect(receipt, instance.logs()).toBeDefined();
-        expect(abort, instance.logs()).toBeDefined();
-        expect(
-          rows.some(
-            (row) =>
-              row.message.includes("shutdown budget at shutdown:") &&
-              row.message.includes("TimeoutStopUSec=46000ms"),
-          ),
-          instance.logs(),
-        ).toBe(true);
-        expect(receipt!.at).toBeGreaterThanOrEqual(abort!.at);
+        expect(receipt!.at).toBeGreaterThanOrEqual(signaledAt);
         expect(receipt!.at).toBeLessThan(
           Math.min(signaledAt + APPLICATION_STOP_MS, exitedAt, deadline?.at ?? Infinity),
         );
-        expect(
-          rows.some((row) => row.message.includes("backgroundExecSessions=2")),
-          instance.logs(),
-        ).toBe(true);
-        expect(
-          rows.some((row) => row.message.includes("embeddedRuns=6")),
-          instance.logs(),
-        ).toBe(true);
-        for (const runId of runIds) {
-          expect(
-            rows.some((row) =>
-              row.message.includes(`lease released: reason=restart-abort runId=${runId}`),
-            ),
-            instance.logs(),
-          ).toBe(true);
-        }
+        expect(exitedAt - receipt!.at, instance.logs()).toBeLessThanOrEqual(5_000);
+        expect(deadline, instance.logs()).toBeUndefined();
+        expect(serviceStop, instance.logs()).toBeDefined();
+        expect(serviceStop!.at).toBeLessThanOrEqual(exitedAt);
+        // The Gateway and test runner use the same runtime and storage policy.
+        const artifactSchema = sqliteDatabaseSealSchemaFor("agent")?.schemaIdentity;
+        const seal = readSqliteCleanCloseSeal(agentPath, statSync(agentPath, { bigint: true }));
+        expect(seal).toMatchObject({ schemaIdentity: artifactSchema });
         const shared = openNodeSqliteDatabase(
           instance.state.statePath("state", "openclaw.sqlite"),
           { readOnly: true },
         );
-        const receipts = openNodeSqliteDatabase(
-          instance.state.statePath("state", "openclaw-quarantine.sqlite"),
-          { readOnly: true },
-        );
+        const agent = openNodeSqliteDatabase(agentPath, { readOnly: true });
         try {
           const leases = shared
             .prepare("SELECT lease_id FROM agent_database_leases WHERE path=?")
             .all(agentPath);
-          const verification = receipts
-            .prepare("SELECT clean_close FROM agent_integrity_verifications WHERE path=?")
-            .get(agentPath);
+          const boot = shared
+            .prepare(
+              "SELECT outcome, completed_at_ms FROM gateway_boot_lifecycle WHERE pid=? ORDER BY started_at_ms DESC LIMIT 1",
+            )
+            .get(child.pid!);
           expect(leases).toEqual([]);
-          expect(verification).toEqual({ clean_close: 1 });
-          console.info(
-            JSON.stringify({
-              proof: "gateway-restart-handoff",
-              signalAtMs: signaledAt,
-              abortAtMs: abort!.at,
-              receiptAtMs: receipt!.at,
-              exitAtMs: exitedAt,
-              receiptAfterSignalMs: receipt!.at - signaledAt,
-              receiptAfterAbortMs: receipt!.at - abort!.at,
-              exitAfterSignalMs: exitedAt - signaledAt,
-              applicationBudgetMs: APPLICATION_STOP_MS,
-              pendingServiceStopAtMs: serviceStop!.at,
-              acceptedRuns: runIds.length,
-              confirmedRunReleases: runIds.length,
-              backgroundExecSessions: 2,
-              remainingLeases: leases.length,
-              cleanClose: verification?.clean_close,
-            }),
-          );
+          expect(boot).toEqual({
+            outcome: "planned_restart",
+            completed_at_ms: expect.any(Number),
+          });
+          expect(boot?.completed_at_ms).toBeGreaterThanOrEqual(signaledAt);
+          expect(boot?.completed_at_ms).toBeLessThanOrEqual(exitedAt);
+          for (const sessionKey of sessionKeys) {
+            const row = agent
+              .prepare(
+                "SELECT current_session_id, entry_json FROM session_nodes WHERE session_key=?",
+              )
+              .get(sessionKey);
+            if (typeof row?.entry_json !== "string" || typeof row.current_session_id !== "string") {
+              throw new Error(`Restart lost persisted session ${sessionKey}`);
+            }
+            const entry: unknown = JSON.parse(row.entry_json);
+            expect(entry).toMatchObject({ resumeAfterRestart: { queuedInputIds: [] } });
+          }
         } finally {
           shared.close();
-          receipts.close();
+          agent.close();
         }
       },
       () => {

@@ -1,10 +1,10 @@
 import type { ResolvedXAccount } from "./accounts.js";
-import { normalizeXUserId, readPublishedXAllowlist } from "./allowlist.js";
+import { normalizeXUserId, readPublishedXAllowlist, type XGitHubEntry } from "./allowlist.js";
 import type { XUser } from "./api.js";
+import { X_GUEST_TOOLS } from "./guest-tools.js";
 import { getXRuntime } from "./runtime.js";
 
 export type XSenderTier = "maintainer" | "guest";
-const X_GUEST_READ_TOOLS = ["read", "ls"] as const;
 
 export function resolveXGuestSettings(account: ResolvedXAccount) {
   return {
@@ -21,14 +21,14 @@ export function resolveXSenderTier(
   const id = senderId && normalizeXUserId(senderId);
   const allowed = [
     ...(account.config.allowFrom ?? []),
-    ...readPublishedXAllowlist(getXRuntime(), account.accountId),
+    ...readPublishedXAllowlist(getXRuntime(), account.accountId, account.config.verifiedFromGitHub),
   ];
   return id && allowed.some((entry) => normalizeXUserId(entry) === id) ? "maintainer" : "guest";
 }
 
 export function resolveXGuestToolPolicy(account: ResolvedXAccount) {
   const configured = account.config.guests?.tools;
-  const allow = X_GUEST_READ_TOOLS.filter(
+  const allow = X_GUEST_TOOLS.filter(
     (name) => !configured?.allow || configured.allow.includes(name),
   );
   // An empty allow array means unrestricted to core; an empty guest selection means no tools.
@@ -37,13 +37,22 @@ export function resolveXGuestToolPolicy(account: ResolvedXAccount) {
     : { deny: ["*"] };
 }
 
-export function formatXSenderLine(tier: XSenderTier, authorId: string, user?: XUser): string {
+export function formatXSenderLine(
+  tier: XSenderTier,
+  authorId: string,
+  user?: XUser,
+  github?: { repo: string; entry: XGitHubEntry },
+): string {
   const inline = (text: string) => text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").trim();
   const username = user?.username ? `@${inline(user.username)}` : "";
   const displayName = user?.name ? `(${inline(user.name)})` : "";
   const label = [username, displayName].filter(Boolean).join(" ");
   const sender = `${label ? `${label}, ` : ""}X user id ${authorId}`;
-  return tier === "maintainer"
-    ? `This is from a verified user: ${sender}, on the maintainer allowlist.`
-    : `This is from a guest: ${sender}. Guest tier: answer from the OpenClaw repo only; you cannot open work sessions, write, run commands, or read other sessions for guests.`;
+  if (tier === "maintainer") {
+    if (github) {
+      return `This is from a verified user: ${sender}, GitHub @${inline(github.entry.githubLogin)} with write access to ${inline(github.repo)}.`;
+    }
+    return `This is from a verified user: ${sender}, on the maintainer allowlist.`;
+  }
+  return `This is from a guest: ${sender}. Guest tier: answer from the OpenClaw repo only; hidden helpers must use the same agent and repository. You cannot open visible work sessions, write, run commands, or read unrelated sessions for guests.`;
 }

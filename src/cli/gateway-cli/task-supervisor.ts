@@ -1,5 +1,6 @@
 // Windows Task Scheduler bridge: retain the Job Object owner until the Gateway exits.
 import { randomInt } from "node:crypto";
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
 import {
   formatWindowsTaskSupervisorChildArgument,
@@ -17,19 +18,6 @@ import { getProcessSupervisor, type ManagedRun } from "../../process/supervisor/
 const log = createSubsystemLogger("gateway/task-supervisor");
 const STDERR_TAIL_CHARS = 8192;
 
-function renderGatewayTaskCommand(restartExitCode: number): string {
-  const childArgs = [...process.execArgv, ...process.argv.slice(1)].filter(
-    (argument) =>
-      argument !== WINDOWS_TASK_SUPERVISOR_FLAG && !isWindowsTaskSupervisorChildArgument(argument),
-  );
-  if (childArgs.length === 0) {
-    throw new Error("Windows task supervisor could not resolve the Gateway command");
-  }
-  return [process.execPath, ...childArgs, formatWindowsTaskSupervisorChildArgument(restartExitCode)]
-    .map((argument) => quoteCmdScriptArg(argument))
-    .join(" ");
-}
-
 /**
  * Runs the real Gateway inside the Windows Job Object owned by ProcessSupervisor.
  * The task launcher owns an outer Job containing this supervisor. The
@@ -42,6 +30,7 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
   let stderr = "";
   let managed: ManagedRun | null = null;
   let cancelled = false;
+  let terminalExitCode: number | undefined;
   const cancel = () => {
     cancelled = true;
     managed?.cancel("signal");
@@ -52,11 +41,9 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
     const launcher = process.env[WINDOWS_TASK_LAUNCHER_ENV];
     delete process.env[WINDOWS_TASK_LAUNCHER_ENV];
     if (launcher === WINDOWS_TASK_LAUNCHER_ACTIVE || launcher === "cmd") {
-      const [{ default: koffi }, { bindWindowsTaskLauncher }] = await Promise.all([
-        import("koffi"),
-        import("../../process/supervisor/service-child-windows-task-launcher.js"),
-      ]);
-      bindWindowsTaskLauncher(koffi, launcher);
+      const { bindWindowsTaskLauncher } =
+        await import("../../process/supervisor/service-child-windows-task-launcher.js");
+      bindWindowsTaskLauncher(launcher);
     }
     while (true) {
       stderr = "";
@@ -66,9 +53,26 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
         WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MIN,
         WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MAX + 1,
       );
-      managed = await getProcessSupervisor().spawn({
+      const supervisor = getProcessSupervisor();
+      const childArgs = process.argv
+        .slice(2)
+        .filter(
+          (argument) =>
+            argument !== WINDOWS_TASK_SUPERVISOR_FLAG &&
+            !isWindowsTaskSupervisorChildArgument(argument),
+        );
+      if (childArgs.length === 0) {
+        throw new Error("Windows task supervisor could not resolve the Gateway command");
+      }
+      const invocation = resolveOpenClawCliInvocation({
+        args: [...childArgs, formatWindowsTaskSupervisorChildArgument(restartExitCode)],
+      });
+      const command = [invocation.command, ...invocation.args]
+        .map((argument) => quoteCmdScriptArg(argument))
+        .join(" ");
+      managed = await supervisor.spawn({
         mode: "anchored-shell",
-        command: renderGatewayTaskCommand(restartExitCode),
+        command,
         scopeKey: `gateway-task-supervisor:${process.pid}`,
         captureOutput: false,
         onStderr: (chunk) => {
@@ -97,7 +101,7 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
           diagnostic,
         );
       } else {
-        process.exitCode = result.exitCode ?? 1;
+        terminalExitCode = result.exitCode ?? 1;
         log.error("Gateway child failed", diagnostic);
       }
       await managed.waitForExtinction?.();
@@ -111,11 +115,14 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
       return;
     }
   } catch (error) {
-    process.exitCode = 1;
+    terminalExitCode = 1;
     log.error(`Gateway task supervisor failed: ${String(error)}`, { stderr });
   } finally {
     process.removeListener("SIGINT", cancel);
     process.removeListener("SIGTERM", cancel);
     await flushLogger();
+    if (terminalExitCode !== undefined) {
+      process.exitCode = terminalExitCode;
+    }
   }
 }

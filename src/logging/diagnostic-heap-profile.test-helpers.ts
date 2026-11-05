@@ -10,10 +10,10 @@ export function allocateHeapProfileWorkload() {
   return retained;
 }
 
-/** Allocate and drop 200 MiB in bounded batches before the final collection. */
-export function allocateDroppedHeapProfileWorkload() {
+/** Allocate and drop MiB-sized rows in bounded batches before the final collection. */
+export function allocateDroppedHeapProfileWorkload(rowCount = 200) {
   const rows: number[][] = [];
-  for (let index = 0; index < 200; index++) {
+  for (let index = 0; index < rowCount; index++) {
     const row: number[] = [];
     // Resizing keeps the allocation in this JavaScript frame.
     row.length = 131_072;

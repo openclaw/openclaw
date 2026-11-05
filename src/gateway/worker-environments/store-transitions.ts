@@ -1,15 +1,18 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
+import { workerPlacementMoveFromRow } from "./placement-move-row-codec.js";
 import {
   isCurrentWorkerWorkspacePendingResultOwner,
-  readWorkerWorkspaceReconciliationFacts,
-} from "./placement-workspace-result.js";
+  isRepositoryDiskGatewayMoveResult,
+} from "./placement-workspace-result-owner.js";
+import { readWorkerWorkspaceReconciliationFacts } from "./placement-workspace-result.js";
 import { assertPreparedEnvironmentAttachment } from "./prepared-environment-store.js";
 import { hasWorkerEnvironmentSessionAttachment } from "./session-attachment-store.js";
 import { WorkerSessionAlreadyAttachedError } from "./session-attachment.js";
@@ -36,9 +39,18 @@ import {
   normalizeWorkerSshEndpoint,
   requireWorkerEnvironmentString,
 } from "./store-validation.js";
+import { executeWorkerEnvironmentWrite } from "./store-write.js";
 import type { WorkerEnvironmentMutationInput } from "./store.types.js";
 
-export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () => number) {
+function resolveNullablePatch<T>(
+  patch: T | null | undefined,
+  current: T | null,
+  normalize: (value: T) => T,
+): T | null {
+  return patch === undefined ? current : patch === null ? null : normalize(patch);
+}
+
+export function createWorkerEnvironmentTransitionOps(db: EngineConnection, now: () => number) {
   return {
     refreshBootstrapReceipt(
       input: WorkerEnvironmentMutationInput<"refreshBootstrapReceipt">,
@@ -83,6 +95,13 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
         ) {
           throw new Error("Worker placement changed during runtime refresh");
         }
+        const moveRow = executeSqliteQueryTakeFirstSync(
+          db,
+          queryWorkerEnvironmentStore(db)
+            .selectFrom("worker_session_placement_moves")
+            .selectAll()
+            .where("session_id", "=", placement.session_id),
+        );
         if (input.expectedReclaimResult) {
           const retained = readWorkerWorkspaceReconciliationFacts(db, [placement.session_id]);
           const pending = retained.pendingResults.get(placement.session_id);
@@ -96,21 +115,24 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
               pending,
             )
           ) {
-            throw new Error("Worker runtime refresh lost its retained Stop result");
+            throw new Error("Worker runtime refresh lost its retained recovery result");
           }
-        }
-        if (
-          executeSqliteQueryTakeFirstSync(
-            db,
-            queryWorkerEnvironmentStore(db)
-              .selectFrom("worker_session_placement_moves")
-              .select("session_id")
-              .where("session_id", "=", placement.session_id),
-          )
-        ) {
+          if (moveRow) {
+            if (
+              !isRepositoryDiskGatewayMoveResult(
+                retained.placements.get(placement.session_id),
+                pending,
+                workerPlacementMoveFromRow(moveRow),
+              )
+            ) {
+              throw new Error("Worker runtime refresh lost its original disk Move result");
+            }
+            assertRepositoryWorkspaceDiskIdentity(pending.repositoryDiskAuthority!, current);
+          }
+        } else if (moveRow) {
           throw new Error("Cannot refresh a worker runtime while its session is moving");
         }
-        executeSqliteQuerySync(
+        executeWorkerEnvironmentWrite(
           db,
           queryWorkerEnvironmentStore(db)
             .updateTable("worker_session_placements")
@@ -183,21 +205,17 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
           "Failed bootstrap transition requires explicit lease clearing after provider teardown",
         );
       }
-      const leaseId =
-        patch.leaseId === undefined
-          ? current.leaseId
-          : patch.leaseId === null
-            ? null
-            : requireWorkerEnvironmentString(patch.leaseId, "lease id");
+      const leaseId = resolveNullablePatch(patch.leaseId, current.leaseId, (value) =>
+        requireWorkerEnvironmentString(value, "lease id"),
+      );
       if (current.leaseId && leaseId !== current.leaseId && !clearsLeaseAfterTeardownFailure) {
         throw new Error("Worker environment provider lease id is immutable once persisted");
       }
-      const nodeDeviceId =
-        patch.nodeDeviceId === undefined
-          ? (current.nodeDeviceId ?? null)
-          : patch.nodeDeviceId === null
-            ? null
-            : requireWorkerEnvironmentString(patch.nodeDeviceId, "node device id");
+      const nodeDeviceId = resolveNullablePatch(
+        patch.nodeDeviceId,
+        current.nodeDeviceId ?? null,
+        (value) => requireWorkerEnvironmentString(value, "node device id"),
+      );
       if (
         current.nodeDeviceId &&
         nodeDeviceId !== current.nodeDeviceId &&
@@ -205,21 +223,16 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
       ) {
         throw new Error("Worker environment node device id is immutable once persisted");
       }
-      const sshEndpoint =
-        patch.sshEndpoint === undefined
-          ? current.sshEndpoint
-          : patch.sshEndpoint === null
-            ? null
-            : normalizeWorkerSshEndpoint(patch.sshEndpoint);
+      const sshEndpoint = resolveNullablePatch(
+        patch.sshEndpoint,
+        current.sshEndpoint,
+        normalizeWorkerSshEndpoint,
+      );
       const sharedHost = leaseId === null ? null : (patch.sharedHost ?? current.sharedHost);
       const desktop =
         leaseId === null
           ? null
-          : patch.desktop === undefined
-            ? current.desktop
-            : patch.desktop === null
-              ? null
-              : normalizeWorkerDesktopEndpoint(patch.desktop);
+          : resolveNullablePatch(patch.desktop, current.desktop, normalizeWorkerDesktopEndpoint);
       const acceptsBootstrapReceipt =
         to === "ready" &&
         (from === "bootstrapping" || (from === "provisioning" && sshEndpoint === null));
@@ -260,15 +273,16 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
           : patch.attachedSessionIds === undefined
             ? current.attachedSessionIds
             : normalizeAttachedSessionIds(patch.attachedSessionIds);
-      assertShape(
-        to,
+      assertShape({
+        state: to,
         leaseId,
+        resourceReceipt: current.resourceReceipt,
         nodeDeviceId,
         sshEndpoint,
         desktop,
         bootstrapReceipt,
         attachedSessionIds,
-      );
+      });
       const [attachedSessionId] = attachedSessionIds;
       if (to === "attached" && attachedSessionId) {
         // Destroy-requested attachments retain physical cleanup scope, not live ownership.
@@ -296,13 +310,9 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
         to === "failed" ||
         to === "orphaned";
       const ownerEndingTransition =
-        (from === "ready" || from === "idle" || from === "attached") &&
-        (to === "bootstrapping" ||
-          (from === "attached" && to === "idle") ||
-          to === "draining" ||
-          to === "destroyed" ||
-          to === "failed" ||
-          to === "orphaned");
+        revokesCredential &&
+        !acceptsAttachedCredential &&
+        (from === "ready" || from === "idle" || from === "attached");
       const ownerEpoch = acceptsBootstrapReceipt
         ? Math.max(1, current.ownerEpoch)
         : acceptsAttachedCredential || ownerEndingTransition

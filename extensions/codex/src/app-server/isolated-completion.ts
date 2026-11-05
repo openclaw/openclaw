@@ -2,9 +2,10 @@ import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import { resolveCodexBoundedTurnIsolation } from "./bounded-turn-isolation.js";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
-import { readCodexPluginConfig, resolveCodexAppServerHomeScope } from "./config.js";
+import { resolveCodexAppServerHomeScope } from "./config.js";
 import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
 import { assertCodexPassiveTurnItems } from "./protocol-validators.js";
+import { isJsonObject } from "./protocol.js";
 
 type CodexIsolatedCompletionParams = Parameters<
   NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>
@@ -23,7 +24,7 @@ export async function runCodexIsolatedCompletion(
   if (authorization.owner !== "harness") {
     throw new Error("Codex native isolated completion requires harness-owned authorization.");
   }
-  const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const pluginConfig = options.pluginConfig ?? {};
   const homeScope = resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer });
   const authRequirement = authorization.plan.modelRoute?.authRequirement;
   const authHandoff = await resolveCodexAppServerPreparedAuthHandoff({
@@ -41,6 +42,7 @@ export async function runCodexIsolatedCompletion(
   const authSelection = authHandoff.preparedAuth
     ? { preparedAuth: authHandoff.preparedAuth }
     : { profile: authHandoff.authProfileId };
+  const outputSchema = isJsonObject(params.outputSchema) ? params.outputSchema : undefined;
   const result = await runBoundedCodexAppServerTurn({
     config: params.config,
     model: {
@@ -59,13 +61,14 @@ export async function runCodexIsolatedCompletion(
     taskLabel: "isolated completion",
     developerInstructions: params.systemPrompt,
     input: [{ type: "text", text: params.prompt, text_elements: [] }],
+    ...(outputSchema ? { outputSchema } : {}),
     requiredModalities: ["text"],
     isolation: resolveCodexBoundedTurnIsolation(options),
     requireNoExternalCapabilities: true,
     allowEmptyText: params.outputTextPolicy === "strict-visible",
   });
   params.assertCurrent?.();
-  assertCodexPassiveTurnItems(result.items, params.prompt, "isolated completion", {
+  assertCodexPassiveTurnItems(result.items, result.submittedInput, "isolated completion", {
     allowManagedHookPrompts: result.managedHooksEnabled,
   });
   return {

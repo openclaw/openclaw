@@ -48,7 +48,6 @@ it("keeps a raw handle to a cached database on conservative ownership admission"
       reads.queries.filter((sql) => sql.includes("SELECT value_json FROM config_machine_state")),
     ).toEqual([
       "SELECT value_json FROM config_machine_state NOT INDEXED WHERE state_key = ? LIMIT 1",
-      "SELECT value_json FROM config_machine_state NOT INDEXED WHERE state_key = ? LIMIT 1",
     ]);
   } finally {
     reads.restore();
@@ -56,5 +55,5 @@ it("keeps a raw handle to a cached database on conservative ownership admission"
     db.close();
   }
 
-  expect(schemaReads).toBe(4);
+  expect(schemaReads).toBe(2);
 });

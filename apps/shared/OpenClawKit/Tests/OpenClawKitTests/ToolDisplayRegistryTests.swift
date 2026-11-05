@@ -3,8 +3,11 @@ import OpenClawKit
 import Testing
 
 struct ToolDisplayRegistryTests {
-    @Test(arguments: [false, true])
-    func `dispatcher presents the called tool for both dictionary representations`(decoded: Bool) throws {
+    @Test(arguments: [false, true], [" Dispatch_Action ", " Tool_Call "])
+    func `dispatcher presents the called tool for both dictionary representations`(
+        decoded: Bool,
+        dispatcher: String) throws
+    {
         let cases = [
             (" web_search ", "web_search", "Web Search"),
             ("mcp:github:search_issues", "search_issues", "Search Issues"),
@@ -14,7 +17,7 @@ struct ToolDisplayRegistryTests {
         for (id, name, title) in cases {
             let raw = AnyCodable(["id": id, "args": ["query": "tool search rendering"]])
             let args = try decoded ? JSONDecoder().decode(AnyCodable.self, from: JSONEncoder().encode(raw)) : raw
-            let summary = ToolDisplayRegistry.resolve(name: " Tool_Call ", args: args)
+            let summary = ToolDisplayRegistry.resolve(name: dispatcher, args: args)
             #expect(summary.name == name)
             #expect(summary.title == title)
             #expect(summary.label == name)
@@ -71,6 +74,22 @@ struct ToolDisplayRegistryTests {
                 "path": "fixture.txt", "offset": offset, "limit": limit,
             ]))
             #expect(summary.detail == expected)
+        }
+    }
+
+    @Test func `tools bridged over MCP present the tool and keep invalid names raw`() {
+        let bridged = ToolDisplayRegistry.resolve(
+            name: "mcp__openclaw__exec",
+            args: AnyCodable(["command": "printf ready"]))
+        #expect(bridged.name == "exec")
+        #expect(bridged.title == ToolDisplayRegistry.resolve(name: "exec", args: nil).title)
+        #expect(bridged.detail == ToolDisplayRegistry.resolve(
+            name: "exec",
+            args: AnyCodable(["command": "printf ready"])).detail)
+
+        #expect(ToolDisplayRegistry.resolve(name: "mcp__github__search_issues", args: nil).name == "search_issues")
+        for raw in ["mcp__", "mcp__server", "mcp__server__"] {
+            #expect(ToolDisplayRegistry.resolve(name: raw, args: nil).name == raw)
         }
     }
 }

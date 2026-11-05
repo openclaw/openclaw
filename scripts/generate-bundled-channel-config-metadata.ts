@@ -10,6 +10,7 @@ import {
   uniqueStrings,
 } from "../packages/normalization-core/src/string-normalization.ts";
 import { loadBundledPluginPublicArtifactModuleSync } from "../src/plugins/public-surface-loader.js";
+import { collectBundledPluginSources } from "./lib/bundled-plugin-source-utils.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { formatGeneratedModule } from "./lib/format-generated-module.mts";
 import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
@@ -20,41 +21,7 @@ const DEFAULT_OUTPUT_PATH = "src/config/bundled-channel-config-metadata.generate
 const IDS_OUTPUT_PATH = "src/channels/bundled-channel-ids.generated.ts";
 const GENERATED_JSON_CHUNK_SIZE = 16 * 1024;
 
-type BundledPluginSource = {
-  dirName: string;
-  pluginDir: string;
-  manifestPath: string;
-  manifest: {
-    id: string;
-    channels?: unknown;
-    name?: string;
-    description?: string;
-  } & Record<string, unknown>;
-  packageJson?: Record<string, unknown>;
-};
-
-const { collectBundledPluginSources } = (await import(
-  new URL("./lib/bundled-plugin-source-utils.mjs", import.meta.url).href
-)) as {
-  collectBundledPluginSources: (params?: {
-    repoRoot?: string;
-    requirePackageJson?: boolean;
-  }) => BundledPluginSource[];
-};
-
-type BundledChannelConfigMetadata = {
-  pluginId: string;
-  channelId: string;
-  aliases?: readonly string[];
-  order?: number;
-  configurable?: boolean;
-  channelEnvVars?: readonly string[];
-  label?: string;
-  description?: string;
-  schema: Record<string, unknown>;
-  uiHints?: Record<string, unknown>;
-  unsupportedSecretRefSurfacePatterns?: readonly string[];
-};
+type BundledPluginSource = ReturnType<typeof collectBundledPluginSources>[number];
 
 type BundledChannelSecuritySurface = {
   unsupportedSecretRefSurfacePatterns?: readonly string[];
@@ -80,7 +47,9 @@ function resolveChannelConfigSchemaModulePath(rootDir: string): string | null {
 }
 
 function resolvePackageChannelMeta(source: BundledPluginSource) {
-  return asOptionalRecord(asOptionalRecord(source.packageJson?.openclaw)?.channel);
+  return asOptionalRecord(
+    asOptionalRecord(asOptionalRecord(source.packageJson)?.openclaw)?.channel,
+  );
 }
 
 function resolveRootText(channelValue: unknown, manifestValue: unknown): string | undefined {
@@ -158,11 +127,12 @@ function resolveChannelUnsupportedSecretRefSurfacePatterns(
 
 async function collectBundledChannelConfigMetadata(repoRoot: string) {
   const sources = collectBundledPluginSources({ repoRoot, requirePackageJson: true });
-  const entries: BundledChannelConfigMetadata[] = [];
+  const entries = [];
 
   for (const source of sources) {
-    const channelIds = Array.isArray(source.manifest?.channels)
-      ? source.manifest.channels.filter(
+    const manifest = asOptionalRecord(source.manifest);
+    const channelIds = Array.isArray(manifest?.channels)
+      ? manifest.channels.filter(
           (entry: unknown): entry is string => typeof entry === "string" && entry.trim().length > 0,
         )
       : [];
@@ -184,14 +154,14 @@ async function collectBundledChannelConfigMetadata(repoRoot: string) {
       const order = asFiniteNumber(channelMeta?.order);
       const configurable = asOptionalRecord(channelMeta?.exposure)?.configured !== false;
       const channelEnvVars = resolveRootChannelEnvVars(channelMeta);
-      const label = resolveRootText(channelMeta?.label, source.manifest?.name);
-      const description = resolveRootText(channelMeta?.blurb, source.manifest?.description);
+      const label = resolveRootText(channelMeta?.label, manifest?.name);
+      const description = resolveRootText(channelMeta?.blurb, manifest?.description);
       const unsupportedSecretRefSurfacePatterns = resolveChannelUnsupportedSecretRefSurfacePatterns(
         source,
         channelId,
       );
       entries.push({
-        pluginId: source.manifest.id,
+        pluginId: manifest?.id,
         channelId,
         ...(aliases.length > 0 ? { aliases } : {}),
         ...(order === undefined ? {} : { order }),

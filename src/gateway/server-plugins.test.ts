@@ -3,7 +3,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { createInfoWarnErrorDebugLogger as createTestLog } from "../../test/helpers/mock-logger.js";
+import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import { createTerminalTool } from "../agents/tools/terminal-tool.js";
+import {
+  getOwnedSessionTranscriptWriterFence,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
 import {
   getGlobalPluginRegistry,
   initializeGlobalHookRunner,
@@ -29,11 +35,12 @@ import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gatewa
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import { withEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { createParentTranscriptWriteContext } from "./server-plugin-transcript.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-plugin-restart-owner-");
 
@@ -65,23 +72,15 @@ const dispatchReplyFromConfig = vi.hoisted(() =>
   vi.fn(async () => ({ counts: {}, queuedFinal: false })),
 );
 
-vi.mock("../plugins/loader.js", () => ({
-  loadOpenClawPlugins,
+vi.mock("../plugins/loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/loader.js")>()),
+  loadOpenClawPluginsAsync: loadOpenClawPlugins,
 }));
 
-vi.mock("../plugins/runtime/load-context.js", async (importOriginal) => {
-  const {
-    buildPluginRuntimeLoadOptions,
-    getPluginRuntimeLoadContext: readPluginRuntimeLoadContext,
-    setPluginRuntimeLoadContext,
-  } = await importOriginal<typeof import("../plugins/runtime/load-context.js")>();
-  return {
-    buildPluginRuntimeLoadOptions,
-    getPluginRuntimeLoadContext: readPluginRuntimeLoadContext,
-    setPluginRuntimeLoadContext,
-    createPluginRuntimeLoaderLogger: () => pluginRuntimeLoaderLogger,
-  };
-});
+vi.mock("../plugins/runtime/load-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/runtime/load-context.js")>()),
+  pluginRuntimeLoaderLogger,
+}));
 
 vi.mock("../plugins/plugin-lookup-table.js", () => ({
   loadPluginLookUpTable,
@@ -210,15 +209,6 @@ let runtimeRegistryModule: PluginRuntimeRegistryModule;
 let gatewayRequestScopeModule: GatewayRequestScopeModule;
 let methodScopesModule: MethodScopesModule;
 let resolveTestGatewayContext: () => GatewayRequestContext | undefined = () => undefined;
-
-function createTestLog() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
-}
 
 function createTestContext(label: string): GatewayRequestContext {
   const config = {};
@@ -349,17 +339,13 @@ function voiceCallOverrideConfig(allowedModels = ["anthropic/claude-haiku-4-5"])
 
 async function createSubagentRuntime(
   cfg: Record<string, unknown> = {},
+  requestScoped = false,
 ): Promise<PluginRuntime["subagent"]> {
   loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-  loadStartupPluginFixture({
+  await loadStartupPluginFixture({
     cfg,
+    ...(requestScoped ? { resolveGatewayContext: undefined } : {}),
   });
-  return createRuntimeFromLastGatewayLoad().subagent;
-}
-
-async function createRequestScopedSubagentRuntime(): Promise<PluginRuntime["subagent"]> {
-  loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-  loadStartupPluginFixture({ resolveGatewayContext: undefined });
   return createRuntimeFromLastGatewayLoad().subagent;
 }
 
@@ -392,10 +378,10 @@ function registerActivePluginToolOwnership(
   });
 }
 
-function loadGatewayPluginsForTest(
+async function loadGatewayPluginsForTest(
   overrides: Partial<Parameters<ServerPluginsModule["loadGatewayPlugins"]>[0]> = {},
 ) {
-  const loaded = serverPluginsModule.loadGatewayPlugins({
+  const loaded = await serverPluginsModule.loadGatewayPlugins({
     loadIntent: "startup",
     cfg: {},
     autoEnabledReasons: {},
@@ -405,15 +391,14 @@ function loadGatewayPluginsForTest(
     resolveGatewayContext: () => resolveTestGatewayContext(),
     ...overrides,
   });
-  // Runtime dispatch cases use a published fixture; preparation itself never selects it.
   runtimeRegistryModule.setActivePluginRegistry(loaded.pluginRegistry);
 }
 
-function loadStartupPluginFixture(
+async function loadStartupPluginFixture(
   overrides: Partial<Parameters<ServerPluginBootstrapModule["prepareGatewayPluginLoad"]>[0]> = {},
 ) {
   const log = createTestLog();
-  const loaded = serverPluginBootstrapModule.prepareGatewayPluginLoad({
+  const loaded = await serverPluginBootstrapModule.prepareGatewayPluginLoad({
     loadIntent: "startup",
     cfg: {},
     workspaceDir: "/tmp",
@@ -427,13 +412,13 @@ function loadStartupPluginFixture(
   return log;
 }
 
-function loadPluginRuntimeForTest(
+async function loadPluginRuntimeForTest(
   registry = createRegistry([]),
   context = createTestContext("plugin-runtime"),
   requestScoped = false,
-): PluginRuntime {
+): Promise<PluginRuntime> {
   loadOpenClawPlugins.mockReturnValue(registry);
-  loadStartupPluginFixture(requestScoped ? { resolveGatewayContext: undefined } : {});
+  await loadStartupPluginFixture(requestScoped ? { resolveGatewayContext: undefined } : {});
   serverPluginsModule.setFallbackGatewayContext(context);
   return createRuntimeFromLastGatewayLoad();
 }
@@ -489,7 +474,7 @@ afterEach(() => {
 describe("loadGatewayPlugins", () => {
   test.each(["warn", "info"] as const)(
     "routes %s diagnostics and retires informational deduplication with metadata",
-    (level) => {
+    async (level) => {
       const cache = createPluginCache();
       loadOpenClawPlugins.mockReturnValue(
         createRegistry([{ level, pluginId: "demo", source: "/plugin.ts", message: "notice" }]),
@@ -498,12 +483,12 @@ describe("loadGatewayPlugins", () => {
       const expected = "[plugins] notice (plugin=demo, source=/plugin.ts)";
       const emitted = () =>
         log[level].mock.calls.filter(([message]) => message === expected).length;
-      withPluginCache(cache, () => {
-        loadStartupPluginFixture({ log });
-        loadStartupPluginFixture({ log });
+      await withPluginCache(cache, async () => {
+        await loadStartupPluginFixture({ log });
+        await loadStartupPluginFixture({ log });
         expect(emitted()).toBe(level === "info" ? 1 : 2);
         invalidatePluginCacheMetadata(cache);
-        loadStartupPluginFixture({ log });
+        await loadStartupPluginFixture({ log });
       });
       expect(emitted()).toBe(level === "info" ? 2 : 3);
       for (const sink of ["error", "warn", "info"] as const) {
@@ -514,7 +499,7 @@ describe("loadGatewayPlugins", () => {
     },
   );
 
-  test("does not re-log a quarantined plugin verification diagnostic", () => {
+  test("does not re-log a quarantined plugin verification diagnostic", async () => {
     const diagnostic: PluginDiagnostic = {
       level: "error",
       code: "plugin-verification",
@@ -540,7 +525,7 @@ describe("loadGatewayPlugins", () => {
       },
     ]);
 
-    const log = loadStartupPluginFixture();
+    const log = await loadStartupPluginFixture();
 
     expect(log.error).toHaveBeenCalledOnce();
     expect(log.error).toHaveBeenCalledWith(
@@ -574,7 +559,7 @@ describe("loadGatewayPlugins", () => {
       return { counts: {}, queuedFinal: false };
     });
 
-    loadGatewayPluginsForTest();
+    await loadGatewayPluginsForTest();
     const runtimeOptions = getLastPluginLoadOption("runtimeOptions") as
       | Parameters<PluginRuntimeModule["createPluginRuntime"]>[0]
       | undefined;
@@ -594,10 +579,10 @@ describe("loadGatewayPlugins", () => {
 
   test("captures retired plugin reply owners through their canonical Gateway binding", async () => {
     const { admitReplyTurn } = await import("../auto-reply/reply/reply-turn-admission.js");
-    const { captureGatewayReplyRunRestartAbort } =
-      await import("../auto-reply/reply/reply-run-registry.js");
-    const { captureGatewaySessionWorkAdmissions } =
-      await import("../sessions/session-lifecycle-admission.js");
+    const { captureSessionControllerStop, stopSession } =
+      await import("../sessions/session-controller.stop.js");
+    const { captureGatewaySessionControllerWork } =
+      await import("../sessions/session-controller.lifecycle.js");
     const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
     const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
     const stateDir = sessionDirs.make();
@@ -617,8 +602,8 @@ describe("loadGatewayPlugins", () => {
       inspection.register("sdk-wrapper", { id: "native", dispose: () => database.close() });
       return inspection;
     });
-    const operations: import("../auto-reply/reply/reply-run-registry.js").ReplyOperation[] = [];
-    const runtimes: ReturnType<ServerPluginsModule["loadGatewayPlugins"]>[] = [];
+    const operations: import("../sessions/session-controller.js").ReplyOperation[] = [];
+    const runtimes: Awaited<ReturnType<ServerPluginsModule["loadGatewayPlugins"]>>[] = [];
     try {
       for (const [name, resolver, sdkHost, inspection] of [
         ["closing", closingResolver, closingSdkHost, inspections[0]!],
@@ -631,7 +616,7 @@ describe("loadGatewayPlugins", () => {
         );
         loadOpenClawPlugins.mockReturnValue(createRegistry([]));
         runtimes.push(
-          serverPluginsModule.loadGatewayPlugins({
+          await serverPluginsModule.loadGatewayPlugins({
             loadIntent: "startup",
             cfg: {},
             autoEnabledReasons: {},
@@ -688,8 +673,13 @@ describe("loadGatewayPlugins", () => {
         }),
       );
       expect(closingResolver).not.toHaveBeenCalled();
-      const admissions = captureGatewaySessionWorkAdmissions(closingResolver);
-      const aborted = captureGatewayReplyRunRestartAbort(closingResolver)(() => {});
+      const admissions = captureGatewaySessionControllerWork(closingResolver);
+      const capture = captureSessionControllerStop({
+        operations: operations.filter((operation) =>
+          gatewayRequestScopeModule.hasGatewayContextOwner(operation, closingResolver),
+        ),
+      });
+      const aborted = stopSession({ capture, source: "restart" }).activeCancelled;
       expect({
         closing: admissions.isActive({
           scope: storePath,
@@ -724,11 +714,11 @@ describe("loadGatewayPlugins", () => {
     }
   });
 
-  test("injects the process HOME-isolation fact into registry construction", () => {
+  test("injects the process HOME-isolation fact into registry construction", async () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     const home = os.userInfo().homedir;
     const defaultStateDir = path.join(home, ".openclaw");
-    withEnv(
+    await withEnvAsync(
       {
         HOME: home,
         USERPROFILE: home,
@@ -737,11 +727,11 @@ describe("loadGatewayPlugins", () => {
         OPENCLAW_STATE_DIR: defaultStateDir,
         OPENCLAW_CONFIG_PATH: path.join(defaultStateDir, "openclaw.json"),
       },
-      () => loadGatewayPluginsForTest(),
+      async () => await loadGatewayPluginsForTest(),
     );
     expect(getLastPluginLoadOption("allowProcessHomeSessionCatalogs")).toBe(true);
 
-    withEnv(
+    await withEnvAsync(
       {
         HOME: home,
         USERPROFILE: home,
@@ -750,7 +740,7 @@ describe("loadGatewayPlugins", () => {
         OPENCLAW_STATE_DIR: path.join(home, ".openclaw-dev"),
         OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw-dev", "openclaw.json"),
       },
-      () => loadGatewayPluginsForTest(),
+      async () => await loadGatewayPluginsForTest(),
     );
 
     expect(getLastPluginLoadOption("allowProcessHomeSessionCatalogs")).toBe(false);
@@ -758,9 +748,9 @@ describe("loadGatewayPlugins", () => {
 
   test.each([false, true])(
     "routes plugin registration logs with info suppression %s",
-    (suppressPluginInfoLogs) => {
+    async (suppressPluginInfoLogs) => {
       loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-      loadGatewayPluginsForTest({ suppressPluginInfoLogs });
+      await loadGatewayPluginsForTest({ suppressPluginInfoLogs });
 
       const logger = getLastPluginLoadLogger();
       logger.info("plugin ready");
@@ -777,14 +767,14 @@ describe("loadGatewayPlugins", () => {
 
   test.each(["startup"] as const)(
     "prepares an empty %s candidate without loading plugins or replacing the active runtime",
-    (loadIntent) => {
+    async (loadIntent) => {
       const previous = addLoadedPlugin(createRegistry([]), { id: "previous-plugin" });
       runtimeRegistryModule.setActivePluginRegistry(previous);
       initializeGlobalHookRunner(previous);
       loadPluginLookUpTable.mockReturnValue({ startup: { pluginIds: [] } });
       const cfg = {};
 
-      const result = serverPluginBootstrapModule.prepareGatewayPluginLoad({
+      const result = await serverPluginBootstrapModule.prepareGatewayPluginLoad({
         loadIntent,
         cfg,
         workspaceDir: "/tmp/gateway-workspace",
@@ -872,6 +862,25 @@ describe("loadGatewayPlugins", () => {
         { timeoutMs: 5 },
       ),
     ).resolves.toEqual({ status: "accepted", runId: "run-accepted" });
+  });
+
+  test("isolates an autonomous agent from its caller transcript writer", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("separate-transcript-writer"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(getOwnedSessionTranscriptWriterFence()).toBeUndefined();
+      opts.respond(true, { status: "accepted", runId: "child-run" });
+    });
+
+    await withOwnedSessionTranscriptWrites(createParentTranscriptWriteContext(), async () => {
+      await expect(
+        serverPluginsModule.dispatchGatewayMethodInProcess("agent", {
+          sessionKey: "agent:main:child",
+        }),
+      ).resolves.toEqual({ status: "accepted", runId: "child-run" });
+      expect(getOwnedSessionTranscriptWriterFence()).toMatchObject({
+        expectedWriterRunId: "parent-run",
+      });
+    });
   });
 
   test("carries delegated tool-policy handoffs only in synthetic client context", async () => {
@@ -962,7 +971,7 @@ describe("loadGatewayPlugins", () => {
   test("projects effective node-command policy into the plugin node runtime", async () => {
     const command = "agent.cli.claude.run.v1";
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-    loadStartupPluginFixture();
+    await loadStartupPluginFixture();
     serverPluginsModule.setFallbackGatewayContext({
       getRuntimeConfig: () => ({ gateway: { nodes: { commands: { deny: [command] } } } }),
       nodeRegistry: {
@@ -1018,7 +1027,7 @@ describe("loadGatewayPlugins", () => {
     "dispatches node requests with the authority of $pluginId",
     async ({ pluginId, origin, requestScoped, requestedScope, command }) => {
       const context = createTestContext("nodes-invoke");
-      const runtime = loadPluginRuntimeForTest(
+      const runtime = await loadPluginRuntimeForTest(
         addLoadedPlugin(createRegistry([]), { id: pluginId, origin }),
         context,
         requestScoped,
@@ -1076,7 +1085,7 @@ describe("loadGatewayPlugins", () => {
     "dispatches trusted Gateway requests with %s scopes",
     async (mode) => {
       const context = createTestContext("plugin-gateway-request");
-      const runtime = loadPluginRuntimeForTest(
+      const runtime = await loadPluginRuntimeForTest(
         addLoadedPlugin(createRegistry([]), { id: "google-meet" }),
         context,
         mode === "admin caller",
@@ -1119,7 +1128,7 @@ describe("loadGatewayPlugins", () => {
     loadOpenClawPlugins.mockReturnValue(
       addLoadedPlugin(createRegistry([]), { id: "community-plugin", origin: "global" }),
     );
-    loadStartupPluginFixture();
+    await loadStartupPluginFixture();
     serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-refused"));
     const runtime = createRuntimeFromLastGatewayLoad();
 
@@ -1140,7 +1149,7 @@ describe("loadGatewayPlugins", () => {
 
   test("preserves structured errors from trusted plugin gateway requests", async () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
-    loadStartupPluginFixture();
+    await loadStartupPluginFixture();
     serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-error"));
     handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
       opts.respond(false, undefined, {
@@ -1173,7 +1182,7 @@ describe("loadGatewayPlugins", () => {
       source: "test",
     });
     loadOpenClawPlugins.mockReturnValue(registry);
-    loadStartupPluginFixture();
+    await loadStartupPluginFixture();
     serverPluginsModule.setFallbackGatewayContext({
       nodeRegistry: { sendInvokeInput: vi.fn() },
     } as unknown as GatewayRequestContext);
@@ -1212,7 +1221,7 @@ describe("loadGatewayPlugins", () => {
       })),
     );
     loadOpenClawPlugins.mockReturnValue(registry);
-    loadStartupPluginFixture();
+    await loadStartupPluginFixture();
     serverPluginsModule.setFallbackGatewayContext({
       nodeRegistry: { sendInvokeInput: vi.fn() },
     } as unknown as GatewayRequestContext);
@@ -1237,7 +1246,7 @@ describe("loadGatewayPlugins", () => {
       const scopes = scopeLabel === "no scopes" ? [] : ["operator.read"];
       const registry = createDuplexPluginRegistry();
       loadOpenClawPlugins.mockReturnValue(registry);
-      loadStartupPluginFixture();
+      await loadStartupPluginFixture();
       const context = {
         nodeRegistry: { sendInvokeInput: vi.fn() },
       } as unknown as GatewayRequestContext;
@@ -1280,7 +1289,7 @@ describe("loadGatewayPlugins", () => {
       const callerAbort = new AbortController();
       const registry = createDuplexPluginRegistry();
       loadOpenClawPlugins.mockReturnValue(registry);
-      loadStartupPluginFixture();
+      await loadStartupPluginFixture();
       const context = {
         nodeRegistry: { sendInvokeInput: vi.fn() },
       } as unknown as GatewayRequestContext;
@@ -1318,7 +1327,7 @@ describe("loadGatewayPlugins", () => {
   test("waits for framed readiness and carries binary messages through canonical invoke transport", async () => {
     const registry = createDuplexPluginRegistry();
     loadOpenClawPlugins.mockReturnValue(registry);
-    loadStartupPluginFixture();
+    await loadStartupPluginFixture();
     const sendInvokeInput = vi.fn();
     const context = {
       nodeRegistry: { sendInvokeInput },
@@ -1392,7 +1401,7 @@ describe("loadGatewayPlugins", () => {
     async (terminalAction) => {
       const registry = createDuplexPluginRegistry();
       loadOpenClawPlugins.mockReturnValue(registry);
-      loadStartupPluginFixture();
+      await loadStartupPluginFixture();
       serverPluginsModule.setFallbackGatewayContext({
         nodeRegistry: { sendInvokeInput: vi.fn() },
       } as unknown as GatewayRequestContext);
@@ -1458,7 +1467,7 @@ describe("loadGatewayPlugins", () => {
   test("cancels a retained duplex invocation when its delegated caller authority closes", async () => {
     const registry = createDuplexPluginRegistry();
     loadOpenClawPlugins.mockReturnValue(registry);
-    loadStartupPluginFixture();
+    await loadStartupPluginFixture();
     const sendInvokeInput = vi.fn();
     const validateAgentRuntimeApprovalAuthority = vi.fn(() => true);
     const context = {
@@ -1527,7 +1536,7 @@ describe("loadGatewayPlugins", () => {
       nodeRegistry: { sendInvokeInput: vi.fn() },
     } as unknown as GatewayRequestContext;
     serverPluginsModule.setFallbackGatewayContext(context);
-    const loaded = serverPluginsModule.loadGatewayPlugins({
+    const loaded = await serverPluginsModule.loadGatewayPlugins({
       loadIntent: "startup",
       cfg: {},
       autoEnabledReasons: {},
@@ -1601,7 +1610,7 @@ describe("loadGatewayPlugins", () => {
     "forwards an authorized $name override",
     async ({ requestScoped, provider, model, sessionKey, message }) => {
       const runtime = requestScoped
-        ? await createRequestScopedSubagentRuntime()
+        ? await createSubagentRuntime({}, true)
         : await createSubagentRuntime(voiceCallOverrideConfig());
       if (!requestScoped && provider) {
         expect(normalizeProviderModelIdWithRuntime).not.toHaveBeenCalled();
@@ -1781,7 +1790,7 @@ describe("loadGatewayPlugins", () => {
   );
 
   test("clears inherited additive grants when a scoped plugin run requests none", async () => {
-    const runtime = await createRequestScopedSubagentRuntime();
+    const runtime = await createSubagentRuntime({}, true);
     const scope = {
       context: createTestContext("clear-tools-also-allow"),
       client: {
@@ -1898,7 +1907,7 @@ describe("loadGatewayPlugins", () => {
     async (mode) => {
       const requestScoped = mode === "plugin admin caller";
       const runtime = requestScoped
-        ? await createRequestScopedSubagentRuntime()
+        ? await createSubagentRuntime({}, true)
         : await createSubagentRuntime();
       const context = createTestContext("delete-session");
       serverPluginsModule.setFallbackGatewayContext(context);
@@ -2065,7 +2074,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("stamps tool-free subagent runs with a private exact empty cap", async () => {
-    const runtime = await createRequestScopedSubagentRuntime();
+    const runtime = await createSubagentRuntime({}, true);
     const scope = {
       context: createTestContext("tool-free-plugin-scope"),
       pluginId: "memory-core",
@@ -2090,7 +2099,7 @@ describe("loadGatewayPlugins", () => {
     expect(request.params).not.toHaveProperty("toolsAllow");
   });
 
-  test.each([
+  test.each<{ name: string; result: AgentWaitResult; expected?: AgentWaitResult }>([
     {
       name: "pending queue observation",
       result: {
@@ -2116,9 +2125,8 @@ describe("loadGatewayPlugins", () => {
       },
     },
     {
-      name: "legacy completed status",
-      result: { status: "completed" },
-      expected: { status: "ok" },
+      name: "successful completion",
+      result: { status: "ok" },
     },
     {
       name: "legacy completed error",

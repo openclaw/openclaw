@@ -1,75 +1,49 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import {
-  allowsSelectedAgent,
-  GroupRouteRevalidation,
-  resolveAgentId,
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import {
+  CatalogTargetDiscovery,
   resolveCreateTarget,
   routeKey,
   routeKeyFromSearch,
 } from "./catalog-target.ts";
-import type { NewSessionRouteData } from "./location.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
+
+it("does not discover or retry CLI targets without a current read grant", async () => {
+  const request = vi.fn().mockRejectedValue(new Error("unavailable"));
+  const context = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client: createTestGatewayClient(request),
+    }),
+  );
+  const discovery = new CatalogTargetDiscovery(() => {});
+  const setScopes = (scopes: string[]) => {
+    context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.catalog.list"], scopes);
+  };
+  setScopes(["operator.sessions.write"]);
+  discovery.load(context, "main", true);
+  expect(request).not.toHaveBeenCalled();
+  expect(discovery.groups()).toBeUndefined();
+  setScopes(["operator.read"]);
+  discovery.load(context, "main", true);
+  await discovery.groups()?.[0]?.completion?.promise.catch(() => {});
+  expect(request).toHaveBeenCalledOnce();
+  setScopes(["operator.sessions.read"]);
+  discovery.load(context, "main", true);
+  discovery.retry(context.gateway.snapshot, "main");
+  expect(discovery.groups()).toBeUndefined();
+  expect(request).toHaveBeenCalledOnce();
+  discovery.clear();
+});
 
 describe("new-session catalog target", () => {
-  const agents = [{ id: "main" }, { id: "research" }];
-
-  it("keeps the draft identity stable while target metadata resolves", () => {
-    const pending = {
-      agentId: "main",
-      requestedAgentId: "main",
-      catalogId: "claude",
-      catalogLabel: "",
-      startTerminal: false,
-    };
-    const ready = {
-      ...pending,
-      startTerminal: true,
-      catalogLabel: "Claude Code",
-    };
-
-    expect(routeKey(pending)).toBe(routeKey(ready));
-    expect(allowsSelectedAgent(pending, { id: "main" })).toBe(false);
-    expect(allowsSelectedAgent(ready, { id: "main" })).toBe(true);
-  });
-
-  it("keeps the draft identity stable while the target agent resolves", () => {
-    const requested = {
-      requestedAgentId: "research",
-      catalogId: "claude",
-      catalogLabel: "",
-      startTerminal: false,
-    };
-    const unresolved = { ...requested, agentId: "" };
-    const resolved = { ...requested, agentId: "research" };
-
-    expect(routeKey(unresolved)).toBe(routeKey(resolved));
-    // Only a navigation changes the requested agent or the target.
-    expect(routeKey({ ...resolved, requestedAgentId: "main" })).not.toBe(routeKey(resolved));
-    expect(routeKey({ ...resolved, catalogId: "codex" })).not.toBe(routeKey(resolved));
-  });
-
-  it("derives pending draft ownership from browser route intent", () => {
-    const pending = {
-      agentId: "",
-      requestedAgentId: "research",
-      catalogId: "claude",
-      catalogLabel: "",
-      startTerminal: false,
-    };
-
-    expect(routeKeyFromSearch("?agent=research&catalog=claude")).toBe(routeKey(pending));
-    expect(routeKeyFromSearch("?agent=main&catalog=claude")).not.toBe(routeKey(pending));
-  });
-
   it("isolates model-specific drafts while retaining ordinary draft storage keys", () => {
-    const plain = {
-      agentId: "main",
-      requestedAgentId: "main",
-      catalogId: "",
-      catalogLabel: "",
-      startTerminal: false,
-    };
+    const plain = createNewSessionRouteData();
     const first = { ...plain, requestedModel: "example/first" };
     const second = { ...plain, requestedModel: "example/second" };
     expect(routeKey(plain)).toBe('["main","",""]');
@@ -91,7 +65,15 @@ describe("new-session catalog target", () => {
     }));
 
     await expect(
-      resolveCreateTarget({ request } as unknown as GatewayBrowserClient, "claude", "research"),
+      resolveCreateTarget(
+        createApplicationGatewaySnapshot({
+          client: createTestGatewayClient(request),
+          phase: "connected",
+          hello: gatewayHelloForMethods(["sessions.catalog.list"]),
+        }),
+        "claude",
+        "research",
+      ),
     ).resolves.toBeUndefined();
     expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
       agentId: "research",
@@ -126,59 +108,19 @@ describe("new-session catalog target", () => {
     }));
 
     await expect(
-      resolveCreateTarget({ request } as unknown as GatewayBrowserClient, "claude", "research"),
+      resolveCreateTarget(
+        createApplicationGatewaySnapshot({
+          client: createTestGatewayClient(request),
+          phase: "connected",
+          hello: gatewayHelloForMethods(["sessions.catalog.list"]),
+        }),
+        "claude",
+        "research",
+      ),
     ).resolves.toEqual({
       catalogLabel: "Claude Code",
       startTerminal: true,
       terminalHosts: [{ hostId: "node:dev", label: "Dev" }],
     });
-  });
-
-  it("canonicalizes the requested agent or falls back before catalog resolution", () => {
-    const target = { agentId: "Research", catalogId: "claude" };
-
-    expect(resolveAgentId(target, agents, "main")).toBe("research");
-    expect(resolveAgentId({ ...target, agentId: "retired" }, agents, "main")).toBe("main");
-    expect(resolveAgentId({ ...target, agentId: "" }, agents, "research")).toBe("research");
-  });
-
-  it("reconciles a provisional new-thread picker value after the roster loads", () => {
-    const location = { agentId: "main", catalogId: "" };
-
-    expect(resolveAgentId(location, [], "main")).toBe("main");
-    expect(resolveAgentId(location, [{ id: "roboclaw" }], "roboclaw")).toBe("roboclaw");
-  });
-
-  it("revalidates when a missing group reappears with empty defaults", async () => {
-    let data: NewSessionRouteData = {
-      agentId: "main",
-      requestedAgentId: "main",
-      catalogId: "",
-      catalogLabel: "",
-      startTerminal: false,
-      group: "Client",
-      groupStatus: "resolved",
-      groupCwd: "",
-      groupWorktree: false,
-      groupCatalogGeneration: 1,
-      groupDefaultsStatus: "ready",
-    };
-    const state = { groupSettings: [] as Array<{ name: string; position: number }> };
-    const sessions = {
-      state,
-      groupsGeneration: () => 1,
-      groupsStatus: () => "ready",
-    } as unknown as SessionCapability;
-    const revalidate = vi.fn(async () => {
-      data = { ...data, groupStatus: "missing" };
-    });
-    const coordinator = new GroupRouteRevalidation(() => data, revalidate);
-
-    coordinator.synchronize(sessions);
-    await vi.waitFor(() => expect(revalidate).toHaveBeenCalledTimes(1));
-    state.groupSettings = [{ name: "Client", position: 0 }];
-    coordinator.synchronize(sessions);
-
-    await vi.waitFor(() => expect(revalidate).toHaveBeenCalledTimes(2));
   });
 });

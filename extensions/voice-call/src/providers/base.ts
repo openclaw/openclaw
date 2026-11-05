@@ -30,10 +30,6 @@ export interface VoiceCallProvider {
    */
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult;
 
-  /**
-   * Parse provider-specific webhook payload into normalized events.
-   * Returns events and optional response to send back to provider.
-   */
   parseWebhookEvent(ctx: WebhookContext, options?: WebhookParseOptions): ProviderWebhookParseResult;
 
   /**
@@ -58,6 +54,12 @@ export interface VoiceCallProvider {
    */
   playTts(input: PlayTtsInput): Promise<void>;
 
+  /** Play a message followed by carrier-owned hangup; acceptance is not completion. */
+  playMessageAndHangup?(input: PlayTtsInput): Promise<void>;
+
+  /**
+   * Send DTMF digits to an active call.
+   */
   sendDtmf?: (input: SendDtmfInput) => Promise<void>;
 
   startListening(input: StartListeningInput): Promise<void>;
@@ -71,4 +73,10 @@ export interface VoiceCallProvider {
    * so the caller can keep the call and rely on timer-based fallback.
    */
   getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult>;
+}
+
+export function assertVoiceCallProviderSetting(value: unknown, message: string): asserts value {
+  if (!value) {
+    throw new Error(message);
+  }
 }

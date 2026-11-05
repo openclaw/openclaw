@@ -1,5 +1,6 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasPackageRuntimeDependencies } from "../infra/install-package-dir.js";
 import { packageNameMatchesId } from "../infra/install-safe-path.js";
@@ -31,12 +32,10 @@ import {
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { linkOpenClawPeerDependencies, resolveOpenClawHostDependency } from "./plugin-peer-link.js";
 
-type ValidatedPackagePlugin = {
-  pluginId: string;
-  manifestName?: string;
-  version?: string;
-  extensions: string[];
-  setup?: import("./manifest.js").PluginManifestSetup;
+type ValidatedPackagePlugin = Omit<
+  Parameters<typeof buildDirectoryInstallResult>[0],
+  "targetDir"
+> & {
   hasRuntimeDependencies: boolean;
   peerDependencies: Record<string, string>;
 };
@@ -110,7 +109,7 @@ export async function validatePackagePluginInstallSource(params: {
 
   if (manifestPluginId && !packageNameMatchesId(npmPluginId, manifestPluginId)) {
     params.logger.info?.(
-      `Plugin manifest id "${manifestPluginId}" differs from npm package name "${npmPluginId}"; using manifest id as the config key.`,
+      terminalText`Plugin manifest id "${manifestPluginId}" differs from npm package name "${npmPluginId}"; using manifest id as the config key.`,
     );
   }
 

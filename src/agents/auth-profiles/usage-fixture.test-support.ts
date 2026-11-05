@@ -7,11 +7,11 @@ import {
 } from "./usage-reduction.js";
 
 export const storeMocks = {
-  resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
-    (params: { agentDir?: string }) => params.agentDir,
+  resolvePersistedAuthProfileOwnerAgentDirAsync: vi.fn(
+    async (params: { agentDir?: string }) => params.agentDir,
   ),
   saveAuthProfileStore: vi.fn(),
-  loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
+  loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(),
   updateAuthProfileStoreWithLock: vi.fn().mockResolvedValue(null),
 };
 
@@ -35,7 +35,6 @@ export function resetAuthProfileUsageMocks() {
     .mockImplementation(async (store, profileId, _agentDir, consume) =>
       consume({
         observed: structuredClone(usageMocks.readFresh() ?? store),
-        inherited: false,
         record: (reduction) => usageMocks.record(store, profileId, reduction),
       }),
     );
@@ -54,7 +53,7 @@ export function resetAuthProfileUsageMocks() {
     }
     return {
       store: fresh,
-      result: next ? { previous, next, now } : undefined,
+      result: next,
       publication: {
         credentialsChanged: false,
         profileSetChanged: false,
@@ -66,26 +65,20 @@ export function resetAuthProfileUsageMocks() {
   });
 }
 
-export function mockLockedUpdateForStore(store: AuthProfileStore): void {
+function prepareLockedUpdate(store: AuthProfileStore) {
   usageMocks.readFresh.mockReturnValue(store);
-  storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockImplementation(() => store);
-  storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
-    async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
-      const freshStore = structuredClone(store);
-      lockParams.updater(freshStore);
-      return freshStore;
-    },
-  );
+  storeMocks.loadAuthProfileStoreWithoutExternalProfilesAsync.mockResolvedValue(store);
+  return async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
+    const freshStore = structuredClone(store);
+    lockParams.updater(freshStore);
+    return freshStore;
+  };
+}
+
+export function mockLockedUpdateForStore(store: AuthProfileStore): void {
+  storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(prepareLockedUpdate(store));
 }
 
 export function mockLockedUpdatesForStore(store: AuthProfileStore): void {
-  usageMocks.readFresh.mockReturnValue(store);
-  storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockImplementation(() => store);
-  storeMocks.updateAuthProfileStoreWithLock.mockImplementation(
-    async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
-      const freshStore = structuredClone(store);
-      lockParams.updater(freshStore);
-      return freshStore;
-    },
-  );
+  storeMocks.updateAuthProfileStoreWithLock.mockImplementation(prepareLockedUpdate(store));
 }

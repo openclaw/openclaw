@@ -134,5 +134,8 @@ export function resolveLegacyAgentRosterOwner(raw: unknown): string | undefined 
     return undefined;
   }
   const marked = entries.filter(({ config }) => isRecord(config) && config.default === true);
+  if (marked.length === 0 && !Object.hasOwn(agents, "entries")) {
+    return normalizeAgentId(entries[0]!.id);
+  }
   return marked.length === 1 ? normalizeAgentId(marked[0]!.id) : undefined;
 }

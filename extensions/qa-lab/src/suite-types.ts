@@ -16,7 +16,7 @@ import type {
 } from "./qa-transport-registry.js";
 import type { QaReportCheck } from "./report.js";
 import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
-import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
+import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.types.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import type { QaSuiteRoundTripProbe } from "./suite-round-trip.js";
@@ -33,18 +33,14 @@ export type QaSuiteStep = {
   run: () => Promise<QaSuiteStepOutcome | void>;
 };
 
-export type QaSuiteScenarioResult = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  // The lifecycle owner carries this through retries and post-run checks.
-  evidenceOccurrenceId?: string;
-  steps: QaReportCheck[];
-  details?: string;
-  timing?: QaEvidenceTiming;
-  rttMeasurement?: QaEvidenceRttMeasurement;
-  modelSwitchEvidence?: Record<string, unknown>;
-  runtimeParity?: RuntimeParityResult;
-};
+export type QaSuiteScenarioResult = QaReportCheck &
+  QaSuiteStepOutcome & {
+    // The lifecycle owner carries this through retries and post-run checks.
+    evidenceOccurrenceId?: string;
+    steps: QaReportCheck[];
+    modelSwitchEvidence?: Record<string, unknown>;
+    runtimeParity?: RuntimeParityResult;
+  };
 
 export type QaSuiteEnvironment = {
   lab: QaLabServerHandle;

@@ -1,7 +1,7 @@
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
-import type { defineBrowserMeetingPlugin } from "./browser-plugin.js";
+import type { MeetingPlatformAdapter } from "./platform-adapter.js";
 
-type BrowserMeetingPlugin = ReturnType<typeof defineBrowserMeetingPlugin>;
+type BrowserMeetingPlugin = ReturnType<typeof MeetingPlatformAdapter.defineBrowserMeetingPlugin>;
 
 export async function loadBrowserMeetingPlugins() {
   const [{ zoomMeetingsPlugin }, { teamsMeetingsPlugin }, { slackHuddlesPlugin }] =

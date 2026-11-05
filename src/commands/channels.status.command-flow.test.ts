@@ -20,8 +20,7 @@ const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   resolveCommandConfigWithSecrets: vi.fn(),
-  readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
-  requireValidConfig: vi.fn(),
+  requireValidConfigFileSnapshot: vi.fn(),
   listChannelPlugins: vi.fn(),
   listConfiguredAnnounceChannelIdsForConfig: vi.fn((_params: unknown) => ["discord"]),
   missingOfficialExternalChannels: new Set<string>(),
@@ -45,12 +44,10 @@ vi.mock("../cli/command-config-resolution.js", () => ({
   },
 }));
 
-vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: () => mocks.readConfigFileSnapshot(),
-}));
-
-vi.mock("./config-validation.js", () => ({
-  requireValidConfig: (runtime: unknown) => mocks.requireValidConfig(runtime),
+vi.mock("./config-validation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config-validation.js")>()),
+  requireValidConfigFileSnapshot: (runtime: unknown) =>
+    mocks.requireValidConfigFileSnapshot(runtime),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -190,7 +187,7 @@ function fallbackConfig(
   resolved = config,
   diagnostics: string[] = [],
 ) {
-  mocks.requireValidConfig.mockResolvedValue(config);
+  mocks.requireValidConfigFileSnapshot.mockResolvedValue({ path: "/tmp/openclaw.json", config });
   mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
     resolvedConfig: resolved,
     effectiveConfig: resolved,
@@ -203,8 +200,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     vi.spyOn(performance, "now").mockReturnValue(0);
     mocks.callGateway.mockReset();
     mocks.resolveCommandConfigWithSecrets.mockReset();
-    mocks.readConfigFileSnapshot.mockClear();
-    mocks.requireValidConfig.mockReset();
+    mocks.requireValidConfigFileSnapshot.mockReset();
     mocks.listChannelPlugins.mockReset();
     mocks.missingOfficialExternalChannels.clear();
     mocks.repairHintChannelIdCalls.length = 0;
@@ -229,7 +225,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
         channelsStatusCommand({ channel: "missing-channel", json }, runtime),
       ).rejects.toBe(error);
 
-      expect(mocks.requireValidConfig).not.toHaveBeenCalled();
+      expect(mocks.requireValidConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
       expect(runtime.error).not.toHaveBeenCalled();
     },
@@ -285,7 +281,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     ]);
     expect(runtime.error).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.requireValidConfig).not.toHaveBeenCalled();
+    expect(mocks.requireValidConfigFileSnapshot).not.toHaveBeenCalled();
   });
 
   it("keeps read-only fallback output when SecretRefs are unresolved", async () => {
@@ -336,33 +332,6 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     const { runtime: jsonRuntime, logs: jsonLogs } = createCapturingTestRuntime();
     await channelsStatusCommand({ json: true, probe: false }, jsonRuntime);
     expect(JSON.parse(jsonLogs.at(-1) ?? "{}").gatewayAuthUnavailable).toBe(true);
-  });
-
-  it("renders missing gateway credentials canonically before config-only status", async () => {
-    const error = Object.assign(
-      new Error(
-        [
-          "gateway channels.status requires credentials before opening a websocket",
-          "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
-          "Config: /tmp/openclaw.json",
-        ].join("\n"),
-      ),
-      {
-        name: "GatewayCredentialsRequiredError",
-        method: "channels.status",
-        configPath: "/tmp/openclaw.json",
-      },
-    );
-    mocks.callGateway.mockRejectedValue(error);
-    fallbackConfig({ channels: {} });
-
-    const { runtime, logs, errors } = createCapturingTestRuntime();
-
-    await channelsStatusCommand({ probe: false }, runtime);
-
-    expect(errors).toEqual([error.message]);
-    expect(errors.join("\n")).not.toContain("Gateway not reachable:");
-    expect(logs.join("\n")).toContain("Gateway auth unavailable; showing config-only status.");
   });
 
   it("resolves config-only repair hints only for the requested channel", async () => {
@@ -421,6 +390,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(payload.gatewayReachable).toBe(false);
     expect(payload.gatewayAuthUnavailable).toBe(false);
     expect(payload.configOnly).toBe(true);
+    expect(payload.config).toEqual({ path: "/tmp/openclaw.json", mode: "local" });
     expect(payload.configuredChannels).toStrictEqual([]);
   });
 

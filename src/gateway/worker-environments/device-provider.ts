@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { hasEffectivePairedDeviceRole } from "../../infra/device-pairing.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
@@ -15,6 +16,7 @@ import type {
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import { workerInferencePlacement } from "./inference-placement.js";
 import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
 
 export { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
@@ -85,6 +87,10 @@ export async function reconcileDeviceWorker(
 }
 
 function requireDeviceId(profile: WorkerProfile): string {
+  workerInferencePlacement({
+    providerId: DEVICE_WORKER_PROVIDER_ID,
+    profileSnapshot: { settings: profile },
+  });
   const deviceId = profile.device;
   if (typeof deviceId !== "string" || !deviceId.trim()) {
     throw new WorkerProviderError("device worker profile requires a device setting");
@@ -164,13 +170,17 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
         node: { deviceId },
       };
     },
-    inspect: async ({ profile }) => {
+    inspect: async ({ profile, signal }) => {
+      signal?.throwIfAborted();
       const deviceId = requireDeviceId(profile);
-      const paired = await options.getPairedDevice(deviceId);
+      const paired = await racePromiseWithAbortSignal(options.getPairedDevice(deviceId), signal);
       if (!hasPairedNodeRole(paired)) {
         return { status: "unknown" };
       }
-      const connected = await nodeTransport?.getCurrentNode(deviceId);
+      const connected = await racePromiseWithAbortSignal(
+        Promise.resolve(nodeTransport?.getCurrentNode(deviceId)),
+        signal,
+      );
       if (connected) {
         return { status: "active", sharedHost: true };
       }

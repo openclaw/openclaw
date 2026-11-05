@@ -2,7 +2,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,
-  createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -31,7 +31,6 @@ type PreparedSignalApprovalTarget = {
   accountId: string;
   baseUrl?: string;
   account?: string;
-  accountUuid?: string;
   targetAuthorKeys: readonly string[];
 };
 type PendingSignalApprovalEntry = {
@@ -48,13 +47,7 @@ type SignalFinalPayload = {
   text: string;
 };
 
-type SignalApprovalRuntimeContext = {
-  baseUrl?: string;
-  account?: string;
-  accountUuid?: string;
-};
-
-function readSignalApprovalRuntimeContext(context: unknown): SignalApprovalRuntimeContext {
+function readSignalApprovalRuntimeContext(context: unknown) {
   const value = context as
     | { baseUrl?: unknown; account?: unknown; accountUuid?: unknown }
     | null
@@ -66,7 +59,7 @@ function readSignalApprovalRuntimeContext(context: unknown): SignalApprovalRunti
   };
 }
 
-export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   ApprovalReactionPendingContent,
   PreparedSignalApprovalTarget,
   PendingSignalApprovalEntry,
@@ -128,7 +121,6 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         accountId: preparedAccountId,
         ...(runtimeContext.baseUrl ? { baseUrl: runtimeContext.baseUrl } : {}),
         ...(runtimeContext.account ? { account: runtimeContext.account } : {}),
-        ...(runtimeContext.accountUuid ? { accountUuid: runtimeContext.accountUuid } : {}),
         targetAuthorKeys,
       };
       return {
@@ -204,14 +196,9 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         targetAuthorKeys: entry.targetAuthorKeys,
         route: {
           deliveryMode: "session",
-          ...(normalizeOptionalString(request.request.agentId)
-            ? { agentId: normalizeOptionalString(request.request.agentId) }
-            : {}),
-          ...(normalizeOptionalString(request.request.sessionKey)
-            ? { sessionKey: normalizeOptionalString(request.request.sessionKey) }
-            : {}),
+          agentId: request.request.agentId ?? undefined,
+          sessionKey: request.request.sessionKey ?? undefined,
         },
-        routeAllowed: true,
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
       }))
         ? true

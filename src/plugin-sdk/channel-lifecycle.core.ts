@@ -102,10 +102,8 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
   };
 }
 
-function runAbortCleanup(onAbort: (() => void | Promise<void>) | undefined): Promise<void> {
-  return new Promise<void>((resolve) => {
-    resolve(onAbort?.());
-  });
+async function runAbortCleanup(onAbort: (() => void | Promise<void>) | undefined): Promise<void> {
+  return onAbort?.();
 }
 
 /**
@@ -166,13 +164,8 @@ export async function keepHttpServerTaskAlive(params: {
     server.once("close", () => resolve());
   });
   let abortTask: Promise<void> = Promise.resolve();
-  let abortTriggered = false;
 
   const triggerAbort = () => {
-    if (abortTriggered) {
-      return;
-    }
-    abortTriggered = true;
     abortTask = runAbortCleanup(onAbort);
     // Cleanup can reject before close; retain that error for the task's final await.
     void abortTask.catch(() => {});

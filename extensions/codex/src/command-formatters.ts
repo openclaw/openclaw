@@ -1,11 +1,16 @@
-/**
- * Formats Codex command responses for safe chat display, including status,
- * lists, account summaries, and user-facing help text.
- */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  escapeChatDisplayText as escapeCodexChatText,
+  sanitizeChatDisplayText as sanitizeCodexTextForDisplay,
+} from "openclaw/plugin-sdk/string-normalization-runtime";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
-import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
+import {
+  isJsonObject,
+  type CodexThread,
+  type CodexThreadListResponse,
+  type JsonValue,
+} from "./app-server/protocol.js";
 import {
   hasCodexRateLimitSnapshots,
   summarizeCodexAccountRateLimits,
@@ -15,31 +20,28 @@ import { isLikelyEmailAddress } from "./command-account-email.js";
 import type { CodexAccountAuthOverview } from "./command-account.js";
 import type { readCodexStatusProbes, SafeValue } from "./command-rpc.js";
 
+export { escapeCodexChatText };
+
 type CodexStatusProbes = Awaited<ReturnType<typeof readCodexStatusProbes>>;
 
 export function formatCodexStatus(probes: CodexStatusProbes): string {
   const connected =
     probes.models.ok || probes.account.ok || probes.limits.ok || probes.mcps.ok || probes.skills.ok;
-  const lines = [`Codex app-server: ${connected ? "connected" : "unavailable"}`];
-  if (probes.models.ok) {
-    lines.push(
-      `Models: ${
-        probes.models.value.models
+  return [
+    `Codex app-server: ${connected ? "connected" : "unavailable"}`,
+    `Models: ${formatProbe(
+      probes.models,
+      ({ models }) =>
+        models
           .map((model) => formatCodexDisplayText(model.id))
           .slice(0, 8)
-          .join(", ") || "none"
-      }`,
-    );
-  } else {
-    lines.push(`Models: ${formatCodexDisplayText(probes.models.error)}`);
-  }
-  lines.push(
+          .join(", ") || "none",
+    )}`,
     `Account: ${formatProbe(probes.account, formatCodexAccountSummary)}`,
     `Rate limits: ${formatProbe(probes.limits, formatCodexRateLimitSummary)}`,
     `MCP servers: ${formatProbe(probes.mcps, summarizeArrayLike)}`,
     `Skills: ${formatProbe(probes.skills, summarizeCodexSkills)}`,
-  );
-  return lines.join("\n");
+  ].join("\n");
 }
 
 function formatProbe<T>(probe: SafeValue<T>, format: (value: T) => string): string {
@@ -50,19 +52,16 @@ export function formatModels(result: CodexAppServerModelListResult): string {
   if (result.models.length === 0) {
     return "No Codex app-server models returned.";
   }
-  const lines = [
+  return [
     "Codex models:",
     ...result.models.map(
       (model) => `- ${formatCodexDisplayText(model.id)}${model.isDefault ? " (default)" : ""}`,
     ),
-  ];
-  if (result.truncated) {
-    lines.push("- More models available; output truncated.");
-  }
-  return lines.join("\n");
+    ...(result.truncated ? ["- More models available; output truncated."] : []),
+  ].join("\n");
 }
 
-export function formatThreads(response: JsonValue | undefined): string {
+export function formatThreads(response: CodexThreadListResponse | JsonValue | undefined): string {
   const threads = extractArray(response);
   if (threads.length === 0) {
     return "No Codex threads returned.";
@@ -127,7 +126,7 @@ function formatAccountAuthOverview(overview: CodexAccountAuthOverview): string {
     lines.push("");
   }
   if (overview.rows.length > 0) {
-    lines.push(overview.orderTitle);
+    lines.push("Auth order");
     for (const [index, row] of overview.rows.entries()) {
       lines.push(
         `  ${index + 1}. ${row.label}   ${row.kind}   — ${row.billingNote ? `${row.status} · ${row.billingNote}` : row.status}`,
@@ -144,11 +143,11 @@ export function formatComputerUseStatus(status: CodexComputerUseStatus): string 
   const lines = [
     `Computer Use: ${status.ready ? "ready" : status.enabled ? "not ready" : "disabled"}`,
     `Plugin: ${formatCodexDisplayText(status.pluginName)} (${computerUsePluginState(status)})`,
-    `Installation: ${formatCodexDisplayText(status.installation.status)} (${status.installation.ok ? "ok" : "not ok"})`,
+    `Installation: ${formatCodexDisplayText(status.installation)} (${status.installation === "installed" ? "ok" : "not ok"})`,
     `MCP server: ${formatCodexDisplayText(status.mcpServerName)}${
       status.mcpServerAvailable ? ` (${status.tools.length} tools)` : " (unavailable)"
     }`,
-    `Exposure: ${formatCodexDisplayText(status.exposure.status)} (${status.exposure.ok ? "ok" : "not ok"})`,
+    `Exposure: ${formatCodexDisplayText(status.exposure)} (${status.exposure === "available" ? "ok" : "not ok"})`,
     `Live test: ${formatCodexDisplayText(status.liveTest.status)} (${status.liveTest.attempted ? `${status.liveTest.attempts} attempt${status.liveTest.attempts === 1 ? "" : "s"}, ${status.liveTest.timeoutMs}ms` : "not run"})`,
   ];
   if (status.liveTest.retried || status.liveTest.repaired) {
@@ -239,32 +238,6 @@ export function formatCodexTextForDisplay(value: string): string {
   return safe || "<unknown>";
 }
 
-function sanitizeCodexTextForDisplay(value: string): string {
-  return value.replace(
-    /[\p{Cc}\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu,
-    "?",
-  );
-}
-
-export function escapeCodexChatText(value: string): string {
-  // Command output is public chat text. Escape markdown/control triggers and
-  // mention characters so Codex data cannot ping users or inject formatting.
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll("@", "\uff20")
-    .replaceAll("`", "\uff40")
-    .replaceAll("[", "\uff3b")
-    .replaceAll("]", "\uff3d")
-    .replaceAll("(", "\uff08")
-    .replaceAll(")", "\uff09")
-    .replaceAll("*", "\u2217")
-    .replaceAll("_", "\uff3f")
-    .replaceAll("~", "\uff5e")
-    .replaceAll("|", "\uff5c");
-}
-
 function escapeCodexChatTextPreservingAt(value: string): string {
   return escapeCodexChatText(value).replaceAll("\uff20", "@");
 }
@@ -277,17 +250,12 @@ export function formatCodexAccountLine(value: string): string {
   if (!safe.trim()) {
     return "";
   }
-  const emailPattern = /[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+/gu;
-  let formatted = "";
-  let lastIndex = 0;
-  for (const match of safe.matchAll(emailPattern)) {
-    const index = match.index ?? 0;
-    formatted += escapeCodexChatText(safe.slice(lastIndex, index));
-    formatted += escapeCodexChatTextPreservingAt(match[0]);
-    lastIndex = index + match[0].length;
-  }
-  formatted += escapeCodexChatText(safe.slice(lastIndex));
-  return formatted;
+  return safe
+    .split(/([^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+)/gu)
+    .map((part, index) =>
+      index % 2 === 1 ? escapeCodexChatTextPreservingAt(part) : escapeCodexChatText(part),
+    )
+    .join("");
 }
 
 export function buildHelp(): string {
@@ -340,10 +308,7 @@ function summarizeAccount(value: JsonValue | undefined): string {
 
 function summarizeArrayLike(value: JsonValue | undefined): string {
   const entries = extractArray(value);
-  if (entries.length === 0) {
-    return "none returned";
-  }
-  return `${entries.length}`;
+  return entries.length === 0 ? "none returned" : `${entries.length}`;
 }
 
 function readEnabledCodexSkills(value: JsonValue | undefined): {
@@ -435,7 +400,13 @@ function isMeaningfulRateLimitSnapshot(value: JsonValue | undefined): boolean {
   });
 }
 
-function extractArray(value: JsonValue | undefined): JsonValue[] {
+function extractArray(value: JsonValue | undefined): JsonValue[];
+function extractArray(
+  value: CodexThreadListResponse | JsonValue | undefined,
+): (CodexThread | JsonValue)[];
+function extractArray(
+  value: CodexThreadListResponse | JsonValue | undefined,
+): (CodexThread | JsonValue)[] {
   if (Array.isArray(value)) {
     return value;
   }

@@ -14,37 +14,26 @@ export async function resolveSessionDiffBase(params: {
   gitOut: GitOutput;
   root: string;
 }): Promise<{ base: string; baseRef: string }> {
-  const defaultRef = await params.gitOut(params.root, [
-    "symbolic-ref",
-    "--short",
-    "refs/remotes/origin/HEAD",
-  ]);
+  if (!params.branch) {
+    return { base: params.head, baseRef: "HEAD" };
+  }
+  const defaultRef = await params.gitOut(params.root, ["symbolic-ref", "refs/remotes/origin/HEAD"]);
   const remoteDefault = defaultRef?.trim() || null;
-  const defaultShort = remoteDefault?.replace(/^origin\//, "");
-  if (remoteDefault && defaultShort && params.branch && params.branch !== defaultShort) {
+  const defaultShort = remoteDefault?.replace(/^refs\/remotes\//, "").replace(/^origin\//, "");
+  if (remoteDefault && defaultShort && params.branch !== defaultShort) {
     const mergeBase = await params.gitOut(params.root, ["merge-base", remoteDefault, params.head]);
     if (mergeBase?.trim()) {
       return { base: mergeBase.trim(), baseRef: defaultShort };
     }
   }
   // Plain clones without origin/HEAD still get a branch-relative diff.
-  if (params.branch && params.branch !== "main" && params.branch !== "master") {
+  if (params.branch !== "main" && params.branch !== "master") {
     for (const candidate of ["main", "master", "origin/main", "origin/master"]) {
-      const verified = await params.gitOut(params.root, [
-        "rev-parse",
-        "--verify",
-        "--quiet",
-        candidate,
-      ]);
-      if (verified?.trim()) {
-        const mergeBase = await params.gitOut(params.root, [
-          "merge-base",
-          verified.trim(),
-          params.head,
-        ]);
-        if (mergeBase?.trim()) {
-          return { base: mergeBase.trim(), baseRef: candidate };
-        }
+      // These are branch defaults; a same-name tag must not become the base.
+      const ref = `${candidate.startsWith("origin/") ? "refs/remotes/" : "refs/heads/"}${candidate}`;
+      const mergeBase = await params.gitOut(params.root, ["merge-base", ref, params.head]);
+      if (mergeBase?.trim()) {
+        return { base: mergeBase.trim(), baseRef: candidate };
       }
     }
   }
@@ -74,18 +63,16 @@ export async function resolveSessionDiffEmptyTree(
 
 type BranchDiffMetadata = Pick<SessionsDiffResult, "aheadCount" | "commits" | "mergeBase">;
 
-function parseCommitRecord(line: string): NonNullable<SessionsDiffResult["mergeBase"]> | undefined {
-  const separator = line.indexOf("\0");
-  if (separator <= 0) {
-    return undefined;
-  }
-  return { sha: line.slice(0, separator), subject: line.slice(separator + 1) };
-}
-
 function parseCommitRecords(text: string): NonNullable<SessionsDiffResult["commits"]> {
   return text
     .split("\n")
-    .map(parseCommitRecord)
+    .map((line) => {
+      const separator = line.indexOf("\0");
+      if (separator <= 0) {
+        return undefined;
+      }
+      return { sha: line.slice(0, separator), subject: line.slice(separator + 1) };
+    })
     .filter(
       (record): record is NonNullable<SessionsDiffResult["mergeBase"]> => record !== undefined,
     );

@@ -1,7 +1,4 @@
-import {
-  normalizeTrimmedStringList,
-  uniqueStrings,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   QA_BASE_RUNTIME_PLUGIN_IDS,
   QA_CODEX_OPENAI_CATALOG_BASE_URL,
@@ -10,15 +7,13 @@ import type { RuntimeId } from "../runtime-id.js";
 import type { QaProviderMode } from "./index.js";
 import { getQaProvider, QA_DEFAULT_IMAGE_MODEL } from "./index.js";
 
-type QaImageGenerationPatchInput = {
+export function buildQaImageGenerationConfigPatch(input: {
   providerMode: QaProviderMode;
   providerBaseUrl?: string;
   requiredPluginIds: readonly string[];
   existingPluginIds?: readonly string[];
   forcedRuntime?: RuntimeId;
-};
-
-export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchInput) {
+}) {
   const provider = getQaProvider(input.providerMode);
   const modelPatch = (() => {
     if (provider.kind !== "mock") {
@@ -55,14 +50,12 @@ export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchI
   })();
   return {
     plugins: {
-      allow: uniqueStrings(
-        normalizeTrimmedStringList([
-          ...QA_BASE_RUNTIME_PLUGIN_IDS,
-          ...(input.existingPluginIds ?? []),
-          "openai",
-          ...input.requiredPluginIds,
-        ]),
-      ),
+      allow: normalizeUniqueTrimmedStringList([
+        ...QA_BASE_RUNTIME_PLUGIN_IDS,
+        ...(input.existingPluginIds ?? []),
+        "openai",
+        ...input.requiredPluginIds,
+      ]),
       entries: { openai: { enabled: true } },
     },
     ...(modelPatch ? { models: modelPatch } : {}),

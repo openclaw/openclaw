@@ -5,7 +5,6 @@ import {
   validateSecretsStoreListResult,
   type QuestionRequestQuestion,
   type QuestionWaitAnswerResult,
-  type SecretsStoreListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ENV_SECRET_REF_ID_RE, type SecretRef } from "../../config/types.secrets.js";
@@ -26,7 +25,11 @@ import {
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { callGatewayTool } from "./gateway.js";
-import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
+import {
+  type QuestionPromptDelivery,
+  QuestionPromptUnavailableError,
+  sendQuestionToolPrompt,
+} from "./question-prompt-send.js";
 import { jsonResult, textResult } from "./tool-results.js";
 
 const SecretsToolSchema = Type.Object(
@@ -141,85 +144,12 @@ export function normalizeSecretsRequestParams(params: unknown): NormalizedSecret
   };
 }
 
-function noSecretAnswerResult(status: "pending" | "expired" | "cancelled") {
-  const details = { status: "no_answer" as const };
-  const note =
-    status === "cancelled"
-      ? "The credential request was cancelled; proceed with best judgment."
-      : "No credential arrived; proceed with best judgment.";
-  return textResult(`${note}\n\n${JSON.stringify(details, null, 2)}`, details);
-}
-
 async function fetchSecretStore(gatewayCall: GatewayQuestionCall, signal?: AbortSignal) {
   const result = await gatewayCall("secrets.store.list", {}, {}, signal ? { signal } : undefined);
   if (!validateSecretsStoreListResult(result)) {
     throw new Error("secrets.store.list returned invalid metadata");
   }
   return result;
-}
-
-async function storedSecretResult(
-  name: string,
-  provider: string,
-  gatewayCall: GatewayQuestionCall,
-  signal?: AbortSignal,
-) {
-  // This read observes current policy, not the earlier approval. Its failure
-  // cannot undo a committed save; never expose the inventory or read error.
-  const currentPolicy = await fetchSecretStore(gatewayCall, signal)
-    .then(({ entries }) => {
-      const entry = entries.find((candidate) => candidate.name === name);
-      if (!entry) {
-        return { status: "missing" as const };
-      }
-      if (entry.kind !== "secret") {
-        return { status: "kind_changed" as const };
-      }
-      const allowedHosts = entry.allowedHosts;
-      if (allowedHosts === undefined) {
-        return { status: "unavailable" as const };
-      }
-      // Return the complete policy or only its count, never a misleading prefix.
-      return JSON.stringify(allowedHosts).length > 512
-        ? { status: "omitted" as const, allowedHostCount: allowedHosts.length }
-        : { status: "available" as const, allowedHosts };
-    })
-    .catch(() => ({ status: "unavailable" as const }));
-  signal?.throwIfAborted();
-
-  const details = {
-    status: "stored" as const,
-    name,
-    kind: "secret",
-    ref: { source: "store", provider, id: name } satisfies SecretRef,
-    currentPolicy,
-  };
-  const guidance = [
-    "Stored; value hidden. Use the returned ref for config SecretRefs.",
-    "currentPolicy is this entry's current host list; the human may edit it. Not Gateway config or an approval receipt; may change later.",
-    "Report current hosts, not proposed hosts. Do not infer why they differ or prescribe Gateway config changes from the difference.",
-    "Only available hosts are complete; [] means no egress. Otherwise make no host claims.",
-    "Stored does not prove proxy enabled or current exec snapshot; config refs are independent.",
-  ];
-  return textResult(`${guidance.join(" ")}\n\n${JSON.stringify(details)}`, details);
-}
-
-function listSecretStoreResult(result: SecretsStoreListResult) {
-  const lines = result.entries.map((entry) => {
-    const fields = [entry.name, entry.kind];
-    if (entry.kind === "secret" && entry.allowedHosts?.length) {
-      fields.push(`hosts: ${entry.allowedHosts.join(", ")}`);
-    }
-    if (entry.kind === "env") {
-      fields.push(`value: ${entry.value}`);
-    }
-    fields.push(`updated: ${new Date(entry.updatedAtMs).toISOString()}`);
-    if (entry.updatedBy) {
-      fields.push(`by: ${entry.updatedBy}`);
-    }
-    return fields.join(" | ");
-  });
-  return textResult(lines.length ? lines.join("\n") : "The secret store is empty.", result);
 }
 
 /** Creates the metadata-only secret-store tool and its human-entered write flow. */
@@ -252,7 +182,22 @@ export function createSecretsTool(params: {
       }
       const action = readToolStringParam(input, "action", { required: true });
       if (action === "list") {
-        return listSecretStoreResult(await fetchSecretStore(gatewayCall, signal));
+        const result = await fetchSecretStore(gatewayCall, signal);
+        const lines = result.entries.map((entry) => {
+          const fields = [entry.name, entry.kind];
+          if (entry.kind === "secret" && entry.allowedHosts?.length) {
+            fields.push(`hosts: ${entry.allowedHosts.join(", ")}`);
+          }
+          if (entry.kind === "env") {
+            fields.push(`value: ${entry.value}`);
+          }
+          fields.push(`updated: ${new Date(entry.updatedAtMs).toISOString()}`);
+          if (entry.updatedBy) {
+            fields.push(`by: ${entry.updatedBy}`);
+          }
+          return fields.join(" | ");
+        });
+        return textResult(lines.length ? lines.join("\n") : "The secret store is empty.", result);
       }
       if (action === "delete") {
         const name = readSecretStoreName(input);
@@ -354,6 +299,10 @@ export function createSecretsTool(params: {
             questionResult = await cancelPendingQuestion("prompt-delivery-failed");
             signal?.throwIfAborted();
             if (!questionResult) {
+              // Preserve trusted retry guidance without exposing transport diagnostics.
+              if (first.result.error instanceof QuestionPromptUnavailableError) {
+                throw first.result.error;
+              }
               throw new Error("credential-request prompt delivery failed", {
                 cause: first.result.error,
               });
@@ -370,14 +319,59 @@ export function createSecretsTool(params: {
           if (questionResult.answers.answers.secret_value?.[0] !== "stored") {
             throw new Error("credential request returned an unexpected answer marker");
           }
-          return await storedSecretResult(request.name, storeProvider, gatewayCall, signal);
+          const name = request.name;
+          // This read observes current policy, not the earlier approval. Its failure
+          // cannot undo a committed save; never expose the inventory or read error.
+          const currentPolicy = await fetchSecretStore(gatewayCall, signal)
+            .then(({ entries }) => {
+              const entry = entries.find((candidate) => candidate.name === name);
+              if (!entry) {
+                return { status: "missing" as const };
+              }
+              if (entry.kind !== "secret") {
+                return { status: "kind_changed" as const };
+              }
+              const allowedHosts = entry.allowedHosts;
+              if (allowedHosts === undefined) {
+                return { status: "unavailable" as const };
+              }
+              // Return the complete policy or only its count, never a misleading prefix.
+              return JSON.stringify(allowedHosts).length > 512
+                ? { status: "omitted" as const, allowedHostCount: allowedHosts.length }
+                : { status: "available" as const, allowedHosts };
+            })
+            .catch(() => ({ status: "unavailable" as const }));
+          signal?.throwIfAborted();
+
+          const details = {
+            status: "stored" as const,
+            name,
+            kind: "secret",
+            ref: { source: "store", provider: storeProvider, id: name } satisfies SecretRef,
+            currentPolicy,
+          };
+          const guidance = [
+            "Stored; value hidden. Use the returned ref for config SecretRefs.",
+            "currentPolicy is this entry's current host list; the human may edit it. Not Gateway config or an approval receipt; may change later.",
+            "Report current hosts, not proposed hosts. Do not infer why they differ or prescribe Gateway config changes from the difference.",
+            "Only available hosts are complete; [] means no egress. Otherwise make no host claims.",
+            "Stored does not prove proxy enabled or current exec snapshot; config refs are independent.",
+            "Protected exec use is HTTPS proxy substitution only, not SSH/sudo passwords or stdin. `${secret:NAME}` is not shell substitution.",
+          ];
+          return textResult(`${guidance.join(" ")}\n\n${JSON.stringify(details)}`, details);
         }
         if (
           questionResult.status === "pending" ||
           questionResult.status === "expired" ||
           questionResult.status === "cancelled"
         ) {
-          return noSecretAnswerResult(questionResult.status);
+          const status = questionResult.status;
+          const details = { status: "no_answer" as const };
+          const note =
+            status === "cancelled"
+              ? "The credential request was cancelled; proceed with best judgment."
+              : "No credential arrived; proceed with best judgment.";
+          return textResult(`${note}\n\n${JSON.stringify(details, null, 2)}`, details);
         }
         throw new Error("question.waitAnswer returned an invalid status");
       } catch (error) {

@@ -30,7 +30,13 @@ export type ConfiguredBindingRecordResolution = {
 };
 
 export type StatefulBindingTargetResetResult =
-  | { ok: true; sessionKey?: string; sessionId?: string; storePath?: string }
+  | {
+      ok: true;
+      sessionKey?: string;
+      sessionId?: string;
+      lifecycleRevision?: string;
+      storePath?: string;
+    }
   | { ok: false; skipped?: boolean; error?: string };
 
 /**

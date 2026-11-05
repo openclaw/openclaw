@@ -47,6 +47,7 @@ export class RealtimeAudioPacer {
   private streamClockMs: number | null = null;
   private playbackSegments: RealtimePlaybackSegment[] = [];
   private sentAudioMs = 0;
+  private carrierAudioEndsAt = 0;
   private retiredAudioMs = 0;
   private confirmedPlayedMs = 0;
   private readonly playbackMarkPrefix = `openclaw-playout-${randomUUID()}`;
@@ -57,10 +58,11 @@ export class RealtimeAudioPacer {
 
   constructor(
     private readonly params: {
-      maxQueuedAudioBytes?: number;
       onBackpressure?: () => void;
       /** Fires whenever queued audio and playback state are discarded. */
       onPlaybackReset?: () => void;
+      /** Fires for each audio chunk actually written to the carrier stream. */
+      onAudioSent?: (audio: Buffer) => void;
       send: (message: string) => boolean;
       serializer: Pick<StreamFrameAdapter, "serializeMedia" | "serializeClear" | "serializeMark">;
     },
@@ -71,10 +73,9 @@ export class RealtimeAudioPacer {
     if (this.closed || muLaw.length === 0) {
       return;
     }
-    const maxQueuedAudioBytes = this.params.maxQueuedAudioBytes ?? DEFAULT_MAX_QUEUED_AUDIO_BYTES;
     for (let offset = 0; offset < muLaw.length; offset += TELEPHONY_CHUNK_BYTES) {
       const chunk = Buffer.from(muLaw.subarray(offset, offset + TELEPHONY_CHUNK_BYTES));
-      if (this.queuedAudioBytes + chunk.length > maxQueuedAudioBytes) {
+      if (this.queuedAudioBytes + chunk.length > DEFAULT_MAX_QUEUED_AUDIO_BYTES) {
         this.failBackpressure();
         return;
       }
@@ -187,6 +188,10 @@ export class RealtimeAudioPacer {
     return !this.closed && (this.queuedAudioBytes > 0 || this.timer !== null);
   }
 
+  hasPlaybackAudio(tailMs: number): boolean {
+    return this.hasPendingAudio() || Date.now() < this.carrierAudioEndsAt + tailMs;
+  }
+
   close(): void {
     this.closed = true;
     this.resetPlaybackState();
@@ -209,6 +214,7 @@ export class RealtimeAudioPacer {
   }
 
   private resetPlaybackState(): void {
+    this.carrierAudioEndsAt = Math.min(this.carrierAudioEndsAt, Date.now());
     this.clearTimer();
     this.resetQueue();
     this.playbackSegments = [];
@@ -301,6 +307,9 @@ export class RealtimeAudioPacer {
       this.params.serializer.serializeMedia(item.chunk.toString("base64")),
     );
     if (sent) {
+      // A drained local queue can still leave audio buffered at the carrier.
+      this.carrierAudioEndsAt = Math.max(Date.now(), this.carrierAudioEndsAt) + item.durationMs;
+      this.params.onAudioSent?.(item.chunk);
       item.segment.sentMs += item.durationMs;
       this.sentAudioMs += item.durationMs;
       item.segment.lastSentEndMs = this.sentAudioMs;

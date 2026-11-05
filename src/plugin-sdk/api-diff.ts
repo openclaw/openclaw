@@ -218,8 +218,8 @@ function collectDeclarationChanges(
   before: readonly PluginSdkApiDeclarationSection[],
   after: readonly PluginSdkApiDeclarationSection[],
 ): PluginSdkApiDeclarationChange[] {
-  const beforeByKey = new Map((before ?? []).map((section) => [sectionKey(section), section]));
-  const afterByKey = new Map((after ?? []).map((section) => [sectionKey(section), section]));
+  const beforeByKey = new Map(before.map((section) => [sectionKey(section), section]));
+  const afterByKey = new Map(after.map((section) => [sectionKey(section), section]));
   const removedByName = new Map<string, string[]>();
   const addedByName = new Map<string, string[]>();
   for (const [key, section] of beforeByKey) {
@@ -275,14 +275,16 @@ export function diffPluginSdkApi(
   const afterModules = new Map(
     after.modules.map((moduleSurface) => [moduleSurface.entrypoint, moduleSurface]),
   );
-  const entrypoints = new Set([...beforeModules.keys(), ...afterModules.keys()]);
+  const modules = new Map([...beforeModules, ...afterModules]);
   const payload: PluginSdkApiDiffPayload = {
     entrypointsAdded: [],
     entrypointsRemoved: [],
     exports: [],
   };
 
-  for (const entrypoint of [...entrypoints].toSorted(compareText)) {
+  for (const [entrypoint, moduleSurface] of [...modules].toSorted(([left], [right]) =>
+    compareText(left, right),
+  )) {
     const beforeModule = beforeModules.get(entrypoint);
     const afterModule = afterModules.get(entrypoint);
     if (!beforeModule && afterModule) {
@@ -290,10 +292,6 @@ export function diffPluginSdkApi(
     }
     if (beforeModule && !afterModule) {
       payload.entrypointsRemoved.push(moduleChange(beforeModule));
-    }
-    const moduleSurface = afterModule ?? beforeModule;
-    if (!moduleSurface) {
-      throw new Error(`Plugin SDK API diff lost entrypoint ${entrypoint}`);
     }
 
     const beforeExports = beforeModule ? exportMap(beforeModule) : new Map();

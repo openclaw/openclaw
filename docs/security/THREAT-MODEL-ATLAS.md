@@ -278,7 +278,7 @@ Every heading from the previous single-page version keeps its anchor here, so an
 
 - <a id="3.1-reconnaissance-(aml.ta0002)" /><a id="3-1-reconnaissance-aml-ta0002" />[3.1 Reconnaissance (AML.TA0002)](/security/THREAT-MODEL-ATLAS/reconnaissance)
 - <a id="t-recon-001%3A-agent-endpoint-discovery" /><a id="t-recon-001-agent-endpoint-discovery" />[T-RECON-001: Agent endpoint discovery](/security/THREAT-MODEL-ATLAS/reconnaissance#t-recon-001-agent-endpoint-discovery)
-- <a id="t-recon-002%3A-channel-integration-probing" /><a id="t-recon-002-channel-integration-probing" />[T-RECON-002: Channel integration probing](/security/THREAT-MODEL-ATLAS/reconnaissance#t-recon-002-channel-integration-probing)
+- <a id="t-recon-002%3A-channel-integration-probing" /><a id="t-recon-002-channel-integration-probing" />[T-RECON-002: Channel integration discovery](/security/THREAT-MODEL-ATLAS/reconnaissance#t-recon-002-channel-integration-probing)
 - <a id="3.2-initial-access-(aml.ta0004)" /><a id="3-2-initial-access-aml-ta0004" />[3.2 Initial access (AML.TA0004)](/security/THREAT-MODEL-ATLAS/initial-access)
 - <a id="t-access-001%3A-pairing-code-interception" /><a id="t-access-001-pairing-code-interception" />[T-ACCESS-001: Pairing code interception](/security/THREAT-MODEL-ATLAS/initial-access#t-access-001-pairing-code-interception)
 - <a id="t-access-002%3A-allowfrom-spoofing" /><a id="t-access-002-allowfrom-spoofing" />[T-ACCESS-002: AllowFrom spoofing](/security/THREAT-MODEL-ATLAS/initial-access#t-access-002-allowfrom-spoofing)

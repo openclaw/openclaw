@@ -1,19 +1,19 @@
 import { ok } from "@openclaw/normalization-core/result";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import {
   runtimeMediaModelSecretOwnerId,
   runtimeMediaRequestSecretOwnerId,
 } from "../secrets/runtime-media-secret-owner.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
-import { formatDecisionSummary, runProviderEntry } from "./runner.entries.js";
+import { runProviderEntry } from "./runner.entries.js";
 import { withAudioFixture } from "./runner.test-utils.js";
-import type { MediaUnderstandingDecision, MediaUnderstandingProvider } from "./types.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
-afterEach(() => {
-  setActiveDegradedSecretOwners([]);
-});
+afterEach(() => setActiveDegradedSecretOwners([]));
 
 function markUnavailable(ownerId: string, configPath: string) {
   setActiveDegradedSecretOwners([
@@ -28,170 +28,176 @@ function markUnavailable(ownerId: string, configPath: string) {
   ]);
 }
 
-describe("media-understanding formatDecisionSummary guards", () => {
-  it("formats skipped summary when decision.attachments is undefined", () => {
-    expect(
-      formatDecisionSummary({
-        capability: "image",
-        outcome: "skipped",
-        attachments: undefined as unknown as MediaUnderstandingDecision["attachments"],
-        attachmentDispositions: {},
-        nativeVisionActive: false,
-      }),
-    ).toBe("image: skipped");
-  });
-
-  it("counts malformed attachment attempts as unchosen", () => {
-    expect(
-      formatDecisionSummary({
-        capability: "video",
-        outcome: "skipped",
-        attachments: [
-          {
-            attachmentIndex: 0,
-            attempts: { bad: true },
-            chosen: { outcome: "failed", provider: { bad: true }, model: 42 },
-          },
-        ],
-      } as unknown as MediaUnderstandingDecision),
-    ).toBe("video: skipped (0/1)");
-  });
-});
-
-function missingProvider(provider: string) {
-  type RunProviderEntryParams = Parameters<typeof runProviderEntry>[0];
+type RunProviderEntryParams = Parameters<typeof runProviderEntry>[0];
+function runAudio(overrides: Partial<RunProviderEntryParams>) {
   return runProviderEntry({
     capability: "audio",
-    entry: { provider },
+    entry: { provider: "fixture", model: "fixture-audio" },
     cfg: {},
     attachmentIndex: 0,
     cache: {} as RunProviderEntryParams["cache"],
     providerRegistry: new Map(),
+    ...overrides,
   });
 }
 
-describe("media-understanding missing provider errors", () => {
-  it("includes the catalog repair hint for a media provider contract", async () => {
-    await expect(missingProvider("groq")).rejects.toThrow(
-      /Media provider not available: groq .*openclaw plugins install .*@openclaw\/groq-provider.*openclaw plugins registry --refresh.*stop and start the gateway service.*openclaw doctor --fix/,
-    );
-  });
+const providerConfig = { apiKey: "fixture-key", baseUrl: "https://fixture.example/v1", models: [] };
+const fixtureConfig = { models: { providers: { fixture: providerConfig } } };
+function audioProvider(
+  callbacks: Pick<MediaUnderstandingProvider, "transcribeAudio" | "transcribeAudioWithContext">,
+) {
+  return new Map<string, MediaUnderstandingProvider>([
+    ["fixture", { id: "fixture", capabilities: ["audio"], ...callbacks }],
+  ]);
+}
 
-  it("keeps the legacy error for providers without a media contract", async () => {
-    await expect(missingProvider("mystery-provider")).rejects.toThrow(
-      "Media provider not available: mystery-provider",
-    );
+it.each(["provider capture prep", "DNS resolution"] as const)(
+  "rechecks request authority after %s before upload",
+  async (revokeAt) => {
+    await withAudioFixture("openclaw-audio-authority", async ({ cache }) => {
+      const paused = createDeferred();
+      const resume = createDeferred();
+      const pauseAt = async (stage: typeof revokeAt) => {
+        if (revokeAt === stage) {
+          paused.resolve();
+          await resume.promise;
+        }
+      };
+      let admitted = true;
+      const assertCurrent = () => {
+        if (!admitted) {
+          throw new Error("admission expired");
+        }
+      };
+      const fetchImpl = vi.fn(async () => new Response("uploaded"));
+      const transcribeAudioWithContext = vi.fn(async () => {
+        await pauseAt("provider capture prep");
+        await fetchWithSsrFGuard({
+          url: "https://public.example/audio",
+          fetchImpl,
+          lookupFn: async () => {
+            await pauseAt("DNS resolution");
+            return [{ address: "93.184.216.34", family: 4 }];
+          },
+        });
+        return ok({ text: "must not upload" });
+      });
+      const run = runAudio({
+        cfg: fixtureConfig,
+        cache,
+        providerRegistry: audioProvider({ transcribeAudioWithContext }),
+        assertCurrent,
+      });
+
+      await paused.promise;
+      admitted = false;
+      resume.resolve();
+      await expect(run).rejects.toThrow("admission expired");
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+  },
+);
+
+it("rechecks admission after attachment/auth preparation", async () => {
+  await withAudioFixture("openclaw-admission-provider", async ({ cache }) => {
+    const transcribeAudio = vi.fn(async () => ({ text: "must not upload" }));
+    const assertCurrent = vi.fn(() => {
+      throw new Error("admission expired");
+    });
+    const result = runAudio({
+      cfg: fixtureConfig,
+      cache,
+      providerRegistry: audioProvider({ transcribeAudio }),
+      assertCurrent,
+    });
+
+    await expect(result).rejects.toThrow("admission expired");
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(transcribeAudio).not.toHaveBeenCalled();
   });
 });
 
-describe("media-understanding SecretRef owner isolation", () => {
-  it.each([
-    { sharedHeader: "X.Trace", headerName: undefined },
-    { sharedHeader: "X.Trace", headerName: "x.trace" },
-    { sharedHeader: "constructor", headerName: "constructor" },
-  ])(
-    "isolates the unavailable shared $sharedHeader header with model override $headerName",
-    async ({ sharedHeader, headerName }) => {
-      const ownerId = runtimeMediaRequestSecretOwnerId("audio");
-      markUnavailable(
-        ownerId,
-        appendConfigPathSegment("tools.media.audio.request.headers", sharedHeader),
-      );
-      await withAudioFixture("openclaw-media-header-owner", async ({ cache }) => {
-        const transcribeAudioWithContext = vi.fn<
-          NonNullable<MediaUnderstandingProvider["transcribeAudioWithContext"]>
-        >(async (request) => {
-          const headers = resolveProviderRequestHeaders({
-            provider: "fixture",
-            request: request.request,
-          });
-          expect(headers).toEqual(
-            headerName && sharedHeader !== "constructor"
-              ? { [headerName]: "healthy-header" }
-              : undefined,
-          );
-          return ok({ text: "transcribed" });
-        });
-        const result = runProviderEntry({
-          capability: "audio",
-          entry: {
-            provider: "fixture",
-            model: "audio-fixture",
-            request: headerName ? { headers: { [headerName]: "healthy-header" } } : undefined,
-          },
-          cfg: {},
-          config: { request: { headers: {} } },
-          attachmentIndex: 0,
-          cache,
-          providerRegistry: new Map([
-            ["fixture", { id: "fixture", capabilities: ["audio"], transcribeAudioWithContext }],
-          ]),
-        });
-        if (headerName) {
-          await expect(result).resolves.toMatchObject({ ok: true, value: { text: "transcribed" } });
-          expect(transcribeAudioWithContext).toHaveBeenCalledOnce();
-          expect(transcribeAudioWithContext.mock.calls[0]?.[0].request?.headers).toEqual({
-            [headerName]: "healthy-header",
-          });
-        } else {
-          await expect(result).rejects.toMatchObject({
-            code: "SECRET_SURFACE_UNAVAILABLE",
-            ownerId,
-          });
-          expect(transcribeAudioWithContext).not.toHaveBeenCalled();
-        }
-      });
-    },
+it("includes the catalog repair hint for a media provider contract", async () => {
+  await expect(runAudio({ entry: { provider: "groq" } })).rejects.toThrow(
+    /Media provider not available: groq .*openclaw plugins install .*@openclaw\/groq-provider.*openclaw plugins registry --refresh.*stop and start the gateway service.*openclaw doctor --fix/,
   );
+});
 
-  it("rejects only the configured media model whose owner is unavailable", async () => {
-    const entry = { provider: "openai", capabilities: ["audio" as const] };
-    const cfg = { tools: { media: { models: [entry], audio: {} } } };
-    const ownerId = runtimeMediaModelSecretOwnerId(0);
-    markUnavailable(ownerId, "tools.media.models.0.request.auth.token");
-
-    type RunProviderEntryParams = Parameters<typeof runProviderEntry>[0];
-    await expect(
-      runProviderEntry({
-        capability: "audio",
-        entry,
-        cfg,
-        config: cfg.tools.media.audio,
-        secretOwnerId: ownerId,
-        attachmentIndex: 0,
-        cache: {} as RunProviderEntryParams["cache"],
-        providerRegistry: new Map(),
-      }),
-    ).rejects.toMatchObject({
-      code: "SECRET_SURFACE_UNAVAILABLE",
-      ownerKind: "capability",
-      ownerId,
+it.each([
+  ["X.Trace", undefined],
+  ["X.Trace", "x.trace"],
+  ["constructor", "constructor"],
+] as const)("isolates unavailable header %s with override %s", async (sharedHeader, headerName) => {
+  const ownerId = runtimeMediaRequestSecretOwnerId("audio");
+  markUnavailable(
+    ownerId,
+    appendConfigPathSegment("tools.media.audio.request.headers", sharedHeader),
+  );
+  await withAudioFixture("openclaw-media-header-owner", async ({ cache }) => {
+    const transcribeAudioWithContext = vi.fn<
+      NonNullable<MediaUnderstandingProvider["transcribeAudioWithContext"]>
+    >(async () => ok({ text: "transcribed" }));
+    const result = runAudio({
+      entry: {
+        provider: "fixture",
+        model: "audio-fixture",
+        request: headerName ? { headers: { [headerName]: "healthy-header" } } : undefined,
+      },
+      config: { request: { headers: {} } },
+      cache,
+      providerRegistry: audioProvider({ transcribeAudioWithContext }),
     });
+    if (headerName) {
+      await expect(result).resolves.toMatchObject({ ok: true, value: { text: "transcribed" } });
+      expect(transcribeAudioWithContext).toHaveBeenCalledOnce();
+      const request = transcribeAudioWithContext.mock.calls[0]![0].request;
+      const headers = { [headerName]: "healthy-header" };
+      expect(request?.headers).toEqual(headers);
+      expect(resolveProviderRequestHeaders({ provider: "fixture", request })).toEqual(
+        sharedHeader === "constructor" ? undefined : headers,
+      );
+    } else {
+      await expect(result).rejects.toMatchObject({
+        code: "SECRET_SURFACE_UNAVAILABLE",
+        ownerId,
+      });
+      expect(transcribeAudioWithContext).not.toHaveBeenCalled();
+    }
   });
+});
 
-  it("keeps a model active when it overrides the unavailable request field", async () => {
-    const entry = {
-      provider: "unknown-provider",
-      capabilities: ["audio" as const],
-      request: { auth: { mode: "authorization-bearer" as const, token: "test-token" } },
+it.each([false, true])(
+  "requires an override for unavailable model fields: %s",
+  async (override) => {
+    const ownerId = override
+      ? runtimeMediaRequestSecretOwnerId("audio")
+      : runtimeMediaModelSecretOwnerId(0);
+    const entry: RunProviderEntryParams["entry"] = {
+      provider: override ? "unknown-provider" : "openai",
+      capabilities: ["audio"],
+      request: override
+        ? { auth: { mode: "authorization-bearer", token: "test-token" } }
+        : undefined,
     };
     const cfg = { tools: { media: { models: [entry], audio: {} } } };
     markUnavailable(
-      runtimeMediaRequestSecretOwnerId("audio"),
-      "tools.media.audio.request.auth.token",
+      ownerId,
+      `${override ? "tools.media.audio" : "tools.media.models.0"}.request.auth.token`,
     );
-
-    type RunProviderEntryParams = Parameters<typeof runProviderEntry>[0];
-    await expect(
-      runProviderEntry({
-        capability: "audio",
-        entry,
-        cfg,
-        config: cfg.tools.media.audio,
-        attachmentIndex: 0,
-        cache: {} as RunProviderEntryParams["cache"],
-        providerRegistry: new Map(),
-      }),
-    ).rejects.toThrow("Media provider not available: unknown-provider");
-  });
-});
+    const result = runAudio({
+      entry,
+      cfg,
+      config: cfg.tools.media.audio,
+      secretOwnerId: override ? undefined : ownerId,
+    });
+    if (override) {
+      await expect(result).rejects.toThrow("Media provider not available: unknown-provider");
+    } else {
+      await expect(result).rejects.toMatchObject({
+        code: "SECRET_SURFACE_UNAVAILABLE",
+        ownerKind: "capability",
+        ownerId,
+      });
+    }
+  },
+);

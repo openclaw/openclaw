@@ -13,14 +13,10 @@ function resolveLoadedSessionConversationThreadInfo(
   if (!raw) {
     return null;
   }
-  const rawId = raw.rawId.trim();
-  if (!rawId) {
-    return null;
-  }
   const messaging = getLoadedChannelPluginForRead(raw.channel)?.messaging;
   const resolved = messaging?.resolveSessionConversation?.({
     kind: raw.kind,
-    rawId,
+    rawId: raw.rawId,
   });
   if (!resolved?.id?.trim()) {
     return null;

@@ -7,10 +7,8 @@ import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { parseTcpListenerEndpoint } from "./ports-netstat.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
-/** Classifies a listener as OpenClaw Gateway, SSH tunnel, known non-gateway, or unknown. */
 export function classifyPortListener(listener: PortListener): PortListenerKind {
   const command = normalizeLowercaseStringOrEmpty(listener.command ?? "");
-  const commandLine = normalizeLowercaseStringOrEmpty(listener.commandLine ?? "");
   // The inspected command identifies the listener owner. Check it before argv,
   // where a socat forward may name OpenClaw. Observed macOS output also uses `socat1`.
   if (command === "socat" || command === "socat1" || command === "socat.exe") {
@@ -24,12 +22,9 @@ export function classifyPortListener(listener: PortListener): PortListenerKind {
   if (classifyOpenClawArgv(argv, { command: "gateway", pid: listener.pid }).kind === "openclaw") {
     return "gateway";
   }
-  const hasSshCommand = /(?:^|[/\\])ssh(?:\.exe)?$/.test(command);
+  const executable = normalizeLowercaseStringOrEmpty(argv[0] ?? "");
   const hasSshExecutable =
-    hasSshCommand ||
-    /(?:^|[\s"'])(?:(?:"[^"]*[/\\])|(?:'[^']*[/\\])|(?:\S*[/\\]))?ssh(?:\.exe)?(?:[\s"']|$)/.test(
-      commandLine,
-    );
+    /(?:^|[/\\])ssh(?:\.exe)?$/.test(command) || /(?:^|[/\\])ssh(?:\.exe)?$/.test(executable);
   if (hasSshExecutable) {
     // The probe row already proves this process owns the queried port. Exact
     // ssh executables may get their forwards from ssh_config or host aliases.
@@ -38,11 +33,9 @@ export function classifyPortListener(listener: PortListener): PortListenerKind {
   if (
     command === "sshd" ||
     /(?:^|[/\\])sshd(?:\.exe)?$/.test(command) ||
-    /(?:^|[/\\])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?$/.test(command)
+    /(?:^|[/\\])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?$/.test(command) ||
+    /(?:^|[/\\])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?$/.test(executable)
   ) {
-    return "non_gateway";
-  }
-  if (/(?:^|[/\\\s])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?(?:[/\\\s"']|$)/.test(commandLine)) {
     return "non_gateway";
   }
   return "unknown";
@@ -99,7 +92,6 @@ function parseGatewayListeners(
   return parsePortListeners(listeners, port);
 }
 
-/** Returns true for one Gateway process represented by separate IPv4 and IPv6 loopback rows. */
 export function isDualStackLoopbackGatewayListeners(
   listeners: PortListener[],
   port: number,
@@ -127,7 +119,6 @@ function parsedListenersOwnSpecificIpv4WithLoopback(parsed: ParsedGatewayListene
   );
 }
 
-/** Checks one PID owns an expected IPv4 interface and canonical loopback. */
 export function isSameProcessSpecificIpv4WithLoopbackListeners(
   listeners: PortListener[],
   port: number,
@@ -144,7 +135,6 @@ export function isSameProcessSpecificIpv4WithLoopbackListeners(
   );
 }
 
-/** Returns true when listener rows describe a benign Gateway bind pattern. */
 export function isExpectedGatewayListeners(listeners: PortListener[], port: number): boolean {
   const parsed = parseGatewayListeners(listeners, port);
   if (!parsed) {
@@ -159,7 +149,6 @@ export function isExpectedGatewayListeners(listeners: PortListener[], port: numb
   );
 }
 
-/** Builds user-facing remediation hints for processes occupying a port. */
 export function buildPortHints(listeners: PortListener[], port: number): string[] {
   if (listeners.length === 0) {
     return [];

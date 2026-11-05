@@ -3,8 +3,9 @@ import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { runCommandWithTimeout, runExec } from "../exec.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
-describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+describe.skipIf(!supportsSpawnBrokerCommandTransport())(
   "independent broker execution deadline",
   () => {
     let host: SpawnBrokerHost;

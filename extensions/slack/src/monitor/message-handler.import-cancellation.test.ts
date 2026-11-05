@@ -1,6 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { expect, it, vi } from "vitest";
+import * as dedupe from "./message-dispatch-dedupe.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { createInboundSlackTestContext } from "./message-handler/prepare.test-helpers.js";
 
@@ -29,10 +30,10 @@ it("releases the replay claim when cancellation interrupts the lazy pipeline imp
     release: vi.fn(),
   };
   vi.spyOn(guard, "claim").mockResolvedValue({ kind: "claimed", handle: claim });
+  vi.spyOn(dedupe, "createSlackMessageDispatchReplayGuard").mockReturnValueOnce(guard);
   const handler = createSlackMessageHandler({
     ctx,
     abortSignal: controller.signal,
-    dispatchReplayGuard: guard,
   });
   const handling = handler(
     { type: "message", channel: "D_TEST", user: "U_TEST", ts: "1709000000.005001", text: "hello" },

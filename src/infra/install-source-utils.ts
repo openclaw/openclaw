@@ -12,8 +12,9 @@ import {
   satisfies as satisfiesSemver,
   validRange as validSemverRange,
 } from "semver";
+import { resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPath, tryParseJson } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
@@ -45,7 +46,6 @@ export function formatNpmCommandFailureOutput(result: SpawnResult): string {
   return `termination ${result.termination} (no output from npm)`;
 }
 
-/** Metadata npm reports when resolving a registry spec or packed archive. */
 export type NpmSpecResolution = {
   name?: string;
   version?: string;
@@ -58,7 +58,6 @@ export type NpmSpecResolution = {
 
 type InstallSourceResult<T> = ({ ok: true } & T) | { ok: false; error: string };
 
-/** Flattened npm resolution fields stored on install results and diagnostics. */
 type NpmResolutionFields = {
   resolvedName?: string;
   resolvedVersion?: string;
@@ -68,7 +67,6 @@ type NpmResolutionFields = {
   resolvedAt?: string;
 };
 
-/** Converts npm resolution metadata into stable result field names. */
 export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmResolutionFields {
   return {
     resolvedName: resolution?.name,
@@ -89,7 +87,7 @@ function createNpmMetadataEnv(
     NPM_CONFIG_IGNORE_SCRIPTS: "true",
   };
   applyNpmFreshnessBypassEnv(env, new Date(), scope);
-  return env;
+  return resolveRuntimeScriptEnv(env);
 }
 
 export async function loadNpmPackageVersions({
@@ -125,11 +123,6 @@ export async function loadNpmPackageVersions({
   );
 }
 
-function resolveNpmSpecVersionSelector(spec: string): string | undefined {
-  const separator = spec.lastIndexOf("@");
-  return separator > 0 ? normalizeOptionalString(spec.slice(separator + 1)) : undefined;
-}
-
 function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
   if (!Array.isArray(value)) {
     return value;
@@ -140,7 +133,8 @@ function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
     // Rechecking a semver-like tag against its spelling would reject a valid tag target.
     return entries[0];
   }
-  const selector = resolveNpmSpecVersionSelector(spec);
+  const separator = spec.lastIndexOf("@");
+  const selector = separator > 0 ? normalizeOptionalString(spec.slice(separator + 1)) : undefined;
   const range = selector ? validSemverRange(selector) : null;
   if (range) {
     // npm view output order tracks publication, not SemVer (a backport can be
@@ -185,8 +179,6 @@ export function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecR
 }
 
 /** Reads npm registry metadata for a package spec without running package scripts. */
-type NpmMetadataFailureCategory = "metadata-env";
-
 export async function resolveNpmSpecMetadata(params: {
   spec: string;
   timeoutMs?: number;
@@ -199,7 +191,7 @@ export async function resolveNpmSpecMetadata(params: {
   | {
       ok: false;
       error: string;
-      category?: NpmMetadataFailureCategory;
+      category?: "metadata-env";
     }
 > {
   const res = await runCommandWithTimeout(
@@ -254,23 +246,15 @@ export async function resolveNpmSpecMetadata(params: {
   }
 }
 
-/** Captures expected and actual npm integrity values when an install source drifts. */
-export type NpmIntegrityDrift = {
-  expectedIntegrity: string;
-  actualIntegrity: string;
-};
-
 /** Runs a callback in a private temp directory and removes it afterward. */
 export async function withInstallWorkspace<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
-  options?: { rootDir?: string },
 ): Promise<T> {
-  const rootDir = options?.rootDir ?? resolvePreferredOpenClawTmpDir();
+  const rootDir = resolvePreferredOpenClawTmpDir();
   return await withTempWorkspace({ rootDir, prefix }, async (tmp) => fn(tmp.dir));
 }
 
-/** Resolves and validates a user-supplied archive path before extraction. */
 export async function resolveArchiveSourcePath(
   archivePath: string,
 ): Promise<InstallSourceResult<{ path: string }>> {
@@ -299,32 +283,6 @@ function parseResolvedSpecFromId(id: string): string | undefined {
   return `${name}@${version}`;
 }
 
-function normalizeNpmPackEntry(
-  entry: unknown,
-): { filename?: string; metadata: NpmSpecResolution } | null {
-  const rec = asNullableObjectRecord(entry);
-  if (!rec) {
-    return null;
-  }
-  const name = normalizeOptionalString(rec.name);
-  const version = normalizeOptionalString(rec.version);
-  const id = normalizeOptionalString(rec.id);
-  const resolvedSpec =
-    (name && version ? `${name}@${version}` : undefined) ??
-    (id ? parseResolvedSpecFromId(id) : undefined);
-
-  return {
-    filename: normalizeOptionalString(rec.filename),
-    metadata: {
-      name,
-      version,
-      resolvedSpec,
-      integrity: normalizeOptionalString(rec.integrity),
-      shasum: normalizeOptionalString(rec.shasum),
-    },
-  };
-}
-
 function parseNpmPackJsonOutput(
   raw: string,
 ): { filename?: string; metadata: NpmSpecResolution } | null {
@@ -340,20 +298,30 @@ function parseNpmPackJsonOutput(
   }
 
   for (const candidate of candidates) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(candidate);
-    } catch {
-      continue;
-    }
-
-    const entries = resolveNpmJsonEntries(parsed);
+    const entries = resolveNpmJsonEntries(tryParseJson(candidate));
     let fallback: { filename?: string; metadata: NpmSpecResolution } | null = null;
     for (let i = entries.length - 1; i >= 0; i -= 1) {
-      const normalized = normalizeNpmPackEntry(entries[i]);
-      if (!normalized) {
+      const rec = asNullableObjectRecord(entries[i]);
+      if (!rec) {
         continue;
       }
+      const name = normalizeOptionalString(rec.name);
+      const version = normalizeOptionalString(rec.version);
+      const id = normalizeOptionalString(rec.id);
+      const resolvedSpec =
+        (name && version ? `${name}@${version}` : undefined) ??
+        (id ? parseResolvedSpecFromId(id) : undefined);
+
+      const normalized = {
+        filename: normalizeOptionalString(rec.filename),
+        metadata: {
+          name,
+          version,
+          resolvedSpec,
+          integrity: normalizeOptionalString(rec.integrity),
+          shasum: normalizeOptionalString(rec.shasum),
+        },
+      };
       if (!fallback) {
         fallback = normalized;
       }
@@ -376,7 +344,6 @@ async function findPackedArchiveInDir(cwd: string): Promise<string | undefined> 
   return archives.length === 1 ? archives[0]?.name : undefined;
 }
 
-/** Packs an npm spec into a tarball in `cwd` and returns archive metadata. */
 export async function packNpmSpecToArchive(params: {
   spec: string;
   timeoutMs: number;

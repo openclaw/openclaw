@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveLoadedSessionThreadInfo } from "../../channels/plugins/session-thread-info-loaded.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
@@ -66,12 +63,6 @@ export function resolveChannelResetConfig(params: {
   if (!resetByChannel) {
     return undefined;
   }
-  const normalized = normalizeMessageChannel(params.channel);
-  const fallback = normalizeOptionalLowercaseString(params.channel);
-  // Channel ids can arrive as public message-channel names or raw provider keys.
-  const key = normalized ?? fallback;
-  if (!key) {
-    return undefined;
-  }
-  return resetByChannel[key];
+  const key = normalizeMessageChannel(params.channel);
+  return key ? resetByChannel[key] : undefined;
 }

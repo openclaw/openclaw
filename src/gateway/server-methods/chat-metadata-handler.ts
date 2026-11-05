@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -13,19 +12,19 @@ import { readUserProfileAliasRevision } from "../../state/user-profile-events.js
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
-import { readOperatorRolePolicyRevision } from "../operator-role-policy.js";
+import { operatorSessionCap, readOperatorRolePolicyRevision } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE } from "../operator-scopes.js";
 import { projectModelFastModeCatalog } from "../session-fast-mode-presentation.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { hasSessionReadAccessChanged, hiddenSessionNotFound } from "../session-sharing-policy.js";
+import { hiddenSessionNotFound } from "../session-sharing-policy.js";
+import { prepareSessionSharingRead } from "../session-sharing-target-read.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
-import { retainGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
+import { readWorkerPlacementIdentity } from "../worker-environments/placement-projector.js";
+import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import {
-  chatMetadataSessionFields,
-  type ChatMetadataReadParams,
-} from "./chat-metadata-contract.js";
+import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
+import { prepareChatMetadataSessionRead } from "./chat-metadata-session-read.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
@@ -69,6 +68,7 @@ export async function resolveChatMetadataReadParams(
       cfg,
       params.sessionKey,
       normalizeOptionalString(params.agentId),
+      "read",
     );
     if (!requested.ok) {
       respond(false, undefined, requested.error);
@@ -76,20 +76,25 @@ export async function resolveChatMetadataReadParams(
     }
     // Persisted session state owns account pins; a caller cannot replace them with a draft id.
     const requesterProfileId = requester.profileId;
-    const session = retainGatewaySessionEntryReadOnly(
-      params.sessionKey,
-      requested.agentId,
-      (previous, current) =>
-        !hasSessionReadAccessChanged(previous, current) &&
-        chatMetadataSessionFields.every((field) =>
-          isDeepStrictEqual(previous[field], current[field]),
-        ),
-    );
-    const isCurrent = () => isRequestCurrent() && session.isCurrent();
+    const read = await prepareChatMetadataSessionRead({
+      cfg,
+      sessionKey,
+      agentId: requested.agentId,
+      assertRequestCurrent,
+    });
+    const session = read.selected;
+    let sharing: Awaited<ReturnType<typeof prepareSessionSharingRead>> | undefined;
+    const release = () => {
+      sharing?.release();
+      read.release();
+    };
+    const isCurrent = () => isRequestCurrent() && read.isCurrent();
     const assertVisible = () => {
+      const currentConfig = (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
       const visible = createSessionListEntryFilter({
         client,
-        cfg: (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)(),
+        cfg: currentConfig,
+        membership: sharing?.readCurrent(currentConfig).membership,
       });
       if (
         session.entry &&
@@ -99,7 +104,21 @@ export async function resolveChatMetadataReadParams(
       }
     };
     try {
+      if (operatorSessionCap(client, cfg) === "invited") {
+        sharing = await prepareSessionSharingRead({ cfg, sessionKey, agentId: requested.agentId });
+      }
       assertVisible();
+      const sessionId = session.entry?.sessionId;
+      const placement =
+        params.includeModels === false
+          ? undefined
+          : await readSessionWorkerPlacementAsync({ context, sessionId });
+      const workerInference = placement
+        ? readWorkerPlacementIdentity(placement, context.workerEnvironmentService)?.inference
+        : undefined;
+      assertVisible();
+      assertRequestCurrent();
+      read.assertCurrent();
       return {
         agentId: resolveSessionAgentId({
           sessionKey: params.sessionKey,
@@ -109,29 +128,35 @@ export async function resolveChatMetadataReadParams(
         sessionKey: session.canonicalKey,
         storePath: session.readSource?.path ?? session.storePath,
         sessionEntry: session.entry,
+        ...(workerInference ? { workerInference } : {}),
         isCurrent,
         assertCurrent: () => {
           assertVisible();
           assertRequestCurrent();
-          if (!session.isCurrentAtResponse()) {
-            throw new PreparedModelRuntimePublicationSupersededError(
-              "Session changed while preparing its metadata. Retry the request.",
-            );
-          }
+          read.assertCurrent();
         },
-        release: session.release,
+        withCurrent: (consume) =>
+          read.withCurrent(() => {
+            assertVisible();
+            return consume();
+          }),
+        beforeRequest: () => {
+          assertVisible();
+          assertRequestCurrent();
+          read.beforeRequest();
+        },
+        release,
         requesterProfileId,
       };
     } catch (error) {
-      session.release();
+      release();
       throw error;
     }
   }
   const resolved = resolveAgentIdOrRespondError({
-    rawAgentId: params.agentId,
+    rawAgentId: params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined,
     respond,
     cfg,
-    normalize: (id) => (typeof id === "string" && id.trim() ? normalizeAgentId(id) : undefined),
   });
   if (!resolved) {
     return undefined;
@@ -168,6 +193,7 @@ export const handleChatMetadataRequest = createPreparedReadHandler(
       }
       if (params.includeModels === false) {
         scope.includeModels = false;
+        scope.ifRevision = params.ifRevision;
       }
       const readScope = scope;
       const assertCurrent = () => {
@@ -180,19 +206,26 @@ export const handleChatMetadataRequest = createPreparedReadHandler(
         release: readScope.release,
         run: async (respond) => {
           const metadata = await context.readChatMetadata(readScope);
-          assertCurrent();
-          const cfg = context.getRuntimeConfig();
-          const policy =
-            metadata.models &&
-            prepareOperatorModelPresentation({
-              cfg,
-              policyConfig: context.getCommittedRuntimeConfig?.() ?? cfg,
-              client,
-            })?.forAgent(readScope.agentId, metadata.models);
-          respond(
-            true,
-            projectModelFastModeCatalog(policy ? policy.metadata(metadata) : metadata, client),
-          );
+          const publish = () => {
+            assertCurrent();
+            const cfg = context.getRuntimeConfig();
+            const policy =
+              metadata.models &&
+              prepareOperatorModelPresentation({
+                cfg,
+                policyConfig: context.getCommittedRuntimeConfig?.() ?? cfg,
+                client,
+              })?.forAgent(readScope.agentId, metadata.models);
+            respond(
+              true,
+              projectModelFastModeCatalog(policy ? policy.metadata(metadata) : metadata, client),
+            );
+          };
+          if (readScope.withCurrent) {
+            await readScope.withCurrent(publish);
+          } else {
+            publish();
+          }
         },
       };
     } catch (error) {

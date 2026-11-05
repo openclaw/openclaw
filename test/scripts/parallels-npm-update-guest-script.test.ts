@@ -189,7 +189,6 @@ const options = ${JSON.stringify(options)};
 options.platforms = new Set(["macos"]);
 await new NpmUpdateSmoke(options)["guestMacos"]("echo update", 30_000, {
   append() {},
-  logPath: ${JSON.stringify(path.join(root, "update.log"))},
   signal: new AbortController().signal,
 });`,
               ],
@@ -206,7 +205,6 @@ await new NpmUpdateSmoke(options)["guestMacos"]("echo update", 30_000, {
           const result = smoke["guestMacos"]("echo update", 30_000, {
             append: (chunk) =>
               output.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")),
-            logPath: path.join(root, "update.log"),
             signal: new AbortController().signal,
           });
           if (exitCode === 0) {

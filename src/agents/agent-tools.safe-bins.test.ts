@@ -1,43 +1,30 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
 import os from "node:os";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 
 let createOpenClawCodingTools: typeof import("./agent-tools.js").createOpenClawCodingTools;
 
-const { mockExecApprovals, supervisorSpawnMock } = vi.hoisted(() => {
-  const defaults = {
-    security: "allowlist",
-    ask: "off",
-    askFallback: "deny",
-    autoAllowSkills: false,
-  } as const;
-  const execApprovals: ExecApprovalsResolved = {
+const { mockExecApprovals, supervisorSpawnMock } = await vi.hoisted(async () => {
+  const { resolveExecApprovalsFromFileInternal } =
+    await import("../infra/exec-approvals-resolver.js");
+  const approvals = resolveExecApprovalsFromFileInternal({
     path: "/tmp/exec-approvals.json",
-    socketPath: "/tmp/exec-approvals.sock",
-    token: "token",
-    defaults,
-    agent: defaults,
-    agentSources: {
-      security: "defaults.security",
-      ask: "defaults.ask",
-      askFallback: "defaults.askFallback",
-    },
-    allowlist: [],
     file: {
       version: 1,
       socket: { path: "/tmp/exec-approvals.sock", token: "token" },
-      defaults,
+      defaults: { security: "allowlist", ask: "off", askFallback: "deny", autoAllowSkills: false },
       agents: {},
     },
-  };
+  });
   return {
-    mockExecApprovals: execApprovals,
+    mockExecApprovals: approvals,
     supervisorSpawnMock: vi.fn(
       async (input: { argv?: string[]; onStdout?: (chunk: string) => void }) => {
         input.onStdout?.(`${input.argv?.join(" ") ?? ""}\n`);
@@ -47,16 +34,7 @@ const { mockExecApprovals, supervisorSpawnMock } = vi.hoisted(() => {
           pid: 1234,
           startedAtMs: Date.now(),
           stdin: undefined,
-          wait: async () => ({
-            reason: "exit" as const,
-            exitCode: 0,
-            exitSignal: null,
-            durationMs: 1,
-            stdout: "",
-            stderr: "",
-            timedOut: false,
-            noOutputTimedOut: false,
-          }),
+          wait: async () => createRunExit(),
           cancel: vi.fn(),
         };
       },
@@ -97,53 +75,6 @@ vi.mock("../process/supervisor/index.js", () => ({
   }),
 }));
 
-vi.mock("./channel-tools.js", () => ({
-  copyChannelAgentToolMeta: vi.fn((_from, to) => to),
-  getChannelAgentToolMeta: () => undefined,
-  listChannelAgentTools: () => [],
-}));
-
-vi.mock("./openclaw-tools.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./openclaw-tools.js")>();
-  return {
-    createOpenClawTools: () => [],
-    filterToolsByClientCaps: actual.filterToolsByClientCaps,
-  };
-});
-
-vi.mock("./bash-tools.exec-host-shared.js", async () => {
-  const mod = await vi.importActual<typeof import("./bash-tools.exec-host-shared.js")>(
-    "./bash-tools.exec-host-shared.js",
-  );
-  return {
-    ...mod,
-    resolveExecHostApprovalContext: () => ({
-      approvals: mockExecApprovals,
-      hostSecurity: "allowlist",
-      hostAsk: "off",
-      askFallback: "deny",
-    }),
-  };
-});
-
-vi.mock("../plugins/tools.js", () => ({
-  resolvePluginTools: () => [],
-}));
-
-vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
-  AuthStorage: vi.fn(),
-  CURRENT_SESSION_VERSION: 1,
-  ModelRegistry: vi.fn(),
-  SessionManager: vi.fn(),
-  SettingsManager: vi.fn(),
-  createCodingTools: vi.fn(() => []),
-  createEditTool: vi.fn(),
-  createReadTool: vi.fn(),
-  createWriteTool: vi.fn(),
-  estimateTokens: vi.fn(() => 0),
-  formatSkillsForPrompt: vi.fn(() => ""),
-}));
-
 vi.mock("../infra/exec-approvals.js", async () => {
   const mod = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
     "../infra/exec-approvals.js",
@@ -151,7 +82,7 @@ vi.mock("../infra/exec-approvals.js", async () => {
   const approvals = mockExecApprovals;
   return {
     ...mod,
-    loadExecApprovals: () => approvals.file,
+    loadExecApprovalsReadOnlyAsync: async () => approvals.file,
     resolveExecApprovals: () => approvals,
     resolveExecApprovalsLocked: async () => approvals,
   };
@@ -178,6 +109,11 @@ describe("createOpenClawCodingTools safeBins", () => {
     };
     const execTool = createOpenClawCodingTools({
       config,
+      toolConstructionPlan: {
+        ...createOpenClawOnlyToolConstructionPlan(),
+        includeShellTools: true,
+        includeOpenClawTools: false,
+      },
       exec: { notifyOnExit: false },
       sessionKey: "agent:main:main",
       workspaceDir: tmpDir,

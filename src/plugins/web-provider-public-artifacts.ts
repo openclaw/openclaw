@@ -1,4 +1,3 @@
-import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import { normalizePluginId } from "./config-state.js";
@@ -39,9 +38,7 @@ function filterAllowlistedBundledPluginIds(
   if (!Array.isArray(allow) || allow.length === 0) {
     return [...pluginIds];
   }
-  const allowedPluginIds = new Set(
-    normalizeUniqueStringEntries(allow.map((pluginId) => normalizePluginId(pluginId))),
-  );
+  const allowedPluginIds = new Set(allow.map(normalizePluginId).filter(Boolean));
   return pluginIds.filter((pluginId) => allowedPluginIds.has(pluginId));
 }
 
@@ -61,7 +58,7 @@ function resolveBundledCandidatePluginIds(
       ...(params.manifestRecords ? { manifestRecords: params.manifestRecords } : {}),
     };
   }
-  const resolvedConfig = resolveBundledWebProviderResolutionConfig(params).config;
+  const resolution = resolveBundledWebProviderResolutionConfig(params);
   const candidates = resolveManifestDeclaredWebProviderCandidates({
     contract: params.contract,
     configKey: params.contract === "webSearchProviders" ? "webSearch" : "webFetch",
@@ -70,11 +67,11 @@ function resolveBundledCandidatePluginIds(
     env: params.env,
     onlyPluginIds: params.onlyPluginIds,
     origin: params.mode === "setup" ? "bundled" : undefined,
-    manifestRecords: params.manifestRecords,
+    manifestRecords: params.manifestRecords ?? (params.config && resolution.manifestRecords),
   });
   return {
     pluginIds: filterAllowlistedBundledPluginIds(
-      resolvedConfig,
+      resolution.config,
       candidates.pluginIds ?? [],
       params.env,
     ),

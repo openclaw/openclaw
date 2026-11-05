@@ -1,8 +1,8 @@
 import AppKit
 import QuartzCore
 
+@MainActor
 enum OverlayPanelFactory {
-    @MainActor
     static func makePanel(
         contentRect: NSRect,
         level: NSWindow.Level,
@@ -29,7 +29,6 @@ enum OverlayPanelFactory {
         return panel
     }
 
-    @MainActor
     static func animatePresent(window: NSWindow, from start: NSRect, to target: NSRect, duration: TimeInterval = 0.18) {
         window.setFrame(start, display: true)
         window.alphaValue = 0
@@ -42,7 +41,6 @@ enum OverlayPanelFactory {
         }
     }
 
-    @MainActor
     static func animateFrame(window: NSWindow, to frame: NSRect, duration: TimeInterval = 0.12) {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
@@ -51,7 +49,6 @@ enum OverlayPanelFactory {
         }
     }
 
-    @MainActor
     static func applyFrame(window: NSWindow?, target: NSRect, animate: Bool) {
         guard let window else { return }
         if animate {
@@ -61,7 +58,6 @@ enum OverlayPanelFactory {
         }
     }
 
-    @MainActor
     static func present(
         window: NSWindow?,
         isFirstPresent: Bool,
@@ -80,7 +76,6 @@ enum OverlayPanelFactory {
         }
     }
 
-    @MainActor
     static func animateDismiss(
         window: NSWindow,
         offsetX: CGFloat = 6,
@@ -92,7 +87,6 @@ enum OverlayPanelFactory {
         self.animateDismiss(window: window, to: target, duration: duration, completion: completion)
     }
 
-    @MainActor
     static func animateDismiss(
         window: NSWindow,
         to target: NSRect,
@@ -109,7 +103,6 @@ enum OverlayPanelFactory {
         }
     }
 
-    @MainActor
     static func animateDismissAndHide(
         window: NSWindow,
         to target: NSRect,
@@ -122,7 +115,6 @@ enum OverlayPanelFactory {
         }
     }
 
-    @MainActor
     static func clearGlobalEventMonitor(_ monitor: inout Any?) {
         if let current = monitor {
             NSEvent.removeMonitor(current)

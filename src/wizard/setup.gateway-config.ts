@@ -42,11 +42,6 @@ type ConfigureGatewayOptions = {
   prompter: WizardPrompter;
 };
 
-type ConfigureGatewayResult = {
-  nextConfig: OpenClawConfig;
-  settings: GatewayWizardSettings;
-};
-
 function getLocalizedTailscaleExposureOptions() {
   return TAILSCALE_EXPOSURE_OPTIONS.map((option) => ({
     hint: t(`wizard.gatewayTailscale.${option.value}Hint`),
@@ -55,9 +50,7 @@ function getLocalizedTailscaleExposureOptions() {
   }));
 }
 
-export async function configureGatewayForSetup(
-  opts: ConfigureGatewayOptions,
-): Promise<ConfigureGatewayResult> {
+export async function configureGatewayForSetup(opts: ConfigureGatewayOptions) {
   const { flow, quickstartGateway, prompter } = opts;
   let { nextConfig } = opts;
 
@@ -301,14 +294,12 @@ export async function configureGatewayForSetup(
     tailscaleBin,
   });
 
-  return {
-    nextConfig,
-    settings: {
-      port,
-      bind,
-      customBindHost: bind === "custom" ? customBindHost : undefined,
-      authMode,
-      gatewayToken,
-    },
+  const settings: GatewayWizardSettings = {
+    port,
+    bind,
+    customBindHost: bind === "custom" ? customBindHost : undefined,
+    authMode,
+    gatewayToken,
   };
+  return { nextConfig, settings };
 }

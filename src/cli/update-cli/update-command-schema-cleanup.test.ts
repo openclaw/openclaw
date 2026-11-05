@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -10,16 +10,17 @@ import {
 } from "../../infra/sqlite-readonly-location-cleanup.js";
 import * as snapshots from "../../infra/sqlite-snapshot-source.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
-import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
 
-vi.mock("./update-command-database-context.js", () => ({
+vi.mock("./update-command-database-context.js", async (original) => ({
+  ...(await original<typeof import("./update-command-database-context.js")>()),
   inspectUpdateDatabaseContexts: vi.fn(),
 }));
-vi.mock("./update-command-git.js", () => ({
+vi.mock("./update-command-git.js", async (original) => ({
+  ...(await original<typeof import("./update-command-git.js")>()),
   inspectGitDryRunTargetSchemaVersions: vi.fn(),
 }));
 
@@ -33,9 +34,11 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 const versions = { state: 1, agent: 1 };
+const admittedSchemas = { packageSchemaPreflight: { incompatible: [], indeterminate: [] } };
 let root: string;
 let env: NodeJS.ProcessEnv;
 let source: string;
+let original: Buffer;
 let prepared: ReturnType<typeof adoptPreparedLocation>;
 let releaseReader: (() => void) | undefined;
 beforeEach(() => {
@@ -43,29 +46,18 @@ beforeEach(() => {
   const handoff = path.join(root, "handoff");
   fs.mkdirSync(handoff);
   vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(handoff);
-  const databasePath = resolveManagedUpdateLeaseDatabasePath();
-  expect(databasePath).toBe(path.join(handoff, "managed-update-handoffs.sqlite"));
-  expect(path.join(fs.realpathSync(path.dirname(databasePath)), path.basename(databasePath))).toBe(
-    databasePath,
-  );
-  expect(databasePath).not.toMatch(/^\/(?:private\/)?tmp\/openclaw(?:\/|$)/u);
   env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
   source = resolveOpenClawStateSqlitePath(env);
   fs.mkdirSync(path.dirname(source), { recursive: true });
-  expect(path.join(fs.realpathSync(path.dirname(source)), path.basename(source))).toBe(source);
-  expect(source.startsWith(`${root}${path.sep}`)).toBe(true);
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(source);
-  database.exec("PRAGMA user_version = 1;");
+  database.exec("PRAGMA journal_mode = WAL; PRAGMA user_version = 1;");
   database.close();
-  const snapshot = path.join(root, "snapshot");
-  fs.mkdirSync(snapshot);
-  const location = path.join(snapshot, "state.sqlite");
-  fs.copyFileSync(source, location);
-  prepared = adoptPreparedLocation(location, snapshot, false, () => {});
+  original = fs.readFileSync(source);
+  // An incomplete WAL family takes ordinary admission through private recovery.
+  prepared = makeSnapshot("snapshot", () => {});
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(async (pathname) => {
     expect(pathname).toBe(fs.realpathSync(source));
-    expect(resolveManagedUpdateLeaseDatabasePath()).toBe(databasePath);
     return prepared;
   });
   vi.mocked(inspectUpdateDatabaseContexts).mockResolvedValue({
@@ -75,7 +67,15 @@ beforeEach(() => {
   } as Awaited<ReturnType<typeof inspectUpdateDatabaseContexts>>);
 });
 
-function runUpdate() {
+function makeSnapshot(name: string, onFailure?: Parameters<typeof adoptPreparedLocation>[3]) {
+  const directory = path.join(root, name);
+  fs.mkdirSync(directory);
+  const location = path.join(directory, "state.sqlite");
+  fs.copyFileSync(source, location);
+  return adoptPreparedLocation(location, directory, false, onFailure);
+}
+
+function runUpdate(packageAlreadyCurrent = false) {
   return preflightUpdateCommandSchemas({
     root,
     updateInstallKind: "package",
@@ -84,26 +84,41 @@ function runUpdate() {
     updateStepTimeoutMs: 1_000,
     managedServiceRootRedirect: null,
     channel: "stable",
-    packageTargetSchemaVersions: versions,
-    packageAlreadyCurrent: false,
+    packageTargetSchemaVersions: packageAlreadyCurrent ? { state: 0, agent: 0 } : versions,
+    packageAlreadyCurrent,
     opts: {},
     refuseUpdate: vi.fn(),
   });
 }
 
+it.each([
+  ["DELETE", false],
+  ["WAL", false],
+  ["WAL", true],
+] as const)(
+  "admits online update without acquiring an unrelated snapshot (%s, already-current=%s)",
+  async (journalMode, alreadyCurrent) => {
+    using database = new (requireNodeSqlite().DatabaseSync)(source);
+    database.exec(`PRAGMA journal_mode = ${journalMode}; CREATE TABLE online_probe(value);`);
+    await expect(runUpdate(alreadyCurrent)).resolves.toMatchObject(admittedSchemas);
+    expect(snapshots.prepareSqliteReadOnlyLocation).not.toHaveBeenCalled();
+    expect(fs.existsSync(prepared.location)).toBe(true);
+  },
+);
+
 it.each(["reader", "removal", "rejection"] as const)(
   "refuses forward update admission after snapshot cleanup failure: %s",
   async (failureKind) => {
-    const original = fs.readFileSync(source);
+    if (failureKind === "rejection") {
+      const failure = new Error("snapshot owner could not retire");
+      vi.spyOn(prepared, "cleanupAsync").mockRejectedValue(failure);
+      await expect(runUpdate()).rejects.toBe(failure);
+      return;
+    }
     const remove = fs.promises.rm;
-    const failure =
-      failureKind === "rejection"
-        ? new Error("snapshot owner could not retire")
-        : Object.assign(new Error("owned scratch removal denied"), { code: "EACCES" });
+    const failure = Object.assign(new Error("owned scratch removal denied"), { code: "EACCES" });
     if (failureKind === "reader") {
       releaseReader = retainSnapshotTempDirectory(path.dirname(prepared.location));
-    } else if (failureKind === "rejection") {
-      vi.spyOn(prepared, "cleanupAsync").mockRejectedValue(failure);
     }
     const removal =
       failureKind === "removal"
@@ -114,37 +129,22 @@ it.each(["reader", "removal", "rejection"] as const)(
             return remove(target, options);
           })
         : undefined;
-    try {
-      if (failureKind === "rejection") {
-        await expect(runUpdate()).rejects.toBe(failure);
-        return;
-      }
-      await expect(runUpdate()).rejects.toThrow(/snapshot cleanup failed/i);
-      expect(fs.existsSync(prepared.location)).toBe(true);
-      expect(fs.readFileSync(source)).toEqual(original);
-      if (failureKind === "reader") {
-        expect(await prepared.cleanupAsync()).toBe(false);
-        expect(snapshots.prepareSqliteReadOnlyLocation).toHaveBeenCalledTimes(1);
-        return;
-      }
-    } finally {
-      removal?.mockRestore();
+    await expect(runUpdate()).rejects.toThrow(/snapshot cleanup failed/i);
+    expect(fs.existsSync(prepared.location)).toBe(true);
+    expect(fs.readFileSync(source)).toEqual(original);
+    if (failureKind === "reader") {
+      expect(await prepared.cleanupAsync()).toBe(false);
+      return;
     }
-    await expect(runUpdate()).resolves.toMatchObject({
-      packageSchemaPreflight: { incompatible: [], indeterminate: [] },
-    });
+    removal?.mockRestore();
+    await expect(runUpdate()).resolves.toMatchObject(admittedSchemas);
     expect(fs.existsSync(prepared.location)).toBe(false);
     expect(fs.readFileSync(source)).toEqual(original);
   },
 );
 
 it("admits normal forward update only after snapshot cleanup has settled", async () => {
-  const unrelatedRoot = path.join(root, "unrelated-snapshot");
-  fs.mkdirSync(unrelatedRoot);
-  const unrelatedPath = path.join(unrelatedRoot, "state.sqlite");
-  fs.copyFileSync(source, unrelatedPath);
-  const unrelated = adoptPreparedLocation(unrelatedPath, unrelatedRoot);
-  const original = fs.readFileSync(source);
+  const unrelated = makeSnapshot("unrelated-snapshot");
   const release = createDeferred();
   const started = createDeferred();
   const cleanup = prepared.cleanupAsync;
@@ -165,90 +165,76 @@ it("admits normal forward update only after snapshot cleanup has settled", async
     release.resolve();
     await Promise.allSettled([update]);
     try {
-      expect(fs.readFileSync(unrelatedPath)).toEqual(original);
+      expect(fs.readFileSync(unrelated.location)).toEqual(original);
       expect(fs.readFileSync(source)).toEqual(original);
     } finally {
       expect(await unrelated.cleanupAsync()).toBe(true);
     }
   }
-  await expect(update).resolves.toMatchObject({
-    packageSchemaPreflight: { incompatible: [], indeterminate: [] },
-  });
+  await expect(update).resolves.toMatchObject(admittedSchemas);
   expect(fs.existsSync(prepared.location)).toBe(false);
 });
 
-it.each([false, true])(
-  "preserves cancellation without admitting more databases (reader=%s)",
-  async (retained) => {
-    const controller = new AbortController();
-    const cancellation = new Error("original update cancellation");
-    const prepare = vi.mocked(snapshots.prepareSqliteReadOnlyLocation).getMockImplementation()!;
-    vi.mocked(snapshots.prepareSqliteReadOnlyLocation).mockImplementation(async (...args) => {
-      const location = await prepare(...args);
-      controller.abort(cancellation);
-      return location;
-    });
-    if (retained) {
-      releaseReader = retainSnapshotTempDirectory(path.dirname(prepared.location));
-    }
-    const candidates = vi.fn(() => []);
-    const inspection = preflightOpenClawDatabaseSchemas({
-      env,
-      supportedVersions: versions,
-      signal: controller.signal,
-      configuredAgentDatabaseTargets: candidates,
-    });
-    if (!retained) {
-      await expect(inspection).rejects.toBe(cancellation);
-    }
-    const failure = await inspection.catch((error: unknown) => error);
-    if (retained) {
-      expect(failure).toBeInstanceOf(AggregateError);
-      if (!(failure instanceof AggregateError)) {
-        throw failure;
-      }
-      expect(failure.cause).toBe(cancellation);
-      expect(failure.errors[0]).toBe(cancellation);
-      expect(failure.errors[1]).toMatchObject({
-        message: expect.stringMatching(/snapshot cleanup failed/i),
-      });
-    } else {
-      expect(failure).toBe(cancellation);
-    }
-    expect(candidates).not.toHaveBeenCalled();
-    expect(fs.existsSync(prepared.location)).toBe(retained);
-  },
-);
-
-it.each(["inspection", "close"] as const)(
-  "preserves %s failure ahead of snapshot retirement failure",
+it.each(["cancel", "cancel-retained", "inspection", "close"] as const)(
+  "preserves the primary %s failure while settling snapshot custody",
   async (phase) => {
+    const cancelled = phase.startsWith("cancel");
+    const retained = phase === "cancel-retained";
+    const controller = new AbortController();
     const primary = new Error(`admission ${phase} failed`);
     const secondary = new Error("snapshot cleanup rejected");
     let inspectedDatabase: import("node:sqlite").DatabaseSync | undefined;
-    vi.spyOn(prepared, "cleanupAsync").mockRejectedValue(secondary);
+    if (cancelled) {
+      const prepare = vi.mocked(snapshots.prepareSqliteReadOnlyLocation).getMockImplementation()!;
+      vi.mocked(snapshots.prepareSqliteReadOnlyLocation).mockImplementation(async (...args) => {
+        const location = await prepare(...args);
+        controller.abort(primary);
+        return location;
+      });
+      if (retained) {
+        releaseReader = retainSnapshotTempDirectory(path.dirname(prepared.location));
+      }
+    } else {
+      vi.spyOn(prepared, "cleanupAsync").mockRejectedValue(secondary);
+    }
+    const candidates = vi.fn(() => []);
     const failure = await preflightOpenClawDatabaseSchemas({
       env,
       supportedVersions: versions,
+      signal: cancelled ? controller.signal : undefined,
+      configuredAgentDatabaseTargets: cancelled ? candidates : undefined,
       scope: phase === "close" ? "state" : undefined,
-      openStateSchemaReadAdmission: (database) => {
-        if (phase === "inspection") {
-          throw primary;
-        }
-        inspectedDatabase = database;
-        return () => {
-          throw primary;
-        };
-      },
+      openStateSchemaReadAdmission: cancelled
+        ? undefined
+        : (database) => {
+            if (phase === "inspection") {
+              throw primary;
+            }
+            inspectedDatabase = database;
+            return () => {
+              throw primary;
+            };
+          },
     }).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(AggregateError);
-    if (!(failure instanceof AggregateError)) {
-      throw failure;
+    if (phase === "cancel") {
+      expect(failure).toBe(primary);
+    } else {
+      assert.instanceOf(failure, AggregateError);
+      expect(failure.cause).toBe(primary);
+      expect(failure.errors[0]).toBe(primary);
+      if (retained) {
+        expect(failure.errors[1]).toMatchObject({
+          message: expect.stringMatching(/snapshot cleanup failed/i),
+        });
+      } else {
+        expect(failure.errors).toEqual([primary, secondary]);
+        expect(failure.errors[1]).toBe(secondary);
+      }
     }
-    expect(failure.cause).toBe(primary);
-    expect(failure.errors).toEqual([primary, secondary]);
-    expect(failure.errors[0]).toBe(primary);
-    expect(failure.errors[1]).toBe(secondary);
+    if (cancelled) {
+      expect(candidates).not.toHaveBeenCalled();
+      expect(fs.existsSync(prepared.location)).toBe(retained);
+    }
     if (phase === "close") {
       expect(inspectedDatabase?.isOpen).toBe(false);
     }

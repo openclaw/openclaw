@@ -28,6 +28,9 @@ mode="${1:-}"
 script_dir="$(cd "$(dirname "$(shell_path "${BASH_SOURCE[0]}")")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 invocation_root="$(pwd)"
+# Release workflows run trusted tooling from the candidate checkout. tsx would
+# otherwise resolve tooling workspace imports through the candidate's tsconfig paths.
+export TSX_TSCONFIG_PATH="${repo_root}/tsconfig.json"
 
 if [[ "${mode}" != "--dry-run" && "${mode}" != "--publish" && "${mode}" != "--pack" &&
   "${mode}" != "--validate-packed" && "${mode}" != "--publish-packed" ]]; then
@@ -129,6 +132,11 @@ source_commit="${SOURCE_COMMIT:-$(git -C "${invocation_root}" rev-parse HEAD)}"
 source_ref="${SOURCE_REF:-$(git -C "${invocation_root}" symbolic-ref -q HEAD || true)}"
 clawhub_workdir="${CLAWDHUB_WORKDIR:-${CLAWHUB_WORKDIR:-${invocation_root}}}"
 manual_override_reason="${OPENCLAW_CLAWHUB_MANUAL_OVERRIDE_REASON:-}"
+package_family="${OPENCLAW_CLAWHUB_PACKAGE_FAMILY:-}"
+if [[ -n "${package_family}" && "${package_family}" != "bundle-plugin" && "${package_family}" != "code-plugin" ]]; then
+  echo "OPENCLAW_CLAWHUB_PACKAGE_FAMILY must be code-plugin or bundle-plugin when set." >&2
+  exit 2
+fi
 release_git_dir="${OPENCLAW_CLAWHUB_RELEASE_GIT_DIR:-}"
 release_tag="${OPENCLAW_CLAWHUB_RELEASE_TAG:-}"
 release_target_sha="${OPENCLAW_CLAWHUB_TARGET_SHA:-}"
@@ -308,6 +316,10 @@ else
 fi
 
 validate_packed_publish() {
+  local family_args=()
+  if [[ -n "${package_family}" ]]; then
+    family_args=(--family "${package_family}")
+  fi
   local dry_run_json
   dry_run_json="$(
     CLAWHUB_WORKDIR="${clawhub_workdir}" "${clawhub_timeout[@]}" "${clawhub_cli}" \
@@ -317,6 +329,7 @@ validate_packed_publish() {
       --source-repo "${source_repo}" \
       --source-commit "${source_commit}" \
       --source-path "${package_dir}" \
+      ${family_args[@]+"${family_args[@]}"} \
       --dry-run \
       --json
   )"
@@ -368,6 +381,10 @@ if [[ -n "${manual_override_reason}" ]]; then
     --manual-override-reason
     "${manual_override_reason}"
   )
+fi
+
+if [[ -n "${package_family}" ]]; then
+  publish_cmd+=(--family "${package_family}")
 fi
 
 printf 'Publish command: CLAWHUB_WORKDIR=%q' "${clawhub_workdir}"

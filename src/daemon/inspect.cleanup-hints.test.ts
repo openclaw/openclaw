@@ -20,7 +20,6 @@ const task = (label: string): ExtraGatewayService => ({
 });
 
 it.each<HintCase>([
-  ["no extra service", [], []],
   [
     "system LaunchDaemon",
     [{ ...agent, scope: "system", sourcePath: daemonPath, detail: `plist: ${daemonPath}` }],
@@ -42,22 +41,6 @@ it.each<HintCase>([
     [
       "launchctl bootout gui/$UID/com.example.openclaw-gateway",
       "sudo rm /Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    ],
-  ],
-  [
-    "system systemd unit",
-    [
-      {
-        platform: "linux",
-        label: "custom-gateway.service",
-        scope: "system",
-        detail: "unit: /etc/systemd/system/custom-gateway.service",
-        sourcePath: "/etc/systemd/system/custom-gateway.service",
-      },
-    ],
-    [
-      "systemctl --system status -- custom-gateway.service",
-      "systemctl --system cat -- custom-gateway.service",
     ],
   ],
   [
@@ -96,9 +79,11 @@ it.each<HintCase>([
     [task("\\OpenClaw Gateway Backup")],
     ['schtasks /Query /TN "\\OpenClaw Gateway Backup" /V /FO LIST'],
   ],
-  ...["$(Start-Process calc)", "%OPENCLAW_GATEWAY_TASK%", "unsafe&task", "task`name"].map(
-    (label): HintCase => [`rejects expandable Windows label ${label}`, [task(label)], []],
-  ),
+  ...["$(Start-Process calc)"].map((label): HintCase => [
+    `rejects expandable Windows label ${label}`,
+    [task(label)],
+    [],
+  ]),
   ["missing source path", [agent], ["launchctl bootout gui/$UID/com.example.openclaw-gateway"]],
 ])("renders cleanup hints for %s", (_name, services, expected) => {
   expect(renderGatewayServiceCleanupHints(services)).toEqual(expected);

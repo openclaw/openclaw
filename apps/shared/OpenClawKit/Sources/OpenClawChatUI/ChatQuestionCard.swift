@@ -572,6 +572,7 @@ struct OpenClawQuestionCard: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(OpenClawChatTheme.accent)
                 .disabled(!self.model.canSubmit || status == .submitting)
             }
             if let errorText = self.model.errorText {
