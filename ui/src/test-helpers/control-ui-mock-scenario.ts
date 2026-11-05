@@ -144,10 +144,15 @@ type ControlUiPluginHello = Required<
 export type NormalizedControlUiMockGatewayScenario = Required<
   Omit<
     ControlUiMockGatewayScenario,
-    "nativePlugins" | "awaitInitialRoster" | "bootstrapPreferences" | keyof ControlUiPluginHello
+    | "nativePlugins"
+    | "awaitInitialRoster"
+    | "bootstrapPreferences"
+    | "profileActivityViewerId"
+    | keyof ControlUiPluginHello
   >
 > &
-  Pick<ControlUiMockGatewayScenario, "bootstrapPreferences"> & {
+  Pick<ControlUiMockGatewayScenario, "bootstrapPreferences" | "profileActivityViewerId"> & {
+    operatorRolePolicy: ReturnType<typeof normalizeControlUiMockAuth>["operatorRolePolicy"];
     controlUiPluginHello: ControlUiPluginHello;
     /** Running-Gateway identity in hello; unset commit and build time are omitted. */
     serverRelease: { version: string; commit?: string; builtAt?: string };
