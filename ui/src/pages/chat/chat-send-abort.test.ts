@@ -15,7 +15,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const sessionAbort = { key: "agent:main", clearQueued: true };
+const sessionAbort = { key: "agent:main", clearQueued: true, userInitiated: true };
 const abortTarget = { runId: "run-main", sessionKey: "agent:main" };
 const readOnly = {
   requestHandlers: {},
@@ -57,7 +57,10 @@ it.each([
     expect(host.request).toHaveBeenCalledWith("sessions.abort", sessionAbort);
     expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
   } else {
-    expect(host.request).toHaveBeenCalledWith("chat.abort", abortTarget);
+    expect(host.request).toHaveBeenCalledWith("chat.abort", {
+      ...abortTarget,
+      userInitiated: true,
+    });
   }
   expect(host.chatMessage).toBe(action === "toolbar" || action === "read-only" ? message : "");
   expect(host.chatRunId).toBe("run-main");
@@ -122,6 +125,7 @@ it.each([
   if (connected) {
     expect(host.request).toHaveBeenCalledWith("sessions.abort", {
       key,
+      userInitiated: true,
       ...(scope === "global" ? { agentId: "work" } : { clearQueued: true }),
     });
     expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());

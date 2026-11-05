@@ -116,6 +116,7 @@ export function applyJobResult(
     forcePreservedNextRunAtMs: job.state.forcePreservedNextRunAtMs,
   };
   const previousRunInterruptedByRestart = job.state.lastError === STARTUP_INTERRUPTED_ERROR;
+  delete job.state.admissionDeferred;
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
   job.state.runningReceiptId = undefined;

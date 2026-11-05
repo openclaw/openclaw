@@ -974,7 +974,7 @@ extension DashboardWindowController {
     }
 
     /// Commands are deliverable when a document is live or a load is in flight
-    /// (the queue flushes at `didFinish`). A failure page, or a terminally
+    /// (the queue flushes when the shell is ready). A failure page, or a terminally
     /// cancelled load with no successor, needs a reload before dispatch —
     /// otherwise queued ⌘N/⌘K would wait on a `didFinish` that never comes.
     var canDeliverNativeCommands: Bool {
@@ -988,22 +988,25 @@ extension DashboardWindowController {
     }
 
     private var canDispatchNativeCommands: Bool {
-        // Older shared-credential Gateways predate the shell-ready signal.
-        // Personal browser sign-in requires the current Control UI's listener-owned fact.
         self.documentHost.hasLiveContent && self.pendingGatewaySwitch == nil && self.isTrustedDashboardDocument &&
-            (!self.auth.usesBrowserIdentity || self.nativeCommandsReady)
+            self.nativeCommandsReady
     }
 
     private func refreshNativeCommandReadiness() {
-        guard self.auth.usesBrowserIdentity || self.documentLoad != nil else { return }
         let sourceID = self.notificationSourceID
         let sourceURL = self.currentURL
+        let allowsLegacyReadiness = !self.auth.usesBrowserIdentity
         Task { @MainActor [weak self] in
             guard let self else { return }
             // Messages only wake the read. A previous same-URL document cannot
             // attest that the currently displayed sign-in page has command listeners.
             let readiness = try? await self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
-                "return window.__OPENCLAW_NATIVE_COMMANDS_READY__ === true;",
+                """
+                // Current HTML declares false before asynchronous shell startup.
+                // Signal-less shared-credential bundles keep document-load delivery.
+                return window.__OPENCLAW_NATIVE_COMMANDS_READY__ === true ||
+                  (\(allowsLegacyReadiness) && window.__OPENCLAW_NATIVE_COMMANDS_READY__ === undefined);
+                """,
                 url: sourceURL)) as? Bool
             guard self.notificationSourceID == sourceID, self.currentURL == sourceURL,
                   !self.webView.isLoading else { return }
