@@ -42,7 +42,22 @@ it("bounds compiled rules across worktree churn without clearing every result", 
   const options = { cwd: "/synthetic-tokenjuice/worktree-0" };
   const rules = await loadRules(options);
   for (let turn = 0; turn < 256; turn++) {
-    await middleware(event(turn % 2), { runtime: "openclaw" });
+    const current = event(turn % 2);
+    await middleware(
+      {
+        ...current,
+        cwd: `/synthetic-tokenjuice/session-${turn}`,
+        result: {
+          ...current.result,
+          details: {
+            status: "completed",
+            exitCode: 0,
+            cwd: `/synthetic-tokenjuice/ignored-${turn}`,
+          },
+        },
+      },
+      { runtime: "openclaw" },
+    );
   }
   expect(await loadRules(options)).toBe(rules);
   for (let worktree = 1; worktree < 128; worktree++) {
