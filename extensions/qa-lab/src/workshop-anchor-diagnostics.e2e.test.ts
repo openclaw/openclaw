@@ -29,7 +29,17 @@ it(
     const dispatch = async ({ body }: { body: Record<string, unknown> }) => {
       const ordinal = ++responses;
       const stream = new MockResponseStream(`resp_anchor_${ordinal}`);
-      if (ordinal === 11) {
+      if (ordinal < 10) {
+        // One foreground turn owns all ten model iterations. Separate turns can interleave the
+        // plugin's daily maintenance request and make provider ordinals ambiguous.
+        stream.tool({
+          type: "function_call",
+          id: `fc_anchor_foreground_${ordinal}`,
+          call_id: `call_anchor_foreground_${ordinal}`,
+          name: "skill_workshop",
+          arguments: JSON.stringify({ action: "list" }),
+        });
+      } else if (ordinal === 11) {
         // The normal review has now admitted its source anchor and reached the model.
         backgroundRequested = true;
         await releaseBackground.promise;
@@ -141,9 +151,7 @@ it(
           )) as { status: string };
           expect(terminal.status).toBe("ok");
         };
-        for (let ordinal = 0; ordinal < 10; ordinal++) {
-          await turn();
-        }
+        await turn();
         const history = (await gateway.call("chat.history", { sessionKey })) as {
           sessionId: string;
           sessionInfo: { activeLeafEntryId: string };
@@ -152,7 +160,8 @@ it(
         console.log(
           "WORKSHOP_ANCHOR_STAGE " +
             JSON.stringify({
-              turnsCompleted: 10,
+              turnsCompleted: 1,
+              foregroundModelIterations: 10,
               modelResponses: responses,
               hasSessionId: Boolean(history.sessionId),
               hasLeaf: Boolean(history.sessionInfo?.activeLeafEntryId),
@@ -318,7 +327,8 @@ it(
         console.log(
           "WORKSHOP_ANCHOR_PROOF " +
             JSON.stringify({
-              foregroundTurnsCompleted: 11,
+              foregroundTurnsCompleted: 2,
+              foregroundModelIterations: 10,
               rewriteCompacted: compact.compacted,
               backgroundReviewReachedProvider: backgroundRequested,
               mismatch,
