@@ -850,10 +850,11 @@ describe("doctor health contributions", () => {
     },
   );
 
-  it.each(["late-work", "current-refusal", "post-write-warning"])(
+  it.each(["new-warning", "current-refusal", "post-write-warning"])(
     "uses the full list once after late work, but never retries a refusal: %s",
     async (outcome) => {
       const events: string[] = [];
+      const repairedConfig = { gateway: { mode: "local" as const } };
       const initialWrite = requireDoctorContribution("doctor:write-config-migrations");
       const finalWrite = requireDoctorContribution("doctor:write-config");
       if (outcome === "post-write-warning") {
@@ -871,9 +872,8 @@ describe("doctor health contributions", () => {
       const auth = createDoctorHealthContribution("doctor:auth-profile-migration", "Auth", {
         async run(current) {
           events.push("auth");
-          if (outcome !== "post-write-warning") {
-            current.retirementOnly = false;
-          }
+          current.updateWarnings = outcome === "new-warning" ? ["New"] : [];
+          current.retirementOnly = outcome !== "current-refusal";
           if (outcome === "current-refusal") {
             current.configWriteRefusal = "validation";
           }
@@ -883,7 +883,7 @@ describe("doctor health contributions", () => {
         async run(current) {
           events.push("full");
           if (outcome === "post-write-warning") {
-            current.cfg = { gateway: { mode: "local" } };
+            current.cfg = repairedConfig;
           }
         },
       });
@@ -899,6 +899,7 @@ describe("doctor health contributions", () => {
       await runDoctorHealthContributions(ctx);
 
       expect(events).toEqual(outcome === "current-refusal" ? ["auth"] : ["auth", "auth", "full"]);
+
       const writes = outcome === "post-write-warning" ? 2 : 1;
       expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(writes);
       expect(mocks.repairCronCodexModelRefsAfterConfigWrite).toHaveBeenCalledTimes(
@@ -906,11 +907,11 @@ describe("doctor health contributions", () => {
       );
       if (outcome === "post-write-warning") {
         expect(mocks.replaceConfigFile.mock.calls[1]?.[0]).toMatchObject({
-          nextConfig: { gateway: { mode: "local" } },
+          nextConfig: repairedConfig,
         });
-        expect(mocks.repairCronCodexModelRefsAfterConfigWrite.mock.calls[1]?.[0]).toMatchObject({
-          cfg: { gateway: { mode: "local" } },
-        });
+        expect(mocks.repairCronCodexModelRefsAfterConfigWrite.mock.calls[1]?.[0]?.cfg).toEqual(
+          repairedConfig,
+        );
         expect(mocks.replaceConfigFile.mock.invocationCallOrder[1]).toBeLessThan(
           mocks.repairCronCodexModelRefsAfterConfigWrite.mock.invocationCallOrder[1]!,
         );

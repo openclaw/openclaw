@@ -5,6 +5,7 @@
  * Save the baseline owner before editing; --source replaces only that module.
  * Run five interleaved baseline/candidate pairs per scenario, reversing launch order.
  * Accept lower allocation/CPU with identical output hashes and no material regression.
+ * --scenario late-orphan measures a full canonical prefix followed by an orphan.
  * Timing is untraced; allocation is a separate sampling pass including collected objects.
  * --request --turns 50 --calls 2 exercises the request replay + transport owners
  * on 200 messages. For baseline request runs, --base-dir names a directory containing
@@ -44,7 +45,7 @@ for (const value of [iterations, turns, callsPerTurn]) {
   assert(Number.isSafeInteger(value) && value > 0);
 }
 assert(!(values.source && values["base-dir"]), "Choose --source or --base-dir");
-assert(values.scenario === "canonical" || values.scenario === "legacy");
+assert(["canonical", "legacy", "late-orphan"].includes(values.scenario));
 assert(global.gc, "Run with --expose-gc");
 const owner = path.resolve("packages/agent-core/src/harness/session/tool-result-pairing.ts");
 const root = process.cwd();
@@ -127,6 +128,16 @@ for (let turn = 0; turn < turns; turn++) {
       timestamp: turn,
     });
   }
+}
+if (values.scenario === "late-orphan") {
+  messages.push({
+    role: "toolResult",
+    toolCallId: "orphan",
+    toolName: "read",
+    content: [{ type: "text", text: "unmatched output" }],
+    isError: false,
+    timestamp: 0,
+  });
 }
 const options = { missingToolResultTimestamp: "assistant" as const };
 let execute = () => repairToolUseResultPairing(messages, options);

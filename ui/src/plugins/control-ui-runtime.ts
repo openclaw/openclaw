@@ -300,7 +300,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           const grantError = !sameOrigin
             ? `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`
             : !bootstrap
-              ? "Could not authenticate native plugin assets. Reconnect and retry."
+              ? "Couldn’t authenticate native plugin assets. Reconnect and try again."
               : controlUiPluginAssetGrantError(descriptor, bootstrap, context.resourceBasePath);
           if (grantError) {
             installed.delete(descriptor.pluginId);

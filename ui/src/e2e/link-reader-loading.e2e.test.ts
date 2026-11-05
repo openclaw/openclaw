@@ -49,7 +49,7 @@ it("makes the overview readable before extras and retains visible content throug
         { code: "UNAVAILABLE", message: "Temporarily unavailable", retryable: true },
         { match: { section: "checks" } },
       );
-      await panel.getByText("Could not load Checks.", { exact: true }).waitFor();
+      await panel.getByText("Couldn’t load Checks. Try again.", { exact: true }).waitFor();
       await gateway.resolveDeferred(
         "forge.detail",
         {

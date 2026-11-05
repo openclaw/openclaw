@@ -129,7 +129,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
   {
     key: "clear",
     name: "clear",
-    description: "Clear chat history",
+    description: "Clear conversation",
     descriptionKey: "chat.commands.clearDescription",
     icon: "trash",
     category: "session",

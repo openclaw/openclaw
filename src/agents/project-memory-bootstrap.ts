@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "@openclaw/retry";
 import {
   extractProjectKeysFromCuratedEntry,
   normalizeProjectAnnotationKey,
@@ -184,15 +185,34 @@ async function prepareLegacyProjectMemoryBootstrap(
   }
 }
 
-export async function prepareProjectMemoryBootstrap(params: {
+type ProjectMemoryBootstrapParams = {
   cfg: OpenClawConfig;
   agentId: string;
   activeProjectKeys: readonly string[];
   context?: MemoryCallerContext;
-}): Promise<string[]> {
+};
+
+export async function prepareProjectMemoryBootstrap(
+  params: ProjectMemoryBootstrapParams,
+): Promise<string[]> {
   if (params.activeProjectKeys.length === 0) {
     return [];
   }
+  // Bound prompt waiting; the read keeps the turn's authority and owns its late cleanup.
+  return await raceWithTimeout(
+    () => loadProjectMemoryBootstrap(params),
+    1_000,
+    () => {
+      log.warn(
+        "project memory recall skipped: 1000ms budget exceeded; continuing without project candidates",
+      );
+      return [];
+    },
+    { signal: params.context?.signal, onAbort: () => [] },
+  );
+}
+
+async function loadProjectMemoryBootstrap(params: ProjectMemoryBootstrapParams): Promise<string[]> {
   using phases = observeDiagnosticsTimelinePhases("project-memory.select");
   // Only a native slot owner serves recall under caller authority. Classification reads
   // owners this process already loaded; legacy owners keep the loaded-runtime path.

@@ -42,7 +42,7 @@ it("keeps a contention check separate from sending and the composer draft", asyn
 
 it.each([
   ["waiting_for_state", "Temporarily busy—retrying…"],
-  ["preparing_context", "Preparing this turn…"],
+  ["preparing_context", "Preparing reply…"],
   ["answer", null],
   ["finishing", null],
 ] as const)("keeps Stop available during %s", (phase, status) => {

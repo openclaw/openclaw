@@ -721,14 +721,16 @@ it("expands one server at a time and keeps switch and bulk tool actions separate
   setCurrentView("root");
   await waitForSolid(() =>
     expect(
-      view.queryByRole("menuitem", { name: "2 changes in this chat", hidden: true }),
+      view.queryByRole("menuitem", { name: "2 changes in this session", hidden: true }),
     ).not.toBeNull(),
   );
-  view.getByRole("menuitem", { name: "2 changes in this chat", hidden: true }).click();
+  view.getByRole("menuitem", { name: "2 changes in this session", hidden: true }).click();
   await waitForSolid(() => {
     expect(patch).toHaveBeenLastCalledWith(null);
     expect(overrides()).toBeNull();
-    expect(view.queryByRole("menuitem", { name: /changes in this chat/, hidden: true })).toBeNull();
+    expect(
+      view.queryByRole("menuitem", { name: /changes in this session/, hidden: true }),
+    ).toBeNull();
   });
 });
 

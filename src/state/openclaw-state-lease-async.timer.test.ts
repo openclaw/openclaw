@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { StateDatabaseOfflineMaintenanceError } from "../infra/gateway-state-owner-record.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-async-lifecycle.js";
 import {
@@ -185,6 +186,22 @@ describe("async state lease timer", () => {
       expect(f.release).toHaveBeenCalledOnce();
     },
   );
+
+  it("retries contended cleanup through the committed automatic renewal expiry", async () => {
+    await using f = fixture();
+    const result = f.run();
+    const { within } = await f.enter(result);
+    await within(() => vi.advanceTimersByTimeAsync(3_300));
+    expect(f.renew).toHaveBeenCalledTimes(3);
+    const contention = new StateDatabaseOfflineMaintenanceError("fixture.sqlite", "maintenance");
+    f.release.mockRejectedValueOnce(contention);
+    f.finishCallback.resolve();
+    expect(await result.outcome).toMatchObject({ ok: false, error: contention });
+    expect(f.resources.size).toBe(1);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(f.release).toHaveBeenCalledTimes(2);
+    expect(f.resources.size).toBe(0);
+  });
 
   it("joins renewal before sealing public methods after commit publication", async () => {
     await using f = fixture();
