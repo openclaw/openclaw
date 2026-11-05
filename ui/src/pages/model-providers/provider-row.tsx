@@ -294,7 +294,11 @@ function KeyForm(props: ProviderRowProps & { onCancel?: () => void }) {
           disabled={busy() || mutationDisabled() || authModeBlocked() || !props.keyDraft.trim()}
           onClick={() => props.onSaveKey(props.card.id, props.card.configKey ?? props.card.id)}
         >
-          {busy() ? t("modelProviders.saving") : t("common.save")}
+          {props.busy[`check:key:${props.card.id}`]
+            ? t("modelProviders.apiKey.checking")
+            : busy()
+              ? t("modelProviders.saving")
+              : t("common.save")}
         </button>
       </div>
     </div>
