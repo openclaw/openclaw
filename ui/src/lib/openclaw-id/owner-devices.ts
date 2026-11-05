@@ -70,9 +70,11 @@ export function approverOf(
 }
 
 /**
- * Signs a Revocation of `target` as this browser's owner device. The Gateway
+ * Signs a Revocation of `target` as this browser's owner device, at the claw seq
+ * this browser last read, so it covers only the listing shown here. The Gateway
  * checks this device is still listed, removes the target with the devices it
- * approved and cuts their connections.
+ * approved and cuts their connections; a target approved again since is refused
+ * as a concurrent change.
  */
 export async function signOwnerDeviceRevocation(
   link: OpenClawIdPeopleLink,
@@ -81,12 +83,14 @@ export async function signOwnerDeviceRevocation(
   const signer = link.clawId ? await loadOwnerDeviceSigner(link.clawId) : undefined;
   const ownPub = signer ? formatEd25519PublicKey(signer.publicKey) : undefined;
   const own = link.ownerDevices?.find((device) => device.devicePub === ownPub);
-  if (!signer || !own) {
+  if (!signer || !own || !link.clawId || link.seq === undefined) {
     throw new NotAnOwnerDeviceError();
   }
   return signStatement(
     "Revocation",
     {
+      claw_id: link.clawId,
+      seq: link.seq,
       // SAFETY: target comes from the Gateway's owner device list, which reports formatted keys.
       target_fp: await fingerprint(target.devicePub as Ed25519PublicKey),
       target_kind: "owner_device",
