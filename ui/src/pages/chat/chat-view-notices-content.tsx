@@ -1,11 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, useContext } from "solid-js";
+import { For, Show, createMemo, useContext } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
 } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
+import { hasTerminalControl } from "../../../../packages/terminal-core/src/safe-text.js";
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
+import { shellEscapeBackslash as shellQuote } from "../../../../src/shared/shell-quote.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
+import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -14,40 +17,228 @@ import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-s
 import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
-import { clampText } from "../../lib/format.ts";
+import { formatUiErrorDetails } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { isChatSendReconnecting } from "./chat-send-presentation.ts";
 import type { ChatComposerNoticesProps, ChatViewNoticesProps } from "./chat-view-notices.tsx";
 import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
 import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
 import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
-import { WorkspaceConflictNotice } from "./components/chat-workspace-conflict.tsx";
+import { RemainingConflictPaths } from "./components/chat-workspace-conflict.tsx";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
+import {
+  visibleWorkspaceConflictPaths,
+  workspaceConflictCount,
+  workspaceConflictPathForDisplay,
+  type WorkspaceResultConflict,
+} from "./workspace-conflict.ts";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
 registerEnglishCatalog(registerChatComposerEnglish);
 
 registerNewSessionRuntimeEnglish();
 
-function renderStatusNotice(
-  className: string,
-  tone: "info" | "warn" | "danger",
-  title: string,
-  body: string,
-  tooltip?: string,
-) {
+function workspaceConflictGitCommands(
+  conflict: WorkspaceResultConflict,
+  requestedPath?: string,
+):
+  | {
+      inspect: string;
+      takeCloud: string;
+    }
+  | undefined {
+  const entryPath =
+    requestedPath === undefined
+      ? conflict.paths.find((candidate) => !hasTerminalControl(candidate))
+      : conflict.paths.includes(requestedPath) && !hasTerminalControl(requestedPath)
+        ? requestedPath
+        : undefined;
+  if (!entryPath) {
+    return undefined;
+  }
+  const stagedPath = shellQuote(`${conflict.stagedResultRef}:${entryPath}`);
+  const stagedRef = shellQuote(conflict.stagedResultRef);
+  const literalPathspec = shellQuote(`:(top,literal)${entryPath}`);
+  return {
+    inspect: `git show ${stagedPath}`,
+    takeCloud: `git checkout ${stagedRef} -- ${literalPathspec}`,
+  };
+}
+
+function ConflictCopyAction(props: { text: string; label: string }) {
+  return (
+    <For each={[props.text]}>
+      {(text) => {
+        let label!: HTMLSpanElement;
+        return (
+          <button
+            class="btn btn--sm chat-copy-btn"
+            type="button"
+            onClick={(event) => void handleCopyButton(event, text, props.label, { label })}
+          >
+            <span ref={(element) => (label = element)} data-copy-label>
+              {props.label}
+            </span>
+          </button>
+        );
+      }}
+    </For>
+  );
+}
+
+function WorkspaceConflictNotice(props: {
+  conflict?: WorkspaceResultConflict;
+  onDismiss?: () => void;
+}) {
+  return (
+    <Show when={props.conflict}>
+      {(conflict) => {
+        const count = () => workspaceConflictCount(conflict());
+        const visible = createMemo(() => visibleWorkspaceConflictPaths(conflict()));
+        const commands = createMemo(() => workspaceConflictGitCommands(conflict()));
+        return (
+          <details
+            class="chat-composer-neighbor-card chat-composer-neighbor-card--warn chat-workspace-conflict-notice"
+            role="status"
+          >
+            <summary class="chat-workspace-conflict-notice__summary">
+              <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
+                <Icon name="alertTriangle" />
+              </span>
+              <span class="chat-composer-neighbor-card__copy">
+                <strong>
+                  {t(
+                    count() === 1
+                      ? "chat.workspaceConflict.titleOne"
+                      : "chat.workspaceConflict.titleMany",
+                    { count: String(count()) },
+                  )}
+                </strong>
+                <span>{t("chat.workspaceConflict.summary")}</span>
+              </span>
+              <span class="chat-workspace-conflict-notice__chevron" aria-hidden="true">
+                <Icon name="chevronUp" />
+              </span>
+              <Show when={props.onDismiss}>
+                <button
+                  class="chat-error__dismiss"
+                  type="button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    props.onDismiss?.();
+                  }}
+                  aria-label={t("chat.workspaceConflict.dismiss")}
+                >
+                  <Icon name="x" />
+                </button>
+              </Show>
+            </summary>
+            <div class="chat-workspace-conflict-notice__content">
+              <ul class="chat-workspace-conflict-paths">
+                <For each={visible().paths}>
+                  {(entryPath) => (
+                    <li>
+                      <code>{workspaceConflictPathForDisplay(entryPath)}</code>
+                      <Show when={workspaceConflictGitCommands(conflict(), entryPath)}>
+                        {(entryCommands) => (
+                          <span class="chat-workspace-conflict-path-actions">
+                            <ConflictCopyAction
+                              text={entryCommands().inspect}
+                              label={t("chat.workspaceConflict.inspectCloud")}
+                            />
+                            <ConflictCopyAction
+                              text={entryCommands().takeCloud}
+                              label={t("chat.workspaceConflict.takeCloud")}
+                            />
+                          </span>
+                        )}
+                      </Show>
+                    </li>
+                  )}
+                </For>
+              </ul>
+              <RemainingConflictPaths count={visible().remaining} />
+              <details class="chat-workspace-conflict-commands-disclosure">
+                <summary>{t("chat.workspaceConflict.showCommands")}</summary>
+                <div class="chat-workspace-conflict-ref">
+                  <span>{t("chat.workspaceConflict.stagedResult")}</span>
+                  <code>{conflict().stagedResultRef}</code>
+                  <CopyButton
+                    text={conflict().stagedResultRef}
+                    idleLabel={t("chat.workspaceConflict.copyStagedResult")}
+                  />
+                </div>
+                <Show
+                  when={commands()}
+                  fallback={
+                    <p class="chat-workspace-conflict-command-help">
+                      {t("chat.workspaceConflict.commandsUnavailable")}
+                    </p>
+                  }
+                >
+                  {(command) => (
+                    <>
+                      <div class="chat-workspace-conflict-commands">
+                        <For
+                          each={
+                            [
+                              [command().inspect, "inspectCloud", "copyInspectCommand"],
+                              [command().takeCloud, "takeCloud", "copyTakeCommand"],
+                            ] as const
+                          }
+                          keyed={(entry) => entry[1]}
+                        >
+                          {(entry) => (
+                            <div>
+                              <span>{t(`chat.workspaceConflict.${entry()[1]}`)}</span>
+                              <code>{entry()[0]}</code>
+                              <CopyButton
+                                text={entry()[0]}
+                                idleLabel={t(`chat.workspaceConflict.${entry()[2]}`)}
+                              />
+                            </div>
+                          )}
+                        </For>
+                      </div>
+                      <p class="chat-workspace-conflict-command-help">
+                        {t("chat.workspaceConflict.commandHelp")}
+                      </p>
+                    </>
+                  )}
+                </Show>
+              </details>
+            </div>
+          </details>
+        );
+      }}
+    </Show>
+  );
+}
+
+function StatusNotice(props: {
+  class: string;
+  tone: "info" | "warn" | "danger";
+  title: string;
+  body: string;
+  tooltip?: string;
+}) {
   return (
     <div
-      class={["chat-composer-neighbor-card", `chat-composer-neighbor-card--${tone}`, className]}
-      role={tone === "danger" ? "alert" : "status"}
-      title={tooltip}
+      class={[
+        "chat-composer-neighbor-card",
+        `chat-composer-neighbor-card--${props.tone}`,
+        props.class,
+      ]}
+      role={props.tone === "danger" ? "alert" : "status"}
+      title={props.tooltip}
     >
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
-        <Icon name={tone === "info" ? "info" : "alertTriangle"} />
+        <Icon name={props.tone === "info" ? "info" : "alertTriangle"} />
       </span>
       <div class="chat-composer-neighbor-card__copy">
-        <strong>{title}</strong>
-        <span>{body}</span>
+        <strong>{props.title}</strong>
+        <span>{props.body}</span>
       </div>
     </div>
   );
@@ -62,14 +253,16 @@ function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined)
       ? Math.round(((diskSpace.totalBytes - diskSpace.availableBytes) / diskSpace.totalBytes) * 100)
       : 0;
   const critical = diskSpace.status === "critical";
-  return renderStatusNotice(
-    "chat-cloud-disk-space-notice",
-    critical ? "danger" : "warn",
-    t(critical ? "chat.diskSpace.criticalTitle" : "chat.diskSpace.warningTitle"),
-    t(critical ? "chat.diskSpace.criticalBody" : "chat.diskSpace.warningBody", {
-      percent: String(usedPercent),
-      free: formatBytes(diskSpace.availableBytes),
-    }),
+  return (
+    <StatusNotice
+      class="chat-cloud-disk-space-notice"
+      tone={critical ? "danger" : "warn"}
+      title={t(critical ? "chat.diskSpace.criticalTitle" : "chat.diskSpace.warningTitle")}
+      body={t(critical ? "chat.diskSpace.criticalBody" : "chat.diskSpace.warningBody", {
+        percent: String(usedPercent),
+        free: formatBytes(diskSpace.availableBytes),
+      })}
+    />
   );
 }
 
@@ -89,19 +282,24 @@ function renderWorkerRuntimeInstallNotice(
     ? t("chat.workerRuntimeInstall.installingBody")
     : t("chat.workerRuntimeInstall.transferringBody", progress);
   // Topbar notices render as compact pills that hide the body, so the title carries progress.
-  return renderStatusNotice(
-    "chat-worker-runtime-install-notice",
-    "info",
-    installing
-      ? t("chat.workerRuntimeInstall.installingTitle")
-      : t("chat.workerRuntimeInstall.transferringTitle", progress),
-    body,
-    body,
+  return (
+    <StatusNotice
+      class="chat-worker-runtime-install-notice"
+      tone="info"
+      title={
+        installing
+          ? t("chat.workerRuntimeInstall.installingTitle")
+          : t("chat.workerRuntimeInstall.transferringTitle", progress)
+      }
+      body={body}
+      tooltip={body}
+    />
   );
 }
 
 function ChatErrorNotice(props: {
   error: string;
+  detail?: unknown;
   action?: JSX.Element;
   displayError?: string;
   tone?: "danger" | "warn";
@@ -109,17 +307,26 @@ function ChatErrorNotice(props: {
   compact?: boolean;
   actionAvailable?: boolean;
 }) {
-  const displayError = () => props.displayError ?? formatWebUiIconErrorText(props.error);
-  const lines = () =>
-    displayError()
-      .trim()
-      .split(/\r?\n/u)
-      .map((line) => line.replace(/\s+/gu, " ").trim());
-  // Local action errors already contain recovery instructions; keep those visible.
-  const title = () => props.summary ?? clampText(lines()[0] ?? "");
-  const hasDetails = () => lines().some((line) => line !== "" && line !== title());
+  const displayError = () =>
+    props.detail === undefined
+      ? (props.displayError ?? formatWebUiIconErrorText(props.error))
+      : formatUiErrorDetails(props.detail);
+  const title = () =>
+    props.summary ??
+    (props.detail === undefined
+      ? displayError().trim().split(/\r?\n/u)[0]?.trim() || t("chat.errorSummary")
+      : props.error);
+  const hasDetails = () => {
+    const detail = displayError().trim();
+    return detail !== "" && detail !== title();
+  };
   const tone = () => props.tone ?? "danger";
-  return (
+  // Notice refreshes must not replace an open disclosure unless its failure changed.
+  const current = createMemo(() => ({ message: props.error, detail: props.detail }), {
+    equals: (previous, next) =>
+      previous.message === next.message && previous.detail === next.detail,
+  });
+  const content = (error: string) => (
     <Show
       when={props.compact}
       fallback={
@@ -139,18 +346,18 @@ function ChatErrorNotice(props: {
             fallback={
               <span class="chat-error__content">
                 <strong>{title()}</strong>
-                <CopyButton text={props.error} idleLabel={t("chat.copyError")} />
+                <CopyButton text={error} idleLabel={t("chat.copyError")} />
               </span>
             }
           >
             <details class="chat-error__content">
               <summary class="chat-error__summary">
                 <strong>{title()}</strong>
-                <span>{t("chat.details")}</span>
+                <span>{t("common.showDetails")}</span>
                 <span class="chat-error__chevron" aria-hidden="true">
                   <Icon name="chevronDown" />
                 </span>
-                <CopyButton text={props.error} idleLabel={t("chat.copyError")} />
+                <CopyButton text={error} idleLabel={t("chat.copyError")} />
               </summary>
               <pre class="chat-error__diagnostic" tabindex={0} aria-label={t("chat.errorDetails")}>
                 {displayError()}
@@ -203,11 +410,16 @@ function ChatErrorNotice(props: {
               <pre tabindex={0} aria-label={t("chat.errorDetails")}>
                 {displayError()}
               </pre>
-              <CopyButton text={props.error} idleLabel={t("chat.copyError")} bare />
+              <CopyButton text={error} idleLabel={t("chat.copyError")} bare />
             </div>
           </details>
         </Show>
       </div>
+    </Show>
+  );
+  return (
+    <Show when={props.error ? current() : undefined} keyed>
+      {(error) => content(error.detail === undefined ? error.message : displayError())}
     </Show>
   );
 }
@@ -232,7 +444,7 @@ export function ChatTopbarNoticesContent(props: ChatViewNoticesProps) {
       {renderDiskSpaceNotice(props.diskSpace)}
       {renderWorkerRuntimeInstallNotice(props.workerRuntimeInstall)}
       <Show when={props.error}>
-        {(error) => <ChatErrorNotice error={error()} action={dismiss} />}
+        {(error) => <ChatErrorNotice error={error()} detail={props.errorDetail} action={dismiss} />}
       </Show>
     </>
   );
@@ -240,8 +452,6 @@ export function ChatTopbarNoticesContent(props: ChatViewNoticesProps) {
 
 export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
   const mobile = useContext(ChatConversationMobile);
-  // Unrelated pane publications must not replace a visible provider notice.
-  const providerPolicyNotice = createMemo(() => props.providerPolicyNotice);
   const hasTranscriptFailure = () =>
     Boolean(
       props.runError?.runId &&
@@ -270,7 +480,9 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
   );
   return (
     <>
-      {renderProviderPolicyNotice(providerPolicyNotice())}
+      <Show when={props.providerPolicyNotice}>
+        {(notice) => <ProviderPolicyNoticeView notice={notice()} />}
+      </Show>
       <Show when={usageLimit()}>
         {(kind) => (
           <For each={[`${props.sessionKey}:${props.runError?.runId}:${kind()}`]}>
@@ -314,22 +526,21 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
   );
 }
 
-function renderProviderPolicyNotice(notice: ProviderPolicyNotice | null | undefined) {
-  if (!notice) {
-    return undefined;
-  }
-  const blocked = notice.state === "blocked" || notice.state === "unavailable";
-  const model = notice.fallbackModel ?? notice.model;
-  const namesModel = notice.state !== "buffering" && notice.state !== "blocked";
-  const body =
-    namesModel && !model
+function ProviderPolicyNoticeView(props: { notice: ProviderPolicyNotice }) {
+  const blocked = () => props.notice.state === "blocked" || props.notice.state === "unavailable";
+  const model = () => props.notice.fallbackModel ?? props.notice.model;
+  const namesModel = () => props.notice.state !== "buffering" && props.notice.state !== "blocked";
+  const body = () =>
+    namesModel() && !model()
       ? t("chat.providerPolicy.fallbackUnknownBody")
-      : t(`chat.providerPolicy.${notice.state}Body`, { model: model ?? "" });
-  return renderStatusNotice(
-    "chat-provider-policy-notice",
-    blocked ? "danger" : "warn",
-    t(`chat.providerPolicy.${notice.state}Title`),
-    body,
+      : t(`chat.providerPolicy.${props.notice.state}Body`, { model: model() ?? "" });
+  return (
+    <StatusNotice
+      class="chat-provider-policy-notice"
+      tone={blocked() ? "danger" : "warn"}
+      title={t(`chat.providerPolicy.${props.notice.state}Title`)}
+      body={body()}
+    />
   );
 }
 

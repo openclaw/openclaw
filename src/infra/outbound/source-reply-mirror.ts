@@ -17,16 +17,9 @@ import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import {
-  beginRestartRecoveryTerminalDelivery,
-  cancelRestartRecoveryTerminalDelivery,
-  completeRestartRecoveryTerminalDelivery,
-  type RestartRecoveryTerminalDeliveryScope,
-} from "../../config/sessions/restart-recovery-receipt.js";
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { resolveImplicitMessageActionTarget } from "./message-action-normalization.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
@@ -50,33 +43,9 @@ type SourceReplyTranscriptMirrorParams = {
   replyToIsExplicit?: boolean;
 };
 
-type TerminalSourceReplyDeliveryStart =
-  | TerminalSourceReplyDeliveryReceipt
-  | {
-      outcome: "already_delivered" | "delivery_ambiguous";
-      result: { status: string; delivered: false; message: string };
-    }
-  | undefined;
-
-function buildTerminalSourceReplyNoSendResult(outcome: "already_delivered" | "delivery_ambiguous") {
-  return {
-    outcome,
-    result: {
-      status: outcome,
-      delivered: false as const,
-      message:
-        outcome === "already_delivered"
-          ? "The completed reply was already delivered. Do not retry it."
-          : "The completed reply may already have been delivered. Do not retry it.",
-    },
-  };
-}
-
 type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams & {
   sessionKey: string;
 };
-
-type TerminalSourceReplyDeliveryReceipt = RestartRecoveryTerminalDeliveryScope;
 
 type SourceReplyThreadPlacement = "match" | "mismatch" | "unknown";
 
@@ -145,85 +114,6 @@ function resolveSourceReplyThreadPlacement(
     return explicitThreadId === currentThreadId ? "match" : "mismatch";
   }
   return currentThreadId ? "unknown" : "match";
-}
-
-/** Arms the fail-closed state before a terminal source reply can reach a provider. */
-export async function beginTerminalSourceReplyDelivery(
-  params: SourceReplyTranscriptMirrorParams,
-): Promise<TerminalSourceReplyDeliveryStart> {
-  const toolCallId = normalizeOptionalString(params.toolCallId);
-  if (params.sourceReplyFinal !== true) {
-    return undefined;
-  }
-  if (!toolCallId) {
-    throw new Error("terminal source reply requires tool-call correlation");
-  }
-  if (!params.sessionId || !isCurrentSourceConversation(params)) {
-    return undefined;
-  }
-  const sourceTurnId = normalizeOptionalString(params.toolContext?.currentSourceTurnId);
-  if (!sourceTurnId) {
-    return undefined;
-  }
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  // Agent admission promotes legacy aliases before the run starts. The signed
-  // runtime session key therefore owns both the active claim and transcript.
-  const receipt: TerminalSourceReplyDeliveryReceipt = {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sourceTurnId,
-    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
-    toolCallId,
-  };
-  const result = await beginRestartRecoveryTerminalDelivery(receipt);
-  if (result === "not-applicable") {
-    return undefined;
-  }
-  if (result === "already-delivered") {
-    return buildTerminalSourceReplyNoSendResult("already_delivered");
-  }
-  if (result === "delivery-ambiguous" || result === "stale") {
-    return buildTerminalSourceReplyNoSendResult("delivery_ambiguous");
-  }
-  return receipt;
-}
-
-/** Cancels a pre-send intent only when dispatch proved that no send occurred. */
-export async function cancelTerminalSourceReplyDelivery(
-  receipt: TerminalSourceReplyDeliveryReceipt | undefined,
-): Promise<void> {
-  if (receipt) {
-    await cancelRestartRecoveryTerminalDelivery(receipt);
-  }
-}
-
-/** Reconciles the provider result while an unresolved intent remains fail closed. */
-export async function reconcileTerminalSourceReplyDelivery(params: {
-  deliveredPayload: unknown;
-  mirror: SourceReplyTranscriptMirrorParams;
-  preservePendingOnExplicitFailure?: boolean;
-  receipt: TerminalSourceReplyDeliveryReceipt | undefined;
-}): Promise<"delivered" | "not-delivered" | "not-source" | "not-applicable" | "pending"> {
-  if (!params.receipt) {
-    return "not-applicable";
-  }
-  const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
-  if (deliveryFact && deliveryFact.status !== "settled") {
-    if (params.preservePendingOnExplicitFailure) {
-      return "pending";
-    }
-    await cancelRestartRecoveryTerminalDelivery(params.receipt);
-    return "not-delivered";
-  }
-  const deliveredMirror = { ...params.mirror, deliveredPayload: params.deliveredPayload };
-  if (
-    !matchesDeliveredSourceTargets(deliveredMirror, deliveryFact) ||
-    !isCurrentSourceConversation(deliveredMirror, true)
-  ) {
-    return "not-source";
-  }
-  await completeRestartRecoveryTerminalDelivery(params.receipt);
-  return "delivered";
 }
 
 function hasCurrentSourceContext(params: SourceReplyTranscriptMirrorParams): boolean {
@@ -474,7 +364,7 @@ function resolveDeliveredCurrentSourceReply(
     case "thread-reply":
       return resolveDeliveredThreadPlacementSourceReply(params, allowAsync);
     default:
-      // Send variants share destination proof, not transcript or restart-receipt ownership.
+      // Send variants share destination proof; transcript mirroring stays send-only.
       return (
         (isMessageToolSendActionName(params.action) || params.action === "poll") &&
         isCurrentSourceConversation({ ...params, action: "send" }, true)

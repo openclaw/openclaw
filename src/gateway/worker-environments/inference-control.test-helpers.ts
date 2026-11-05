@@ -90,6 +90,7 @@ export function createWorkerInferenceServiceStub(): WorkerEnvironmentServiceCont
   };
   return {
     getDedicatedNodeLeaseSignal: unexpected,
+    ensureRetainedRunning: unexpected,
     captureSessionAttachment: unexpected,
     getSessionAttachment: unexpected,
     findSessionAttachment: unexpected,

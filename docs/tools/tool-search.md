@@ -64,6 +64,11 @@ one selected tool when it needs the exact schema, and calls that tool through
 OpenClaw. Direct-only tools remain model-visible and are not added to the
 catalog.
 
+Claude CLI runs use Claude's native `ToolSearch` for deferred MCP definitions.
+OpenClaw keeps the same authorized tools and maps the enabled/disabled setting to
+native deferral. The native tool does not use OpenClaw's search modes, limits, or
+include/exclude selectors. See [CLI backends](/gateway/cli-backends#keeping-claude-code-orchestration-tools-on-managed-turns).
+
 Codex harness runs do not receive these experimental OpenClaw Tool Search
 controls. OpenClaw passes product capabilities to Codex as dynamic tools, and
 Codex owns the stable native code mode, native tool search, deferred dynamic
@@ -123,7 +128,8 @@ additional discovery turns can offset initial payload savings. Set
 ## Select which tools to defer
 
 Use `include` and `exclude` to defer only part of the authorized tool inventory.
-For example, defer MCP tools but keep frequently used GitHub reads direct:
+For example, defer MCP tools but keep the frequently used read tools of an MCP
+server configured as `github` directly callable:
 
 ```json
 {
@@ -131,7 +137,7 @@ For example, defer MCP tools but keep frequently used GitHub reads direct:
     "toolSearch": {
       "mode": "tools",
       "include": [{ "source": "mcp" }],
-      "exclude": [{ "source": "mcp", "name": "github_read_*" }]
+      "exclude": [{ "source": "mcp", "name": "github__read_*" }]
     }
   }
 }
@@ -141,7 +147,12 @@ Core tools, non-MCP plugin tools, client tools, and matching MCP GitHub read
 tools keep their schemas and remain directly callable. Other eligible MCP tools
 are searchable, describable, and callable through Tool Search. Use the
 **registered tool name**, which can differ from the name advertised by the MCP
-server.
+server. Tools from servers configured under `mcp.servers` register as
+`<safe-server>__<safe-tool>`, so this server's `read_file` tool is
+`github__read_file`. Unsupported characters become `-`, names that do not
+start with a letter get an `mcp-` or `tool-` prefix, and long or colliding
+names are shortened or get a numeric suffix. `openclaw mcp probe --json`
+previews these names, but collision suffixes can differ at run time.
 
 Each selector must contain `source`, `name`, or both. Empty selectors, blank
 names, unsupported sources, and unknown fields are rejected.
@@ -257,7 +268,7 @@ including the exact input schema and the trusted full `outputSchema` when the
 tool declares one.
 
 ```json
-{ "id": "mcp:calendar:create_event" }
+{ "id": "mcp:calendar:calendar__create_event" }
 ```
 
 ### Call
@@ -299,7 +310,7 @@ for runtime consumers. Use `tool_describe` for full tool metadata.
 
 ```json
 {
-  "id": "mcp:calendar:create_event",
+  "id": "mcp:calendar:calendar__create_event",
   "args": {
     "summary": "Planning",
     "start": "2026-05-09T14:00:00Z"

@@ -70,6 +70,12 @@ function accountHandler(cfg: OpenClawConfig, listenerAccount: string, peer: stri
       accountId,
     }),
   });
+  fixture.deps.accountPolicyCfg = cfg;
+  fixture.deps.cfg = withAccountScopedMSTeamsConfig({
+    cfg,
+    accountId: listenerAccount,
+    accountConfig: resolveMSTeamsAccountConfig(cfg, listenerAccount),
+  });
   return { ...fixture, handler: createMSTeamsMessageHandler(fixture.deps) };
 }
 function activity(overrides: Partial<MSTeamsTurnContext["activity"]> = {}): MSTeamsTurnContext {
@@ -233,6 +239,11 @@ describe("msteams message authorization and supplemental context", () => {
       setRuntimeConfigSnapshot(cfg);
       const support = accountHandler(cfg, "support", `channel:${channelId}`);
       const { handler: salesHandler } = accountHandler(cfg, "sales", `channel:${channelId}`);
+      // Retain startup allowlists after an unrelated reload, then revoke during preparation.
+      setRuntimeConfigSnapshot({
+        ...structuredClone(cfg),
+        agents: { defaults: { userTimezone: "UTC" } },
+      });
       const started = createDeferred<void>();
       const replies = createDeferred<GraphThreadMessage[]>();
       graph.fetchThreadReplies.mockImplementationOnce(() => {
@@ -265,73 +276,6 @@ describe("msteams message authorization and supplemental context", () => {
         await salesHandler(threadActivity());
         expect(dispatch).toHaveBeenCalledTimes(1);
         expect(dispatch.mock.calls[0]?.[0].ctx.AccountId).toBe("sales");
-      } finally {
-        replies.resolve([]);
-        await pending;
-      }
-    },
-  );
-
-  it.each(["team", "channel"])(
-    "rejects a %s revoked during thread preparation while startup allowlists are retained",
-    async (revoked) => {
-      const account: MSTeamsConfig = {
-        appId: "test-app",
-        groupPolicy: "open",
-        requireMention: false,
-        teams: { team123: { channels: { [channelId]: {} } } },
-      };
-      const cfg = accountsConfig(account);
-      setRuntimeConfigSnapshot(cfg);
-      const fixture = createMessageHandlerDeps(cfg, {
-        accountId: "support",
-        resolveAgentRoute: ({ accountId = "default" }) => ({
-          sessionKey: `agent:main:msteams:${accountId}:channel:${channelId}`,
-          agentId: "main",
-          accountId,
-        }),
-      });
-      // Monitor wiring: the raw policy config plus the account-scoped startup projection.
-      fixture.deps.accountPolicyCfg = cfg;
-      fixture.deps.cfg = withAccountScopedMSTeamsConfig({
-        cfg,
-        accountId: "support",
-        accountConfig: resolveMSTeamsAccountConfig(cfg, "support"),
-      });
-      const handler = createMSTeamsMessageHandler(fixture.deps);
-      // An unrelated reload first, so admission reads the retained startup allowlists.
-      setRuntimeConfigSnapshot({
-        ...structuredClone(cfg),
-        agents: { defaults: { userTimezone: "UTC" } },
-      });
-      const started = createDeferred<void>();
-      const replies = createDeferred<GraphThreadMessage[]>();
-      graph.fetchThreadReplies.mockImplementationOnce(() => {
-        started.resolve();
-        return replies.promise;
-      });
-      const pending = handler(threadActivity());
-      try {
-        await started.promise;
-        expect(fixture.conversationStore.upsert).toHaveBeenCalled();
-        setRuntimeConfigSnapshot(
-          accountsConfig(
-            {
-              ...account,
-              teams:
-                revoked === "team"
-                  ? { anotherTeam: { channels: { [channelId]: {} } } }
-                  : { team123: { channels: { "19:other-channel@thread.tacv2": {} } } },
-            },
-            account,
-          ),
-        );
-        replies.resolve([]);
-        await pending;
-        expect(dispatch).not.toHaveBeenCalled();
-        expect(fixture.deps.log.info).toHaveBeenCalledWith(
-          "dropping message (dispatch-time account authorization changed)",
-        );
       } finally {
         replies.resolve([]);
         await pending;

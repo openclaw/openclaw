@@ -234,6 +234,7 @@ export type RetryOptions = RetryConfig & {
 };
 
 export type RetryRuntime = {
+  shouldRetry?: (err: unknown) => boolean;
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
   createFailure?: (attemptErrors: readonly unknown[]) => Error;
@@ -378,7 +379,11 @@ export function createRetryRunner(runtime: RetryRuntime = {}) {
         return await fn();
       } catch (err) {
         attemptErrors.push(err);
-        if (attempt >= maxAttempts || !shouldRetry(err, attempt)) {
+        if (
+          attempt >= maxAttempts ||
+          runtime.shouldRetry?.(err) === false ||
+          !shouldRetry(err, attempt)
+        ) {
           break;
         }
         if (numeric) {

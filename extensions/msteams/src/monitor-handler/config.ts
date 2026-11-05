@@ -45,14 +45,13 @@ export function createMSTeamsHandlerConfigReader(deps: MSTeamsMessageHandlerDeps
     const keepStartup =
       current.channels?.msteams !== undefined &&
       isDeepStrictEqual(allowlistInputs(accountConfig), startupInputs);
-    if (deps.accountId === "default" && !current.channels?.msteams?.accounts && !retired) {
-      return (lastProjection = keepStartup
-        ? withAccountScopedMSTeamsConfig({
-            cfg: current,
-            accountId: deps.accountId,
-            accountConfig: { ...current.channels?.msteams, ...startupAllowlists },
-          })
-        : current);
+    if (
+      deps.accountId === "default" &&
+      !current.channels?.msteams?.accounts &&
+      !retired &&
+      !keepStartup
+    ) {
+      return (lastProjection = current);
     }
     return (lastProjection = withAccountScopedMSTeamsConfig({
       cfg: current,

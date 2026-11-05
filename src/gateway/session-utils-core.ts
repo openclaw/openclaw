@@ -18,10 +18,31 @@ import {
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
 import {
   createSessionRowModelCacheKey,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
+
+export function prepareGatewaySessionBackgroundProcessScope(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  agentId: string;
+  entry?: Pick<SessionEntry, "sessionId">;
+}) {
+  return {
+    scopeKeys: [
+      resolveSessionStoreKey({
+        cfg: params.cfg,
+        sessionKey: params.key,
+        storeAgentId: params.agentId,
+      }),
+      params.key,
+      params.entry?.sessionId ?? "",
+    ],
+    agentId: params.agentId,
+  };
+}
 
 export function matchesSessionArchiveFilter(
   entry: Pick<SessionEntry, "archivedAt">,
@@ -148,19 +169,49 @@ export function isFinitePositiveTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
+function storeOnlyChildLinkExpiresAt(entry: SessionEntry): number {
   if (isTerminalSessionStatus(entry.status) || isFinitePositiveTimestamp(entry.endedAt)) {
     const endedAt = isFinitePositiveTimestamp(entry.endedAt) ? entry.endedAt : entry.updatedAt;
-    return (
-      isFinitePositiveTimestamp(endedAt) && now - endedAt <= RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
-    );
+    return isFinitePositiveTimestamp(endedAt)
+      ? endedAt + RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
+      : -Infinity;
   }
-  // Store-only child links lack a live registry entry; retain recent unknown-state rows.
-  return (
-    isFinitePositiveTimestamp(entry.startedAt) ||
-    (isFinitePositiveTimestamp(entry.updatedAt) &&
-      now - entry.updatedAt <= STALE_STORE_ONLY_CHILD_LINK_MS)
-  );
+  return isFinitePositiveTimestamp(entry.startedAt)
+    ? Infinity
+    : isFinitePositiveTimestamp(entry.updatedAt)
+      ? entry.updatedAt + STALE_STORE_ONLY_CHILD_LINK_MS
+      : -Infinity;
+}
+
+function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
+  return now <= storeOnlyChildLinkExpiresAt(entry);
+}
+
+/** The next clock-only navigation change; execution/reservation changes invalidate separately. */
+export function sessionChildLinkExpiresAt(
+  key: string,
+  entry: SessionEntry,
+  subagentRuns: SessionListRowContext["subagentRuns"],
+  now: number,
+): number {
+  const parsed = parseAgentSessionKey(key);
+  if (
+    (!entry.acp &&
+      !parsed?.rest.startsWith("acp:") &&
+      (parsed?.rest.startsWith("subagent:") ||
+        (Boolean(entry.spawnedBy) && (entry.spawnDepth ?? 0) > 0))) ||
+    (entry.parentSessionKey && parsed?.rest.startsWith("dashboard:")) ||
+    (!entry.parentSessionKey && !entry.spawnedBy)
+  ) {
+    return Infinity;
+  }
+  const run = subagentRuns.getDisplaySubagentRun(key);
+  const expires = run
+    ? typeof run.execution.endedAt === "number" && Number.isFinite(run.execution.endedAt)
+      ? run.execution.endedAt + RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
+      : Infinity
+    : storeOnlyChildLinkExpiresAt(entry);
+  return expires >= now ? expires : Infinity;
 }
 
 const emptyChildOwners: readonly string[] = Object.freeze([]);

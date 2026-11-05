@@ -96,8 +96,9 @@ existing tools, not a separate ingestion engine.
   References/Referenced by navigation, not typed relationships, `entities`, or
   `dependencies`. Ambiguous/broken targets are diagnosed, never guessed. Update
   path links when renaming; old UUID paths still resolve through frontmatter IDs.
-- Within an authorized ingestion, back-link every identified mentioned entity
-  with a page to the source page, and link the source back to it. Actual identified
+- Within an authorized ingestion, link the source to every identified entity
+  with a page, and give each one it says something substantive about a source
+  note ([profiles](profiles.md#source-notes)). Actual identified
   meeting attendees get substantive sourced profiles; other new pages use the
   notability gate. Do not create profiles for incidental names or do unsolicited
   broad web/API enrichment. Read existing context before asking about an identity;
@@ -175,10 +176,9 @@ existing tools, not a separate ingestion engine.
   evidence or prose cards. Keep view/filters unchanged across pages. Request
   `view: "full"` for metadata/evidence previews and `includeCards: true` with
   full view when claim prose is needed; read the record for complete provenance.
-  A source → entity link gives the entity a derived backlink; it does NOT author
-  the entity's contextual source/timeline link. Verify both authored directions
-  when required. Do not write generated References/Referenced by lists into page
-  bodies. Check typed claims/relationships separately; navigation is not evidence.
+  A source → entity link gives the entity a derived backlink. An entity's
+  Timeline comes from its relationship with the source, not from links. Do not
+  write generated References/Referenced by lists into page bodies. Check typed claims/relationships separately; navigation is not evidence.
   Successful expected-link/endpoint checks do not need duplicate graph reads
   solely to reconfirm structure; saved contextual prose still needs review.
 - Read the saved prose for readable citations and absence of redundant Sources

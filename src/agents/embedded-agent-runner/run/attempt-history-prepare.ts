@@ -4,6 +4,10 @@ import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { readSessionEntrySummariesInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
+  selectBoundedModelRequests,
+  type ModelContextRequest,
+} from "../../../config/sessions/session-model-context-window.js";
+import {
   sessionEntryCommitGuardOptions,
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
@@ -16,6 +20,43 @@ import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.j
 import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
+import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
+
+function boundSettledFinalizationMessages(attempt: EmbeddedRunAttemptInternalParams) {
+  const requests: ModelContextRequest[] = attempt.settledTurnFinalizationMessages!.map(
+    (message, index) => ({
+      entry: {
+        type: "message",
+        id: String(index),
+        parentId: index ? String(index - 1) : null,
+        timestamp: new Date(message.timestamp).toISOString(),
+        message,
+        seq: index,
+      },
+      omitCheckpoint: false,
+    }),
+  );
+  const project = (request: ModelContextRequest) => {
+    const message = request.entry.type === "message" ? request.entry.message : undefined;
+    return message?.role === "toolResult" && request.toolResultOmission
+      ? { ...message, content: [{ type: "text" as const, text: request.toolResultOmission }] }
+      : message!;
+  };
+  // Reuse hydration's byte/event and tool-body omission policy on the selected view.
+  // Only model input changes; the receipt-bearing writer remains the original manager.
+  return selectBoundedModelRequests(
+    requests,
+    (selected) =>
+      new Map(
+        selected.map((request) => [
+          request.entry,
+          Buffer.byteLength(JSON.stringify(project(request)), "utf8") + 1,
+        ]),
+      ),
+    resolveEmbeddedSessionContextLimits(attempt),
+  ).map(project);
+}
 
 export async function prepareEmbeddedAttemptHistory(
   input: EmbeddedAttemptExecutionPhaseInput,
@@ -64,7 +105,9 @@ export async function prepareEmbeddedAttemptHistory(
     const prior = await sanitizeSessionHistory({
       ...replayContext(),
       messages: bindToolResultPromptProjectionKeys(
-        activeSession.messages,
+        isSettledTurnFinalization && attempt.settledTurnFinalizationMessages
+          ? boundSettledFinalizationMessages(attempt)
+          : activeSession.messages,
         input.prepared.sessionRuntime.toolResultPromptProjectionState,
       ),
       allowedToolNames: replayAllowedToolNames,
@@ -182,7 +225,7 @@ export async function prepareEmbeddedAttemptHistory(
     }
     input.setup.prepStages.mark("history-window");
     cacheTrace?.recordStage("session:limited", { messages: limited });
-    if (limited.length > 0 || prior.length > 0) {
+    if (limited.length > 0 || prior.length > 0 || isSettledTurnFinalization) {
       activeSession.agent.state.messages = limited;
     }
   }

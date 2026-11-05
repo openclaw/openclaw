@@ -446,19 +446,15 @@ describe("chat pane connection lifecycle", () => {
       state.loadAssistantIdentity = vi.fn(async () => undefined);
       pane.connectedClient = null;
       const snapshot = pane.context.gateway.snapshot;
+      const presence = ["owner", "alice"].map((id) => ({ ts: 0, user: { id } }));
       const connected = {
         ...snapshot,
-        hello: {
-          ...snapshot.hello!,
-          snapshot: {
-            presence: [
-              { ts: 0, user: { id: "owner" } },
-              { ts: 0, user: { id: "alice" } },
-            ],
-          },
-        },
+        hello: { ...snapshot.hello!, snapshot: { presence } },
       };
-
+      pane.context = {
+        ...pane.context,
+        gateway: { ...pane.context.gateway, readPresence: () => presence },
+      };
       pane.applyGatewaySnapshot(connected);
       pane.applySessionsState(sessions.state);
       listed.resolve({ suggestions: [], role: "owner" });
@@ -830,6 +826,7 @@ describe("chat pane connection lifecycle", () => {
     });
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("chat.abort", {
+        userInitiated: true,
         sessionKey: "agent:main",
         runId: "run-main",
       }),
