@@ -1603,6 +1603,23 @@ describe("full-release-validation-at-sha", () => {
     expect(fixture.refs()).toHaveLength(1);
   });
 
+  it.each(["failure", "cancelled"])(
+    "keeps terminal %s authoritative over retained diagnostic-pending evidence",
+    (conclusion) => {
+      const fixture = createDispatchFixture({
+        parentRunStates: [
+          { conclusion, status: "completed", decisionState: "blocked_diagnostics_running" },
+        ],
+      });
+      const result = fixture.run();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`Full Release Validation concluded ${conclusion}`);
+      expect(result.stdout).not.toContain("remains active");
+      expect(fixture.readWaits()).toEqual([]);
+      expect(fixture.refs()).toHaveLength(1);
+    },
+  );
+
   it("does not redownload a validated decision or adopt a newer parent attempt", () => {
     const fixture = createDispatchFixture({
       parentRunStates: [
