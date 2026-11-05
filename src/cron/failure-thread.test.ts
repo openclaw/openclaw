@@ -1,5 +1,7 @@
 // Failure destinations accept explicit threads without changing legacy routes.
+import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
+import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { resolveFailureDestination } from "./delivery-plan.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
@@ -12,7 +14,10 @@ import type { CronDelivery, CronJob } from "./types.js";
 const target = { channel: "telegram", to: "-100123456789" };
 const route = { ...target, threadId: 41 };
 const primary: CronDelivery = { mode: "announce", ...target, threadId: 7 };
-const alert = (cronConfig: CronConfig = {}, overrides: Partial<CronJob> = {}) =>
+const alert = (
+  cronConfig: CronConfig = {},
+  overrides: Partial<CronJob> & { createdActor?: SessionCreatedActor } = {},
+) =>
   resolveFailureAlert(
     { deps: { cronConfig, defaultAgentId: "main" } },
     makeCronJob({ agentId: "ops", delivery: primary, ...overrides }),
@@ -79,10 +84,17 @@ describe("failure destination threads", () => {
 
   it("normalizes, merges and persists explicit threads and clears", () => {
     const patch = normalizeCronJobPatch({ delivery: { failureDestination: { threadId: " 41 " } } });
+    assert(patch);
     expect(patch.delivery?.failureDestination?.threadId).toBe("41");
-    const delivery = mergeCronDelivery(primary, { failureDestination: route });
+    const delivery = mergeCronDelivery(primary, { failureDestination: route }, "announce");
+    assert(delivery);
     expect(deliveryToJson(delivery).failureDestination).toMatchObject(route);
-    const cleared = mergeCronDelivery(delivery, { failureDestination: { threadId: null } });
+    const cleared = mergeCronDelivery(
+      delivery,
+      { failureDestination: { threadId: null } },
+      "announce",
+    );
+    assert(cleared);
     expect(cleared.failureDestination).toMatchObject({ ...target, threadId: undefined });
     expect(deliveryToJson(cleared).failureDestination).toMatchObject({ threadId: null });
     expect(mergeCronFailureAlert(route, { threadId: null })).toMatchObject({ threadId: undefined });
