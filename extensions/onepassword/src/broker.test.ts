@@ -335,7 +335,9 @@ it.runIf(process.platform !== "win32")(
       const first = await (await prepareGet(broker, "real-1", "automatic")).get();
       expect(first).toMatchObject({ value: "secret-real" });
       clock -= 60 * 60 * 1000;
-      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_100);
+      });
       const second = await (await prepareGet(broker, "real-2", "automatic")).get();
       expect(second).toMatchObject({ value: "secret-real" });
       expect(await fs.readFile(counterFile, "utf8")).toBe("1\n1\n");
