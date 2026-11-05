@@ -32,8 +32,13 @@ import {
   readSqliteSchemaHeader,
   readSqliteSchemaHeaderFromSnapshot,
 } from "./sqlite-schema-header.js";
+import type { SqliteSnapshotChangeReason } from "./sqlite-snapshot-diagnostics.js";
 import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
-import { MAX_SNAPSHOT_ATTEMPTS, waitForSnapshotRetrySync } from "./sqlite-snapshot-policy.js";
+import {
+  MAX_SNAPSHOT_ATTEMPTS,
+  assertSqliteSnapshotSpace,
+  waitForSnapshotRetrySync,
+} from "./sqlite-snapshot-policy.js";
 import {
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
@@ -62,7 +67,19 @@ type SourceSidecars = {
 };
 
 type SourceJournalMode = "empty" | "rollback" | "unknown" | "wal";
-export class SqliteSourceChangedError extends Error {}
+export class SqliteSourceChangedError extends Error {
+  constructor(
+    readonly reason: SqliteSnapshotChangeReason,
+    options?: ErrorOptions & { attempts?: number },
+  ) {
+    super(
+      options?.attempts
+        ? `SQLite source did not stabilize (reason=${reason}, attempts=${options.attempts}) after ${options.attempts} read-only inspection attempts. Wait a moment for write activity to settle, then retry the inspection`
+        : `SQLite source changed during read-only inspection (reason=${reason})`,
+      options,
+    );
+  }
+}
 
 function statIfPresent(pathname: string): BigIntStats | undefined {
   try {
@@ -92,7 +109,7 @@ function openPinnedFile(
     descriptor = fs.openSync(pathname, "r");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new SqliteSourceChangedError(`SQLite source disappeared: ${pathname}`);
+      throw new SqliteSourceChangedError("source-disappeared");
     }
     throw error;
   }
@@ -103,7 +120,7 @@ function openPinnedFile(
     }
     const current = statIfPresent(pathname);
     if (!identity.isFile() || !current?.isFile() || !sameFileIdentity(identity, current)) {
-      throw new SqliteSourceChangedError(`SQLite source changed while opening: ${pathname}`);
+      throw new SqliteSourceChangedError("source-identity-changed");
     }
     return { descriptor, identity, pathname };
   } catch (error) {
@@ -145,7 +162,7 @@ function assertPinnedIdentityUnchanged(file: PinnedFile): void {
     !sameFileIdentity(file.identity, opened) ||
     !sameFileIdentity(file.identity, current)
   ) {
-    throw new SqliteSourceChangedError(`SQLite source changed while copying: ${file.pathname}`);
+    throw new SqliteSourceChangedError("source-identity-changed");
   }
 }
 
@@ -163,9 +180,7 @@ export function copySourceFile(
       physicalSourcePath = fs.realpathSync.native(sourcePath);
     } catch (error) {
       if (extractErrorCode(error) === "ENOENT") {
-        throw new SqliteSourceChangedError(`SQLite source disappeared: ${sourcePath}`, {
-          cause: error,
-        });
+        throw new SqliteSourceChangedError("source-disappeared", { cause: error });
       }
       throw error;
     }
@@ -176,7 +191,9 @@ export function copySourceFile(
       destination: { rootPath: path.dirname(targetPath), absolutePath: targetPath },
       expectedSourceIdentity: source.identity,
       sourceHardlinks: "allow",
-      clone: "auto",
+      // Reflinks lock the source inode and add shared extents to live databases.
+      // Inspection preserves source artifacts, not physical extent sharing.
+      clone: "never",
       mode: 0o600,
     });
     try {
@@ -217,7 +234,7 @@ function assertExpectedSidecars(pathname: string, expected: SourceSidecars): voi
   const current = readSourceSidecars(pathname);
   // The WAL index is rebuilt privately; concurrent readers may recreate the source index.
   if (current.journal !== expected.journal || current.wal !== expected.wal) {
-    throw new SqliteSourceChangedError(`SQLite journal state changed while copying: ${pathname}`);
+    throw new SqliteSourceChangedError("journal-state-changed");
   }
 }
 
@@ -234,6 +251,14 @@ export function isSqliteReadOnlyError(error: unknown): boolean {
     current = details.cause;
   }
   return false;
+}
+
+export function requiresPrivateRollbackRecovery(pathname: string, error: unknown): boolean {
+  return (
+    isSqliteReadOnlyError(error) &&
+    readSourceJournalMode(pathname) === "rollback" &&
+    readSourceSidecars(pathname).journal
+  );
 }
 
 function rollbackJournalReferencesSuperJournal(journalPath: string): boolean {
@@ -305,13 +330,13 @@ function* createStableReadOnlyCopyInTempDirectory(
   let tempDir = existingTempDir;
   try {
     tempDir ??= createSqliteSnapshotStagingDirectorySync(stagingRoot);
+    assertSqliteSnapshotSpace(pathname, tempDir);
     const snapshotPath = path.join(tempDir, "database.sqlite.partial");
-    const firstPath = path.join(tempDir, "first");
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
     if (readSourceJournalMode(pathname, expectedSourceIdentity) !== journalMode) {
-      throw new SqliteSourceChangedError(`SQLite journal mode changed before copying: ${pathname}`);
+      throw new SqliteSourceChangedError("journal-mode-changed");
     }
     const sidecars = readSourceSidecars(pathname);
     let copiedWalPrefix = false;
@@ -328,9 +353,7 @@ function* createStableReadOnlyCopyInTempDirectory(
         const copied = copyPrefix?.();
         assertPinnedIdentityUnchanged(wal);
         if (copied === false) {
-          throw new SqliteSourceChangedError(
-            `SQLite WAL generation changed while copying: ${pathname}`,
-          );
+          throw new SqliteSourceChangedError("wal-copy-unstable");
         }
         copiedWalPrefix = copied === true;
       } finally {
@@ -349,37 +372,32 @@ function* createStableReadOnlyCopyInTempDirectory(
       }
       yield { sourcePath: pathname, targetPath: snapshotPath, expectedSourceIdentity };
       if (!sourceMatchesCopy(pathname, snapshotPath, expectedSourceIdentity)) {
-        throw new SqliteSourceChangedError(
-          `SQLite main database changed while copying: ${pathname}`,
-        );
+        throw new SqliteSourceChangedError("main-changed-during-copy");
       }
       for (const suffix of sidecarSuffixes) {
         if (!sourceMatchesCopy(`${pathname}${suffix}`, `${snapshotPath}${suffix}`)) {
-          const label = suffix === "-wal" ? "WAL" : "rollback journal";
-          throw new SqliteSourceChangedError(`SQLite ${label} changed while copying: ${pathname}`);
+          throw new SqliteSourceChangedError(
+            suffix === "-wal" ? "wal-changed-during-copy" : "rollback-journal-changed-during-copy",
+          );
         }
       }
       assertExpectedSidecars(pathname, sidecars);
     } else {
-      yield { sourcePath: pathname, targetPath: firstPath, expectedSourceIdentity };
+      yield { sourcePath: pathname, targetPath: snapshotPath, expectedSourceIdentity };
       assertExpectedSidecars(pathname, sidecars);
       // A generation owner can bind the private bytes to its earlier source digest
       // instead. Publication must verify that digest before any native open.
       const mainUnchanged =
         expectedSourceContent !== undefined ||
-        sourceMatchesCopy(pathname, firstPath, expectedSourceIdentity);
+        sourceMatchesCopy(pathname, snapshotPath, expectedSourceIdentity);
       assertExpectedSidecars(pathname, sidecars);
       if (!mainUnchanged) {
-        throw new SqliteSourceChangedError(
-          `SQLite main database changed while copying: ${pathname}`,
-        );
+        throw new SqliteSourceChangedError("main-changed-during-copy");
       }
-      fs.rmSync(snapshotPath, { force: true });
-      fs.renameSync(firstPath, snapshotPath);
     }
 
     if (readSourceJournalMode(pathname, expectedSourceIdentity) !== journalMode) {
-      throw new SqliteSourceChangedError(`SQLite journal mode changed while copying: ${pathname}`);
+      throw new SqliteSourceChangedError("journal-mode-changed");
     }
     // A captured recovery-free digest cannot authorize newly observed recovery
     // data. Refuse before any private native open rather than dropping the binding.
@@ -387,9 +405,7 @@ function* createStableReadOnlyCopyInTempDirectory(
       expectedSourceContent &&
       (sidecars.journal || (sidecars.wal && fs.statSync(`${snapshotPath}-wal`).size !== 0))
     ) {
-      throw new SqliteSourceChangedError(
-        `SQLite recovery data appeared after generation capture: ${pathname}`,
-      );
+      throw new SqliteSourceChangedError("recovery-data-appeared");
     }
     if (sidecars.journal) {
       // Journal filenames can coexist without activity. Let SQLite resolve the
@@ -402,7 +418,10 @@ function* createStableReadOnlyCopyInTempDirectory(
       ? sqliteSnapshotStagingError(tempDir, error, false, pathname)
       : error;
     if (tempDir && existingTempDir === undefined) {
-      removeTempDirectory(tempDir);
+      const errors: unknown[] = [stagingError];
+      if (!removeTempDirectory(tempDir, (cleanupError) => errors.push(cleanupError))) {
+        throw preparationCleanupError(errors, "SQLite snapshot preparation");
+      }
     }
     throw stagingError;
   }
@@ -436,7 +455,7 @@ async function copyPreparedLocation(
       const { sourcePath, targetPath, expectedSourceIdentity } = step.value;
       const source = openPinnedFile(sourcePath, expectedSourceIdentity);
       try {
-        await copySqliteFile(sourcePath, targetPath, source.identity);
+        await copySqliteFile(sourcePath, targetPath, source.identity, { clone: "never" });
       } finally {
         try {
           assertPinnedIdentityUnchanged(source);
@@ -490,6 +509,7 @@ export async function createOnlineReadOnlyBackup(
       : await createSqliteSnapshotStagingDirectory(stagingRoot, false, signal);
   const snapshotPath = path.join(tempDir, "database.sqlite.partial");
   try {
+    assertSqliteSnapshotSpace(pathname, tempDir);
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
@@ -564,9 +584,7 @@ async function prepareReadOnlySourceInProcess(
           signal?.throwIfAborted();
           if (
             error instanceof AggregateError ||
-            !isSqliteReadOnlyError(error) ||
-            readSourceJournalMode(canonicalPath) !== "rollback" ||
-            !readSourceSidecars(canonicalPath).journal
+            !requiresPrivateRollbackRecovery(canonicalPath, error)
           ) {
             throw error;
           }
@@ -594,8 +612,7 @@ function* prepareArtifactPreservingCopy(
   expectedSourceContent?: SqliteFileContent,
 ): Generator<CopyRequest, PreparedSqliteReadOnlyLocation, void> {
   const canonicalPath = fs.realpathSync.native(pathname);
-  let lastChange: Error | undefined;
-  for (let attempt = 0; attempt < MAX_SNAPSHOT_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; ; attempt += 1) {
     try {
       const journalMode = readSourceJournalMode(canonicalPath, expectedSourceIdentity);
       // Stable malformed bytes still belong to SQLite's diagnostic path. The
@@ -615,16 +632,15 @@ function* prepareArtifactPreservingCopy(
       if (!(error instanceof SqliteSourceChangedError)) {
         throw error;
       }
-      lastChange = error;
+      if (attempt + 1 >= MAX_SNAPSHOT_ATTEMPTS) {
+        throw new SqliteSourceChangedError(error.reason, {
+          cause: error,
+          attempts: MAX_SNAPSHOT_ATTEMPTS,
+        });
+      }
       waitForSnapshotRetrySync(attempt);
     }
   }
-  throw new SqliteSourceChangedError(
-    `SQLite source did not stabilize after ${MAX_SNAPSHOT_ATTEMPTS} read-only inspection attempts (the database may be under concurrent write activity): ${canonicalPath}. Wait a moment for write activity to settle, then retry the inspection`,
-    {
-      cause: lastChange,
-    },
-  );
 }
 
 export function prepareSqliteReadOnlyLocationSyncInProcess(
@@ -643,7 +659,7 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(
   );
 }
 
-/** Artifact-preserving acquisition with native CoW where supported, in the isolated child. */
+/** Artifact-preserving byte copy in the isolated child, without source extent sharing. */
 export function prepareSqliteReadOnlyCopyInProcess(
   pathname: string,
   stagingRoot?: SqliteSnapshotDestination,
@@ -687,12 +703,7 @@ export async function inspectSqliteSchemaHeaderInProcess(
     } catch (error) {
       // Only SQLite's recovery-required refusal permits private recovery.
       // Ordinary I/O, admission, and native close errors must stay failures.
-      if (
-        error !== readError ||
-        !isSqliteReadOnlyError(error) ||
-        !statIfPresent(`${canonicalPath}-journal`) ||
-        readSourceJournalMode(canonicalPath) !== "rollback"
-      ) {
+      if (error !== readError || !requiresPrivateRollbackRecovery(canonicalPath, error)) {
         throw error;
       }
     }
@@ -749,6 +760,7 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
   );
   try {
     assertReady();
+    assertSqliteSnapshotSpace(database.location(), directory);
     const location = path.join(directory, "database.sqlite.partial");
     await retainSnapshotWork(backupNodeSqliteDatabase(database, location));
     signal?.throwIfAborted();

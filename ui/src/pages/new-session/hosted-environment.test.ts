@@ -1,10 +1,11 @@
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import { nativeRuntime } from "../../test-helpers/chat-model.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { resolveHostedEnvironments } from "./hosted-environments.ts";
 import { createNewSessionRouteData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { managedModelControls, controlQueries } from "./model-control-view-queries.test-support.ts";
@@ -14,6 +15,7 @@ import {
   mountPlacement as renderPlace,
   placementDevice,
 } from "./placement.test-support.ts";
+import { replaceBrowserPreference } from "./preferences.ts";
 const modelRef = "openai/hosted-model";
 const createSelection = { message: "hello", visibility: "normal" as const };
 const model: ModelCatalogEntry = {
@@ -27,14 +29,38 @@ const model: ModelCatalogEntry = {
 const agent = { id: "main", model: { primary: modelRef } };
 const preferred = { model: modelRef, agentRuntime: "agentsapi" };
 const managed = managedModelControls();
+beforeEach(() => {
+  replaceBrowserPreference("ws://gateway.example", "main", {});
+});
 afterEach(() => {
   managed.reset();
   vi.restoreAllMocks();
+  replaceBrowserPreference("ws://gateway.example", "main", {});
 });
 function modelControl(context: Parameters<typeof renderControl>[1]) {
   const control = managed.make(() => {});
   return { control, ...controlQueries(control, context, "main", agent) };
 }
+it("keeps an unavailable hosted workspace distinct from an available one", () => {
+  const unavailableRuntime = { ...runtime, id: "unavailable" };
+  const choices = resolveHostedEnvironments(
+    [
+      model,
+      {
+        ...model,
+        runtimeChoices: [{ agentRuntime: unavailableRuntime, available: false }],
+      },
+    ],
+    modelRef,
+    true,
+  );
+  expect(choices.map((choice) => choice.id)).toEqual([runtime.id, unavailableRuntime.id]);
+  expect(choices.find((choice) => choice.id === runtime.id)?.disabledReason).toBeUndefined();
+  expect(choices.find((choice) => choice.id === unavailableRuntime.id)?.disabledReason).toBe(
+    "This hosted workspace isn’t available. Check its setup or choose another workspace.",
+  );
+});
+
 const catalog = (overrides: Partial<ModelCatalogEntry>) => ({
   models: [{ ...model, ...overrides }],
 });
@@ -93,6 +119,20 @@ it("uses model-picker changes and configured defaults as the environment authori
   control.load(context, "other", true, { agent: { ...agent, id: "other" }, preference: preferred });
   await vi.waitFor(() => expect(control.resolveAgentRuntime()?.id).toBe("agentsapi"));
   expect(control.modelForSubmission()).toBe(modelRef);
+});
+it("returns to the Gateway's implicit host runtime without pinning it", async () => {
+  const implicitHost = {
+    ...model,
+    agentRuntime: { ...nativeRuntime(), source: "implicit" as const },
+  };
+  const { context } = contextWith([implicitHost]);
+  const { control, find } = modelControl(context);
+  control.load(context, "main", true, { agent });
+  await waitForModelControl(control, context, "main", agent);
+  find("model-runtime", "agentsapi")!.click();
+  expect(control.selectHostEnvironment()).toBe(true);
+  expect(control.agentRuntime).toBeUndefined();
+  expect(control.resolveAgentRuntime()?.id).toBe("openclaw");
 });
 it("retains the explicit API-key account through hosted selection and rejects a late unavailable account preview", async () => {
   const api = modelAccount("api", "API account", "api_key");

@@ -24,7 +24,7 @@ non-code visualizations that belong together.
 
 For HTML widgets, OpenClaw core validates `widget_code` by parsing every inline JavaScript `<script>` (classic and module), skipping scripts with `src` or a non-JavaScript `type`, then wraps it once in the standard HTML document. Core rejects the call with the line and column of the first syntax error, so a widget with a broken script is never hosted. For an inline client, core stores that document as a Canvas document and returns a preview handle. The Control UI reads the document over its authenticated Gateway connection and renders it through the dedicated-origin, double-iframe sandbox used by dashboard widgets and MCP Apps. In the Control UI, conversation readers, including guests, can view its saved inline widgets. [Public conversation links](/web/urls#public-session-transcripts) show the same saved inline widgets read-only in a sandboxed frame, without prompts or host APIs. New widgets appear automatically when their result is saved; conversation access is checked again when loading them. The widget frame does not need its own login session. iOS, Android, macOS, and Linux Quick Chat use isolated web views. Full chat clients restore the widget after history reload. Quick Chat keeps the widget for its active reply.
 
-Syntax-error snippets and parser messages preserve complete Unicode code points when clipped to their existing UTF-16 limits.
+Unchanged scripts reuse their syntax validation even when the surrounding markup changes. Large scripts are validated in a background worker. Syntax-error snippets and parser messages preserve complete Unicode code points when clipped to their existing UTF-16 limits.
 
 Channel plugins can register a contextual presenter behind the same core tool. In a configured Discord session, core hands the composed document to the Discord presenter, which stores it and posts the Activity button in the current channel. The model still makes one `show_widget` call. There is no transport-specific widget tool or content kind.
 
@@ -45,7 +45,10 @@ OpenClaw exposes `show_widget` only when the originating Gateway client declares
 
 An agent-turn automation bound to a persistent session and carrying a server-authored scheduled tool policy may explicitly allow `show_widget` without an inline client. That scheduled surface is pinned-only: every call requires `pin: true`, writes to the bound session dashboard, and cannot set `presentation.target`. Detached cron-run sessions, ordinary capless channel runs, and scheduled jobs without an explicit tool cap remain excluded. The originating-client capability remains mandatory for inline presentation.
 
-When the Gateway automatically resumes an interrupted Control UI turn after a restart, the recovered turn can also create or update pinned dashboard widgets without a connected browser. Recovery uses the same pinned-only surface: set `pin: true` and omit `presentation.target`. Inline previews still require a new turn from a client that declares `inline-widgets`. The resumed turn does not inherit a browser connection or device presentation rights.
+A post-restart input uses the session's current authority and tool policy. It does
+not inherit an old browser connection or device presentation rights. Inline
+previews still require a connected client with `inline-widgets`; use the normal
+pinned-widget surface only when the current turn is authorized to do so.
 
 A `status: "pinned"` tool result means the widget is on the session dashboard. Open that dashboard tab in the Control UI, or use `dashboard` with `action: "focus_tab"` and the saved widget's `tabId` when the tool is available. Widget hosting URLs are internal rendering resources and should not be opened in the Browser panel to substitute for widget presentation.
 
@@ -360,7 +363,7 @@ share GitHub's anonymous IP quota. Existing widgets using `fetch` should replace
 that call with the binding and replace their GitHub `netOrigins` declaration with
 the repository-scoped tool grant. Check the effective account in **Agent settings
 → Tools → GitHub account**. Administrators can also reach it from **Settings →
-Profile → GitHub connections**.
+Profile → GitHub accounts**.
 
 For refreshable widgets, keep the last successful data and a separate error
 element. Clear the error after a successful read, and keep result containers in

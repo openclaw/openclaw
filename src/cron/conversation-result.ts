@@ -20,7 +20,9 @@ export type CronConversationResultParams = {
 /** Commits an internal-channel result; external deliveries are recorded by outbound delivery. */
 export async function commitCronConversationResult(
   params: CronConversationResultParams,
-): Promise<{ ok: true; diagnostics?: CronRunDiagnostics } | { ok: false; reason: string }> {
+): Promise<
+  { ok: true; skipped?: true; diagnostics?: CronRunDiagnostics } | { ok: false; reason: string }
+> {
   const runId = createCronExecutionId(params.jobId, params.runStartedAt);
   await params.deliveryAttemptFence?.beforeAttempt();
   const committed = await commitBackgroundPayloadsToSession({
@@ -43,12 +45,15 @@ export async function commitCronConversationResult(
   if (!committed.ok) {
     return committed;
   }
-  return committed.diagnostics
-    ? {
-        ok: true,
-        diagnostics: createCronRunDiagnosticsFromError("delivery", committed.diagnostics, {
-          severity: "warn",
-        }),
-      }
-    : { ok: true };
+  return {
+    ok: true,
+    ...(committed.skipped ? { skipped: true as const } : {}),
+    ...(committed.diagnostics
+      ? {
+          diagnostics: createCronRunDiagnosticsFromError("delivery", committed.diagnostics, {
+            severity: "warn",
+          }),
+        }
+      : {}),
+  };
 }

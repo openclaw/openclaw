@@ -1,23 +1,40 @@
 /* @vitest-environment jsdom */
 
 import { createComponent, createSignal } from "solid-js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelAuthStatusProvider } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
-import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  createComposerControlsFixture,
+  renderComposerFixture,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
 import { ContextNotice } from "./components/chat-composer-context.tsx";
 
 type ComposerOverrides = Parameters<typeof renderComposerFixture>[0];
 
 function renderComposer({
   session,
+  authProfileId,
   ...overrides
 }: ComposerOverrides & {
   session?: Partial<GatewaySessionRow>;
+  authProfileId?: string | null;
 } = {}) {
+  const controls = createComposerControlsFixture();
+  controls.model.accountSelection = {
+    kind: "shared",
+    label: "Selected account",
+    authProfileId: authProfileId ?? session?.modelProvider ?? "openai",
+  };
+  if (authProfileId === null) {
+    controls.model.accountSelection = { kind: "automatic", label: "Automatic" };
+  }
   const container = renderComposerFixture({
+    composerControls: controls,
     ...(session ? { selectedSession: sessionRow(session) } : {}),
     ...overrides,
   }).container;
@@ -29,6 +46,8 @@ function renderComposer({
 
 const part = (root: ParentNode, name: string) => root.querySelector(`.context-usage__${name}`);
 const contextRingFor = (root: ParentNode) => root.querySelector(".context-ring");
+const compactButton = (root: ParentNode) =>
+  root.querySelector<HTMLButtonElement>(".context-usage__actions .chat-context__compact");
 const statsTitle = (root: ParentNode) => part(root, "stats [title]")?.getAttribute("title");
 const defaultSessions = () => ({ sessions: [], defaults: { contextTokens: 200_000 } });
 const textContents = (root: ParentNode, selector: string) =>
@@ -58,6 +77,7 @@ function planProvider(
     profiles: [{ profileId: provider, type: options.type ?? "oauth", status: "ok" }],
     usage: {
       providerId: provider,
+      authProfileId: provider,
       windows: windows.map(([label, usedPercent, resetAt]) => ({ label, usedPercent, resetAt })),
       ...options.usage,
     },
@@ -134,7 +154,7 @@ describe("renderChatComposer context usage", () => {
         contextBudgetStatus: contextBudgetStatusFixture(),
       },
     });
-    expect(contextRingFor(container)?.getAttribute("title")).toBe("Open context usage details");
+    expect(contextRingFor(container)?.getAttribute("title")).toBe("Context: 89% used");
     expect(part(container, "context-value")?.textContent).toContain("180k");
     expect(part(container, "title")?.textContent).toBe("Prompt budget");
     expect(contextRingFor(container)?.classList.contains("context-ring--warning")).toBe(true);
@@ -185,10 +205,39 @@ describe("renderChatComposer context usage", () => {
       expect(part(container, "context-value")).toBeNull();
       const ring = contextRingFor(container);
       if (withPlanUsage) {
-        expect(ring?.getAttribute("aria-label")).toBe("Usage Remaining");
+        expect(ring?.getAttribute("aria-label")).toBe("Usage remaining");
         expect(part(container, "limit")?.textContent).toContain("72%");
       } else {
         expect(ring).toBeNull();
+      }
+    },
+  );
+
+  it.each(["automatic", "unmeasured", "no-quota", "expired", "mixed"])(
+    "hides subscription cost estimates when quota identity is %s",
+    (scenario) => {
+      const provider = planProvider("anthropic", "Claude", [["Week", 10]]);
+      if (scenario === "unmeasured") {
+        delete provider.usage?.authProfileId;
+      } else if (scenario === "no-quota" || scenario === "expired") {
+        delete provider.usage;
+      }
+      if (scenario === "expired") {
+        provider.status = "expired";
+        provider.profiles[0]!.status = "expired";
+      }
+      if (scenario === "mixed") {
+        provider.profiles.push({ profileId: "anthropic:api", type: "api_key", status: "static" });
+      }
+      const container = renderComposer({
+        authProfileId: scenario === "automatic" || scenario === "mixed" ? null : "anthropic",
+        session: { modelProvider: "anthropic", estimatedCostUsd: 0.02 },
+        providerUsage: planUsage([provider]),
+      });
+      expect(part(container, "stats")?.textContent).not.toContain("Cost");
+      expect(part(container, "stats")?.textContent).not.toContain("$0.02");
+      if (scenario !== "no-quota" && scenario !== "expired") {
+        expect(container.textContent).toContain("Quota account unknown");
       }
     },
   );
@@ -281,7 +330,11 @@ describe("renderChatComposer context usage", () => {
           ],
         },
       }),
-      planProvider("openai", "Claude", [["Week", 140]]),
+      planProvider("openai", "Claude", [
+        ["  Week  ", 140],
+        [" Fractional ", 32.7],
+        ["Negative", -10],
+      ]),
     ];
     for (const modelProvider of ["anthropic", "openrouter", "openai"]) {
       const container = renderComposer({
@@ -289,7 +342,10 @@ describe("renderChatComposer context usage", () => {
         providerUsage: planUsage(providers),
       });
       expect(textContents(container, ".context-usage__limit-value")).toEqual(
-        modelProvider === "openai" ? ["100%"] : [],
+        modelProvider === "openai" ? ["100%", "33%", "0%"] : [],
+      );
+      expect(textContents(container, ".context-usage__limit-label")).toEqual(
+        modelProvider === "openai" ? ["Weekly", "Fractional", "Negative"] : [],
       );
       expect(container.querySelectorAll(".context-usage__tray")).toHaveLength(
         modelProvider === "openai" ? 1 : 0,
@@ -324,6 +380,50 @@ describe("renderChatComposer context usage", () => {
 
     session.modelProvider = undefined;
     expect(providerNames(renderComposer(composerProps as never))).toEqual(["codex"]);
+  });
+
+  it("selects the authoritative account regardless of response order", () => {
+    const first = planProvider("openai", "OpenAI", [["Week", 10]], {
+      usage: { authProfileId: "openai:one", accountEmail: "first@example.test" },
+    });
+    const second = planProvider("openai", "OpenAI", [["Week", 80]], {
+      usage: { authProfileId: "openai:two", accountEmail: "second@example.test" },
+    });
+    for (const providers of [
+      [first, second],
+      [second, first],
+    ]) {
+      const container = renderComposer({
+        session: { modelProvider: "openai" },
+        authProfileId: "openai:two",
+        providerUsage: planUsage(providers),
+      });
+      expect(container.textContent).toContain("second@example.test");
+      expect(container.textContent).toContain("80%");
+      expect(container.textContent).not.toContain("first@example.test");
+    }
+  });
+
+  it("does not guess a quota account from provider response order", () => {
+    const first = planProvider("openai", "OpenAI", [["Week", 10]], {
+      usage: { accountEmail: "first@example.test" },
+    });
+    const second = planProvider("openai", "OpenAI", [["Week", 80]], {
+      usage: { accountEmail: "second@example.test" },
+    });
+    for (const providers of [
+      [first, second],
+      [second, first],
+    ]) {
+      const container = renderComposer({
+        session: { modelProvider: "openai", contextTokens: 200_000, totalTokens: 10_000 },
+        authProfileId: null,
+        providerUsage: planUsage(providers),
+      });
+      expect(container.textContent).toContain("Quota account unknown");
+      expect(container.textContent).not.toContain("first@example.test");
+      expect(container.textContent).not.toContain("second@example.test");
+    }
   });
 
   it("keeps context, token, and cost details when only unrelated plan usage exists", () => {
@@ -369,6 +469,86 @@ describe("renderChatComposer context usage", () => {
 
     expect(part(container, "stats [title]")).toBeNull();
     expect(part(container, "stats")?.textContent).toContain("$0.00");
+  });
+
+  it("offers a secondary Compact beside View context in every popover state", () => {
+    const onCompact = vi.fn();
+    const render = (overrides: ComposerOverrides & { session?: Partial<GatewaySessionRow> }) =>
+      compactButton(
+        renderComposer({ sessions: defaultSessions() as never, onCompact, ...overrides }),
+      );
+    const state = (button: HTMLButtonElement | null) =>
+      button && {
+        label: button.textContent,
+        filled: button.classList.contains("chat-context__compact--high"),
+        disabled: button.disabled,
+        busy: button.getAttribute("aria-busy"),
+        title: button.title,
+      };
+    const ready = {
+      label: "Compact",
+      filled: false,
+      disabled: false,
+      busy: null,
+      title: "Summarizes older messages to free up space.",
+    };
+
+    expect(compactButton(renderComposer({ session: { totalTokens: 190_000 } }))).toBeNull();
+    // Near the limit the ring carries the warning; the action stays secondary.
+    for (const session of [
+      { totalTokens: 40_000 },
+      { totalTokens: 190_000 },
+      { totalTokens: 190_000, totalTokensFresh: false },
+    ]) {
+      expect(state(render({ session }))).toEqual(ready);
+    }
+    expect(state(render({ session: { totalTokens: 190_000 }, runActive: true }))).toEqual({
+      ...ready,
+      disabled: true,
+      title: "Available after this reply finishes.",
+    });
+    expect(state(render({ session: { totalTokens: 190_000 }, connected: false }))).toEqual({
+      ...ready,
+      disabled: true,
+    });
+    // A compaction the pane already tracks (runtime or another surface) reads as busy.
+    expect(
+      state(
+        render({
+          session: { totalTokens: 190_000 },
+          runActive: true,
+          compactionStatus: { phase: "active", runId: "run-1", startedAt: 1, completedAt: null },
+        }),
+      ),
+    ).toEqual({ ...ready, label: "Compacting", disabled: true, busy: "true" });
+    expect(onCompact).not.toHaveBeenCalled();
+  });
+
+  it("keeps the popover open and busy until the compaction request settles", async () => {
+    const pending = createDeferred();
+    const onCompact = vi.fn(() => pending.promise);
+    const container = renderComposer({
+      session: { totalTokens: 190_000 },
+      sessions: defaultSessions() as never,
+      onCompact,
+    });
+    const details = container.querySelector<HTMLDetailsElement>(".context-usage details")!;
+    const button = compactButton(container)!;
+    try {
+      button.click();
+      await waitForSolid(() => {
+        expect(button.disabled).toBe(true);
+        expect(button.textContent).toBe("Compacting");
+      });
+      button.click();
+      expect(onCompact).toHaveBeenCalledOnce();
+      expect(details.open).toBe(true);
+    } finally {
+      pending.resolve();
+    }
+    await waitForSolid(() => expect(button.textContent).toBe("Compact"));
+    expect(button.disabled).toBe(false);
+    expect(details.open).toBe(true);
   });
 
   it("warns on fresh high usage but keeps stale usage approximate", () => {

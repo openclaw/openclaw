@@ -215,7 +215,7 @@ it("paces 30 shared-account sessions once per request and admits interactive wor
   const { model, message, providerStream, run, rateLimit, embedded } = createCompletionRuntime();
   await run();
   vi.useFakeTimers();
-  vi.setSystemTime(0);
+  vi.setSystemTime(1_700_000_000_000);
   providerStream
     .mockClear()
     .mockImplementationOnce(() =>
@@ -250,6 +250,7 @@ it("paces 30 shared-account sessions once per request and admits interactive wor
   await vi.advanceTimersByTimeAsync(999);
   expect(calls()).toEqual(["seed", "other-account"]);
   expect(onRateLimitWait).toHaveBeenCalledTimes(10);
+  expect(onRateLimitWait).toHaveBeenCalledWith(Date.now() + 1);
   await vi.advanceTimersByTimeAsync(1);
   expect(calls()).toEqual(["seed", "other-account", "interactive-0"]);
   expect(stoppedWaiting).toHaveBeenCalledOnce();
@@ -264,7 +265,7 @@ it("paces 30 shared-account sessions once per request and admits interactive wor
   expect(stoppedWaiting).toHaveBeenCalledTimes(10);
 
   // Ongoing successful traffic must not keep the recovery gate alive forever.
-  await vi.advanceTimersByTimeAsync(60_000 - Date.now());
+  await vi.advanceTimersByTimeAsync(60_000 - performance.now());
   const active = run({ apiKey: "synthetic-priority-key" });
   await vi.advanceTimersByTimeAsync(0);
   await active;
@@ -279,14 +280,19 @@ it("shares TPM waits across runs of one model without delaying another model on 
   const { model, runtime, message, providerStream, run, limit } = createCompletionRuntime();
   await run();
   vi.useFakeTimers();
+  vi.setSystemTime(1_700_000_000_000);
   const options = {
     apiKey: "synthetic-model-scoped-key",
     headers: { "OpenAI-Organization": "org-synthetic-model-scoped" },
   };
   providerStream.mockImplementationOnce(() => limit("model-scoped", 1000));
   await run(options);
+  vi.setSystemTime(Date.now() + 90_000);
   providerStream.mockClear();
-  const primary = run({ ...options, sessionId: "another-primary-run" });
+  const primary = withProviderRateLimitRetryDeadline(performance.now() + 1200, () =>
+    run({ ...options, sessionId: "another-primary-run" }),
+  );
+  const primaryOutcome = Promise.allSettled([primary]);
   const fallbackModel = bindModelLlmRuntime({ ...model, id: "fallback-sibling" }, runtime);
   const fallback = completeSimple(fallbackModel, emptyContext, {
     ...options,
@@ -297,12 +303,10 @@ it("shares TPM waits across runs of one model without delaying another model on 
   await expect(fallback).resolves.toEqual(message);
   await vi.advanceTimersByTimeAsync(999);
   expect(providerStream).toHaveBeenCalledOnce();
+  vi.setSystemTime(Date.now() - 180_000);
   await vi.advanceTimersByTimeAsync(1);
-  await expect(primary).resolves.toEqual(message);
-  expect(providerStream.mock.calls.map((call) => call[2]?.sessionId)).toEqual([
-    "fallback-run",
-    "another-primary-run",
-  ]);
+  await expect(primaryOutcome).resolves.toEqual([{ status: "fulfilled", value: message }]);
+  expect(providerStream).toHaveBeenCalledTimes(2);
   await vi.advanceTimersByTimeAsync(60_000);
 });
 
@@ -360,7 +364,7 @@ it("bounds retry admission while shared floors extend and interactive peers rema
   const options = { apiKey: "synthetic-deadline-key" };
   const { providerStream, run, limit } = await createLimitedRuntime("deadline", options);
   providerStream.mockClear();
-  const retry = withProviderRateLimitRetryDeadline(Date.now() + 1200, () =>
+  const retry = withProviderRateLimitRetryDeadline(performance.now() + 1200, () =>
     run({ ...options, sessionId: "bounded-retry" }),
   );
   const failed = expect(retry).rejects.toMatchObject({ reason: "rate_limit", status: 429 });

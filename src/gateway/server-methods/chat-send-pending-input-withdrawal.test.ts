@@ -196,7 +196,7 @@ describe("queued chat input withdrawal", () => {
     expect(recorder.getAdmissionReceipt()).toBeUndefined();
     expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
       total: 1,
-      items: [{ state: "interrupted" }],
+      items: [{ state: "cancelled" }],
     });
     expect(loadTranscriptEventsSync(fixture.scope)).not.toContainEqual(
       expect.objectContaining({
@@ -215,7 +215,7 @@ describe("queued chat input withdrawal", () => {
     ["consumed", "rpc", undefined, false],
     ["queued", "rpc", "rpc", true],
   ] as const)(
-    "settles %s input (%s, %s, discard: %s) without losing recovery",
+    "settles %s input (%s, %s, discard: %s) while preserving failed sends",
     async (target, stopReason, reason, discardPendingInput) => {
       await using fixture = await startInput();
       const { context, scope, active, recorder, runId } = fixture;
@@ -254,7 +254,7 @@ describe("queued chat input withdrawal", () => {
         }
       }
       await fixture.finishDispatch();
-      const disposition = reason === "restart" ? "interrupted" : "cancelled";
+      const disposition = "cancelled";
       const prefix = "chat pending input aborted:";
       const logs = vi
         .mocked(context.logGateway.info)
@@ -279,7 +279,7 @@ describe("queued chat input withdrawal", () => {
           {
             runId,
             state: "pending",
-            ...(disposition === "cancelled" ? { cancelled: true } : {}),
+            cancelled: true,
           },
         ]);
         expect(loadTranscriptEventsSync(scope)).toEqual(fixture.activeTranscript);

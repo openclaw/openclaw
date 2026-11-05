@@ -352,6 +352,7 @@ suite.define(() => {
         totalMessages: 100,
         hasMore: true,
         nextOffset: 1,
+        olderCursor: "older-outbox-history",
         pendingInputs: { items: [cancelInput], total: 2, nextBefore: 21, queuedCount: 1 },
         inputReceipts: [{ runId: cancelRunId, state: "pending", queued: true }],
       };
@@ -417,10 +418,9 @@ suite.define(() => {
         expect(await page.getByText(cancelPrompt, { exact: true }).count()).toBe(0);
         expect(
           await page
-            .getByText(
-              "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
-              { exact: true },
-            )
+            .getByText("This message was not sent to the agent. Copy it and send again.", {
+              exact: true,
+            })
             .count(),
         ).toBe(0);
       };
@@ -470,7 +470,7 @@ suite.define(() => {
       await gateway.setMethodResponse("chat.history", historyResponses(activeHistory));
       await gateway.setMethodResponse("chat.startup", activeHistory);
       await reconnectMockGateway(page, gateway);
-      const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       await stop.waitFor();
 
       const stoppedHistory = {

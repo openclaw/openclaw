@@ -71,7 +71,6 @@ function createRequiredWorkerSessionPreparation(
     options.dispatch as WorkerPlacementDispatchService,
     createGatewayWorkerDispatchAdmission(),
     undefined,
-    undefined,
     options,
   );
   return createRequiredPreparation({ getConfig: options.getConfig, dispatch });

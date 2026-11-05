@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
 import type { RuntimeId } from "./runtime-id.js";
-import type { RuntimeParityResult } from "./runtime-parity.js";
+import type { RuntimeParityResult } from "./runtime-parity.types.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {
   buildQaToolCoverageReport,

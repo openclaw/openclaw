@@ -1,4 +1,5 @@
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
+import type { PluginCohortRecoveryWriteBinding } from "./update-plugin-cohort-schema.js";
 import type { UpdateResultPayload } from "./update-result-payload.js";
 import type {
   InterruptedUpdateSettlement,
@@ -32,6 +33,7 @@ export type UpdateRunWriteInput = {
   runId: string;
   redactionFacts: UpdateRunRedactionFacts;
   requireNoRecovery?: true;
+  pluginCohort?: PluginCohortRecoveryWriteBinding;
   busyTimeoutMs?: number;
   redactPaths?: readonly string[];
 };

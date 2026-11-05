@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
+import { deserialize } from "node:v8";
+import { zstdDecompressSync } from "node:zlib";
+import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
 import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
+import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
 import {
   pruneWorkspaceHashMemo,
   withWorkerWorkspaceHashMemo,
@@ -11,6 +16,7 @@ import {
 import {
   manifestNodes,
   parseChangedWorkspaceResult,
+  prepareWorkspaceReconciliation,
   sameEntry,
   type WorkspaceNode,
 } from "./workspace-manifest-comparison.js";
@@ -27,6 +33,11 @@ import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
+
+// One prepared tree per existing worker; another owner or root refills it.
+let preparedLocalManifest:
+  | { owner: string; records: Map<string, LocalWorkspaceManifestRecord> }
+  | undefined;
 
 function decodeUtf8(bytes: Uint8Array): string {
   return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8");
@@ -76,6 +87,39 @@ export async function executeWorkspaceManifestComputation(
   assertBeforeMutation?: () => void,
 ): Promise<WorkspaceManifestComputationResult> {
   switch (command.type) {
+    case "workspace.manifest.local": {
+      const { executeLocalWorkspaceManifestRead } =
+        await import("./local-workspace-manifest-scan.js");
+      const owner = command.input.owner;
+      let records =
+        preparedLocalManifest?.owner === owner ? preparedLocalManifest.records : undefined;
+      preparedLocalManifest = undefined;
+      const bytes = await requestGitWorkerEffect({
+        type: "workspace.manifest.read",
+        input: { knownTreeRoot: records?.get("")?.treeRef },
+      });
+      // SAFETY: The state reader captures both arguments from the admitted request.
+      const [snapshot, action] = deserialize(zstdDecompressSync(bytes)) as Parameters<
+        typeof executeLocalWorkspaceManifestRead
+      >;
+      if (snapshot.records) {
+        records = decodeLocalWorkspaceTree(snapshot.records, !snapshot.row.tree_root_digest);
+      }
+      const result = await executeLocalWorkspaceManifestRead(snapshot, action, records);
+      if (
+        records?.has("") &&
+        snapshot.row.tree_root_digest &&
+        (action.kind === "scan" ||
+          action.kind === "probe" ||
+          action.kind === "materialize" ||
+          action.kind === "archive")
+      ) {
+        // A scan consumes this map. Its actual root may still await acceptance;
+        // the next authoritative header must match it before any reuse.
+        preparedLocalManifest = { owner, records };
+      }
+      return result;
+    }
     case "workspace.manifest.base-refresh": {
       const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
       const input = command.input;
@@ -160,11 +204,15 @@ export async function executeWorkspaceManifestComputation(
     }
     case "workspace.manifest.staged": {
       const { loadStagedWorkerWorkspace } = await import("./workspace-result-inventory.runtime.js");
-      return await loadStagedWorkerWorkspace(
+      const { nodes, ...snapshot } = await loadStagedWorkerWorkspace(
         command.input.root,
         command.input.ref,
         command.input.buildCacheInputs,
       );
+      return {
+        ...snapshot,
+        reconciliation: prepareWorkspaceReconciliation(snapshot.base, snapshot.current, nodes),
+      };
     }
     case "workspace.manifest.stage-input": {
       const { buildWorkspaceStageInput } =
@@ -257,8 +305,16 @@ export async function executeWorkspaceManifestComputation(
     case "workspace.manifest.pair": {
       const baseRaw = decodeUtf8(command.input.baseRaw);
       const currentRaw = decodeUtf8(command.input.currentRaw);
-      const base = parseWorkerWorkspaceManifest(baseRaw, command.input.baseRef);
-      const current = parseWorkerWorkspaceManifest(currentRaw, command.input.currentRef);
+      const base = parseWorkerWorkspaceManifest(
+        baseRaw,
+        command.input.baseRef,
+        command.input.buildCacheInputs,
+      );
+      const current = parseWorkerWorkspaceManifest(
+        currentRaw,
+        command.input.currentRef,
+        command.input.buildCacheInputs,
+      );
       const compared = parseChangedWorkspaceResult(base, current);
       return { base, current, ...compared, paths: compared.entries.map((entry) => entry.path) };
     }

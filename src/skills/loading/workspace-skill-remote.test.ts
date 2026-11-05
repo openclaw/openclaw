@@ -8,8 +8,8 @@ import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import { prepareWorkspaceSkillStatus } from "../discovery/status.js";
 import { recordSkillFileHost, resolveSkillFileHost } from "../skill-file-host.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { resolveSkillDiscoveryLimits } from "./skill-root-discovery.js";
 import {
   loadWorkspaceSkills,
@@ -77,7 +77,7 @@ async function fixture() {
     stat: vi.fn(async () => null),
   };
   const options = {
-    config: { plugins: { enabled: false } },
+    config: { plugins: { allow: ["skill-workshop"] } },
     executionWorkspaceDir: execution,
     bundledSkillsDir: path.join(root, "bundled"),
     managedSkillsDir: path.join(root, "managed"),

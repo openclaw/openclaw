@@ -1,4 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { SaveMediaSourceError } from "./store.shared.js";
 
 // Pin each chunk to the opened file and reject parent aliases outside the workspace.
 const REMOTE_FILE_READER = String.raw`
@@ -20,9 +21,9 @@ try {
       const verified = fs.statSync(descriptor);
       if (verified.dev !== before.dev || verified.ino !== before.ino) throw Error("file changed while being opened");
     }
-    if (before.size > max) throw Error("file exceeds limit of " + max + " bytes");
     if (offset > before.size) throw Error("file changed while being read");
-    const expected = Math.min(chunk, before.size - offset), buffer = Buffer.allocUnsafe(expected);
+    // Return metadata alone for oversized sources; the host owns the typed refusal.
+    const expected = before.size > max ? 0 : Math.min(chunk, before.size - offset), buffer = Buffer.allocUnsafe(expected);
     let total = 0;
     while (total < buffer.length) {
       const count = fs.readSync(fd, buffer, total, buffer.length - total, offset + total);
@@ -108,7 +109,6 @@ export function createBoundedRemoteFileReader(binding: {
         typeof chunk.size !== "number" ||
         !Number.isSafeInteger(chunk.size) ||
         chunk.size < 0 ||
-        chunk.size > params.maxBytes ||
         typeof chunk.revision !== "string" ||
         !chunk.revision
       ) {
@@ -118,6 +118,12 @@ export function createBoundedRemoteFileReader(binding: {
       expectedRevision ??= chunk.revision;
       if (chunk.size !== expectedSize || chunk.revision !== expectedRevision) {
         throw new Error("Remote workspace artifact changed during chunked transfer.");
+      }
+      if (chunk.size > params.maxBytes) {
+        if (chunk.dataBase64 !== "") {
+          throw new Error("Remote workspace artifact returned invalid or oversized chunk data.");
+        }
+        throw SaveMediaSourceError.tooLarge(params.maxBytes);
       }
       const expectedChunkBytes = Math.min(chunkBytes, expectedSize - offset);
       if (chunk.dataBase64.length > Math.ceil(expectedChunkBytes / 3) * 4) {
