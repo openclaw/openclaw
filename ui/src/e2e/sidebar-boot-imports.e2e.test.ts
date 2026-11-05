@@ -133,6 +133,7 @@ suite.define(() => {
           );
           expect(report.parity?.initialRows).toBeGreaterThan(0);
           expect(report.parity).toMatchObject({ added: 0, removed: 0, avatars: 0 });
+          expect(await page.locator(".sidebar-footer-bar__home").isEnabled()).toBe(true);
           await page
             .locator("aside.sidebar")
             .screenshot({ path: path.join(suite.artifactDir, `${face}-live.png`) });

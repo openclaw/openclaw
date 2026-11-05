@@ -332,7 +332,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
   const profileGateway = projectGateway(context.gateway);
   const home = () => host.visibleHomeSession(host.expandedAgentId());
   const homeAvailable = () =>
-    profileGateway.read().hello
+    profileGateway.read().snapshot.hello
       ? isHomePanelAvailable(context.gateway)
       : host.sidebarSnapshot?.homeAllowed;
   const connectionStatus = () => host.connectionStatus;
