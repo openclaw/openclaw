@@ -18,7 +18,6 @@ import { projectApplicationConfig, projectGateway } from "../../../lib/reactive/
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { sharedThemeProjection } from "../../../lib/reactive/shared-application-projections.ts";
-import "../../../styles/session-menu.css";
 
 /** Adapts existing anonymous page metadata; never fetches or embeds remote markup. */
 function browserTabTweet(url: string, title?: string, page?: ControlUiLinkPreview) {

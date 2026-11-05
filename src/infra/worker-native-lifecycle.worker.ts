@@ -231,7 +231,10 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
     void (async () => {
       await nextTurn();
       lifetime.nativeJoined = { code };
-      send({ type: "execution-exit", id, code });
+      // Only retained resources can keep cleanup pending after execution has joined.
+      if (lifetime.resource) {
+        send({ type: "execution-exit", id, code });
+      }
       finishJoined(id, lifetime);
     })().catch((error: unknown) => send({ type: "stop-error", id, error }));
   });
@@ -270,14 +273,6 @@ port.on("message", (message: NativeWorkerRequest) => {
   }
   if (message.type === "resource-owner") {
     lifetime.resource?.owner.ownerMessage(message.value, message.sequence);
-    return;
-  }
-  if (message.type === "ref") {
-    if (message.referenced) {
-      lifetime.worker.ref();
-    } else {
-      lifetime.worker.unref();
-    }
     return;
   }
   if (message.type === "post") {

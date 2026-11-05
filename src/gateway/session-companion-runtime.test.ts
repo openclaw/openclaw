@@ -154,6 +154,7 @@ describe("Side chat with a published Gateway runtime", () => {
           sessionId: "selected-session",
           sessionKey: "agent:main:selected",
           storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+          ownerId: "shared",
         };
         const seededEntry = { sessionId: selected.sessionId, updatedAt: 1 };
         await patchSessionEntryCore(selected, () => seededEntry, {
@@ -320,6 +321,7 @@ describe("Side chat with a published Gateway runtime", () => {
               sessionKey: selected.sessionKey,
               question: "What is it doing now?",
               connId: "restricted-connection",
+              ownerId: "profile:restricted",
               operatorAuthority: authority,
             }),
           ).resolves.toMatchObject({ answer: "The selected session is ready." });
@@ -329,6 +331,7 @@ describe("Side chat with a published Gateway runtime", () => {
               sessionKey: selected.sessionKey,
               question: "Use another model?",
               connId: "denied-connection",
+              ownerId: "profile:denied",
               operatorAuthority: deniedAuthority,
             }),
           ).rejects.toThrow("Side chat");

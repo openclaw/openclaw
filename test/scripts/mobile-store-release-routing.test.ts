@@ -44,7 +44,13 @@ type Workflow = {
   concurrency: { group: string; "cancel-in-progress": boolean };
   jobs: {
     qualify: { if: string };
-    release: { if: string; needs: string; environment: string; steps: WorkflowStep[] };
+    release: {
+      if: string;
+      needs: string;
+      environment: string;
+      "runs-on": string;
+      steps: WorkflowStep[];
+    };
     screenshots: { if: string };
   };
 };
@@ -195,6 +201,8 @@ it.each(["ios", "android"])("routes %s daily and qualified weekly/manual release
     );
   const upload = findStep(`Prepare and upload ${ios ? "iOS" : "Android"} release`);
   if (!ios) {
+    expect(release["runs-on"]).toBe("blacksmith-32vcpu-ubuntu-2404");
+    expect(upload.env?.ANDROID_SCREENSHOT_DIAGNOSTICS).toBe("1");
     expect(workflow.on.workflow_dispatch.inputs.operation).toMatchObject({
       default: "release",
       options: ["release", "internal"],

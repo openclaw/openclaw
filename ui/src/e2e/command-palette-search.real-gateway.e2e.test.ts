@@ -22,9 +22,11 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import type { SessionsListResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
@@ -49,6 +51,7 @@ const scope = {
 };
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let instance: OpenClawTestInstance | undefined;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
 
 type RpcObservation = {
   method: string;
@@ -155,6 +158,15 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
 const suite = createControlUiE2eSuite({
   name: "Control UI command palette search with a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      expect.assert(instance);
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     const owner = await createOpenClawTestInstance({
       name: "command-palette-search",
@@ -537,7 +549,9 @@ suite.define(() => {
               revision,
               keys: metadataKeys,
             });
-            expect(notices).toEqual(noMatches ? [expect.stringContaining("No results found")] : []);
+            expect(notices).toEqual(
+              noMatches ? [expect.stringContaining("No results match your search.")] : [],
+            );
             expect(
               await palette
                 .getByText(/Search notices|incomplete|unavailable|indexing older/i)
@@ -613,7 +627,7 @@ suite.define(() => {
           expect(absent.truncated).toBe(false);
           expect(await results.getByRole("option").count()).toBe(0);
           await emptyState
-            .getByRole("heading", { name: "No results found", exact: true })
+            .getByRole("heading", { name: "No results match your search.", exact: true })
             .waitFor();
 
           await search("copperfinch observatory", 1, "06-selected-search-result.png");
@@ -649,20 +663,8 @@ suite.define(() => {
               ),
             )
             .toBe(otherKey);
-          const call = async (method: string, params: Record<string, unknown>) => {
-            const rpcResult = await owner.cli([
-              "gateway",
-              "call",
-              method,
-              "--json",
-              "--params",
-              JSON.stringify(params),
-            ]);
-            expect(rpcResult.code, rpcResult.stderr).toBe(0);
-            return requireRecord(JSON.parse(rpcResult.stdout));
-          };
           for (const category of ["Research", null, "HOME ASSISTANT"]) {
-            await call("sessions.patch", { key: targetKey, category });
+            await client.request("sessions.patch", { key: targetKey, category });
             const groupRows = page.locator(
               `[data-session-section^="category:"] [data-session-key="${targetKey}"]`,
             );
@@ -674,7 +676,7 @@ suite.define(() => {
                 )
                 .waitFor({ state: "visible" });
             }
-            const inventory = await call("sessions.list", {
+            const inventory = await client.request<SessionsListResult>("sessions.list", {
               ...scope,
               search: targetLabel,
               includePeople: true,

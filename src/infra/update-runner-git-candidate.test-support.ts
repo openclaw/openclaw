@@ -13,6 +13,7 @@ import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers
 import { pathExists } from "../utils.js";
 import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
+import { writeFixtureTree } from "./fixture-tree.test-support.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { updateGitCheckout } from "./update-runner-git.js";
@@ -141,14 +142,6 @@ export function isolateGitIdentity() {
     for (const field of ["NAME", "EMAIL"]) {
       vi.stubEnv(`GIT_${role}_${field}`, undefined);
     }
-  }
-}
-
-export async function writeFixtureTree(root: string, files: Record<string, string>) {
-  for (const [file, contents] of Object.entries(files)) {
-    const destination = path.join(root, file);
-    await fs.mkdir(path.dirname(destination), { recursive: true });
-    await fs.writeFile(destination, contents);
   }
 }
 
@@ -421,6 +414,7 @@ export async function writeRuntime(directory: string, sha: string, store: string
   const virtualPackage = path.join(virtualStore, sha, "node_modules", "virtual-runtime");
   const identity = `module.exports = ${JSON.stringify(sha)};`;
   await writeFixtureTree(root, {
+    [path.relative(root, path.join(external, "package.json"))]: '{"type":"commonjs"}',
     [path.relative(root, path.join(external, "index.js"))]: identity,
     [path.relative(root, path.join(virtualPackage, "index.js"))]: identity,
     "node_modules/identity.cjs": identity,

@@ -183,7 +183,6 @@ afterEach(() => {
   clearPluginMetadataLifecycleCaches();
   vi.resetModules();
   vi.doUnmock("../../plugins/bundled-channel-runtime.js");
-  vi.doUnmock("./bundled-root.js");
 });
 
 describe("bundled channel entry shape guards", () => {
@@ -298,13 +297,7 @@ describe("bundled channel entry shape guards", () => {
       const label = layout === "direct" ? "Direct dist Alpha" : "Package dist Alpha";
       writeAlphaSdkAliasDistFixture(pluginDir, label);
       if (layout === "package-local") {
-        // mock-isolation: The fixture owns the package root instead of probing the host installation.
-        vi.doMock("./bundled-root.js", () => ({
-          resolveBundledChannelRootScope: () => ({
-            packageRoot: root,
-            cacheKey: `${root}:package-local-dist`,
-          }),
-        }));
+        vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(root, "extensions"));
       } else {
         vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", pluginsRoot);
       }
@@ -377,13 +370,7 @@ describe("bundled channel entry shape guards", () => {
     const { root, pluginDir } = fixtureDirectory("runtime-root", "dist-runtime");
     writeSetup(pluginDir, pluginSource("Setup dist-runtime"));
 
-    // mock-isolation: The fixture owns the package root instead of probing the host installation.
-    vi.doMock("./bundled-root.js", () => ({
-      resolveBundledChannelRootScope: () => ({
-        packageRoot: root,
-        cacheKey: `${root}:dist-runtime`,
-      }),
-    }));
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(root, "dist-runtime", "extensions"));
     mockMetadata(
       alphaChannelMetadata({ includeSetup: true, rootDir: pluginDir }),
       (rootDir, entry, pluginDirName) =>

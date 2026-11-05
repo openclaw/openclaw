@@ -67,15 +67,6 @@ async function resolveTarget(identity = IDENTITY) {
     agentId: identity.agentId,
   });
 }
-function transcriptEvent(
-  type: string,
-  id: string,
-  parentId: string | null,
-  fields: Record<string, unknown>,
-) {
-  return { type, id, parentId, ...fields };
-}
-
 function seedSession(fields: Parameters<typeof upsertSessionEntryCore>[1] = {}) {
   return upsertSessionEntryCore(IDENTITY, {
     sessionId: IDENTITY.sessionId,
@@ -121,15 +112,16 @@ async function createHandlers(identity = IDENTITY) {
   );
 }
 
-async function readRecoveryEvents(identity = IDENTITY) {
-  const events = await loadTranscriptEvents(identity);
-  return events.filter(
+async function readReports(identity = IDENTITY, customType: string | null = null) {
+  return (await loadTranscriptEvents(identity)).filter(
     (event): event is Record<string, unknown> =>
       isRecord(event) &&
       event.type === "custom_message" &&
-      event.customType === WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
+      (customType === null || event.customType === customType),
   );
 }
+const readRecoveryEvents = (identity = IDENTITY) =>
+  readReports(identity, WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE);
 
 it.each(["reset", "opaque"])(
   "selects conflict reports through %s navigation without adopting an inactive clear",
@@ -137,22 +129,20 @@ it.each(["reset", "opaque"])(
     await seedSession();
     await replaceTranscriptEvents(IDENTITY, [
       sessionHeader,
-      transcriptEvent("message", "root", null, { message: { role: "user", content: "Start" } }),
+      { type: "message", id: "root", parentId: null, message: { role: "user", content: "Start" } },
       conflictEvent("conflict", "root"),
-      transcriptEvent("custom_message", "inactive-clear", "conflict", {
+      {
+        type: "custom_message",
+        id: "inactive-clear",
+        parentId: "conflict",
         customType: WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
         content: "Cleared",
         display: false,
-      }),
+      },
       { type: "provider_event", id: "opaque", parentId: "conflict", evidence: "unchanged" },
       navigation === "reset"
         ? { type: "reset", id: "reset", parentId: null, reason: "reset" }
-        : {
-            type: "leaf",
-            id: "selection",
-            parentId: "opaque",
-            targetId: "opaque",
-          },
+        : { type: "leaf", id: "selection", parentId: "opaque", targetId: "opaque" },
     ]);
     const handlers = await createHandlers();
     expect(await handlers.resolveConflict()).toEqual(
@@ -163,9 +153,7 @@ it.each(["reset", "opaque"])(
     await handlers.reportConflict({ cleared: true });
     await handlers.reportConflict({ cleared: true });
     expect(await handlers.resolveConflict()).toEqual({ kind: "absent" });
-    const reports = (await loadTranscriptEvents(IDENTITY)).filter(
-      (event) => isRecord(event) && event.type === "custom_message",
-    );
+    const reports = await readReports();
     expect(reports).toHaveLength(navigation === "reset" ? 4 : 3);
     expect(reports.at(-1)).toMatchObject({
       customType: WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
@@ -199,18 +187,12 @@ it("records historical recovery failures while preserving the live pending-resul
   await upsertSessionEntryCore(REQUEST, { sessionId: REQUEST.sessionId, updatedAt: 1 });
   const workspacePath = state.statePath("recovery-workspace");
   await fs.mkdir(workspacePath, { recursive: true });
-  expect(
-    (
-      await runCommandWithTimeout(["git", "-C", workspacePath, "init", "--quiet"], {
-        timeoutMs: 10_000,
-      })
-    ).code,
-  ).toBe(0);
+  const init = await runCommandWithTimeout(["git", "-C", workspacePath, "init", "--quiet"], {
+    timeoutMs: 10_000,
+  });
+  expect(init.code).toBe(0);
   const placements = createWorkerSessionPlacementStore();
-  const harnessOptions: { reconcileFails: boolean; workspacePath: string } = {
-    reconcileFails: true,
-    workspacePath,
-  };
+  const harnessOptions = { reconcileFails: true, workspacePath };
   const harness = await createHarness(openOpenClawStateDatabase(), placements, harnessOptions);
   const active = await harness.placements.seedActive(2);
   if (active.state !== "active") {
@@ -240,10 +222,7 @@ it("records historical recovery failures while preserving the live pending-resul
   expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
   expect(harness.environments.destroy).not.toHaveBeenCalled();
   expect(await readRecoveryEvents(REQUEST)).toMatchObject([
-    {
-      content: expect.stringContaining("workspace conflict"),
-      display: true,
-    },
+    { content: expect.stringContaining("workspace conflict"), display: true },
   ]);
 
   harnessOptions.reconcileFails = false;
@@ -294,10 +273,7 @@ it("records a visible commit fallback note without reporting a recovery failure"
   await reportNote(note);
   await reportNote(note);
 
-  const events = (await loadTranscriptEvents(IDENTITY)).filter(
-    (event) => isRecord(event) && event.type === "custom_message",
-  );
-  expect(events).toMatchObject([
+  expect(await readReports()).toMatchObject([
     { customType: WORKSPACE_HISTORY_NOTE_TRANSCRIPT_TYPE, content: note, display: true },
   ]);
   expect(await readRecoveryEvents()).toEqual([]);

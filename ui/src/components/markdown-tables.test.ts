@@ -8,6 +8,7 @@ import {
   resetTranscriptSession,
 } from "../pages/chat/components/chat-thread-interactions.ts";
 import { installDialogPolyfill, waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
+import { installSessionTitleRegistrar } from "./markdown-link-display.ts";
 import {
   enhanceMarkdownTables,
   handleMarkdownTableInteraction,
@@ -15,7 +16,6 @@ import {
 } from "./markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
-import { installSessionTitleRegistrar } from "./session-title-target-registration.ts";
 
 const writeText = vi.fn(async (_text: string) => undefined);
 
@@ -57,10 +57,10 @@ function query(owner: ParentNode, selector: string): HTMLElement {
   return owner.querySelector<HTMLElement>(selector)!;
 }
 
-function interactiveOwner(content = table) {
+function interactiveOwner(content = table, options = interactiveOptions) {
   const owner = document.createElement("div");
   owner.className = "chat-thread";
-  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(content, interactiveOptions)}</div>`;
+  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(content, options)}</div>`;
   document.body.append(owner);
   const shell = query(owner, ".markdown-table");
   const viewport = query(owner, ".markdown-table__viewport");
@@ -73,6 +73,7 @@ function interactiveOwner(content = table) {
   enhanceMarkdownTables(owner);
   cleanups.push(() => releaseMarkdownTables(owner));
   deliverTableResize(viewport);
+  viewport.dispatchEvent(new Event("scroll"));
   return {
     owner,
     shell,
@@ -120,24 +121,37 @@ describe("Markdown table interactions", () => {
     restoreDialogPolyfill();
   });
 
-  it("tracks hidden columns in both scroll directions", () => {
+  it("copies rendered breaks and delimiter characters within their table cells", async () => {
+    vi.useFakeTimers();
+    const { owner, copy } = interactiveOwner(
+      '| Label | Value | Empty |\n| --- | --- | --- |\n| **Alpha**<br>Beta | One | |\n| Quote "here"<br>next | Comma, kept | |\n| `A\tB` | End | |\n| Quote "only" | Plain | |',
+      { ...interactiveOptions, progressBars: false },
+    );
+    await copyTable(copy, "Copied");
+    expect(writeText).toHaveBeenLastCalledWith(
+      'Label\tValue\tEmpty\n"Alpha\nBeta"\tOne\t\n"Quote ""here""\nnext"\tComma, kept\t\n"A\tB"\tEnd\t\n"Quote ""only"""\tPlain\t',
+    );
+    expect(owner.querySelectorAll("br")).toHaveLength(2);
+  });
+
+  it.each(["ltr", "rtl"])("tracks physical hidden edges in %s tables", (direction) => {
     const { shell, viewport } = interactiveOwner();
     const canScroll = (side: string) =>
       shell.classList.contains(`markdown-table--can-scroll-${side}`);
-    for (const [offset, left, right] of [
+    viewport.style.direction = direction;
+    for (const [position, left, right] of [
       [0, false, true],
       [100, true, true],
       [200, true, false],
     ] as const) {
-      viewport.scrollLeft = offset;
-      if (offset) {
-        viewport.dispatchEvent(new Event("scroll"));
-      }
+      viewport.scrollLeft = direction === "rtl" ? position - 200 : position;
+      viewport.dispatchEvent(new Event("scroll"));
       expect([canScroll("left"), canScroll("right")]).toEqual([left, right]);
     }
   });
 
   it("updates retained table overflow without mutation-time layout", async () => {
+    vi.useFakeTimers();
     vi.stubGlobal("MutationObserver", originalMutationObserver);
     const { owner, shell, viewport } = interactiveOwner(`${table}\n\n${table}`);
     const otherViewport = owner.querySelectorAll(".markdown-table__viewport")[1]!;
@@ -146,15 +160,18 @@ describe("Markdown table interactions", () => {
     Object.defineProperty(otherViewport, "scrollWidth", { configurable: true, get: otherWidth });
     Object.defineProperty(viewport, "scrollWidth", { configurable: true, get: changedWidth });
 
-    shell.querySelector("td")!.firstChild!.textContent = "Shorter";
+    shell.querySelector("td")!.innerHTML = "<code>Shorter</code>";
     await Promise.resolve();
     await Promise.resolve();
     expect(changedWidth).not.toHaveBeenCalled();
     expect(otherWidth).not.toHaveBeenCalled();
     deliverTableResize(viewport);
-    expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
-    expect(changedWidth).toHaveBeenCalled();
+    expect(changedWidth).not.toHaveBeenCalled();
     expect(otherWidth).not.toHaveBeenCalled();
+    expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(true);
+    vi.advanceTimersToNextFrame();
+    expect(changedWidth).toHaveBeenCalled();
+    expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
 
     changedWidth.mockClear();
     query(shell, ".markdown-table__copy").replaceChildren(document.createElement("span"));
@@ -164,31 +181,77 @@ describe("Markdown table interactions", () => {
     expect(otherWidth).not.toHaveBeenCalled();
   });
 
+  it("retires queued overflow writes on scroll or owner release", () => {
+    vi.useFakeTimers();
+    const { owner, shell, viewport } = interactiveOwner();
+    viewport.scrollLeft = 100;
+    deliverTableResize(viewport);
+    viewport.scrollLeft = 0;
+    viewport.dispatchEvent(new Event("scroll"));
+    vi.advanceTimersToNextFrame();
+    expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(false);
+
+    viewport.scrollLeft = 100;
+    deliverTableResize(viewport);
+    releaseMarkdownTables(owner);
+    vi.advanceTimersToNextFrame();
+    expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(false);
+  });
+
+  it("discovers nested tables in code and releases removed tables even after they are emptied", async () => {
+    vi.stubGlobal("MutationObserver", originalMutationObserver);
+    const { owner } = interactiveOwner();
+    const pre = document.createElement("pre");
+    pre.innerHTML = `<code data-code-highlight>${toSanitizedMarkdownHtml(table, interactiveOptions)}</code>`;
+    query(owner, ".chat-text").append(pre);
+    const shell = query(pre, ".markdown-table");
+    const viewport = query(shell, ".markdown-table__viewport");
+    const nestedTable = query(viewport, "table");
+    const resize = ResizeObserverMock.mock.results.at(-1)!.value;
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(query(shell, ".markdown-table__expand").textContent).toBe("Expand table");
+    expect(resize.observe).toHaveBeenCalledWith(viewport);
+    expect(resize.observe).toHaveBeenCalledWith(nestedTable);
+
+    nestedTable.replaceChildren();
+    nestedTable.remove();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resize.unobserve).toHaveBeenCalledWith(nestedTable);
+
+    pre.remove();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resize.unobserve).toHaveBeenCalledWith(viewport);
+  });
+
   it("announces copy outcomes without stale success and resets their feedback", async () => {
     vi.useFakeTimers();
     const legacyCopy = vi.fn(() => false);
     stubProperty(document, "execCommand", legacyCopy);
     const { shell, copy } = interactiveOwner();
     const statusText = () => shell.querySelector('[role="status"]')?.textContent;
-    await copyTable(copy, "Copied!");
-    expect(statusText()).toBe("Copied!");
+    await copyTable(copy, "Copied");
+    expect(statusText()).toBe("Copied");
 
     writeText.mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
-    await copyTable(copy, "Copy failed");
-    expect(statusText()).toBe("Copy failed");
+    await copyTable(copy, "Couldn’t copy. Try again.");
+    expect(statusText()).toBe("Couldn’t copy. Try again.");
 
     expect(writeText).toHaveBeenLastCalledWith("Name\tValue\nAlpha\tOne");
     expect(legacyCopy).toHaveBeenCalledExactlyOnceWith("copy");
     await vi.advanceTimersByTimeAsync(1500);
-    expect(copy.getAttribute("aria-label")).toBe("Copy failed");
+    expect(copy.getAttribute("aria-label")).toBe("Couldn’t copy. Try again.");
 
-    await copyTable(copy, "Copied!");
+    await copyTable(copy, "Copied");
     await vi.advanceTimersByTimeAsync(500);
-    expect(copy.getAttribute("aria-label")).toBe("Copied!");
+    expect(copy.getAttribute("aria-label")).toBe("Copied");
     await vi.advanceTimersByTimeAsync(1000);
     expectCopy(copy, "Copy table");
     writeText.mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
-    await copyTable(copy, "Copy failed");
+    await copyTable(copy, "Couldn’t copy. Try again.");
     await vi.advanceTimersByTimeAsync(2000);
     expect(statusText()).toBe("");
   });

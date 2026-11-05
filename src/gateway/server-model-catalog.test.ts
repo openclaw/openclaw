@@ -10,13 +10,18 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as currentPluginMetadata from "../plugins/current-plugin-metadata-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import {
   loadDeferredCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "./server-model-catalog-auth.js";
-import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
+import {
+  createPreparedGatewayModelCatalog,
+  readPreparedGatewayModelCatalogMetadata,
+  readPreparedGatewaySessionRowPolicy,
+} from "./server-model-catalog-view.js";
 import {
   loadGatewayModelCatalogSnapshot,
   loadPreparedGatewayModelCatalogSnapshot,
@@ -91,6 +96,43 @@ function rowFacts(
 }
 
 describe("gateway prepared model catalog", () => {
+  it("omits row comparison work for display reads while retaining eager projection snapshots", () => {
+    let reads = 0;
+    let contextTokens = 8_192;
+    const entry = {
+      provider: "fixture",
+      id: "model",
+      name: "Model",
+      get contextTokens() {
+        reads++;
+        return contextTokens;
+      },
+    };
+    const input = {
+      entries: [entry],
+      routeVariants: [entry],
+      pluginRegistry: createEmptyPluginRegistry(),
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+    };
+    const display = createPreparedGatewayModelCatalog({
+      ...input,
+      includeSessionRowPolicy: false,
+    });
+    expect(reads).toBe(0);
+    expect(display.entries).toBe(input.entries);
+    expect(display.routeVariants).toBe(input.routeVariants);
+    expect(display.pluginRegistry).toBe(input.pluginRegistry);
+    expect(readPreparedGatewayModelCatalogMetadata(display)).toBe(input.metadataSnapshot);
+    expect(readPreparedGatewaySessionRowPolicy(display)).toBeUndefined();
+
+    const projection = createPreparedGatewayModelCatalog(input);
+    contextTokens = 16_384;
+    expect(readPreparedGatewaySessionRowPolicy(projection)).toMatchObject({
+      entries: [{ data: { contextTokens: 8_192 } }],
+      routeVariants: [{ data: { contextTokens: 8_192 } }],
+    });
+  });
+
   it("keeps a prepared metadata miss separate from the current runtime generation", async () => {
     const currentMetadata = createPluginMetadataSnapshotFixture({
       plugins: [

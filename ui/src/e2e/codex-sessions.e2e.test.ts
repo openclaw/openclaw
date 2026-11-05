@@ -13,6 +13,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { assertSessionSectionCountAlignment } from "../test-helpers/control-ui-session-section-layout.ts";
 import { readTextTone } from "../test-helpers/rendered-colors.ts";
+import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eSuite,
   expandCodingSection,
@@ -111,6 +112,9 @@ suite.define(() => {
             makeCatalog("claude", "Claude Code", [makeHost("gateway:claude", "Local Claude", [])], {
               capabilities: { continueSession: true, archive: false },
             }),
+            makeCatalog("fixture", "Fixture", [
+              makeHost("gateway:fixture", "Fixture", [makeNativeSession("ready", "Catalog ready")]),
+            ]),
           ],
         },
       },
@@ -118,6 +122,7 @@ suite.define(() => {
 
     await page.goto(`${suite.server.baseUrl}chat`);
     await gateway.waitForRequest("sessions.catalog.list");
+    await browserExpect(page.getByText("Catalog ready", { exact: true })).toBeVisible();
     expect(await page.locator('[data-session-section="catalog:codex"]').count()).toBe(0);
     expect(await page.locator('[data-session-section="catalog:claude"]').count()).toBe(0);
     await page.close();
@@ -582,6 +587,10 @@ suite.define(() => {
       ).toHaveText("null");
       await browserExpect(pane.locator(".chat-tool-msg-collapse").nth(1)).not.toContainText("null");
       await browserExpect(pane).not.toContainText("omitted-native-output");
+      const thread = pane.locator(".chat-thread");
+      await thread.hover({ position: { x: 20, y: 4 } });
+      await page.mouse.wheel(0, await thread.evaluate((element) => element.scrollHeight));
+      await waitForChatScrollIdle(page);
       await browserExpect(pane).toContainText('[embed ref="cv_external" /]');
       await browserExpect(pane.locator("mcp-app-view, iframe")).toHaveCount(0);
       await pane

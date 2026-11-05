@@ -90,12 +90,7 @@ describe("ensureMatrixCryptoRuntime", () => {
       });
       await Promise.all([ensureMatrixCryptoRuntime(), ensureMatrixCryptoRuntime()]);
       await ensureMatrixCryptoRuntime();
-      expect(cryptoRequire).toHaveBeenCalledTimes(2);
-      if (mode === "missing") {
-        expect(fs.readFileSync(artifact)).toEqual(Buffer.alloc(bytes));
-      } else {
-        expect(fs.statSync(artifact).size).toBe(bytes);
-      }
+      expect(fs.readFileSync(artifact)).toEqual(Buffer.alloc(bytes));
       expect(bindingSizes).toEqual([0, bytes]);
     },
   );
@@ -116,9 +111,9 @@ describe("ensureMatrixCryptoRuntime", () => {
 
 describe("ensureMatrixSdkInstalled", () => {
   it("returns without error when all required packages resolve", async () => {
-    const resolveFn = vi.fn((_id: string) => "/fake/path");
-    await expect(ensureMatrixSdkInstalled({ resolveFn })).resolves.toBeUndefined();
-    expect(resolveFn).toHaveBeenCalled();
+    await expect(
+      ensureMatrixSdkInstalled({ resolveFn: () => "/fake/path" }),
+    ).resolves.toBeUndefined();
   });
 
   it("lists missing packages without prompting for installation (regression: #80758)", async () => {

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, rm, rename, symlink } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { expect, it } from "vitest";
-import { DraftStore, type EditorDraft } from "./drafts.js";
 import { LiveState } from "./live-state.js";
 import { createKnowledgeService } from "./service.js";
 import {
@@ -123,60 +122,6 @@ it("retired services fence new and in-flight operations, leaving no accepted wri
   for (const operation of ["grep", "lookup"] as const) {
     await expect(f.service[operation]({ query: "Fenced" }, f.context)).rejects.toThrow(/reloaded/);
   }
-});
-
-it("draft recovery isolates vault/agent/scope and preserves exact uncertain-save payload and base", () => {
-  const values = new Map();
-  const storage = {
-    getItem: (k: any) => values.get(k) ?? null,
-    setItem: (k: any, v: any) => values.set(k, v),
-    removeItem: (k: any) => values.delete(k),
-  };
-  const identity = { agent: "main", vault: "one", scope: "private" };
-  const draft: EditorDraft = {
-    version: 1,
-    key: randomUUID(),
-    title: "Unsaved",
-    body: "Exact text",
-    type: "note",
-    fields: "{}",
-    source: "Source",
-    attribution: "Test",
-    base: { id: randomUUID(), revision: 3, hash: "abc" },
-    submitted: {
-      requestId: randomUUID(),
-      title: "Submitted text",
-      body: "Original submission",
-      type: "note",
-    },
-  };
-  new DraftStore(identity, storage).write(draft);
-  expect(new DraftStore(identity, storage).read()).toStrictEqual(draft);
-  for (const changed of [{ vault: "two" }, { agent: "other" }, { scope: "conversation:other" }]) {
-    expect(new DraftStore({ ...identity, ...changed }, storage).read()).toBe(undefined);
-  }
-  const store = new DraftStore(identity, storage);
-  store.remove("wrong-key");
-  expect(store.read()).toStrictEqual(draft);
-  store.remove(draft.key);
-  expect(store.read()).toBe(undefined);
-});
-
-it("corrupt/oversized draft and unavailable storage fail explicitly without clearing data", () => {
-  let raw = "{broken";
-  const storage = {
-    getItem: () => raw,
-    setItem: () => {
-      throw new Error("quota");
-    },
-    removeItem: () => expect.fail("must preserve"),
-  };
-  const store = new DraftStore({ agent: "main", vault: "one", scope: "private" }, storage);
-  expect(() => store.read()).toThrow();
-  raw = "x".repeat(400001);
-  expect(() => store.read()).toThrow(/large/);
-  // The write fails in storage, so a minimal draft is enough.
-  expect(() => store.write({ version: 1 } as EditorDraft)).toThrow(/quota/);
 });
 
 it("status snapshot is stable for unchanged reads and detects equal-count edits and source corruption", async () => {

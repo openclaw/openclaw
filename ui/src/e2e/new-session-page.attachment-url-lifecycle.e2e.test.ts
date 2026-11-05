@@ -6,6 +6,7 @@ import {
   installMockGateway,
   navigateInApp,
   pastePng,
+  waitForCommittedChatRoute,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
@@ -154,7 +155,7 @@ suite.define(() => {
         await page.getByRole("img", { name: "pixel.png" }).waitFor();
         await waitForCommittedNewSessionDraft(page, "", 1);
         await navigate("chat");
-        await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+        await waitForCommittedChatRoute(page);
         await expectActiveObjectUrls(1);
 
         await navigate("new-session");

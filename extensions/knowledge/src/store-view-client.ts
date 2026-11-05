@@ -4,7 +4,8 @@ import type {
   FeatureOutput,
   FeatureRequestOptions,
 } from "openclaw/plugin-sdk/feature-contract";
-import { contract } from "./contract.js";
+import { browserContract } from "./browser-contract.js";
+import type { contract } from "./contract.js";
 
 type Client = FeatureClient<typeof contract>;
 type Operation = keyof typeof contract.operations;
@@ -31,7 +32,8 @@ export function viewingClient(
     ) {
       return base.invoke(operation, input, options);
     }
-    const proxy = contract.operations[operation].kind === "query" ? "agent_query" : "agent_action";
+    const proxy =
+      browserContract.operations[operation].kind === "query" ? "agent_query" : "agent_action";
     // SAFETY: the proxy validates the inner output against operation K's own output schema.
     return (await base.invoke(proxy, { agent, operation, input }, options)) as FeatureOutput<
       typeof contract,

@@ -24,9 +24,12 @@ import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { mapColdLoadCpuProfile, summarizeCpuProfile } from "./lib/control-ui-cold-load-trace.ts";
 import {
-  createInteractionFixture,
+  createScenarioFixture,
   interactionScenarios,
+  installInteractionNavigationPreloadObserver,
+  settleInteractionNavigationPreloads,
   settleSidebarBackgroundWork,
+  type InteractionNavigationPreloads,
   type InteractionEvidence,
   type InteractionSandbox,
 } from "./lib/control-ui-interaction-scenarios.ts";
@@ -45,39 +48,69 @@ import {
   prepareProjectionFixture,
 } from "./lib/control-ui-projection-fixtures.ts";
 import {
+  measureRendererProcessMetrics,
+  readControlUiPerformanceMetrics as metrics,
+  readRendererProcessSnapshot as rendererProcesses,
+  type RendererProcessSnapshot,
+} from "./lib/control-ui-renderer-metrics.ts";
+import {
   installControlUiResourceCounts,
   readControlUiResourceCounts,
   type ControlUiResourceCounts,
 } from "./lib/control-ui-resource-counts.ts";
+import { captureRetention, installRetentionTimers } from "./lib/control-ui-retention.ts";
+import {
+  createWorkboardResourceFixture,
+  prepareWorkboardResourceSource,
+} from "./lib/control-ui-workboard-resource-fixture.ts";
 
 const { values } = parseArgs({
   options: {
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
+    "control-bundle-dir": { type: "string" },
+    "workboard-source-root": { type: "string" },
+    "compare-workboard-source-root": { type: "string" },
+    "control-workboard-source-root": { type: "string" },
     output: { type: "string", default: ".artifacts/control-ui-interactions" },
     steps: { type: "string" },
     viewport: { type: "string", default: "both" },
     pairs: { type: "string", default: "1" },
     "cpu-throttle": { type: "string", default: "1" },
+    "low-memory": { type: "boolean", default: false },
     trace: { type: "boolean", default: false },
+    "profile-interval-us": { type: "string", default: "1000" },
+    "no-opt": { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     theme: { type: "string", default: "light" },
     "thread-cpu-time": { type: "boolean", default: false },
+    "function-counts": { type: "boolean", default: false },
+    "graph-counts": { type: "boolean", default: false },
     "first-pair-screenshots": { type: "boolean", default: false },
     "invalidation-tracking": { type: "boolean", default: false },
     "resource-counts": { type: "boolean", default: false },
     "process-wakeups": { type: "boolean", default: false },
+    "renderer-process-metrics": { type: "boolean", default: false },
+    counterbalance: { type: "boolean", default: false },
+    "asset-latency-ms": { type: "string", default: "0" },
     "projection-fixtures": { type: "boolean", default: false },
     "projection-counts": { type: "boolean", default: false },
-    headed: { type: "boolean", default: false },
+    "data-pages": { type: "boolean", default: false },
+    "retained-heap": { type: "boolean", default: false },
   },
 });
 const trace = values.trace || values["selector-stats"];
+if (values["graph-counts"] && (trace || values["function-counts"] || values["projection-counts"])) {
+  throw new Error("Run reactive graph counts separately from CPU/coverage instrumentation");
+}
 if (values["projection-counts"] && !values["projection-fixtures"]) {
   throw new Error("--projection-counts requires --projection-fixtures");
 }
 if (values["projection-counts"] && trace) {
   throw new Error("Run precise projection counts separately from CPU profiles/traces");
+}
+if (values["function-counts"] && trace) {
+  throw new Error("Run precise function counts separately from CPU profiles/traces");
 }
 if (values["projection-fixtures"] && values["resource-counts"]) {
   throw new Error("Run native resource counts separately from projection fixture measurements");
@@ -88,11 +121,24 @@ if (values.theme !== "light" && values.theme !== "dark") {
 const theme = values.theme;
 const pairs = Number(values.pairs);
 const cpuThrottle = Number(values["cpu-throttle"]);
+const profileIntervalUs = Number(values["profile-interval-us"]);
+if (!Number.isInteger(profileIntervalUs) || profileIntervalUs < 50) {
+  throw new Error("profile-interval-us must be an integer of at least 50");
+}
+const assetLatencyMs = Number(values["asset-latency-ms"]);
+if (!Number.isFinite(assetLatencyMs) || assetLatencyMs < 0) {
+  throw new Error("asset-latency-ms must be nonnegative");
+}
 if (!Number.isFinite(cpuThrottle) || cpuThrottle < 1) {
   throw new Error("cpu-throttle must be at least 1");
 }
 if (!Number.isInteger(pairs) || pairs < 1) {
   throw new Error("pairs must be a positive integer");
+}
+if (values["control-bundle-dir"] && !values["compare-bundle-dir"]) {
+  throw new Error(
+    "control-bundle-dir requires compare-bundle-dir for baseline/candidate/control order",
+  );
 }
 if (!["desktop", "mobile", "both"].includes(values.viewport)) {
   throw new Error("viewport must be desktop, mobile or both");
@@ -102,17 +148,22 @@ const scenarios = interactionScenarios.filter((step) => {
   if (Boolean(step.projectionFamily) !== values["projection-fixtures"]) {
     return false;
   }
+  if (!selectedIds && Boolean(step.dataPage) !== values["data-pages"]) {
+    return false;
+  }
   return selectedIds
     ? selectedIds.includes(step.id)
-    : !step.resourceOnly || values["resource-counts"];
+    : !step.explicitOnly && (!step.resourceOnly || values["resource-counts"]);
 });
 if (!scenarios.length || selectedIds?.some((id) => !scenarios.some((step) => step.id === id))) {
   throw new Error("Unknown or empty interaction steps");
 }
 const artifactDir = createControlUiE2eArtifactDir("warm", values.output);
-const bundles = [values["bundle-dir"], values["compare-bundle-dir"]].filter(
-  (directory): directory is string => Boolean(directory),
-);
+const bundles = [
+  values["bundle-dir"],
+  values["compare-bundle-dir"],
+  values["control-bundle-dir"],
+].filter((directory): directory is string => Boolean(directory));
 const viewports = [
   { name: "desktop", width: 1440, height: 1000 },
   { name: "mobile", width: 390, height: 844 },
@@ -125,12 +176,6 @@ async function settle(page: Page) {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       }),
   );
-}
-
-async function metrics(cdp: CDPSession) {
-  const result: { metrics: Array<{ name: string; value: number }> } =
-    await cdp.send("Performance.getMetrics");
-  return Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
 }
 
 function distribution(numbers: number[]) {
@@ -271,20 +316,48 @@ type Result = {
   taskMs?: number;
   layoutMs?: number;
   styleMs?: number;
+  heapBeforeBytes?: number;
+  heapAfterBytes?: number;
+  heapDeltaBytes?: number;
+  rendererCpuMs?: number;
+  rendererRssBeforeBytes?: number;
+  rendererRssAfterBytes?: number;
+  rendererProcessMetrics?: {
+    before?: RendererProcessSnapshot;
+    after?: RendererProcessSnapshot;
+    complete: boolean;
+    error?: string;
+  };
   durationBreakdownMs?: Record<string, number>;
+  retainedHeap?: {
+    beforeBytes: number;
+    afterBytes?: number;
+    deltaBytes?: number;
+    before: Awaited<ReturnType<typeof captureRetention>> & { artifact: string };
+    after?: Awaited<ReturnType<typeof captureRetention>> & { artifact: string };
+  };
   longTasks?: { count: number; totalMs: number; maxMs: number };
+  cls?: number;
   requests?: Record<string, number>;
   scenarioEvidence?: InteractionEvidence;
   domBefore?: { nodes: number; menuItems: number; namedAnchors: number };
   domAfter?: { nodes: number; menuItems: number; namedAnchors: number };
   rowIdentity?: { initial: number; created: number; retained: number; final: number };
+  navigationPreloads?: InteractionNavigationPreloads;
   resourcesBefore?: ControlUiResourceCounts;
   resourcesAfter?: ControlUiResourceCounts;
   processWakeups?: ProcessWakeups;
   projectionFixture?: ProjectionFixtureFacts;
   projectionCoverageArtifact?: string;
+  functionCoverageArtifact?: string;
+  functionCoveragePreparationArtifact?: string;
+  reactiveGraphArtifact?: string;
   projectionScreenshotArtifact?: string;
-  measurementClass?: "production-interaction" | "projection-counter" | "projection-cpu";
+  measurementClass?:
+    | "production-interaction"
+    | "projection-counter"
+    | "projection-cpu"
+    | "diagnostic";
   skipReason?: string;
   trace?: ReturnType<typeof summarizeInteractionTrace>;
   longTaskDetails?: ReturnType<typeof summarizeLongTaskCpuProfiles>;
@@ -306,6 +379,7 @@ const servers: Array<{
   directory: string;
   build: { buildId: string; version: string };
   indexSha256: string;
+  workboardSource?: Awaited<ReturnType<typeof prepareWorkboardResourceSource>>;
   projectionBuild?: { entry: string; descriptorSha256: string; entrySha256: string };
   server: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
 }> = [];
@@ -335,9 +409,18 @@ if (values["process-wakeups"]) {
     }
   }
 }
+const browserExecutable = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const memoryArgs = values["low-memory"] ? ["--enable-low-end-device-mode"] : [];
+const v8Flags = [
+  ...(values["low-memory"] ? ["--max-old-space-size=128"] : []),
+  ...(values["no-opt"] ? ["--no-opt"] : []),
+];
+if (v8Flags.length) {
+  memoryArgs.push(`--js-flags=${v8Flags.join(" ")}`);
+}
 const browser = await chromium.launch({
-  executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-  headless: !values.headed,
+  executablePath: browserExecutable,
+  args: memoryArgs,
 });
 
 async function launchNativeVisibilityContext() {
@@ -351,6 +434,9 @@ async function launchNativeVisibilityContext() {
       "--no-default-browser-check",
       "--password-store=basic",
       "--use-mock-keychain",
+      // Full Chrome headless still hides a natively minimized window; the headless shell does not.
+      "--headless=new",
+      ...memoryArgs,
       "about:blank",
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
@@ -446,7 +532,7 @@ try {
       sandboxPort: address.port,
     };
   }
-  for (const directory of bundles) {
+  for (const [bundleIndex, directory] of bundles.entries()) {
     const resolved = path.resolve(directory);
     const html = await readFile(path.join(resolved, "index.html"), "utf8");
     const raw = html.match(
@@ -456,6 +542,17 @@ try {
       throw new Error(`Missing build identity: ${directory}`);
     }
     const build: { buildId: string; version: string } = JSON.parse(raw);
+    const sourceRoot = [
+      values["workboard-source-root"],
+      values["compare-workboard-source-root"],
+      values["control-workboard-source-root"],
+    ][bundleIndex];
+    const needsWorkboard = scenarios.some((scenario) => scenario.fixture?.workboardResources);
+    if (needsWorkboard && !sourceRoot) {
+      throw new Error(`Missing explicit Workboard source root for bundle ${bundleIndex}`);
+    }
+    const workboardSource =
+      needsWorkboard && sourceRoot ? await prepareWorkboardResourceSource(sourceRoot) : undefined;
     let projectionBuild: (typeof servers)[number]["projectionBuild"];
     if (values["projection-fixtures"]) {
       const descriptor = await readFile(path.join(resolved, "projection-fixture.json"), "utf8");
@@ -477,10 +574,11 @@ try {
     }
     servers.push({
       directory: resolved,
+      workboardSource,
       build,
       indexSha256: createHash("sha256").update(html).digest("hex"),
       projectionBuild,
-      server: await startControlUiBenchGatewayServer(resolved),
+      server: await startControlUiBenchGatewayServer(resolved, 0, assetLatencyMs),
     });
   }
   await writeFile(
@@ -489,6 +587,7 @@ try {
       {
         revision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
         browser: browser.version(),
+        browserExecutable,
         host: {
           platform: os.platform(),
           arch: os.arch(),
@@ -496,10 +595,41 @@ try {
           load: os.loadavg(),
         },
         collection: trace
-          ? "CDP trace + 1ms CPU profiler (overhead included)"
+          ? `CDP trace + ${profileIntervalUs}µs CPU profiler (overhead included)`
           : "untraced CDP metrics",
+        v8Optimization: values["no-opt"] ? "disabled for diagnostics" : "default",
         metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+        functionCounts: values["function-counts"]
+          ? "Precise coverage starts before navigation and resets after preparation; diagnostic overhead, not timing evidence."
+          : false,
+        reactiveGraphCounts: values["graph-counts"]
+          ? "Observe-only Solid build; diagnostic counts, not production timing evidence."
+          : false,
         cpuThrottle,
+        memoryProfile: values["low-memory"]
+          ? "Chromium low-end-device mode; 128 MiB V8 old-space limit, not an OS/RSS limit."
+          : "default",
+        retainedHeap: values["retained-heap"]
+          ? "Separate GC-controlled proof: full heap/DOM snapshots after preparation and after action metrics/tracing, including fixture request history; not a timing comparison."
+          : false,
+        pairOrder: values["control-bundle-dir"]
+          ? values.counterbalance
+            ? "ABC/CBA alternating by pair"
+            : "ABC"
+          : values.counterbalance
+            ? "AB/BA alternating by pair"
+            : "AB",
+        assetLatency: {
+          milliseconds: assetLatencyMs,
+          scope:
+            "Simulated asset RTT: response delay for every owned HTTP-server request, including worker modules; no bandwidth shaping or Gateway/provider delay.",
+        },
+        rendererProcessMetrics: values["renderer-process-metrics"]
+          ? "CDP whole-renderer-process CPU (including dedicated workers), plus ps RSS endpoint snapshots; not retained heap or GPU memory."
+          : false,
+        heavyContentWorkerObservation: scenarios.some(({ id }) => id.startsWith("heavy-"))
+          ? "Benchmark init script observes only markdown-code-highlight Worker starts, replies, errors, termination and live count."
+          : false,
         mobileTouchEmulation: true,
         screenshots: values["first-pair-screenshots"] ? "first pair per cell" : "all",
         resourceCounts: values["resource-counts"]
@@ -521,7 +651,6 @@ try {
             }
           : false,
         preferences: { lobsterPetVisits: false },
-        headed: values.headed,
         invalidationTracking:
           trace && (values["invalidation-tracking"] || values["selector-stats"]),
         selectorStats: values["selector-stats"],
@@ -537,31 +666,53 @@ try {
                 "board-pins": { A: 400, B: 80 },
                 "sdk-avatars": { A: 120, B: 40 },
                 "sdk-avatar-identities": { A: 120, B: 40 },
+                tooltips: { A: 100 },
+                "link-providers": { A: 100, B: 30 },
+                "link-metadata": { A: 100, B: 30 },
+                "ci-pairs": { A: 100, B: 30 },
+                "clawhub-cards": { A: 100, B: 30 },
               },
               publications: 20,
+              nativeResourceWork: {
+                tooltips: "20 native child-list mutation batches",
+                "link-providers": "20 native child-list mutation batches in A",
+                "link-metadata": "20 replay request events; two actual panel producers",
+                "ci-pairs": "20 native A Gateway snapshots",
+                "clawhub-cards": "20 native A Gateway snapshots",
+                idle: "No deliberate publication; three native-clock seconds",
+              },
               note: "Extra benchmark-only entry changes the build graph; compare identical entry builds and measure shipping bytes separately.",
             }
           : undefined,
         acceptance:
-          "For fixed steps: >=10 serial AB pairs per viewport, all median/p95/min/max cells reviewed; any >20% regression stops landing. No boot growth beyond 64 B.",
+          "For fixed steps: >=10 serial AB pairs per viewport, all median/p95/min/max cells reviewed; any >20% regression stops landing. Compare startup with its same-host merge base; growth beyond build variance needs an accepted measured win.",
         exclusions: [
           "No live Gateway/provider",
           "No sidebar text input exists; measure command palette search separately",
-          "No fake clocks, Lit probes or simulated transport delay",
+          "No fake clocks or Lit probes; optional asset delay is recorded above and other simulated transport delays are named by their scenario",
         ],
-        scenarios: scenarios.map(({ id, route, expected, fixture }) => ({
-          id,
-          route,
-          expected,
-          fixture,
-        })),
+        scenarios: scenarios.map(
+          ({ id, route, expected, fixture, dataPage, diagnostic, observationBrowser }) => ({
+            id,
+            route,
+            expected,
+            fixture,
+            dataPage,
+            diagnostic,
+            observationBrowser,
+          }),
+        ),
         viewports,
-        bundles: servers.map(({ directory, build, indexSha256, projectionBuild }) => ({
-          directory,
-          ...build,
-          indexSha256,
-          projectionBuild,
-        })),
+        bundles: servers.map(
+          ({ directory, build, indexSha256, workboardSource, projectionBuild }, index) => ({
+            role: index === 0 ? "baseline" : index === 1 ? "candidate" : "control",
+            directory,
+            ...build,
+            indexSha256,
+            workboardSource,
+            projectionBuild,
+          }),
+        ),
       },
       null,
       2,
@@ -572,22 +723,24 @@ try {
       for (let pair = 0; pair < pairs; pair++) {
         const startedAt = new Date().toISOString();
         const startLoad = os.loadavg();
-        for (const [bundle, slot] of servers.entries()) {
+        const slots = [...servers.entries()];
+        if (values.counterbalance && pair % 2 === 1) {
+          slots.reverse();
+        }
+        for (const [bundle, slot] of slots) {
           const artifactPrefix = `${viewport.name}-${theme}-${scenario.id}-${pair + 1}-${bundle}`;
           const nativeVisibility =
-            scenario.visibility === "hidden" && values.headed
-              ? await launchNativeVisibilityContext()
-              : undefined;
+            scenario.visibility === "hidden" ? await launchNativeVisibilityContext() : undefined;
           const observationBrowser =
             scenario.observationBrowser && !nativeVisibility
               ? await launchControlUiObservationBrowser({
                   viewport: { width: viewport.width, height: viewport.height },
                   artifactDir,
                   artifactPrefix,
-                  headless: !values.headed,
                   colorScheme: theme,
                   isMobile: viewport.name === "mobile",
                   hasTouch: viewport.name === "mobile",
+                  args: memoryArgs,
                 })
               : undefined;
           const ownedBrowserPid = nativeVisibility?.processId ?? observationBrowser?.processId;
@@ -620,6 +773,7 @@ try {
             // tsx preserves names in serialized fixture callbacks, as in the cold-load runner.
             await page.addInitScript("globalThis.__name = (fn) => fn");
             await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
+            await page.addInitScript(installInteractionNavigationPreloadObserver);
             // Random per-load pets can repaint continuously; measure the selected interaction.
             await page.addInitScript(
               ({ key, gatewayUrl }) => {
@@ -672,20 +826,32 @@ try {
           try {
             cdp = await context.newCDPSession(page);
             await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
+            if (values["function-counts"]) {
+              // Starting after warmup can miss calls in already optimized functions.
+              await cdp.send("Profiler.enable");
+              await cdp.send("Profiler.startPreciseCoverage", { callCount: true, detailed: true });
+              preciseCoverage = true;
+            }
             if (
               nativeVisibility &&
-              (scenario.fixture?.boardFrameResources || scenario.fixture?.browserResources)
+              (scenario.fixture?.boardFrameResources ||
+                scenario.fixture?.browserResources ||
+                scenario.fixture?.workboardResources)
             ) {
               // Native default contexts allow service workers, which hide fixture fetches from page.route.
               await cdp.send("Network.enable");
               await cdp.send("Network.setBypassServiceWorker", { bypass: true });
             }
-            const fixture = createInteractionFixture(
-              slot.build.buildId,
-              slot.build.version,
-              scenario.fixture,
-              sandbox,
-            );
+            const workboardSource = scenario.fixture?.workboardResources
+              ? slot.workboardSource
+              : undefined;
+            const fixture = workboardSource
+              ? createWorkboardResourceFixture(
+                  slot.build.buildId,
+                  slot.build.version,
+                  workboardSource.root,
+                )
+              : createScenarioFixture(slot.build.buildId, slot.build.version, scenario, sandbox);
             const sessions = createTeamScaleSidebarListOwner({
               rows: fixture.sessions,
               viewerProfileId: "interaction-viewer",
@@ -694,55 +860,76 @@ try {
               owners: [],
             });
             const boardResponse = createProjectionBoardResponses();
+            const defaultRequestHandlers: Record<string, (params: unknown) => unknown> = {
+              ...(scenario.projectionFamily
+                ? {
+                    "board.get": (params: unknown) => {
+                      if (!isRecord(params)) {
+                        throw new Error("Expected board.get parameters");
+                      }
+                      return boardResponse(params);
+                    },
+                  }
+                : {}),
+              "sessions.list": (params: unknown) => {
+                if (!isRecord(params)) {
+                  throw new Error("Expected sessions.list query parameters");
+                }
+                return sessions.list(params).result;
+              },
+            };
             // Keep the same readiness contract with a timeout scaled for intentional throttling.
             const gateway = await installMockGateway(
               page,
               { ...fixture, awaitInitialRoster: false },
               {
                 requestHandlers: {
-                  ...(scenario.projectionFamily
-                    ? {
-                        "board.get": (params: unknown) => {
-                          if (!isRecord(params)) {
-                            throw new Error("Expected board.get parameters");
-                          }
-                          return boardResponse(params);
-                        },
-                      }
-                    : {}),
-                  "sessions.list": (params) => {
-                    if (!isRecord(params)) {
-                      throw new Error("Expected sessions.list query parameters");
-                    }
-                    return sessions.list(params).result;
-                  },
+                  ...defaultRequestHandlers,
+                  ...scenario.createRequestHandlers?.(defaultRequestHandlers),
                 },
               },
             );
+            if (values["retained-heap"]) {
+              await installRetentionTimers(page);
+            }
             await scenario.setup?.(page);
             await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
             await waitForControlUiInitialRoster(page, 15_000 * cpuThrottle);
             await scenario.prepare(page, gateway);
             if (
               nativeVisibility &&
-              (scenario.fixture?.boardFrameResources || scenario.fixture?.browserResources)
+              (scenario.fixture?.boardFrameResources ||
+                scenario.fixture?.browserResources ||
+                scenario.fixture?.workboardResources)
             ) {
               await cdp.send("Network.setBypassServiceWorker", { bypass: false });
               await cdp.send("Network.disable");
             }
-            result.measurementClass = scenario.projectionFamily
-              ? values["projection-counts"]
-                ? "projection-counter"
-                : "projection-cpu"
-              : "production-interaction";
+            result.measurementClass =
+              scenario.diagnostic ||
+              values["function-counts"] ||
+              values["graph-counts"] ||
+              values["retained-heap"]
+                ? "diagnostic"
+                : scenario.projectionFamily
+                  ? values["projection-counts"]
+                    ? "projection-counter"
+                    : "projection-cpu"
+                  : "production-interaction";
             if (scenario.projectionFamily) {
               result.projectionFixture = await prepareProjectionFixture(
                 page,
                 scenario.projectionFamily,
                 values["projection-counts"],
               );
-              await page.waitForFunction(() => window.openclawControlUi !== undefined);
-              await settleSidebarBackgroundWork(page);
+              // Native instance fixtures have no shell or navigation prefetch owner.
+              if (scenario.route !== "/instance-resource-fixture.html") {
+                await page.waitForFunction(() => window.openclawControlUi !== undefined);
+                await settleSidebarBackgroundWork(page);
+              }
+            }
+            if (scenario.route !== "/instance-resource-fixture.html") {
+              result.navigationPreloads = await settleInteractionNavigationPreloads(page);
             }
             // Slow CPUs can still be loading boot modules after the first ready frame.
             await page.waitForLoadState("networkidle");
@@ -758,6 +945,17 @@ try {
             await cdp.send("Performance.enable", {
               timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
             });
+            if (values["retained-heap"]) {
+              const artifact = `${artifactPrefix}.before.heapsnapshot`;
+              // Scenarios can retain request-count cursors from preparation.
+              const initial = await captureRetention(page, cdp, path.join(artifactDir, artifact), {
+                preserveFixtureRequests: true,
+              });
+              result.retainedHeap = {
+                beforeBytes: initial.heapUsedBytes,
+                before: { ...initial, artifact },
+              };
+            }
             if (values["selector-stats"]) {
               cdp.on(
                 "CSS.styleSheetAdded",
@@ -794,7 +992,7 @@ try {
               });
               tracing = true;
               await cdp.send("Profiler.enable");
-              await cdp.send("Profiler.setSamplingInterval", { interval: 1000 });
+              await cdp.send("Profiler.setSamplingInterval", { interval: profileIntervalUs });
               await cdp.send("Profiler.start");
               profiling = true;
             }
@@ -805,8 +1003,7 @@ try {
                 windowId,
                 bounds: { windowState: "minimized" },
               });
-              // Headless Chromium accepts minimization without hiding the page.
-              // A frozen renderer would make this idle measurement meaningless.
+              // Never simulate hidden: an unhidden or frozen renderer would make this idle measurement meaningless.
               const hidden = await page
                 .waitForFunction(() => document.visibilityState === "hidden", undefined, {
                   timeout: 1_000,
@@ -818,7 +1015,7 @@ try {
                 );
               if (!hidden) {
                 throw new ScenarioSkipped(
-                  "Native window minimization did not hide the page; use --headed on a windowed host for hidden-idle proof.",
+                  "Native window minimization did not hide the page; this Chromium build cannot produce hidden-idle proof.",
                 );
               }
             }
@@ -886,21 +1083,105 @@ try {
                 }
               }
             }
+            if (values["renderer-process-metrics"]) {
+              const observation: NonNullable<Result["rendererProcessMetrics"]> = {
+                complete: false,
+              };
+              result.rendererProcessMetrics = observation;
+              try {
+                const ownedBrowser = context.browser();
+                if (!ownedBrowser) {
+                  throw new Error("Active context has no owned Chromium browser");
+                }
+                processSession ??= await ownedBrowser.newBrowserCDPSession();
+                observation.before = await rendererProcesses(processSession);
+              } catch (error) {
+                observation.error = String(error);
+              }
+            }
             const taskProbe = await page.evaluateHandle(() => {
               const durations: number[] = [];
               const observer = new PerformanceObserver((list) => {
                 durations.push(...list.getEntries().map((entry) => entry.duration));
               });
               observer.observe({ type: "longtask" });
-              return { durations, observer };
+              const shifts: Array<{ at: number; value: number }> = [];
+              const recordShifts = (entries: PerformanceEntry[]) => {
+                for (const entry of entries) {
+                  if (!Reflect.get(entry, "hadRecentInput")) {
+                    shifts.push({
+                      at: entry.startTime,
+                      value: Number(Reflect.get(entry, "value")),
+                    });
+                  }
+                }
+              };
+              const shiftObserver = PerformanceObserver.supportedEntryTypes.includes("layout-shift")
+                ? new PerformanceObserver((list) => recordShifts(list.getEntries()))
+                : undefined;
+              shiftObserver?.observe({ type: "layout-shift" });
+              return {
+                read() {
+                  durations.push(...observer.takeRecords().map((entry) => entry.duration));
+                  observer.disconnect();
+                  if (shiftObserver) {
+                    recordShifts(shiftObserver.takeRecords());
+                    shiftObserver.disconnect();
+                  }
+                  const start = performance.getEntriesByName("interaction:start").at(-1)!.startTime;
+                  const end = performance.getEntriesByName("interaction:end").at(-1)!.startTime;
+                  let cls = 0;
+                  let windowValue = 0;
+                  let windowStart = -Infinity;
+                  let previousShift = -Infinity;
+                  for (const shift of shifts) {
+                    if (shift.at < start || shift.at > end) {
+                      continue;
+                    }
+                    // CLS is the largest burst: less than 1s between shifts, at most 5s long.
+                    if (shift.at - previousShift < 1_000 && shift.at - windowStart < 5_000) {
+                      windowValue += shift.value;
+                    } else {
+                      windowStart = shift.at;
+                      windowValue = shift.value;
+                    }
+                    previousShift = shift.at;
+                    cls = Math.max(cls, windowValue);
+                  }
+                  return {
+                    longTasks: {
+                      count: durations.length,
+                      totalMs: durations.reduce((sum, duration) => sum + duration, 0),
+                      maxMs: Math.max(0, ...durations),
+                    },
+                    cls: shiftObserver ? cls : undefined,
+                  };
+                },
+              };
             });
             const before = await metrics(cdp);
-            if (scenario.projectionFamily && values["projection-counts"]) {
+            if (values["function-counts"]) {
+              const artifact = `${artifactPrefix}.preparation-function-coverage.json`;
+              await writeFile(
+                path.join(artifactDir, artifact),
+                JSON.stringify(await cdp.send("Profiler.takePreciseCoverage")),
+              );
+              result.functionCoveragePreparationArtifact = artifact;
+            } else if (scenario.projectionFamily && values["projection-counts"]) {
               await cdp.send("Profiler.enable");
               await cdp.send("Profiler.startPreciseCoverage", { callCount: true, detailed: true });
               preciseCoverage = true;
             }
             await page.evaluate(() => performance.mark("interaction:start"));
+            if (values["graph-counts"]) {
+              await page.evaluate((label) => {
+                const graph = Reflect.get(window, "__openclawReactiveGraph");
+                if (!graph) {
+                  throw new Error("--graph-counts requires the explicit reactive graph build");
+                }
+                graph.start(label);
+              }, scenario.id);
+            }
             const start = performance.now();
             result.scenarioEvidence = (await scenario.run(page, gateway)) ?? undefined;
             if (scenario.visibility !== "hidden") {
@@ -908,24 +1189,46 @@ try {
             }
             result.wallMs = performance.now() - start;
             await page.evaluate(() => performance.mark("interaction:end"));
+            if (values["graph-counts"]) {
+              const graph = await page.evaluate(() =>
+                Reflect.get(window, "__openclawReactiveGraph").stop(),
+              );
+              const artifact = `${artifactPrefix}.reactive-graph.json`;
+              await writeFile(path.join(artifactDir, artifact), JSON.stringify(graph, null, 2));
+              result.reactiveGraphArtifact = artifact;
+            }
             if (preciseCoverage) {
               const coverage = await cdp.send("Profiler.takePreciseCoverage");
               await cdp.send("Profiler.stopPreciseCoverage");
               preciseCoverage = false;
-              const artifact = `${artifactPrefix}.projection-coverage.json`;
-              await writeFile(path.join(artifactDir, artifact), JSON.stringify(coverage));
-              result.projectionCoverageArtifact = artifact;
+              if (values["function-counts"]) {
+                const artifact = `${artifactPrefix}.function-coverage.json`;
+                await writeFile(path.join(artifactDir, artifact), JSON.stringify(coverage));
+                result.functionCoverageArtifact = artifact;
+              }
+              if (scenario.projectionFamily && values["projection-counts"]) {
+                const artifact = `${artifactPrefix}.projection-coverage.json`;
+                await writeFile(path.join(artifactDir, artifact), JSON.stringify(coverage));
+                result.projectionCoverageArtifact = artifact;
+              }
             }
             const after = await metrics(cdp);
-            result.longTasks = await taskProbe.evaluate(({ durations, observer }) => {
-              durations.push(...observer.takeRecords().map((entry) => entry.duration));
-              observer.disconnect();
-              return {
-                count: durations.length,
-                totalMs: durations.reduce((sum, duration) => sum + duration, 0),
-                maxMs: Math.max(0, ...durations),
-              };
-            });
+            if (processSession && result.rendererProcessMetrics?.before) {
+              const observation = result.rendererProcessMetrics;
+              try {
+                observation.after = await rendererProcesses(processSession);
+                const beforeRows = observation.before!;
+                const afterRows = observation.after;
+                Object.assign(result, measureRendererProcessMetrics(beforeRows, afterRows));
+                observation.complete = true;
+              } catch (error) {
+                observation.error = String(error);
+              }
+            }
+            result.heapBeforeBytes = before.JSHeapUsedSize;
+            result.heapAfterBytes = after.JSHeapUsedSize;
+            result.heapDeltaBytes = after.JSHeapUsedSize - before.JSHeapUsedSize;
+            Object.assign(result, await taskProbe.evaluate((probe) => probe.read()));
             await taskProbe.dispose();
             if (processSession && processWakeupReader && result.processWakeups?.before) {
               try {
@@ -997,13 +1300,26 @@ try {
               const sdk =
                 scenario.projectionFamily === "sdk-avatars" ||
                 scenario.projectionFamily === "sdk-avatar-identities";
+              const resourceFamily = [
+                "tooltips",
+                "link-providers",
+                "link-metadata",
+                "ci-pairs",
+                "clawhub-cards",
+              ].includes(scenario.projectionFamily);
               const method =
                 scenario.projectionFamily === "board-pins"
                   ? "board.get"
-                  : scenario.projectionFamily === "sdk-avatar-identities"
-                    ? "agent.identity.get"
-                    : "agents.list";
-              const expected = scenario.projectionIdle ? 0 : sdk ? 10 : 20;
+                  : scenario.projectionFamily === "ci-pairs"
+                    ? "controlUi.sessionPullRequests.checks"
+                    : scenario.projectionFamily === "clawhub-cards"
+                      ? "plugins.catalog.get"
+                      : resourceFamily
+                        ? "forge.detail"
+                        : scenario.projectionFamily === "sdk-avatar-identities"
+                          ? "agent.identity.get"
+                          : "agents.list";
+              const expected = scenario.projectionIdle || resourceFamily ? 0 : sdk ? 10 : 20;
               if ((result.requests[method] ?? 0) !== expected) {
                 throw new Error(
                   `Expected ${expected} measured ${method} requests, got ${result.requests[method] ?? 0}`,
@@ -1127,6 +1443,23 @@ try {
                   }
                 });
               }
+              const retainedHeap = result.retainedHeap;
+              if (values["retained-heap"] && cdp && retainedHeap && result.status === "passed") {
+                await capture(async () => {
+                  const artifact = `${artifactPrefix}.after.heapsnapshot`;
+                  const final = await captureRetention(
+                    page,
+                    cdp!,
+                    path.join(artifactDir, artifact),
+                    {
+                      preserveFixtureRequests: true,
+                    },
+                  );
+                  retainedHeap.after = { ...final, artifact };
+                  retainedHeap.afterBytes = final.heapUsedBytes;
+                  retainedHeap.deltaBytes = final.heapUsedBytes - retainedHeap.beforeBytes;
+                });
+              }
               if (!values["first-pair-screenshots"] || pair === 0 || result.status === "failed") {
                 await capture(() =>
                   page.screenshot({ path: path.join(artifactDir, `${artifactPrefix}.png`) }),
@@ -1141,6 +1474,11 @@ try {
                     result.processWakeups.complete = false;
                     delete result.processWakeups.delta;
                     result.processWakeups.reason = `Process session cleanup failed: ${String(error)}`;
+                  }
+                  if (result.rendererProcessMetrics) {
+                    result.rendererProcessMetrics.complete = false;
+                    delete result.rendererCpuMs;
+                    result.rendererProcessMetrics.error = `Process session cleanup failed: ${String(error)}`;
                   }
                 }
               }
@@ -1199,7 +1537,7 @@ try {
 }
 const summary = viewports
   .flatMap(({ name }) =>
-    scenarios.flatMap(({ id }) =>
+    scenarios.flatMap(({ id, diagnostic }) =>
       servers.map((_, bundle) => {
         const samples = results.filter(
           (row) =>
@@ -1247,9 +1585,24 @@ const summary = viewports
                 )
               : undefined,
           metrics: Object.fromEntries(
-            (["wallMs", "scriptMs", "taskMs", "layoutMs", "styleMs"] as const).map((metric) => [
+            (
+              [
+                "wallMs",
+                "scriptMs",
+                "taskMs",
+                "layoutMs",
+                "styleMs",
+                "cls",
+                ...(values["renderer-process-metrics"] ? ["rendererCpuMs" as const] : []),
+              ] as const
+            ).map((metric) => [
               metric,
-              samples.length && !values["projection-counts"]
+              !diagnostic &&
+              !values["function-counts"] &&
+              !values["retained-heap"] &&
+              samples.length &&
+              !values["projection-counts"] &&
+              samples.every((row) => row[metric] !== undefined)
                 ? distribution(samples.map((row) => row[metric]!))
                 : null,
             ]),
@@ -1259,43 +1612,51 @@ const summary = viewports
     ),
   )
   .toSorted((a, b) => (b.metrics.scriptMs?.median ?? 0) - (a.metrics.scriptMs?.median ?? 0));
-const comparisons = summary
-  .filter((row) => row.bundle === 0)
-  .flatMap((baseline) => {
-    const candidate = summary.find(
-      (row) => row.bundle === 1 && row.viewport === baseline.viewport && row.step === baseline.step,
-    );
-    if (!candidate) {
-      return [];
-    }
-    return Object.entries(baseline.metrics).flatMap(([metric, before]) => {
-      const after = candidate.metrics[metric];
-      if (!before || !after) {
+const compareBundle = (bundle: number) =>
+  summary
+    .filter((row) => row.bundle === 0)
+    .flatMap((baseline) => {
+      const candidate = summary.find(
+        (row) =>
+          row.bundle === bundle && row.viewport === baseline.viewport && row.step === baseline.step,
+      );
+      if (!candidate) {
         return [];
       }
-      return (["median", "p95", "min", "max"] as const).map((statistic) => ({
-        viewport: baseline.viewport,
-        step: baseline.step,
-        metric,
-        statistic,
-        before: before[statistic],
-        after: after[statistic],
-        percent: before[statistic] ? (after[statistic] / before[statistic] - 1) * 100 : null,
-        regression: after[statistic] > before[statistic] * 1.2,
-      }));
+      return Object.entries(baseline.metrics).flatMap(([metric, before]) => {
+        const after = candidate.metrics[metric];
+        if (!before || !after) {
+          return [];
+        }
+        return (["median", "p95", "min", "max"] as const).map((statistic) => ({
+          viewport: baseline.viewport,
+          step: baseline.step,
+          metric,
+          statistic,
+          before: before[statistic],
+          after: after[statistic],
+          percent: before[statistic] ? (after[statistic] / before[statistic] - 1) * 100 : null,
+          regression: after[statistic] > before[statistic] * 1.2,
+        }));
+      });
     });
-  });
+const comparisons = compareBundle(1);
+const controlComparisons = values["control-bundle-dir"] ? compareBundle(2) : undefined;
 await writeFile(
   path.join(artifactDir, "summary.json"),
   JSON.stringify(
     {
       comparisons,
+      controlComparisons,
       planned: viewports.length * scenarios.length * pairs * servers.length,
       executed: results.length,
       failed: results.filter((row) => row.status === "failed").length,
       skipped: results.filter((row) => row.status === "skipped").length,
       processWakeupsIncomplete: values["process-wakeups"]
         ? results.filter((row) => row.processWakeups?.complete !== true).length
+        : undefined,
+      rendererProcessMetricsIncomplete: values["renderer-process-metrics"]
+        ? results.filter((row) => row.rendererProcessMetrics?.complete !== true).length
         : undefined,
       summary,
     },
@@ -1313,10 +1674,11 @@ const rows = summary
         result.viewport === row.viewport &&
         result.bundle === row.bundle,
     );
-    const metric = (name: "scriptMs" | "taskMs" | "layoutMs" | "styleMs") => {
+    const metric = (name: "scriptMs" | "taskMs" | "layoutMs" | "styleMs" | "cls") => {
       const value = row.metrics[name];
+      const precision = name === "cls" ? 4 : 1;
       return value
-        ? `${value.median.toFixed(1)} / ${value.p95.toFixed(1)} / ${value.min.toFixed(1)}–${value.max.toFixed(1)}`
+        ? `${value.median.toFixed(precision)} / ${value.p95.toFixed(precision)} / ${value.min.toFixed(precision)}–${value.max.toFixed(precision)}`
         : "—";
     };
     const links = representative
@@ -1332,12 +1694,12 @@ const rows = summary
           )
           .join(" ")
       : "";
-    return `<tr><td>${escapeHtml(row.viewport)}</td><td>${escapeHtml(row.step)}</td><td>${row.bundle}</td><td>${row.passed}/${row.failed}/${row.skipped}</td><td>${metric("scriptMs")}</td><td>${metric("taskMs")}</td><td>${metric("layoutMs")}</td><td>${metric("styleMs")}</td><td>${row.trace?.longTasks?.median ?? "—"}</td><td>${links}</td></tr>`;
+    return `<tr><td>${escapeHtml(row.viewport)}</td><td>${escapeHtml(row.step)}</td><td>${row.bundle}</td><td>${row.passed}/${row.failed}/${row.skipped}</td><td>${metric("scriptMs")}</td><td>${metric("taskMs")}</td><td>${metric("layoutMs")}</td><td>${metric("styleMs")}</td><td>${metric("cls")}</td><td>${row.trace?.longTasks?.median ?? "—"}</td><td>${links}</td></tr>`;
   })
   .join("\n");
 await writeFile(
   path.join(artifactDir, "report.html"),
-  `<!doctype html><meta charset="utf-8"><title>Warm interactions</title><style>body{font:15px system-ui;padding:24px}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #bbb;text-align:left}a{margin-right:6px}</style><h1>Production-renderer warm interactions</h1><p>${trace ? "Trace and CPU sampling overhead included." : "Untraced CDP metric deltas."} ${values["selector-stats"] ? "CSS selector instrumentation overhead included; selectors ranked by elapsed microseconds." : ""} Theme: ${theme}. Cells: median / p95 / min–max (ms). Wall time in JSON is automation-to-assertion, not INP. Synthetic Gateway; native clocks. <a href="manifest.json">Manifest</a> <a href="summary.json">Summary</a></p><table><tr><th>Viewport</th><th>Step</th><th>Bundle</th><th>Pass/fail/skip</th><th>Script</th><th>Task</th><th>Layout</th><th>Style</th><th>Long tasks</th><th>Evidence</th></tr>${rows}</table>`,
+  `<!doctype html><meta charset="utf-8"><title>Warm interactions</title><style>body{font:15px system-ui;padding:24px}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #bbb;text-align:left}a{margin-right:6px}</style><h1>Production-renderer warm interactions</h1><p>${trace ? "Trace and CPU sampling overhead included." : "Untraced CDP metric deltas."} ${values["selector-stats"] ? "CSS selector instrumentation overhead included; selectors ranked by elapsed microseconds." : ""} Theme: ${theme}. Cells: median / p95 / min–max; times in ms, CLS unitless. Wall time in JSON is automation-to-assertion, not INP. Synthetic Gateway; native clocks. <a href="manifest.json">Manifest</a> <a href="summary.json">Summary</a></p><table><tr><th>Viewport</th><th>Step</th><th>Bundle</th><th>Pass/fail/skip</th><th>Script</th><th>Task</th><th>Layout</th><th>Style</th><th>CLS</th><th>Long tasks</th><th>Evidence</th></tr>${rows}</table>`,
 );
 console.log(`Warm interaction artifacts: ${artifactDir}`);
 if (results.some((result) => result.status === "failed")) {

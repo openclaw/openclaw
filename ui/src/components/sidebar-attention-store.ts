@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronCompactJob, ModelAuthStatusResult } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
-import { hasOperatorReadAccess } from "../app/operator-access.ts";
+import { hasOperatorReadAccess, isRestrictedSessionGuest } from "../app/operator-access.ts";
 import type {
   SidebarAttentionStoreOwner as StoreOwner,
   SidebarAttentionStoreSources,
@@ -10,6 +10,10 @@ import type {
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { subscribeChatOutboxAttentionChanges } from "../lib/chat/outbox-owner-registry.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
+import {
+  hasCronInventoryEvents,
+  isCronInventoryInvalidation,
+} from "../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
 import { createInitialCronState, loadCronStatus } from "../lib/cron/state.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
@@ -118,10 +122,16 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       sources.gateway.subscribe(() => this.synchronizeGateway()),
       sources.gateway.subscribeEvents((event) => {
         if (event.event === "cron") {
-          if (!this.applyCronEvent(event.payload)) {
+          if (
+            !this.applyCronEvent(event.payload) &&
+            !hasCronInventoryEvents(sources.gateway.snapshot)
+          ) {
             this.load(false);
           }
-        } else if (event.event === "config.changed") {
+          if (document.visibilityState === "hidden") {
+            this.cronRefreshNeeded = true;
+          }
+        } else if (isCronInventoryInvalidation(event, sources.gateway.snapshot)) {
           this.load(false);
         } else if (modelAuthEventInvalidates(event)) {
           this.load(true, false);
@@ -276,10 +286,13 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
         ) ?? [];
     const overlay = this.sources.overlays.snapshot;
     const update = resolveSidebarUpdateAttention(this.sources);
-    const scopeUpgrade = buildScopeUpgradeInboxEntry({
-      scopes: gateway.hello?.auth?.scopes,
-      state: this.sources.scopeUpgrade.state,
-    });
+    // Expected guest permissions are not a browser-repair incident. Profile keeps the explicit request.
+    const scopeUpgrade = isRestrictedSessionGuest(gateway.hello?.auth ?? null)
+      ? null
+      : buildScopeUpgradeInboxEntry({
+          scopes: gateway.hello?.auth?.scopes,
+          state: this.sources.scopeUpgrade.state,
+        });
     const attention = buildSidebarAttentionEntries({
       cronJobs: this.cronJobs,
       cronSchedulerEnabled: this.cronSchedulerEnabled,

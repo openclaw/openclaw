@@ -11,12 +11,12 @@ export function createGatewayProxy(root: string, proxy: Record<string, ProxyOpti
   });
 }
 
-export function gatewayProxyRoute(port: number, user: string) {
+export function gatewayProxyRoute(port: number, user: string, forwardedFor = "192.0.2.10") {
   return {
     target: `http://127.0.0.1:${port}`,
     ws: true,
     headers: {
-      "x-forwarded-for": "192.0.2.10",
+      "x-forwarded-for": forwardedFor,
       "x-forwarded-proto": "http",
       "x-forwarded-user": user,
     },

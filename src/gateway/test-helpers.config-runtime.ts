@@ -246,3 +246,13 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
     writeConfigFile,
   };
 }
+
+/** Writes raw HTTP fixture config without applying runtime snapshots or defaults. */
+export async function writeGatewayConfig(config: Record<string, unknown>) {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH is required for gateway config tests");
+  }
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+}

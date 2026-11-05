@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -28,7 +29,10 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
-import type { LlmCompleteParams, LlmIsolatedAgentRuntimeCompleteParams } from "./types-core.js";
+import type {
+  LlmCompleteParams,
+  LlmIsolatedAgentRuntimeCompleteParams,
+} from "./runtime-llm.types.js";
 
 const mocks = vi.hoisted(() => ({
   acquire: vi.fn<typeof CompletionRuntime.acquireSimpleCompletionModelForAgent>(),
@@ -106,12 +110,7 @@ async function expectDenied(pending: Promise<unknown>, message?: unknown) {
 }
 
 function waitForWork(started: Promise<unknown>, pending: Promise<unknown>) {
-  return Promise.race([
-    started,
-    pending.then(() => {
-      throw new Error("completion settled before work started");
-    }),
-  ]);
+  return awaitGateBeforeSettlement(started, pending, "completion settled before work started");
 }
 
 function operator(assertCurrent: () => void = () => {}, retain?: () => () => void) {

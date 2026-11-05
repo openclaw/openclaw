@@ -11,6 +11,7 @@ import {
 } from "./attachment-payload-store.ts";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 import baseStyles from "../../styles/base.css?inline";
+import queueContentStyles from "../../styles/chat/composer-queue-content.css?inline";
 import queueStyles from "../../styles/chat/composer-queue.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 
@@ -30,7 +31,7 @@ const left = (row: Element, selector: string) =>
 
 beforeEach(() => {
   styles = document.createElement("style");
-  styles.textContent = baseStyles + componentStyles + queueStyles;
+  styles.textContent = baseStyles + componentStyles + queueStyles + queueContentStyles;
   document.head.append(styles);
   container = document.createElement("div");
   container.className = "agent-chat__composer-shell";

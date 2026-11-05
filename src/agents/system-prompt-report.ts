@@ -13,6 +13,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
+import { indexFirstByKey } from "../shared/dedupe-by-key.js";
 import type { BootstrapInjectionStat } from "./bootstrap-budget.types.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 type PromptReportTool = { name: string; parameters: unknown; description?: string; label?: string };
@@ -89,14 +90,18 @@ function buildToolsEntries(
   tools: PromptReportTool[],
   catalogEntries?: readonly ToolSearchCatalogEntry[],
 ): SessionSystemPromptReport["tools"]["entries"] {
+  const visibleEntries = catalogEntries
+    ? indexFirstByKey(
+        catalogEntries.filter((entry) => entry.directVisible),
+        (entry) => entry.name,
+      )
+    : undefined;
   return tools.map((tool) => {
     const name = tool.name;
     const summary = tool.description?.trim() || tool.label?.trim() || "";
     const summaryChars = summary.length;
     const schemaStats = buildToolSchemaStats(tool.parameters);
-    const catalogEntry = catalogEntries?.find(
-      (entry) => entry.directVisible && entry.name === name,
-    );
+    const catalogEntry = visibleEntries?.get(name);
     const provenance = catalogEntry ?? classifyAgentToolSource(tool);
     return {
       name,

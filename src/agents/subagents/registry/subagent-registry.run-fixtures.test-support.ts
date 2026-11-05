@@ -8,9 +8,6 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type KilledRunOverrides = SubagentRunRecordOverrides &
   Pick<SubagentRunRecord, "task" | "createdAt">;
-type QueuedRunOverrides = Omit<SubagentRunRecordOverrides, "queuedLaunch"> & {
-  queuedLaunch?: Partial<NonNullable<SubagentRunRecord["queuedLaunch"]>>;
-};
 type SuspendedDeliveryRunOverrides = Omit<
   SubagentRunRecordOverrides,
   "startedAt" | "outcome" | "expectsCompletionMessage" | "delivery"
@@ -43,32 +40,6 @@ export const makeCompletedCollectorRun = (
   collectorCompletion: { status: "done" },
   ...overrides,
 });
-export const makeQueuedRun = ({
-  queuedLaunch: queuedLaunchOverrides,
-  ...overrides
-}: QueuedRunOverrides): SubagentRunRecord => {
-  const childSessionKey = overrides.childSessionKey ?? `agent:main:subagent:${overrides.runId}`;
-  const requesterSessionKey = overrides.requesterSessionKey ?? "agent:main:main";
-  return createSubagentRunRecord({
-    childSessionKey,
-    requesterSessionKey,
-    collect: true,
-    execution: { status: "queued" },
-    completion: { required: false },
-    ...overrides,
-    queuedLaunch: {
-      requesterRecovery: {},
-      request: {
-        sessionKey: childSessionKey,
-        idempotencyKey: overrides.runId,
-      },
-      timeoutMs: 1_000,
-      schedulerGroupKey: JSON.stringify([requesterSessionKey, overrides.groupId]),
-      maxConcurrent: 1,
-      ...queuedLaunchOverrides,
-    },
-  });
-};
 export const makeSuspendedDeliveryRun = ({
   delivery: deliveryOverrides,
   ...overrides

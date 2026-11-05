@@ -112,6 +112,13 @@ describe("post-install doctor result IPC", () => {
     expect(normalizeUpdatePostInstallDoctorWarnings([warning])).toEqual([`${field} …`]);
   });
 
+  it("keeps a complete diagnostic code after a long source path", () => {
+    const sourcePath = `/state/${"profile/".repeat(24)}sessions.json`;
+    const field = `${sourcePath}: [retained_plugin_receipt_superseded]`;
+    const warning = `${field} ${"verify the source before restoring the agent ".repeat(20)}`;
+    expect(normalizeUpdatePostInstallDoctorWarnings([warning])).toEqual([`${field} …`]);
+  });
+
   it.each([
     { ids: "missing-array" },
     { ids: [" "] },

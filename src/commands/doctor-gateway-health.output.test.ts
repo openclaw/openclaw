@@ -24,17 +24,9 @@ import {
 import type { ConsoleStyle } from "../logging/types.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import { expectText } from "../test-utils/text-assertions.js";
 import { checkGatewayHealth } from "./doctor-gateway-health.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
-
-function expectText(text: string, present: string[], absent: string[] = []) {
-  for (const value of present) {
-    expect(text).toContain(value);
-  }
-  for (const value of absent) {
-    expect(text).not.toContain(value);
-  }
-}
 
 describe("Doctor Gateway close note output", { concurrent: false }, () => {
   let server: WebSocketServer | undefined;

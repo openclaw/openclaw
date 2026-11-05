@@ -6,6 +6,7 @@ import type { PresenceUpdate } from "../../packages/gateway-protocol/src/presenc
 import type { PresenceEntry } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { listSystemPresence } from "../infra/system-presence.js";
 import {
   connectReq,
   CONTROL_UI_CLIENT,
@@ -122,7 +123,13 @@ test("keeps multi-client presence compact through heartbeat, activity, and watch
         const capable = index >= 2;
         clients.push({ ws, observations, capable });
         const result = await connectReq(ws, {
-          client: { ...CONTROL_UI_CLIENT, instanceId: `presence-browser-${index}` },
+          client: {
+            ...CONTROL_UI_CLIENT,
+            instanceId: `presence-browser-${index}`,
+            deviceFamily: "Laptop",
+            modelIdentifier: "presence-test-device",
+            timeZone: "Europe/Paris",
+          },
           caps: capable ? webCapabilities : [],
           deviceIdentityPath: path.join(
             identityDir,
@@ -174,6 +181,58 @@ test("keeps multi-client presence compact through heartbeat, activity, and watch
               row.instanceId === "presence-browser-0" && row.watchedSessions?.includes(sessionKey),
           ),
       );
+      const beforeEviction = clients[0]!.observations
+        .at(-1)!
+        .rows.filter((row) => row.instanceId?.startsWith("presence-browser-"));
+      expect(beforeEviction).toHaveLength(clients.length);
+      const identities = new Map(
+        beforeEviction.map((row) => [
+          row.connectionId,
+          { instanceId: row.instanceId, deviceId: row.deviceId },
+        ]),
+      );
+      for (const { deviceId } of identities.values()) {
+        expect(deviceId).toMatch(/^[a-f0-9]{64}$/);
+      }
+      // Expire the cached rows without introducing peers outside the live-client projection.
+      clock.mockReturnValue(Date.now() + 5 * 60_000 + 1);
+      const recoveredAt = Date.now();
+      expect(
+        listSystemPresence().filter((row) => row.instanceId?.startsWith("presence-browser-")),
+      ).toEqual([]);
+      const recovered = await publication(
+        async () => {
+          await Promise.all(
+            clients.map(async ({ ws }) => {
+              ws.pong();
+              expect((await rpcReq(ws, "presence.activity", {})).ok).toBe(true);
+            }),
+          );
+        },
+        ({ rows }) => {
+          const browsers = rows.filter((row) => identities.has(row.connectionId));
+          return (
+            browsers.length === clients.length &&
+            browsers.every((row) => row.connectionLastActivityAt === recoveredAt)
+          );
+        },
+      );
+      for (const observation of recovered) {
+        for (const row of observation.rows.filter((entry) => identities.has(entry.connectionId))) {
+          expect(row).toMatchObject({
+            ...identities.get(row.connectionId),
+            version: "1.0.0",
+            platform: "web",
+            deviceFamily: "Laptop",
+            modelIdentifier: "presence-test-device",
+            timeZone: "Europe/Paris",
+          });
+          expect(row.ip).toBeUndefined();
+          expect(row.watchedSessions ?? []).toEqual(
+            row.instanceId === "presence-browser-0" ? [sessionKey] : [],
+          );
+        }
+      }
       const rounds: Observation[][] = [];
       for (let round = 0; round < 3; round += 1) {
         clock.mockReturnValue(Date.now() + 31_000);
@@ -197,16 +256,21 @@ test("keeps multi-client presence compact through heartbeat, activity, and watch
                 }),
               );
             },
-            ({ rows }) =>
-              rows
-                .filter((row) => row.instanceId?.startsWith("presence-browser-"))
-                .every(
+            ({ rows }) => {
+              const browsers = rows.filter((row) =>
+                row.instanceId?.startsWith("presence-browser-"),
+              );
+              return (
+                browsers.length === clients.length &&
+                browsers.every(
                   (row) =>
                     row.ts === now &&
                     row.lastActivityAt === now &&
                     row.connectionLastActivityAt === now &&
                     JSON.stringify(row.watchedSessions ?? []) === JSON.stringify(watched),
-                ),
+                )
+              );
+            },
           ),
         );
       }

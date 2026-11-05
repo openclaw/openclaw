@@ -25,7 +25,7 @@ export function loadJsonFileThroughSymlink<T = unknown>(pathname: string): T | u
   try {
     resolved = fs.realpathSync(pathname);
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
+    if (["ENOENT", "ENOTDIR", "ELOOP"].some((code) => hasNodeErrorCode(error, code))) {
       return undefined;
     }
     throw error;

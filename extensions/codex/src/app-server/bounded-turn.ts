@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { parse as parseToml } from "smol-toml";
@@ -44,6 +45,8 @@ import {
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
 import { resolveCodexPromptError } from "./usage-limit-error.js";
+
+const loadSharedClient = createLazyRuntimeModule(() => import("./shared-client.js"));
 
 const CODEX_APP_SERVER_ARGS_ENV_KEY = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const CODEX_BOUNDED_THREAD_CONFIG: JsonObject = {
@@ -193,7 +196,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     assertCurrent: params.assertCurrent,
     ...(params.signal ? { abandonSignal: params.signal } : {}),
   };
-  const client = await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
+  const client = await loadSharedClient().then(({ createIsolatedCodexAppServerClient }) =>
     createIsolatedCodexAppServerClient({
       ...clientOptions,
       authProfileStore: params.authProfileStore,
@@ -581,7 +584,9 @@ async function resolveCodexBoundedTurnModel(params: {
     "model/list",
     { limit: null, cursor: null, includeHidden: params.selection.mode === "required" },
     {
-      timeoutMs: Math.min(params.timeoutMs, 5_000),
+      // Native cold discovery can spend five seconds refreshing before returning its catalog.
+      // The enclosing turn deadline already bounds this request.
+      timeoutMs: params.timeoutMs,
       signal: params.signal,
       assertCurrent: params.assertCurrent,
     },
@@ -603,7 +608,12 @@ async function resolveCodexBoundedTurnModel(params: {
   const model = params.selection.id;
   const match = listed.find((entry) => entry.model === model || entry.id === model);
   if (!match) {
-    throw new Error(`Codex app-server model not found: ${model}`);
+    throw Object.assign(
+      new Error(
+        `Codex app-server model not found: ${model}. Choose a model advertised by this account/runtime in model/list.`,
+      ),
+      { code: "model_not_found", model },
+    );
   }
   if (params.requiredModalities.includes("image") && !match.inputModalities.includes("image")) {
     throw new Error(`Codex app-server model does not support images: ${model}`);

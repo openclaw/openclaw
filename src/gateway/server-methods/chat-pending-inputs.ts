@@ -10,7 +10,7 @@ import {
   isRpcSourceQueued,
   listRpcSourceEntries,
 } from "../../sessions/session-controller.rpc-sources.js";
-import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
@@ -129,6 +129,12 @@ export async function readChatPendingInputs(
         state: item.state,
         message: messages[index],
       };
+      if (
+        item.state === "cancelled" &&
+        item.message["__openclaw"]?.pendingInputCancelledByUser === true
+      ) {
+        display.cancelledByUser = true;
+      }
       if (item.runId.length <= PENDING_INPUT_CORRELATION_MAX_CHARS) {
         display.runId = item.runId;
         if (item.state === "queued" && options.queuedRunIds?.has(item.runId)) {

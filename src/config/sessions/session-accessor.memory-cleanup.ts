@@ -70,7 +70,7 @@ export function applyMemorySessionEntryCleanup(
     try {
       preservation = params.skipMaintenance
         ? undefined
-        : await prepareSessionMaintenancePreservation(params.storePath);
+        : await prepareSessionMaintenancePreservation(params.storePath, { env: params.env });
       const beforeStore = Object.fromEntries(
         entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
       );
@@ -141,6 +141,7 @@ export function applyMemorySessionEntryCleanup(
                   captured.authority.assertCurrent();
                   assertSourceCurrent();
                   assertDeletionCurrent();
+                  preservation?.capture();
                 },
               },
               {

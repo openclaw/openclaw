@@ -54,6 +54,10 @@ export type DiagnosticRuntimeMeasurementFields =
     }
   | {
       type: "diagnostic.gc";
+      /** Native full-heap usage immediately after a major collection. */
+      heapUsedAfterMajorGcBytes?: number;
+      /** Unix time when the isolate's existing profiler drained that collection. */
+      heapUsedAfterMajorGcTimestampSeconds?: number;
       durationMs: number;
       /** Optional for existing SDK event producers; native observers always supply attribution. */
       kind?: GcSample["kind"];
@@ -200,6 +204,8 @@ export type DiagnosticMemoryUsage = {
   }[];
   /** Main-thread transport totals; unknown payload sizes remain separate from known zero bytes. */
   workerMessages?: WorkerMessageMetric[];
+  /** Linux physical reads by outer operation in direct reader workers, including retired workers. */
+  sqliteReaderMetrics?: { operation: string; count: number; readBytes: number }[];
   /** Process-lifetime selector totals with bounded shape and caller labels. */
   sessionRowSelections?: ReturnType<typeof getSessionRowSelectionMetrics>;
 };
@@ -220,9 +226,26 @@ export type DiagnosticMemoryPressureMetrics = Partial<
 export type DiagnosticMemoryPressureFields = DiagnosticMemoryPressureMetrics & {
   type: "diagnostic.memory.pressure";
   level: "warning" | "critical";
-  reason: "rss_threshold" | "heap_threshold" | "worker_heap_threshold" | "rss_growth";
+  reason:
+    | "rss_threshold"
+    | "heap_threshold"
+    | "worker_heap_threshold"
+    | "process_memory_threshold"
+    | "rss_growth";
   memory: DiagnosticMemoryUsage;
 };
+
+export function isMemoryPressureReason(
+  reason: string,
+): reason is DiagnosticMemoryPressureFields["reason"] {
+  return (
+    reason === "rss_threshold" ||
+    reason === "heap_threshold" ||
+    reason === "worker_heap_threshold" ||
+    reason === "process_memory_threshold" ||
+    reason === "rss_growth"
+  );
+}
 
 export type DiagnosticChildProcessSpawnFields = {
   type: "diagnostic.child_process.spawn";

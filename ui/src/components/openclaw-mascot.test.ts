@@ -14,18 +14,44 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function playback() {
+  const requestFrame = vi.fn<(callback: FrameRequestCallback) => number>(() => 1);
+  const cancelFrame = vi.fn();
+  vi.stubGlobal("requestAnimationFrame", requestFrame);
+  vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  return { requestFrame, cancelFrame, visibility };
+}
+
+function mountMascot(attributes: Record<string, string> = {}) {
+  const mascot = document.createElement("openclaw-mascot");
+  for (const [name, value] of Object.entries(attributes)) {
+    mascot.setAttribute(name, value);
+  }
+  document.body.append(mascot);
+  return mascot;
+}
+
+function canvasRenderer() {
+  const draw = vi.spyOn(mascotCanvas, "drawMascot").mockImplementation(() => {});
+  const context: Pick<CanvasRenderingContext2D, "setTransform" | "clearRect"> = {
+    setTransform: vi.fn(),
+    clearRect: vi.fn(),
+  };
+  // The stubbed renderer leaves only these context operations in the host.
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+    context as CanvasRenderingContext2D,
+  );
+  vi.stubGlobal("Path2D", vi.fn());
+  return { draw, context };
+}
+
 it("replaces the animated mascot with a same-size neutral mark and restores it on theme changes", async () => {
   const warning = vi.spyOn(console, "warn");
   delete document.documentElement.dataset.themeMascot;
   setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
-  const requestFrame = vi.fn(() => 1);
-  const cancelFrame = vi.fn();
-  vi.stubGlobal("requestAnimationFrame", requestFrame);
-  vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-  const mascot = document.createElement("openclaw-mascot");
-  mascot.setAttribute("size", "48");
-  document.body.append(mascot);
+  const { requestFrame, cancelFrame } = playback();
+  const mascot = mountMascot({ size: "48" });
   await waitForSolid(() => expect(mascot.querySelector("canvas")).not.toBeNull());
   await waitForSolid(() => expect(requestFrame).toHaveBeenCalledOnce());
 
@@ -48,13 +74,8 @@ it("pauses for reduced motion and hidden documents, and cancels playback on remo
   const warning = vi.spyOn(console, "warn");
   const motionQuery = Object.assign(new EventTarget(), { matches: false });
   vi.stubGlobal("matchMedia", () => motionQuery);
-  const requestFrame = vi.fn(() => 1);
-  const cancelFrame = vi.fn();
-  vi.stubGlobal("requestAnimationFrame", requestFrame);
-  vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-  const mascot = document.createElement("openclaw-mascot");
-  document.body.append(mascot);
+  const { requestFrame, cancelFrame, visibility } = playback();
+  const mascot = mountMascot();
   await waitForSolid(() => expect(requestFrame).toHaveBeenCalledOnce());
 
   motionQuery.matches = true;
@@ -85,30 +106,13 @@ it("pauses for reduced motion and hidden documents, and cancels playback on remo
 
 it("draws current size and expression across animation frames and reduced-motion updates", async () => {
   const warning = vi.spyOn(console, "warn");
-  const draw = vi.spyOn(mascotCanvas, "drawMascot").mockImplementation(() => {});
-  const context: Pick<CanvasRenderingContext2D, "setTransform" | "clearRect"> = {
-    setTransform: vi.fn(),
-    clearRect: vi.fn(),
-  };
-  // SAFETY: The vector renderer is stubbed; these are the only context operations used by the host.
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
-    context as CanvasRenderingContext2D,
-  );
-  vi.stubGlobal("Path2D", vi.fn());
+  const { draw, context } = canvasRenderer();
   vi.stubGlobal("devicePixelRatio", 2);
   vi.spyOn(performance, "now").mockReturnValue(1_000);
   const motionQuery = Object.assign(new EventTarget(), { matches: false });
   vi.stubGlobal("matchMedia", () => motionQuery);
-  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-  const requestFrame = vi.fn<(callback: FrameRequestCallback) => number>(() => 1);
-  vi.stubGlobal("requestAnimationFrame", requestFrame);
-  const cancelFrame = vi.fn();
-  vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-  const mascot = document.createElement("openclaw-mascot");
-  mascot.setAttribute("size", "48");
-  mascot.setAttribute("mood", "working");
-  mascot.setAttribute("tease", "");
-  document.body.append(mascot);
+  const { requestFrame, cancelFrame } = playback();
+  const mascot = mountMascot({ size: "48", mood: "working", tease: "" });
   await waitForSolid(() => expect(mascot.querySelector("canvas")?.width).toBe(96));
   expect(context.setTransform).toHaveBeenLastCalledWith(2, 0, 0, 2, 0, 0);
   expect(context.clearRect).toHaveBeenLastCalledWith(0, 0, 48, 48);
@@ -135,16 +139,7 @@ it("draws current size and expression across animation frames and reduced-motion
 });
 
 it("draws while hidden and retains the same canvas when motion first starts and resumes", async () => {
-  const draw = vi.spyOn(mascotCanvas, "drawMascot").mockImplementation(() => {});
-  const context: Pick<CanvasRenderingContext2D, "setTransform" | "clearRect"> = {
-    setTransform: vi.fn(),
-    clearRect: vi.fn(),
-  };
-  // SAFETY: The renderer is stubbed; the host only uses these two context methods.
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
-    context as CanvasRenderingContext2D,
-  );
-  vi.stubGlobal("Path2D", vi.fn());
+  const { draw } = canvasRenderer();
   let intersect: IntersectionObserverCallback | undefined;
   const targets = new Set<Element>();
   vi.stubGlobal(
@@ -164,14 +159,8 @@ it("draws while hidden and retains the same canvas when motion first starts and 
       }
     },
   );
-  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-  const requestFrame = vi.fn(() => 1);
-  const cancelFrame = vi.fn();
-  vi.stubGlobal("requestAnimationFrame", requestFrame);
-  vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-  const mascot = document.createElement("openclaw-mascot");
-  mascot.setAttribute("size", "48");
-  document.body.append(mascot);
+  const { requestFrame, cancelFrame } = playback();
+  const mascot = mountMascot({ size: "48" });
   await waitForSolid(() => expect(intersect).toBeDefined());
   const canvas = mascot.querySelector("canvas");
   expect(canvas).not.toBeNull();

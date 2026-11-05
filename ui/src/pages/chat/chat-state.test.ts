@@ -27,10 +27,11 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
+import { historyBudget, makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { removeQueuedMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { requestChatSend } from "./chat-send-request.ts";
@@ -63,8 +64,6 @@ import {
 } from "./queued-message-edit.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { createHost as createToolStreamHost } from "./tool-stream.test-helpers.ts";
-
-const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
 
 function textMessage(text: string, role = "assistant") {
   return { role, content: [{ type: "text", text }] };
@@ -874,21 +873,15 @@ describe("canonical session message recovery", () => {
       listBranches,
       refresh: vi.fn(async () => {
         await refreshFinished.promise;
-        state.sessionsResult = {
-          ts: 2,
-          path: "",
-          count: 1,
-          defaults: { modelProvider: null, model: null, contextTokens: null },
-          sessions: [
-            {
-              key: state.sessionKey,
-              kind: "direct",
-              hasActiveRun: false,
-              status: "done",
-              updatedAt: 2,
-            },
-          ],
-        };
+        state.sessionsResult = sessionListResult(2, [
+          {
+            key: state.sessionKey,
+            kind: "direct",
+            hasActiveRun: false,
+            status: "done",
+            updatedAt: 2,
+          },
+        ]);
       }),
     };
 
@@ -1826,8 +1819,7 @@ describe("session pull request refresh", () => {
   });
 
   function createFinalReplyState(refreshSessionPullRequests: ReturnType<typeof vi.fn>) {
-    return {
-      ...makeChatHost(),
+    return Object.assign(makeChatHost(), {
       chatMessagesBySession: new Map(),
       chatStreamRenderFrame: null,
       pendingSessionMessageReloadSessionKey: null,
@@ -1835,7 +1827,7 @@ describe("session pull request refresh", () => {
       sessionKey: "main",
       sessions: { reconcileRunTerminal: vi.fn() },
       settings: {},
-    } as unknown as ChatPageHost;
+    }) as unknown as ChatPageHost;
   }
 
   it.each([
@@ -1954,15 +1946,14 @@ describe("refreshChatMetadata", () => {
       hello?: { features: { methods: string[] } };
     } = {},
   ): ChatPageHost {
-    return {
-      ...makeChatHost(),
+    return Object.assign(makeChatHost(), {
       agentsList: null,
       assistantAgentId: "main",
       client: { request },
       hello: { features: { methods: ["chat.metadata"] } },
       sessionKey: "agent:work:main",
       ...overrides,
-    } as unknown as ChatPageHost;
+    }) as unknown as ChatPageHost;
   }
 
   it("ends a retired automatic catalog's loading before unrelated commands settle", async () => {

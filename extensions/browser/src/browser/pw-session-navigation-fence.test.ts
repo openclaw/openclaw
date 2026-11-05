@@ -9,21 +9,117 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+async function fence(
+  options: {
+    send?: (method: string) => Promise<unknown>;
+    detach?: () => Promise<void>;
+    isClosed?: () => boolean;
+    assertCurrent?: () => void;
+    handleDocument?: Parameters<typeof installNavigationAuthorityFence>[3];
+  } = {},
+) {
+  const send = vi.fn(async (method: string, _params?: unknown) => {
+    if (method === "Page.getFrameTree") {
+      return { frameTree: { frame: { id: "MAIN_FRAME" } } };
+    }
+    return await options.send?.(method);
+  });
+  const detach = vi.fn(options.detach ?? (async () => {}));
+  const session = Object.assign(new EventEmitter(), {
+    send: async (method: string, params?: unknown) =>
+      method === "Page.getFrameTree"
+        ? { frameTree: { frame: { id: "main" } } }
+        : send(method, params),
+    detach,
+  });
+  const page = Object.assign(new EventEmitter(), {
+    context: () => ({ newCDPSession: async () => session }),
+    isClosed: options.isClosed ?? (() => false),
+  });
+  const errors: unknown[] = [];
+  const dispose = await installNavigationAuthorityFence(
+    page as unknown as Page,
+    { assertNavigationCurrent: options.assertCurrent ?? (() => {}) },
+    (error) => errors.push(error),
+    options.handleDocument,
+  );
+  const pause = (requestId: string, url = "http://127.0.0.1/target") =>
+    session.emit("Fetch.requestPaused", { requestId, resourceType: "Document", request: { url } });
+  return { send, detach, session, page, errors, dispose, pause };
+}
+
 describe("navigation authority fence lifecycle", () => {
+  it("observes queued document interception before an idle cleanup", async () => {
+    const releaseBarrier = Promise.withResolvers<void>();
+    const { send, session, dispose } = await fence({
+      send: async (method) => {
+        if (method === "Runtime.evaluate") {
+          await releaseBarrier.promise;
+        }
+      },
+      handleDocument: async (route) => {
+        await route.preserve();
+      },
+    });
+    const cleanup = dispose();
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Runtime.evaluate", { expression: "void 0" }),
+    );
+    session.emit("Network.requestWillBeSent", {
+      requestId: "document",
+      type: "Document",
+      frameId: "MAIN_FRAME",
+    });
+    session.emit("Fetch.requestPaused", {
+      requestId: "interception",
+      networkId: "document",
+      frameId: "MAIN_FRAME",
+      resourceType: "Document",
+      request: { url: "http://127.0.0.1/blocked" },
+    });
+    releaseBarrier.resolve();
+    await expect(cleanup).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledWith("Fetch.disable", undefined);
+  });
+
+  it("settles a document completed by the operation-owned interceptor", async () => {
+    const releaseFulfillment = Promise.withResolvers<void>();
+    const { send, detach, session, dispose } = await fence({
+      send: async (method) => {
+        if (method === "Fetch.failRequest") {
+          await releaseFulfillment.promise;
+        }
+      },
+      handleDocument: async (route) => {
+        await route.preserve();
+      },
+    });
+    session.emit("Network.requestWillBeSent", {
+      requestId: "document",
+      type: "Document",
+      frameId: "MAIN_FRAME",
+    });
+    session.emit("Fetch.requestPaused", {
+      requestId: "interception",
+      frameId: "MAIN_FRAME",
+      resourceType: "Document",
+      request: { url: "http://127.0.0.1/blocked" },
+    });
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Fetch.failRequest", {
+        requestId: "interception",
+        errorReason: "Aborted",
+      }),
+    );
+    const cleanup = dispose();
+    releaseFulfillment.resolve();
+    await expect(cleanup).resolves.toBeUndefined();
+    expect(detach).toHaveBeenCalledOnce();
+  });
+
   it("keeps a pending document redirect fenced after its initiating action returns", async () => {
     vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockResolvedValue(undefined);
-    const send = vi.fn(async () => {});
-    const detach = vi.fn(async () => {});
-    const session = Object.assign(new EventEmitter(), { send, detach });
-    const page = Object.assign(new EventEmitter(), {
-      context: () => ({ newCDPSession: async () => session }),
-      isClosed: () => false,
-    });
-    const dispose = await installNavigationAuthorityFence(
-      page as unknown as Page,
-      { assertNavigationCurrent: () => {} },
-      () => {},
-    );
+    const { send, detach, session, dispose } = await fence();
     session.emit("Network.requestWillBeSent", { requestId: "document", type: "Document" });
     const cleanup = dispose();
     await Promise.resolve();
@@ -42,34 +138,58 @@ describe("navigation authority fence lifecycle", () => {
     expect(detach).toHaveBeenCalledOnce();
   });
 
-  it("removes the paused-request listener before detachment releases interception", async () => {
-    const errors: unknown[] = [];
-    let detached = false;
-    const send = vi.fn(async () => {
-      if (detached) {
-        throw new Error("Invalid InterceptionId");
-      }
+  it("stops a timed-out committed document before waiting for cleanup", async () => {
+    const { send, session, dispose } = await fence();
+    session.emit("Network.requestWillBeSent", {
+      requestId: "streaming-document",
+      type: "Document",
+      frameId: "MAIN_FRAME",
     });
-    const session = Object.assign(new EventEmitter(), {
-      send,
-      detach: vi.fn(async () => {
+
+    await expect(dispose({ stopLoading: true })).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledWith("Page.stopLoading", undefined);
+  });
+
+  it("retires committed bodies while retaining a simultaneous child redirect", async () => {
+    const { send, detach, session, dispose } = await fence();
+    for (const frameId of ["main", "child"]) {
+      session.emit("Network.requestWillBeSent", {
+        requestId: frameId + "-document",
+        type: "Document",
+        frameId,
+      });
+    }
+    const cleanup = dispose();
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Runtime.evaluate", { expression: "void 0" }),
+    );
+    session.emit("Page.frameNavigated", { frame: { id: "main" } });
+    await Promise.resolve();
+    expect(detach).not.toHaveBeenCalled();
+    // Neither body reaches EOF. Only the child's own commit retires its chain.
+    session.emit("Page.frameNavigated", { frame: { id: "child" } });
+    await expect(cleanup).resolves.toBeUndefined();
+    expect(send).not.toHaveBeenCalledWith("Page.stopLoading", undefined);
+    expect(detach).toHaveBeenCalledOnce();
+  });
+
+  it("removes the paused-request listener before detachment releases interception", async () => {
+    let detached = false;
+    const { session, errors, dispose } = await fence({
+      send: async () => {
+        if (detached) {
+          throw new Error("Invalid InterceptionId");
+        }
+      },
+      detach: async () => {
         detached = true;
         session.emit("Fetch.requestPaused", {
           requestId: "late-resource",
           resourceType: "Other",
           request: { url: "https://example.com/favicon.ico" },
         });
-      }),
+      },
     });
-    const page = Object.assign(new EventEmitter(), {
-      context: () => ({ newCDPSession: async () => session }),
-      isClosed: () => false,
-    }) as unknown as Page;
-    const dispose = await installNavigationAuthorityFence(
-      page,
-      { assertNavigationCurrent: () => {} },
-      (error) => errors.push(error),
-    );
     expect(await dispose()).toBeUndefined();
     expect(errors).toEqual([]);
     expect(session.listenerCount("Fetch.requestPaused")).toBe(0);
@@ -78,41 +198,28 @@ describe("navigation authority fence lifecycle", () => {
   it("retains interception until target close when revoked loading cannot be stopped", async () => {
     const denied = Promise.withResolvers<void>();
     const stopError = new Error("stop acknowledgement unavailable");
-    const send = vi.fn(async (method: string) => {
-      if (method === "Page.stopLoading") {
-        throw stopError;
-      }
-      if (method === "Fetch.failRequest") {
-        denied.resolve();
-      }
-    });
-    const detach = vi.fn(async () => {});
-    const session = Object.assign(new EventEmitter(), { send, detach });
     let closed = false;
-    const page = Object.assign(new EventEmitter(), {
-      context: () => ({ newCDPSession: async () => session }),
-      isClosed: () => closed,
-    });
     let current = true;
-    const dispose = await installNavigationAuthorityFence(
-      page as unknown as Page,
-      {
-        assertNavigationCurrent: () => {
-          if (!current) {
-            throw new Error("invocation revoked");
-          }
-        },
+    const { send, detach, session, page, dispose, pause } = await fence({
+      send: async (method) => {
+        if (method === "Page.stopLoading") {
+          throw stopError;
+        }
+        if (method === "Fetch.failRequest") {
+          denied.resolve();
+        }
       },
-      () => {},
-    );
+      isClosed: () => closed,
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("invocation revoked");
+        }
+      },
+    });
     current = false;
     expect(await dispose()).toBe(stopError);
     expect(detach).not.toHaveBeenCalled();
-    session.emit("Fetch.requestPaused", {
-      requestId: "late-redirect",
-      resourceType: "Document",
-      request: { url: "http://127.0.0.1/target" },
-    });
+    pause("late-redirect");
     await denied.promise;
     expect(send).not.toHaveBeenCalledWith("Fetch.continueRequest", expect.anything());
     closed = true;
@@ -125,25 +232,11 @@ describe("navigation authority fence lifecycle", () => {
     vi.useFakeTimers();
     const validation = Promise.withResolvers<void>();
     vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockReturnValue(validation.promise);
-    const send = vi.fn(async () => {});
-    const detach = vi.fn(async () => {});
-    const session = Object.assign(new EventEmitter(), { send, detach });
     let closed = false;
-    const page = Object.assign(new EventEmitter(), {
-      context: () => ({ newCDPSession: async () => session }),
+    const { send, detach, session, page, errors, dispose, pause } = await fence({
       isClosed: () => closed,
     });
-    const errors: unknown[] = [];
-    const dispose = await installNavigationAuthorityFence(
-      page as unknown as Page,
-      { assertNavigationCurrent: () => {} },
-      (error) => errors.push(error),
-    );
-    session.emit("Fetch.requestPaused", {
-      requestId: "stalled-policy",
-      resourceType: "Document",
-      request: { url: "http://127.0.0.1/target" },
-    });
+    pause("stalled-policy");
     let result: unknown;
     const cleanup = dispose().then((error) => {
       result = error;
@@ -154,11 +247,7 @@ describe("navigation authority fence lifecycle", () => {
         new Error("Browser navigation did not settle before authority cleanup"),
       );
       expect(detach).not.toHaveBeenCalled();
-      session.emit("Fetch.requestPaused", {
-        requestId: "late-redirect",
-        resourceType: "Document",
-        request: { url: "http://127.0.0.1/late" },
-      });
+      pause("late-redirect", "http://127.0.0.1/late");
       expect(send).toHaveBeenCalledWith("Fetch.failRequest", {
         requestId: "late-redirect",
         errorReason: "Aborted",
@@ -186,35 +275,20 @@ describe("navigation authority fence lifecycle", () => {
           await validation.promise;
         },
       );
-      const send = vi.fn(async (method: string) => {
-        if (method === "Fetch.failRequest" || method === "Fetch.continueRequest") {
-          stopped.resolve();
-        }
-      });
-      const detach = vi.fn(async () => {});
-      const session = Object.assign(new EventEmitter(), { send, detach });
-      const page = Object.assign(new EventEmitter(), {
-        context: () => ({ newCDPSession: async () => session }),
-        isClosed: () => false,
-      }) as unknown as Page;
       let current = true;
-      const errors: unknown[] = [];
-      const dispose = await installNavigationAuthorityFence(
-        page,
-        {
-          assertNavigationCurrent: () => {
-            if (!current) {
-              throw new Error("invocation revoked");
-            }
-          },
+      const { send, detach, session, errors, dispose, pause } = await fence({
+        send: async (method) => {
+          if (method === "Fetch.failRequest" || method === "Fetch.continueRequest") {
+            stopped.resolve();
+          }
         },
-        (error) => errors.push(error),
-      );
-      session.emit("Fetch.requestPaused", {
-        requestId: "redirect-hop",
-        resourceType: "Document",
-        request: { url: "http://127.0.0.1/target" },
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("invocation revoked");
+          }
+        },
       });
+      pause("redirect-hop");
       await entered.promise;
       let cleanup: Promise<unknown> | undefined;
       if (state === "revoked") {

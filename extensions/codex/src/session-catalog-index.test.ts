@@ -4,6 +4,10 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
+import {
+  freezeCatalogDirectoryClocks,
+  watchWithControlledEvents,
+} from "./session-catalog-index.test-support.js";
 import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import {
   measureCatalogLists,
@@ -59,6 +63,36 @@ function localRoot() {
 }
 
 describe("resident Codex catalog", () => {
+  it("does not snapshot resident rows when a local DB-only walk cannot remove them", async () => {
+    const root = localRoot();
+    const native = idleThread({ id: "local-omission", source: "cli" });
+    const readNative = vi.fn(async (_params: CodexThreadListParams) =>
+      projectCodexCatalogPage({ data: [native] }),
+    );
+    const index = await initializedIndex("local-omission", readNative, root);
+    await advance(index, 0);
+    const resident = index.get(native.id)!;
+    const iterate = Map.prototype[Symbol.iterator];
+    let residentIterations = 0;
+    vi.spyOn(Map.prototype, Symbol.iterator).mockImplementation(function (
+      this: Map<unknown, unknown>,
+    ) {
+      if (this.get(native.id) === resident) {
+        residentIterations++;
+      }
+      return iterate.call(this);
+    });
+    readNative.mockImplementation(async () => projectCodexCatalogPage({ data: [] }));
+    await advance(index, 15 * 60_000);
+    await index.list({});
+    await advance(index, 0);
+    expect(readNative).toHaveBeenCalledTimes(2);
+    expect(readNative.mock.calls[1]?.[0]).toMatchObject({ useStateDbOnly: true });
+    expect(await listedIds(index)).toEqual([native.id]);
+    expect(index.get(native.id)).toBe(resident);
+    expect(residentIterations).toBe(0);
+  });
+
   it("runs due local file scans while a demand-triggered native walk is blocked", async () => {
     const root = localRoot();
     await fs.mkdir(root, { recursive: true });
@@ -152,6 +186,8 @@ describe("resident Codex catalog", () => {
   });
 
   it("reconciles a new rollout with only bounded reads of that file", async () => {
+    const { notifyRename } = watchWithControlledEvents("linux");
+    freezeCatalogDirectoryClocks();
     const root = localRoot();
     const existing = idleThread({ id: "existing", source: "cli", originator: "codex_cli_rs" });
     existing.path = await writeCatalogRollout(root, existing);
@@ -159,7 +195,7 @@ describe("resident Codex catalog", () => {
     const index = await initializedIndex("currency", readNative, root);
     await vi.advanceTimersByTimeAsync(0);
     await index.reconcile();
-    const stat = vi.spyOn(fs, "lstat");
+    const stat = vi.spyOn(fs, "lstat").mockClear();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(stat).not.toHaveBeenCalled();
     expect(readNative).toHaveBeenCalledOnce();
@@ -167,6 +203,8 @@ describe("resident Codex catalog", () => {
       root,
       idleThread({ id: "new-thread", preview: "New request" }),
     );
+    // Filesystem completion does not acknowledge the scanner's watcher delivery.
+    notifyRename(added);
     const open = vi.spyOn(fs, "open");
     await vi.advanceTimersByTimeAsync(14 * 60_000 + 30_000);
     await index.reconcile();
@@ -219,21 +257,21 @@ describe("resident Codex catalog", () => {
     await index.reconcile();
     readNative.mockRejectedValueOnce(new Error("native unavailable"));
     readNative.mockRejectedValueOnce(new Error("native retry unavailable"));
-    const stat = vi.spyOn(fs, "lstat");
+    const scan = vi.spyOn(fs, "opendir");
     await advance(index, 15 * 60_000);
-    expect(stat).toHaveBeenCalled();
+    expect(scan).toHaveBeenCalled();
     expect(readNative).toHaveBeenCalledOnce();
-    stat.mockClear();
+    scan.mockClear();
     for (const calls of [2, 3]) {
       await index.upsertThread(existing);
       await advance(index, 30_000);
       expect(readNative).toHaveBeenCalledTimes(calls);
-      expect(stat).not.toHaveBeenCalled();
+      expect(scan).not.toHaveBeenCalled();
     }
 
     await writeCatalogRollout(root, idleThread({ id: "external", preview: "External request" }));
     await advance(index, 14 * 60_000);
-    expect(stat).toHaveBeenCalled();
+    expect(scan).toHaveBeenCalled();
     expect(index.get("external")?.preview).toBe("External request");
   });
 

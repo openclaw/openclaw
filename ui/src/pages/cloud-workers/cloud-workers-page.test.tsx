@@ -291,7 +291,7 @@ it.each([
     try {
       await waitForSolid(() => {
         const profiles = [...page.querySelectorAll(".settings-section")].find((section) =>
-          section.querySelector("h2")?.textContent?.trim().startsWith("Machines"),
+          section.querySelector("h2")?.textContent?.trim().startsWith("Cloud devices"),
         );
         expect(profiles?.querySelectorAll(".settings-row code")).toHaveLength(2);
       });
@@ -357,7 +357,7 @@ it.each([
         expect(retainedRow?.textContent).toContain("Advertised");
       });
       if (action !== "delete") {
-        await waitText(() => page, "Profile saved.");
+        await waitText(() => page, "Profile saved");
         expect(request).not.toHaveBeenCalledWith("environments.prepare", expect.anything());
       }
       expect(patches[0]).toMatchObject({
@@ -472,13 +472,13 @@ it("keeps a rejected profile draft and retires pending save presentation on acce
     click(page, "Save");
     await waitForSolid(() => expect(patches).toBe(2));
     gatewayHarness.publish(true, client, gatewayHelloForMethods([], ["operator.read"]));
-    await waitText(() => page, "Administrator access is required to manage cloud worker profiles.");
+    await waitText(() => page, "You need admin access to manage cloud device profiles.");
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBeNull();
     pending.resolve({ ok: true, config, hash: "after" });
     await pending.promise;
     flush();
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBeNull();
-    expect(page.textContent).not.toContain("Profile saved.");
+    expect(page.textContent).not.toContain("Profile saved");
   } finally {
     view.unmount();
     runtimeConfig.dispose();

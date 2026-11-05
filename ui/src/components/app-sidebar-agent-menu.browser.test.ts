@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewayAgentRow } from "../api/types.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "../test-helpers/load-styles.ts";
+import "../styles/sidebar-menus.css";
 
 afterEach(() => document.body.replaceChildren());
 

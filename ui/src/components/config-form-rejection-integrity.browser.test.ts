@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  expectElement,
   connectionSchemaFixture,
   renderObjectFixture,
   renderArrayFixture,
@@ -8,12 +9,14 @@ import { flush } from "../test-helpers/solid-settle.ts";
 
 const errorSelector = ".cfg-structured-draft__error [role='alert']";
 
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
+function openDisclosure(root: ParentNode) {
+  const details = expectElement(
+    root.querySelector<HTMLDetailsElement>("details.cfg-object"),
+    "disclosure",
+  );
+  details.open = true;
+  details.dispatchEvent(new Event("toggle"));
+  flush();
 }
 
 function field(root: ParentNode, name: string) {
@@ -53,7 +56,8 @@ describe("config form rejection integrity", () => {
       initial: [{ "custom-1": {} }, {}],
       path: "entries",
       index: 1,
-      addLabel: "Add Entry",
+      addLabel: "Add",
+      commitLabel: "Add entry",
       key: "custom-2",
       value: "{}",
       expected: [{ "custom-1": {} }, { "custom-2": {} }],
@@ -99,7 +103,7 @@ describe("config form rejection integrity", () => {
     );
     edit(value, testCase.value);
     flush();
-    add(draft, testCase.addLabel);
+    add(draft, testCase.commitLabel ?? testCase.addLabel);
     expect(onPatch).toHaveBeenCalledWith([testCase.path], testCase.expected);
     container.remove();
   });
@@ -139,6 +143,7 @@ describe("config form rejection integrity", () => {
         "optional object draft",
       );
       flush();
+      openDisclosure(draft);
       edit(field(draft, "Host"), "gateway.local");
       flush();
       expect(onPatch).not.toHaveBeenCalled();
@@ -203,11 +208,11 @@ describe("config form rejection integrity", () => {
     add(draft);
     flush();
     expect(onPatch).not.toHaveBeenCalled();
-    expect(draft.textContent).toContain("1 item");
+    expect(draft.querySelectorAll(".cfg-array__item")).toHaveLength(1);
 
     renderValue();
     flush();
-    expect(draft.textContent).toContain("1 item");
+    expect(draft.querySelectorAll(".cfg-array__item")).toHaveLength(1);
 
     add(draft);
     flush();
@@ -215,12 +220,12 @@ describe("config form rejection integrity", () => {
     const [path, value] = onPatch.mock.calls[0] ?? [];
     expect(path).toEqual(["settings", "codes"]);
     expect(value).toEqual(Array.from({ length: 101 }, () => ""));
-    expect(draft.textContent).toContain("101 items");
+    expect(draft.querySelectorAll(".cfg-array__item")).toHaveLength(101);
     expect(draft.querySelector(errorSelector)?.textContent).toContain("draft is still here");
 
     renderValue();
     flush();
-    expect(draft.textContent).toContain("101 items");
+    expect(draft.querySelectorAll(".cfg-array__item")).toHaveLength(101);
     expect(draft.querySelector(errorSelector)?.textContent).toContain("draft is still here");
     container.remove();
   });

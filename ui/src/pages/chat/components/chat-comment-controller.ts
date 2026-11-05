@@ -28,7 +28,8 @@ export function currentChatComments(attachments: readonly ChatAttachment[], sess
   );
 }
 
-type ChatCommentControllerProps = {
+/** Owns comment mutations even when plugins or history errors replace the transcript. */
+export function ChatCommentController(view: {
   props: ChatAttachmentControlsProps;
   disabled: boolean;
   sessionKey: string;
@@ -37,10 +38,7 @@ type ChatCommentControllerProps = {
   onFocusComposer?: () => void;
   visiblePin?: (id: string) => HTMLElement | undefined;
   resolveSourceRange?: (source: ChatSelectionSource) => Range | undefined;
-};
-
-/** Owns comment mutations even when plugins or history errors replace the transcript. */
-export function ChatCommentController(view: ChatCommentControllerProps) {
+}) {
   const host = document.createElement("openclaw-chat-comment-controller");
   host.style.display = "contents";
   let root: HTMLElement | null = null;
@@ -258,7 +256,7 @@ export function ChatCommentController(view: ChatCommentControllerProps) {
     } catch (error) {
       if (editorOwner === owner && canChange(signal)) {
         retireEditor();
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
       return;
     }

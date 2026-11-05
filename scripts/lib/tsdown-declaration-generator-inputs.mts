@@ -239,5 +239,6 @@ export function resolveTsdownDeclarationGeneratorInputs(
     ...resolveSqliteSchemaAssetInputs(root),
     ...resolveWorkerDeployGeneratorInputs(root),
     fs.realpathSync(path.resolve(root, "node_modules/tree-sitter-bash/LICENSE")),
+    fs.realpathSync(path.resolve(root, "node_modules/highlight.js/LICENSE")),
   ];
 }

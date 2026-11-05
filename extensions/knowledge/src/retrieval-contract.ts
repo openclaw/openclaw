@@ -149,5 +149,3 @@ export const ToolLookupOutput = Type.Object(
   { additionalProperties: false },
 );
 export type ToolLookupOutput = Static<typeof ToolLookupOutput>;
-/** Narrow a tool hit; operator (non-agent) calls always receive full hits. */
-export const isFullHit = (h: FullHit | CompactHit): h is FullHit => "citation" in h;

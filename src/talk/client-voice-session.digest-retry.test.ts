@@ -4,6 +4,7 @@ import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.entry-mutation.js";
 import {
   loadSessionEntry,
@@ -306,13 +307,9 @@ describe("client voice session lifecycle", () => {
       await settleDigestAttempts();
       expect(send).not.toHaveBeenCalled();
 
-      const entered = createDeferred();
-      const resume = createDeferred();
-      const blocker = runOpenClawAgentWorkerWrite(mainTarget, async () => {
-        entered.resolve();
-        await resume.promise;
-      });
-      await entered.promise;
+      const writerGate = createEnteredGate();
+      const blocker = runOpenClawAgentWorkerWrite(mainTarget, writerGate.wait);
+      await writerGate.entered;
       let settled = false;
       const registering = registerRun({ ...binding, config: {} }).then((release) => {
         settled = true;
@@ -334,7 +331,7 @@ describe("client voice session lifecycle", () => {
           await createOrResumeClientVoiceSession({ ...successor, origin: "client" });
           releaseReplacement = await registerRun({ ...successor, runId: binding.runId });
         }
-        resume.resolve();
+        writerGate.release();
         const releaseReplay = await registering;
         await settleDigestAttempts();
         expect(readRecord(voiceSessionId)).toMatchObject({
@@ -358,7 +355,7 @@ describe("client voice session lifecycle", () => {
         await settleDigestAttempts();
         expect(send).toHaveBeenCalledOnce();
       } finally {
-        resume.resolve();
+        writerGate.release();
         await blocker;
         (await registering)();
         releaseOriginal();
@@ -461,7 +458,7 @@ describe("client voice session lifecycle", () => {
         const successor = path.join(harness.stateDir, "successor");
         const env = captureEnv(["OPENCLAW_STATE_DIR"]);
         const lookup = voiceSessionReads.lookupClientVoiceSessions;
-        const read = vi
+        using _ = vi
           .spyOn(voiceSessionReads, "lookupClientVoiceSessions")
           .mockImplementationOnce(async (...args) => {
             const candidates = await lookup(...args);
@@ -481,7 +478,6 @@ describe("client voice session lifecycle", () => {
             closed === "original" ? "open" : "closed",
           );
         } finally {
-          read.mockRestore();
           env.restore();
           await Promise.all([originalClose.drain(), successorClose?.drain()]);
           await cleanupSessionStateForTest({ stateDir: successor, rootPath: successor });
@@ -513,7 +509,7 @@ describe("client voice session lifecycle", () => {
       const release = createDeferred();
       // oxlint-disable-next-line typescript/unbound-method -- Invoked below with the original registry receiver.
       const close = VoiceTranscriptOperationRegistry.prototype.close;
-      const barrier = vi
+      using _ = vi
         .spyOn(VoiceTranscriptOperationRegistry.prototype, "close")
         .mockImplementationOnce(function (this: VoiceTranscriptOperationRegistry, key, operation) {
           return close.call(this, key, async () => {
@@ -533,7 +529,6 @@ describe("client voice session lifecycle", () => {
       } finally {
         release.resolve();
         await stale;
-        barrier.mockRestore();
       }
     });
   });

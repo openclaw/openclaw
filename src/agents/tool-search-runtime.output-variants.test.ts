@@ -108,37 +108,34 @@ describe("Tool Search input-dependent output contracts", () => {
       const { runtime, execute } = createFixture({ outputSchema });
       return { owner, runtime, execute };
     });
-    const stringify = vi.spyOn(JSON, "stringify");
-    try {
-      for (let round = 0; round < 2; round++) {
-        for (const operation of ["list", "remove"]) {
-          for (const { owner, runtime, execute } of fixtures) {
-            const output = {
-              owner,
-              ...(operation === "list" ? { records: [] } : { removed: true }),
-            };
-            execute.mockResolvedValueOnce(jsonResult(output));
-            await expectResult(runtime, operation, output);
-          }
+    using stringify = vi.spyOn(JSON, "stringify");
+
+    for (let round = 0; round < 2; round++) {
+      for (const operation of ["list", "remove"]) {
+        for (const { owner, runtime, execute } of fixtures) {
+          const output = {
+            owner,
+            ...(operation === "list" ? { records: [] } : { removed: true }),
+          };
+          execute.mockResolvedValueOnce(jsonResult(output));
+          await expectResult(runtime, operation, output);
         }
       }
-      expect(
-        stringify.mock.calls.filter(
-          ([value]) =>
-            value &&
-            typeof value === "object" &&
-            "title" in value &&
-            String(value.title).startsWith("immutable-output-") &&
-            "allOf" in value,
-        ),
-      ).toHaveLength(4);
-      fixtures[0]!.execute.mockResolvedValueOnce(jsonResult({ owner: "second", records: [] }));
-      await expectContractFailure(fixtures[0]!.runtime.callValue("records", { operation: "list" }));
-      fixtures[1]!.execute.mockResolvedValueOnce(jsonResult({ owner: "second", removed: true }));
-      await expectContractFailure(fixtures[1]!.runtime.callValue("records", { operation: "list" }));
-    } finally {
-      stringify.mockRestore();
     }
+    expect(
+      stringify.mock.calls.filter(
+        ([value]) =>
+          value &&
+          typeof value === "object" &&
+          "title" in value &&
+          String(value.title).startsWith("immutable-output-") &&
+          "allOf" in value,
+      ),
+    ).toHaveLength(4);
+    fixtures[0]!.execute.mockResolvedValueOnce(jsonResult({ owner: "second", records: [] }));
+    await expectContractFailure(fixtures[0]!.runtime.callValue("records", { operation: "list" }));
+    fixtures[1]!.execute.mockResolvedValueOnce(jsonResult({ owner: "second", removed: true }));
+    await expectContractFailure(fixtures[1]!.runtime.callValue("records", { operation: "list" }));
   });
 
   it("preserves explicit failures without applying the success output contract", async () => {

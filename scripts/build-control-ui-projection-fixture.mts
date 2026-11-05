@@ -1,4 +1,4 @@
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -50,3 +50,14 @@ await build({
     },
   },
 });
+
+// Isolate new native resources from pre-existing shell singletons. This document is
+// emitted only by the explicit benchmark build and imports no application entry.
+const shippingHtml = await readFile(path.join(outDir, "index.html"), "utf8");
+const styles = [...shippingHtml.matchAll(/<link\b[^>]*rel="stylesheet"[^>]*>/gu)]
+  .map(([tag]) => tag.replace(/\smedia="print"/gu, ' media="all"'))
+  .join("\n");
+await writeFile(
+  path.join(outDir, "instance-resource-fixture.html"),
+  `<!doctype html><html lang="en" data-theme="light" data-theme-mode="light" data-theme-resolved="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Synthetic instance resources</title>${styles}</head><body></body></html>`,
+);

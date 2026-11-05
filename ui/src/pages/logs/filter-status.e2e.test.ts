@@ -10,7 +10,7 @@ const options = {
   serviceWorkers: "block" as const,
   viewport: { width: 1280, height: 900 },
 };
-const emptyMessage = "No log entries.";
+const emptyMessage = "No log entries yet.";
 const line = (message: string, level: string) =>
   JSON.stringify({ message, time: "2026-10-25T12:00:00Z", _meta: { logLevelName: level } });
 const tail = (lines: string[], reset = false) => ({
@@ -33,7 +33,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}logs`);
       const stream = page.getByRole("region", { name: "Logs", exact: true });
-      const filter = page.getByRole("textbox", { name: "Filter", exact: true });
+      const filter = page.getByRole("searchbox", { name: "Search logs", exact: true });
       await expect.poll(() => stream.locator(".log-row").count()).toBe(2);
       const [originalStatus] = await stream.getByRole("status").elementHandles();
       await filter.focus();
@@ -60,15 +60,17 @@ suite.define(() => {
       await filter.press("Backspace");
       await expect.poll(() => stream.locator(".log-row").count()).toBe(2);
       expect(await status.textContent()).toBe("");
+      await page.getByRole("button", { name: "Filter", exact: true }).click();
       for (const level of ["info", "error"]) {
-        const checkbox = page.getByRole("checkbox", { name: level, exact: true });
+        const checkbox = page.getByRole("menuitemcheckbox", { name: level, exact: true });
         await checkbox.focus();
         await checkbox.press("Space");
       }
       await stream.getByText(emptyMessage, { exact: true }).waitFor();
       expect(await status.textContent()).toBe(emptyMessage);
-      const errorLevel = page.getByRole("checkbox", { name: "error", exact: true });
+      const errorLevel = page.getByRole("menuitemcheckbox", { name: "error", exact: true });
       expect(await errorLevel.evaluate((element) => document.activeElement === element)).toBe(true);
+      await errorLevel.press("Escape");
 
       const observation = await status.evaluateHandle((element) => {
         const records: MutationRecord[] = [];

@@ -65,8 +65,7 @@ function fixture(options: { opsOnly?: boolean; workspace?: boolean } = {}) {
   };
   const config: OpenClawConfig = { agents: { entries } };
   const proposalsDir = path.join(stateDir, "skill-workshop", "proposals");
-  const exportsFor = (agentDir: string) =>
-    path.join(agentDir, "workshop-skills", ".archive", ".retired-proposals");
+  const exportsFor = (agentDir: string) => path.join(agentDir, "workshop-skills", ".drafts");
   const skillDir = path.join(opsWorkspace, "skills", "deploy");
   return {
     env,
@@ -150,8 +149,8 @@ it("exports pending drafts from retired tables and legacy files, then drops the 
 
   await expect(retireSkillWorkshopProposals({ config, env })).resolves.toEqual({
     changes: [
-      `Exported 1 pending Skill Workshop proposal draft to ${opsExports}${path.sep}.`,
-      `Exported 1 pending Skill Workshop proposal draft to ${mainExports}${path.sep}.`,
+      `Exported 1 pending Skill Workshop proposal draft to ${opsExports}${path.sep}; review them with /learn drafts.`,
+      `Exported 1 pending Skill Workshop proposal draft to ${mainExports}${path.sep}; review them with /learn drafts.`,
       retiredTablesMessage,
       `Removed retired Skill Workshop proposal files from ${proposalsDir}.`,
     ],
@@ -173,6 +172,28 @@ it("exports pending drafts from retired tables and legacy files, then drops the 
     changes: [],
     warnings: [],
   });
+});
+
+it("moves drafts an earlier Doctor exported under the archive into the drafts inbox", async () => {
+  const { env, config, mainDir, mainExports } = fixture();
+  const earlier = path.join(mainDir, "workshop-skills", ".archive", ".retired-proposals");
+  write(path.join(earlier, "moved-procedure-1", "SKILL.md"), "# Earlier\n");
+  write(path.join(earlier, "both-procedure-1", "SKILL.md"), "# Earlier copy\n");
+  write(path.join(mainExports, "both-procedure-1", "SKILL.md"), "# Inbox\n");
+
+  await expect(retireSkillWorkshopProposals({ config, env })).resolves.toEqual({
+    changes: [
+      `Moved 1 exported Skill Workshop proposal draft from ${earlier} to ${mainExports}; review them with /learn drafts.`,
+    ],
+    warnings: [
+      `Kept Skill Workshop proposal export ${path.join(earlier, "both-procedure-1")}: a draft with the same id already exists in ${mainExports}. Compare the two, keep the one you want in ${mainExports}, and delete the other.`,
+    ],
+    warningDisposition: "recoverable",
+  });
+  expect(read(mainExports, "moved-procedure-1", "SKILL.md")).toBe("# Earlier\n");
+  // An existing draft is never overwritten; the earlier copy stays where it was.
+  expect(read(mainExports, "both-procedure-1", "SKILL.md")).toBe("# Inbox\n");
+  expect(read(earlier, "both-procedure-1", "SKILL.md")).toBe("# Earlier copy\n");
 });
 
 it.each(["proposal", "rollback"])(
@@ -242,7 +263,7 @@ it("keeps legacy bundles without a provable owner, record, or draft until every 
 
   const first = await retireSkillWorkshopProposals({ config, env });
   expect(first.changes).toEqual([
-    `Exported 1 pending Skill Workshop proposal draft to ${opsExports}${path.sep}.`,
+    `Exported 1 pending Skill Workshop proposal draft to ${opsExports}${path.sep}; review them with /learn drafts.`,
   ]);
   expect(first.warningDisposition).toBe("recoverable");
   expect(first.warnings.toSorted()).toEqual([
@@ -301,7 +322,7 @@ it.each([
     ],
     warningDisposition: "recoverable",
   });
-  expect(fs.existsSync(path.join(mainDir, "workshop-skills", ".archive"))).toBe(false);
+  expect(fs.existsSync(path.join(mainDir, "workshop-skills", ".drafts"))).toBe(false);
   expect(fs.readFileSync(path.join(proposalDir, "PROPOSAL.md"), "utf8")).toBe("# Unowned\n");
   expect(retiredTableNames(env)).not.toEqual([]);
 

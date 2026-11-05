@@ -1,8 +1,11 @@
 import { Show, createMemo, createSignal } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
-import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
-import { collectProviderQuotaGroups } from "../../../lib/provider-quota-summary.ts";
+import { isMonitoredAuthProvider, providerUsageForAccount } from "../../../lib/model-auth.ts";
+import type {
+  ProviderQuotaGroup,
+  ProviderQuotaSelection,
+} from "../../../lib/provider-quota-summary.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   getContextNoticeViewModel,
@@ -19,19 +22,85 @@ const RING_RADIUS = 6.5;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 export function ContextNotice(props: ContextNoticeProps) {
-  const model = createMemo(() => getContextNoticeViewModel(props.session));
-  const currentGroup = createMemo(() => {
-    const provider = (
+  const model = createMemo(() =>
+    getContextNoticeViewModel(
+      props.session,
+      props.session?.totalTokens === undefined && props.session?.totalTokensFresh === undefined
+        ? props.contextUsage
+        : undefined,
+    ),
+  );
+  const providers = createMemo(() => {
+    const currentProvider = (
       props.session?.modelProvider?.trim() || latestAssistantProvider(props.messages)
     )?.toLowerCase();
-    if (!provider || !props.providerUsage) {
-      return undefined;
-    }
-    return collectProviderQuotaGroups(
-      props.providerUsage.modelAuthStatusResult ?? null,
-      isMonitoredAuthProvider,
-    ).find((group) => group.providers.some((id) => id.trim().toLowerCase() === provider));
+    return currentProvider
+      ? (props.providerUsage?.modelAuthStatusResult?.providers ?? []).filter((provider) =>
+          [provider.provider, provider.usage?.providerId].some(
+            (id) => id?.trim().toLowerCase() === currentProvider,
+          ),
+        )
+      : [];
   });
+  // Usage does not attribute each run to a credential yet. Keep mixed providers
+  // conservative: missing account-specific quota does not imply token billing.
+  const hasSubscription = createMemo(() =>
+    providers().some((provider) =>
+      provider.profiles.some((profile) => profile.type === "oauth" || profile.type === "token"),
+    ),
+  );
+  const quota = createMemo<ProviderQuotaSelection>(() => {
+    const available = providers().filter(
+      (provider) => isMonitoredAuthProvider(provider) && provider.usage,
+    );
+    if (available.length === 0) {
+      return { status: "unavailable" };
+    }
+    const profileId =
+      props.accountSelection?.kind === "automatic"
+        ? undefined
+        : props.accountSelection?.authProfileId;
+    const selected = available.filter((provider) => providerUsageForAccount(provider, profileId));
+    const provider = selected[0];
+    const usage = provider?.usage;
+    // Alias rows share the Gateway's canonical usage snapshot. Distinct usage
+    // providers remain ambiguous; presentation labels cannot identify an account.
+    if (
+      !provider ||
+      !usage ||
+      selected.some((candidate) => candidate.usage?.providerId !== usage.providerId)
+    ) {
+      return { status: "unknown" };
+    }
+    const windows = usage.windows ?? [];
+    const budgets: ProviderQuotaGroup["budgets"] = (usage.billing ?? []).flatMap((entry) => {
+      if (
+        entry.type !== "budget" ||
+        !Number.isFinite(entry.used) ||
+        !Number.isFinite(entry.limit) ||
+        entry.used < 0 ||
+        entry.limit <= 0
+      ) {
+        return [];
+      }
+      return [entry];
+    });
+    if (windows.length === 0 && budgets.length === 0) {
+      return { status: "unavailable" };
+    }
+    return {
+      status: "known",
+      group: {
+        providers: [provider.provider],
+        displayName: provider.displayName,
+        plan: usage.plan,
+        accountEmail: usage.accountEmail,
+        windows,
+        budgets,
+      },
+    };
+  });
+  const currentGroup = () => quota().group;
   const summary = createMemo(() => {
     const context = model();
     return context
@@ -42,13 +111,21 @@ export function ContextNotice(props: ContextNoticeProps) {
         })
       : t("chat.usageRemaining");
   });
+  const tooltip = () => {
+    const context = model();
+    return context
+      ? t("chat.composer.contextUsage.percentUsed", {
+          pct: `${context.approximate ? "~" : ""}${context.pct}`,
+        })
+      : summary();
+  };
   const colors = () => {
     const context = model();
     return context ? { "--ctx-color": context.color, "--ctx-bg": context.bg } : undefined;
   };
   const dashOffset = () => RING_CIRCUMFERENCE * (1 - (model()?.pct ?? 0) / 100);
   return (
-    <Show when={Boolean(model() || currentGroup())}>
+    <Show when={Boolean(model() || quota().status !== "unavailable")}>
       {(_visible) => {
         const [open, setOpen] = createSignal(false);
         const [visited, setVisited] = createSignal(false);
@@ -78,7 +155,7 @@ export function ContextNotice(props: ContextNoticeProps) {
                 ref={pickerRef.trigger}
                 class={["context-ring", { "context-ring--warning": model()?.warning }]}
                 aria-label={summary()}
-                title={t("chat.composer.contextUsage.open")}
+                title={tooltip()}
               >
                 <svg
                   class="context-ring__dial"
@@ -109,6 +186,8 @@ export function ContextNotice(props: ContextNoticeProps) {
                     {...props}
                     model={model()}
                     currentGroup={currentGroup()}
+                    quotaUnknown={quota().status === "unknown"}
+                    hasSubscription={hasSubscription()}
                     open={open()}
                     onOpenContext={props.onOpenContext ? openContext : undefined}
                   />

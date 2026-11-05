@@ -48,7 +48,7 @@ it.each(["empty", "retained", "expired"] as const)(
         const endedAt = nowMs - (history === "expired" ? 8 : 1) * day;
         database.db
           .prepare(
-            "INSERT INTO task_runs (task_id, runtime, source_id, owner_key, scope_kind, task, delivery_status, notify_policy, created_at, ended_at, status) VALUES ('terminal', 'cron', 'job', '', 'system', 'legacy', 'not_applicable', 'silent', ?, ?, 'succeeded')",
+            "INSERT INTO task_runs (task_id, runtime, source_id, run_id, owner_key, scope_kind, task, delivery_status, notify_policy, created_at, ended_at, status) VALUES ('terminal', 'cron', 'job', 'run', '', 'system', 'legacy', 'not_applicable', 'silent', ?, ?, 'succeeded')",
           )
           .run(endedAt, endedAt);
       }
@@ -56,6 +56,7 @@ it.each(["empty", "retained", "expired"] as const)(
       expect(revision).toBeTypeOf("number");
       const exec = vi.spyOn(database.db, "exec");
       const reads = trackReads(database, true);
+      const stringify = vi.spyOn(JSON, "stringify");
       try {
         expect(sweep()).toEqual({
           outcome: {
@@ -65,6 +66,14 @@ it.each(["empty", "retained", "expired"] as const)(
           },
         });
         expect(reads.counts).toEqual({ history: 1, receipts: 0 });
+        // At most one recovery identity and retention partition per row, including pruning sweeps.
+        for (const discriminator of ["run", false]) {
+          expect(
+            stringify.mock.calls.filter(
+              ([value]) => Array.isArray(value) && value[1] === "job" && value[2] === discriminator,
+            ).length,
+          ).toBeLessThanOrEqual(history === "empty" ? 0 : 1);
+        }
         expect(exec.mock.calls.some(([sql]) => /^\s*BEGIN\b/i.test(sql))).toBe(
           history === "expired",
         );
@@ -75,6 +84,7 @@ it.each(["empty", "retained", "expired"] as const)(
           history === "retained" ? [{ task_id: "terminal" }] : [],
         );
       } finally {
+        stringify.mockRestore();
         reads.restore();
         exec.mockRestore();
       }

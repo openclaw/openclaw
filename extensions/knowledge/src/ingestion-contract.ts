@@ -176,7 +176,6 @@ export const BatchInput = compactBatchSchema(
   ),
 );
 export type BatchInput = Static<typeof BatchInput>;
-export type BatchItem = BatchInput["items"][number];
 export const VerifyInput = Type.Object(
   {
     records: Type.Array(

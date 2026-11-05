@@ -2,7 +2,7 @@ import { summaryLink } from "./claim-view.js";
 import { identityTag } from "./knowledge-presentation.js";
 import type { Page } from "./page-context.js";
 import { button, el, tile } from "./page-dom.js";
-import { isFullHit } from "./retrieval-contract.js";
+import { isFullHit } from "./retrieval-hit.js";
 import { temporalQuery, temporalSelectionError } from "./search-date-filters.js";
 import { icon } from "./ui-icons.js";
 

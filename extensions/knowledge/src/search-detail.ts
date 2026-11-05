@@ -11,7 +11,7 @@ const MATCH_OFFSET = 100,
   LEAD_IN = 40;
 
 /** Response-only selector added to agent-facing search and lookup inputs. */
-export const SearchDetail = Type.Optional(
+const SearchDetail = Type.Optional(
   Type.Union([Type.Literal("compact"), Type.Literal("full")], {
     description:
       "compact (agent default): id, title, type, path, revision, a short snippet and matched fields per hit. full: adds citation hashes, offsets, line locators, score, attribution and evidence locators. Default limit is 10 for agents.",
@@ -33,7 +33,7 @@ type ToolOutput<O extends SearchOutput | LookupOutput> = Omit<O, "hits"> & {
 };
 
 /** Reduce one ranked hit to what identity resolution and discovery need. */
-export function compactHit(hit: FullHit): CompactHit {
+function compactHit(hit: FullHit): CompactHit {
   const { id, title, kind, type, path, revision, lifecycle, valid } = hit.record;
   const text = hit.snippet.text;
   // A snippet that does not start at the field start has the match at MATCH_OFFSET.

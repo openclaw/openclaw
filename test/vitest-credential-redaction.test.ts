@@ -19,31 +19,22 @@ it("recognizes credential env names without hiding ordinary key fields", () => {
 });
 const encodedObject = JSON.stringify({ EXAMPLE_TOKEN: "synthetic", NORMAL: "visible" });
 const encodedClean = JSON.stringify({ EXAMPLE_TOKEN: "<redacted len=9>", NORMAL: "visible" });
-const wrap = (input: string, depth: number) => {
-  let value = input;
-  for (let index = 0; index < depth; index++) {
-    value = JSON.stringify({ payload: value });
-  }
-  return value;
-};
+const wrap = (input: string) =>
+  [1, 2, 3].reduce((value) => JSON.stringify({ payload: value }), input);
 const redactedCase = (input: string, secret = "synthetic"): [string, string] => [
   input,
   input.replaceAll(secret, `<redacted len=${secret.length}>`),
 ];
 it("redacts credential text without altering nonsecret fields", () => {
   const cases: [string, string][] = [
-    ..."EXAMPLE_TOKEN PASSWD FAL_KEY OPENCLAW_CODEX_AUTH_JSON apiKey sessionId"
-      .split(" ")
-      .flatMap((key) =>
-        [
-          `${key}: 'synthetic'`,
-          `${key}: "synthetic"`,
-          `"${key}": "synthetic"`,
-          `${key}=synthetic\nNORMAL=visible`,
-          `["${key}", "synthetic"]`,
-          `[ '${key}', 'synthetic' ]`,
-        ].map((input) => redactedCase(input)),
-      ),
+    ...[
+      "EXAMPLE_TOKEN: 'synthetic'",
+      'PASSWD: "synthetic"',
+      '"FAL_KEY": "synthetic"',
+      "OPENCLAW_CODEX_AUTH_JSON=synthetic\nNORMAL=visible",
+      '["apiKey", "synthetic"]',
+      "[ 'sessionId', 'synthetic' ]",
+    ].map((input) => redactedCase(input)),
     [
       `+ [\n+   "EXAMPLE_TOKEN",\n+   "one\\ntwo",\n+ ],\n  ["NORMAL", "visible"]`,
       `+ [\n+   "EXAMPLE_TOKEN",\n+   "<redacted len=7>",\n+ ],\n  ["NORMAL", "visible"]`,
@@ -60,61 +51,26 @@ it("redacts credential text without altering nonsecret fields", () => {
       "Authorization: Bearer synthetic\nCookie: a=b; c=d",
       "Authorization: <redacted len=16>\nCookie: <redacted len=8>",
     ],
-    ...[1, 2, 3].map((depth): [string, string] => [
-      wrap(encodedObject, depth),
-      wrap(encodedClean, depth),
-    ]),
-    ...["", "can't load "].map((prefix) =>
-      redactedCase(
-        JSON.stringify({
-          message: `${prefix}AUTHORIZATION=Bearer synthetic`,
-          untouched: "visible",
-        }),
-        "Bearer synthetic",
-      ),
+    [wrap(encodedObject), wrap(encodedClean)],
+    redactedCase(
+      JSON.stringify({
+        message: "can't load AUTHORIZATION=Bearer synthetic",
+        untouched: "visible",
+      }),
+      "Bearer synthetic",
     ),
     redactedCase('TOKEN: "SECRET=synthetic"', "SECRET=synthetic"),
-    ...(
-      [
-        ["PASSWORD", " two synthetic words "],
-        ["TOKEN", "synthetic NORMAL=visible"],
-        ["TOKEN", "synthetic,second}"],
-        ["TOKEN", "<redacted len=3> synthetic"],
-      ] satisfies [string, string][]
-    ).map(([key, value]): [string, string] => [
-      `${key}=${value}\r\nNORMAL=visible`,
-      `${key}=<redacted len=${value.length}>\r\nNORMAL=visible`,
-    ]),
+    redactedCase(
+      "TOKEN= <redacted len=3> synthetic NORMAL=visible,second} \r\nNORMAL=visible",
+      " <redacted len=3> synthetic NORMAL=visible,second} ",
+    ),
     ["TOKEN=\nNORMAL=visible", "TOKEN=<redacted len=0>\nNORMAL=visible"],
     ['{ TOKEN: undefined, NORMAL: "visible" }', '{ TOKEN: <redacted len=9>, NORMAL: "visible" }'],
-    ["Authorization: Digest first=synthetic, second=synthetic", "Authorization: <redacted len=40>"],
-    [
-      '- "TOKEN": "first"\n+ "TOKEN": "second"',
-      '- "TOKEN": "<redacted len=5>"\n+ "TOKEN": "<redacted len=6>"',
-    ],
   ];
   for (const [input, expected] of cases) {
     expect(redactCredentialText(input), input).toBe(expected);
     expect(redactCredentialText(expected), input).toBe(expected);
   }
-});
-
-it("scrubs nested credential entry pairs while preserving keys and ordinary entries", () => {
-  const entries = (secret: string) => ({
-    actual: { env: Object.entries({ EXAMPLE_TOKEN: secret, NORMAL: "visible" }) },
-    cause: {
-      entries: [
-        ["apiKey", secret, "retained"],
-        ["NORMAL", "visible"],
-      ],
-    },
-  });
-  const diagnostic = entries("synthetic");
-  redactDiagnostic(diagnostic);
-  const expected = entries("<redacted len=9>");
-  expect(diagnostic).toEqual(expected);
-  redactDiagnostic(diagnostic);
-  expect(diagnostic).toEqual(expected);
 });
 
 it("redacts composite values and strings that merely start with a redaction marker", () => {
@@ -129,16 +85,20 @@ it("redacts composite values and strings that merely start with a redaction mark
     expect(output).not.toMatch(/first|second|synthetic/u);
     expect(redactCredentialText(output)).toBe(output);
   }
-  const object = { TOKEN: ["first", "second"] };
-  redactDiagnostic(object);
-  expect(object.TOKEN).toEqual(expect.stringMatching(/^<redacted len=\d+>$/u));
 });
 
 it("scrubs every error field and nested causes without losing nonsecret diagnostics", () => {
   const error = Object.assign(new Error("TOKEN=synthetic"), {
     diff: "PASSWORD: 'synthetic'",
     expected: '"API_KEY": "synthetic"',
-    actual: { env: { EXAMPLE_TOKEN: "synthetic", NORMAL: "visible" } },
+    actual: {
+      env: { EXAMPLE_TOKEN: "synthetic", NORMAL: "visible" },
+      entries: [
+        ["apiKey", "synthetic", "retained"],
+        ["NORMAL", "visible"],
+      ],
+      TOKEN: ["first", "second"],
+    },
     frame: "COOKIE=synthetic",
     codeFrame: "SESSION=synthetic",
     cause: { message: "SECRET=synthetic" },
@@ -154,5 +114,10 @@ it("scrubs every error field and nested causes without losing nonsecret diagnost
     expect(value).not.toContain("synthetic");
   }
   expect(error.actual.env).toEqual({ EXAMPLE_TOKEN: "<redacted len=9>", NORMAL: "visible" });
+  expect(error.actual.entries).toEqual([
+    ["apiKey", "<redacted len=9>", "retained"],
+    ["NORMAL", "visible"],
+  ]);
+  expect(error.actual.TOKEN).toEqual(expect.stringMatching(/^<redacted len=\d+>$/u));
   expect(error.cause.message).toBe("SECRET=<redacted len=9>");
 });

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { createMemo, createSignal, Show } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import {
   GitHubPublicationOwner,
@@ -11,12 +11,19 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../../test-helpers/gateway-client.ts";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { options, requestId, shared } from "../chat-github-publication.test-support.ts";
 import { GitHubPublicationMobile } from "./chat-github-publication-mobile.tsx";
 
-afterEach(cleanupSolid);
+const published = {
+  status: "published",
+  requestId,
+  publisher: shared,
+  repository: "example/project",
+  branch: "feature/docs",
+  url: "https://github.com/example/project/pull/1",
+};
 
 function bind(request: GatewayRequestHandler) {
   const owner = new GitHubPublicationOwner({
@@ -50,7 +57,13 @@ function render(binding: GitHubPublicationPresentationBinding) {
       </Show>
     );
   });
-  return { ...view, replace };
+  const button = () => view.container.querySelector<HTMLButtonElement>(".chat-pr__create");
+  const expectButton = (label: string, disabled = true) =>
+    waitForSolid(() => {
+      expect(button()?.disabled).toBe(disabled);
+      expect(button()?.textContent).toContain(label);
+    });
+  return { ...view, replace, expectButton };
 }
 
 it("observes a delayed owner read and retries its visible discovery failure once", async () => {
@@ -58,30 +71,13 @@ it("observes a delayed owner read and retries its visible discovery failure once
   const request = vi.fn().mockReturnValueOnce(initial.promise).mockResolvedValue(options);
   const { binding } = bind(request);
   const view = render(binding);
-  const button = () => view.container.querySelector<HTMLButtonElement>(".chat-pr__create");
-  await waitForSolid(() => {
-    expect(button()?.disabled).toBe(true);
-    expect(button()?.textContent).toContain("Loading");
-  });
-  expect(request).toHaveBeenCalledTimes(1);
+  await view.expectButton("Loading");
   initial.reject(new Error("Discovery unavailable"));
   await waitForSolid(() => expect(view.container.textContent).toContain("Discovery unavailable"));
-  expect(binding.view()).toMatchObject({
-    optionsUnavailable: true,
-    error: "Discovery unavailable",
-  });
-  view.container
-    .querySelector<HTMLButtonElement>('button[aria-label="Refresh publication"]')!
-    .click();
-  await waitForSolid(() => {
-    expect(button()?.disabled).toBe(false);
-    expect(button()?.textContent).toContain("Publish PR");
-  });
-  expect(binding.view()).toMatchObject({ optionsUnavailable: false, error: null });
-  expect(request.mock.calls.map(([method]) => method)).toEqual([
-    "sessions.github.options",
-    "sessions.github.options",
-  ]);
+  view.getByRole("button", { name: "Refresh publication" }).click();
+  await view.expectButton("Publish PR", false);
+  expect(view.container.textContent).not.toContain("Discovery unavailable");
+  expect(request).toHaveBeenCalledTimes(2);
   binding.detach();
 });
 
@@ -92,89 +88,36 @@ it("retires a held publication before displaying a replacement binding", async (
   const view = render(first.binding);
   await waitForSolid(() => expect(view.getByRole("button", { name: "Publish PR" })).toBeTruthy());
   view.getByRole("button", { name: "Publish PR" }).click();
-  await waitForSolid(() => {
-    const button = view.container.querySelector<HTMLButtonElement>(".chat-pr__create");
-    expect(button?.disabled).toBe(true);
-    expect(button?.textContent).toContain("Publishing");
-  });
+  await view.expectButton("Publishing");
   const nextRead = Promise.withResolvers<unknown>();
   const next = bind(vi.fn().mockReturnValue(nextRead.promise));
   first.binding.detach();
   first.owner.reset();
   view.replace(next.binding);
-  await waitForSolid(() => {
-    const button = view.container.querySelector<HTMLButtonElement>(".chat-pr__create");
-    expect(button?.disabled).toBe(true);
-    expect(button?.textContent).toContain("Loading");
-    expect(view.queryByRole("button", { name: "Publish PR" })).toBeNull();
-  });
-  completion.resolve({
-    status: "published",
-    requestId,
-    url: "https://github.com/example/repo/pull/1",
-    repository: "example/repo",
-    branch: "feature",
-    publisher: shared,
-  });
-  await waitForSolid(() => {
-    expect(
-      view.container.querySelector<HTMLButtonElement>(".chat-pr__create")?.textContent,
-    ).toContain("Loading");
-    expect(
-      view.container.querySelector('a[href="https://github.com/example/repo/pull/1"]'),
-    ).toBeNull();
-  });
+  await view.expectButton("Loading");
+  expect(view.queryByRole("button", { name: "Publish PR" })).toBeNull();
+  completion.resolve(published);
+  await view.expectButton("Loading");
+  expect(view.container.querySelector(`a[href="${published.url}"]`)).toBeNull();
   nextRead.resolve({ ...options, shared: { ...shared, login: "replacement-bot" } });
-  await waitForSolid(() => {
-    expect(view.getByRole("button", { name: "Publish PR" })).toBeTruthy();
-    expect(view.container.querySelector<HTMLButtonElement>(".chat-pr__create")?.disabled).toBe(
-      false,
-    );
-  });
-  expect(request).toHaveBeenCalledTimes(2);
+  await view.expectButton("Publish PR", false);
   next.binding.detach();
 });
 
 it("acknowledges a completed publication before reading the next action", async () => {
-  const published = {
-    status: "published",
-    requestId,
-    publisher: shared,
-    repository: "example/project",
-    branch: "feature/docs",
-    headCommit: "a".repeat(40),
-    url: "https://github.com/example/project/pull/1",
-  };
   const nextRead = Promise.withResolvers<unknown>();
   const request = vi
     .fn()
-    .mockResolvedValueOnce({
-      ...options,
-      latestShared: {
-        result: published,
-        confirmation: null,
-      },
-    })
+    .mockResolvedValueOnce({ ...options, latestShared: { result: published, confirmation: null } })
     .mockReturnValueOnce(nextRead.promise);
   const { binding } = bind(request);
   const view = render(binding);
   await waitForSolid(() => expect(view.getByRole("link", { name: "Open PR" })).toBeTruthy());
-  expect(binding.view()?.result).toEqual(published);
-  expect(binding.view()?.onPublish).toBeUndefined();
+  expect(view.queryByRole("button", { name: "Publish PR" })).toBeNull();
   view.getByRole("button", { name: "Dismiss" }).click();
-  await waitForSolid(() => {
-    expect(view.queryByRole("link", { name: "Open PR" })).toBeNull();
-    expect(view.container.querySelector<HTMLButtonElement>(".chat-pr__create")?.disabled).toBe(
-      true,
-    );
-  });
+  await view.expectButton("Loading");
+  expect(view.queryByRole("link", { name: "Open PR" })).toBeNull();
   nextRead.resolve(options);
   await waitForSolid(() => expect(view.getByRole("button", { name: "Publish PR" })).toBeTruthy());
-  expect(binding.view()?.result).toBeNull();
-  expect(binding.view()?.onPublish).toBeTypeOf("function");
-  expect(request.mock.calls.map(([method]) => method)).toEqual([
-    "sessions.github.options",
-    "sessions.github.options",
-  ]);
   binding.detach();
 });

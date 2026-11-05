@@ -5,7 +5,6 @@ import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
-import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
 import type { CronJob, CronRunStatus, CronStoredJob, CronTriggerEvalOutcome } from "../types.js";
@@ -35,7 +34,8 @@ import {
   resolveManualOneShotOccurrenceAtMs,
 } from "./one-shot-schedule.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
-import { type CronJobRunResult, MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
+import { MIN_REFIRE_GAP_MS } from "./timer-constants.js";
+import type { CronJobRunResult } from "./timer-execution-timeout.js";
 import {
   applyTriggerEvaluationState,
   applyTriggerRunResult,
@@ -86,7 +86,7 @@ function assignNextRunAtMs(
 export function applyJobResult(
   state: CronJobPolicyContext,
   job: CronStoredJob,
-  result: CronJobRunResult,
+  result: CronJobRunResult & Pick<CronRunFinalizationOutcome, "errorReason">,
   opts: {
     // Manual force runs update outcome state but are out-of-band for cadence.
     scheduleMode?: "advance" | "preserve";
@@ -116,6 +116,7 @@ export function applyJobResult(
     forcePreservedNextRunAtMs: job.state.forcePreservedNextRunAtMs,
   };
   const previousRunInterruptedByRestart = job.state.lastError === STARTUP_INTERRUPTED_ERROR;
+  delete job.state.admissionDeferred;
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
   job.state.runningReceiptId = undefined;
@@ -133,9 +134,7 @@ export function applyJobResult(
   job.state.lastDiagnostics = normalizeCronRunDiagnostics(result.diagnostics);
   job.state.lastDiagnosticSummary = summarizeCronRunDiagnostics(job.state.lastDiagnostics);
   job.state.lastErrorReason =
-    result.status === "error" && typeof result.error === "string"
-      ? resolveCronRunErrorReason(result.error, result.provider, result.errorClassification)
-      : undefined;
+    result.status === "error" && typeof result.error === "string" ? result.errorReason : undefined;
   if (result.status === "error") {
     state.deps.log.warn(
       {
@@ -256,6 +255,14 @@ export function applyJobResult(
     }
     if (shouldDelete || job.schedule.kind === "event") {
       job.state.nextRunAtMs = undefined;
+    }
+    if (
+      ownsSchedule &&
+      result.status === "error" &&
+      previousScheduleState.pacedNextRunAtMs !== undefined
+    ) {
+      // A failed check has not consumed the paced occurrence; its backoff retry still owns it.
+      job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
     }
     // A parent pause is not a failure: its own notice below replaces the skipped-run alert.
     const failureNotification = result.parentUnavailable
@@ -466,7 +473,9 @@ export function applyJobResult(
       let normalNextComputed = false;
       const computeNormalNext = () => {
         if (!normalNextComputed) {
-          normalNext = computeNaturalNext(retryDecision.retryable || previousConsecutiveErrors > 0);
+          normalNext =
+            previousScheduleState.pacedNextRunAtMs ??
+            computeNaturalNext(retryDecision.retryable || previousConsecutiveErrors > 0);
           normalNextComputed = true;
         }
         return normalNext;

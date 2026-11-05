@@ -9,6 +9,7 @@ import {
   GatewayThinkingLevelOptionSchema,
 } from "./model-runtime-options.js";
 import { NonEmptyString } from "./primitives.js";
+import { CyberAccessProgramSchema } from "./sessions-row.js";
 
 /** Model catalog request with optional visibility scope. */
 export const ModelsListParamsSchema = Type.Object(
@@ -79,6 +80,12 @@ const ModelRuntimeProperties = {
   ),
   /** Account-scoped service tiers advertised for this selected runtime. Missing means unknown. */
   serviceTiers: Type.Optional(Type.Array(NonEmptyString)),
+  /** Accepted selections from this account/model/runtime. Missing is unknown, never available. */
+  availableAccessPrograms: Type.Optional(
+    closedObject({ cyber: Type.Array(CyberAccessProgramSchema) }),
+  ),
+  /** Configured selection or Standard baseline for an Access-capable model and runtime. */
+  cyberAccessProgramDefault: Type.Optional(CyberAccessProgramSchema),
   /** Local selected-request applicability, not preference or upstream fulfillment. */
   supportsFastMode: Type.Optional(Type.Boolean()),
   /** Selected route can safely retry rejected service tiers before output. */
@@ -208,6 +215,19 @@ export const ModelsListResultSchema = closedObject({
       /** Route the utility model in effect (automatic or explicit) runs on; absent when disabled. */
       utilityRuntime: Type.Optional(GatewayCompletionRouteSchema),
     }),
+  ),
+  /** Requested agent's utility decision; private account inventories remain Gateway-owned. */
+  utilityModel: Type.Optional(
+    Type.Union([
+      closedObject({
+        modelRef: NonEmptyString,
+        source: Type.Union([Type.Literal("config"), Type.Literal("provider-default")]),
+      }),
+      closedObject({
+        modelRef: Type.Null(),
+        source: Type.Union([Type.Literal("disabled"), Type.Literal("none")]),
+      }),
+    ]),
   ),
   refreshFailed: Type.Optional(Type.Boolean()),
   pendingProviders: Type.Optional(Type.Array(NonEmptyString)),

@@ -82,7 +82,7 @@ suite.define(() => {
         sessionKey: "agent:main:session-a",
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
-      await waitForRequests(gateway, "chat.startup", 1);
+      await waitForRequests(gateway, "sessions.messages.subscribe", 1);
       const thread = page.locator(".chat-thread");
       const prefixes = ["CLI user copy", "CLI imported-only reply"];
       for (const prefix of prefixes) {

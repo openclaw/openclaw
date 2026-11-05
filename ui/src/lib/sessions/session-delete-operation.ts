@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
@@ -148,7 +148,10 @@ export async function runDeferredSessionDelete(
     if (outcome.worktreePreserved) {
       const { formatPreservedWorktreesNotice } = await import("./worktree-preservation.ts");
       if (host.connection.isCurrent(scope)) {
-        showToast({ message: formatPreservedWorktreesNotice([outcome.worktreePreserved]) });
+        showToast({
+          severity: undefined,
+          message: formatPreservedWorktreesNotice([outcome.worktreePreserved]),
+        });
       }
     }
     if (outcome.deleted && host.connection.isCurrent(scope)) {

@@ -149,8 +149,13 @@ suite.define(() => {
                 after: requestsBefore,
               });
               await expect
-                .poll(() => page.locator(".usage-page .usage-loading-spinner").count())
-                .toBe(0);
+                .poll(() =>
+                  page
+                    .locator(".usage-page")
+                    .getByRole("button", { name: "Refresh", exact: true })
+                    .isEnabled(),
+                )
+                .toBe(true);
               expect(request.params).toMatchObject({ startDate, endDate: date, mode });
               const inputs = await page.locator(".usage-date-input").all();
               expect(await Promise.all(inputs.map((input) => input.inputValue()))).toEqual([

@@ -1,8 +1,8 @@
-import { readFile } from "node:fs/promises";
 import type { TranscriptsGetResult } from "@openclaw/gateway-protocol";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import {
   meetingEntry,
@@ -63,9 +63,7 @@ async function expectDownload(page: Page, format: "Markdown" | "JSONL", contents
   await click(control(page, "article", "Transcript reader"), `Download ${format}`);
   const download = await event;
   expect(download.suggestedFilename()).toBe(`design-review.${extension}`);
-  const file = await download.path();
-  expect(file).not.toBeNull();
-  expect(await readFile(file!, "utf8")).toBe(contents);
+  expect((await readControlUiE2eDownload(download)).toString("utf8")).toBe(contents);
 }
 
 suite.define(() => {
@@ -183,7 +181,7 @@ suite.define(() => {
         __mockError: { code: "INVALID_REQUEST", message: "Transcript export exceeds 4 MiB" },
       });
       await click(reader, "Download JSONL");
-      await reader.getByRole("alert").filter({ hasText: "Download failed" }).waitFor();
+      await reader.getByRole("alert").filter({ hasText: "Couldn’t download" }).waitFor();
       await control(page, "link", "Meeting capture").click();
       const capture = page.locator("openclaw-meeting-capture-settings");
       await text(capture, "Not active").waitFor();
@@ -229,7 +227,8 @@ suite.define(() => {
         await gateway.setMethodResponse("transcripts.list", {
           __mockError: { code: "FORBIDDEN", message: "Shared archive restricted" },
         });
-        await click(page, "Refresh");
+        await click(page, "More actions");
+        await control(page, "menuitem", "Refresh").click();
         await control(page, "heading", "Transcript access is restricted").waitFor();
         expect(await page.locator(".transcripts-list__entry").count()).toBe(0);
       },

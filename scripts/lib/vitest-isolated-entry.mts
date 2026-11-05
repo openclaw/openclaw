@@ -3,10 +3,20 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import { runManagedCommand } from "./managed-child-process.mts";
+import { requirePinnedBun } from "./pinned-bun.mts";
 import { resolveIsolatedVitestBuild } from "./vitest-isolated-build.mts";
 import { prepareIsolatedVitestScratch } from "./vitest-isolated-source.mts";
 
-const [nodeVersion, pnpmVersion, ...argv] = process.argv.slice(2);
+const [nodeVersion, pnpmVersion, runtime, ...argv] = process.argv.slice(2);
+if (runtime !== "node" && runtime !== "bun") {
+  throw new Error("Isolated test runtime must be node or bun.");
+}
+if (runtime === "bun") {
+  requirePinnedBun(process.env, { preparedOnly: true });
+  console.error(
+    "[vitest:isolated] Bun pinned SHA-256 and revision verified; selected test runtime=bun",
+  );
+}
 if (process.version !== nodeVersion) {
   throw new Error("Isolated Node does not match the prepared host runtime.");
 }

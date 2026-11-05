@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
@@ -9,7 +10,12 @@ import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-pr
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { resolveChannelPairingRequestId, type PairingRequest } from "./pairing-store.js";
+import { generateUniqueCode } from "./pairing-store-model.js";
+import {
+  readChannelAllowFromStoreSync,
+  resolveChannelPairingRequestId,
+  type PairingRequest,
+} from "./pairing-store.js";
 import { pairingStoreFixture } from "./pairing-store.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker((cleanup) =>
@@ -51,6 +57,95 @@ function fixture(
 function sql(query: string, ...values: SQLInputValue[]) {
   database.db.prepare(query).run(...values);
 }
+
+it("skips malformed persisted requests and ignores stale account metadata", async () => {
+  const f = fixture("malformed");
+  const insert =
+    "INSERT INTO channel_pairing_requests (channel_key, account_id, request_id, code, created_at, last_seen_at, meta_json) VALUES ('malformed', ?, ?, ?, ?, ?, ?)";
+  sql(insert, "default", "", "BADCODE1", "invalid", "invalid", null);
+  const now = new Date().toISOString();
+  sql(
+    insert,
+    "alpha",
+    "valid-user",
+    "GOODCODE",
+    now,
+    now,
+    JSON.stringify({ accountId: "stale-account" }),
+  );
+  await expect(f.list("alpha")).resolves.toHaveLength(1);
+  await expect(f.list("stale-account")).resolves.toEqual([]);
+  await expect(f.approve({ code: "GOODCODE", pairingAdapter: undefined })).resolves.toMatchObject({
+    id: "valid-user",
+  });
+  await expect(f.allow()).resolves.toEqual(["valid-user"]);
+  await expect(f.allow("stale-account")).resolves.toEqual([]);
+});
+
+it("approves and dismisses account-scoped requests by opaque id", async () => {
+  const f = fixture("opaque", [request("shared")]);
+  await f.upsert("shared", "beta");
+  const [alpha] = await f.list("alpha");
+  const [beta] = await f.list("beta");
+  expect([alpha, beta]).not.toContain(undefined);
+  const channel = " OpAqUe ";
+  const alphaId = resolveChannelPairingRequestId(channel, alpha!);
+  const betaId = resolveChannelPairingRequestId("opaque", beta!);
+  expect(alphaId).not.toBe(betaId);
+  expect(alphaId).not.toContain(alpha!.code);
+  await expect(f.approveRequest(alphaId, "alpha", channel)).resolves.toMatchObject({
+    id: "shared",
+  });
+  await expect(f.allow()).resolves.toEqual(["shared"]);
+  await expect(f.approveRequest(alphaId, "beta")).resolves.toBeNull();
+  await expect(pairingStoreFixture("opaque", env, "beta").dismiss(betaId)).resolves.toMatchObject({
+    id: "shared",
+  });
+  await expect(f.allow("beta")).resolves.toEqual([]);
+  await expect(f.list()).resolves.toEqual([]);
+});
+
+it("regenerates colliding codes and reports exhaustion without leaking codes", () => {
+  const randomInt = vi.spyOn(crypto, "randomInt").mockImplementation(() => 0);
+  let draws = 0;
+  randomInt.mockImplementation(() => (draws++ < 8 ? 0 : 1));
+  expect(generateUniqueCode(new Set(["AAAAAAAA"]))).toBe("BBBBBBBB");
+  randomInt.mockImplementation(() => 0);
+  expect(() => generateUniqueCode(new Set(["AAAAAAAA"]))).toThrow(
+    "failed to generate unique pairing code after 500 attempts; existing code count: 1",
+  );
+});
+
+it("keeps allowFrom and pending requests isolated by account", async () => {
+  const f = fixture("accounts");
+  await f.add("1001");
+  const alpha = await f.upsert("shared");
+  const beta = await f.upsert("shared", "beta");
+  expect(beta.code).not.toBe(alpha.code);
+  await expect(f.approve({ accountId: undefined, code: alpha.code })).resolves.toMatchObject({
+    id: "shared",
+  });
+  await expect(f.allow()).resolves.toEqual(["1001", "shared"]);
+  await expect(f.allow("beta")).resolves.toEqual([]);
+  await expect(f.remove("1001")).resolves.toEqual({ changed: true, allowFrom: ["shared"] });
+});
+
+it("reads current SQLite entries without a process-local file cache", async () => {
+  const f = fixture("fresh", [], { alpha: ["1001"] });
+  await expect(f.allow()).resolves.toEqual(["1001"]);
+  expect(readChannelAllowFromStoreSync("fresh", env, "alpha")).toEqual(["1001"]);
+  f.write({ version: 1, requests: [], allowFrom: { alpha: ["10022"] } });
+  await expect(f.allow()).resolves.toEqual(["10022"]);
+  const observed = observeHostDataSql();
+  try {
+    expect(readChannelAllowFromStoreSync("fresh", env, "alpha")).toEqual(["10022"]);
+    expect(observed.queries.filter((query) => query.includes("channel_pairing_requests"))).toEqual(
+      [],
+    );
+  } finally {
+    observed.restore();
+  }
+});
 
 it.each([
   ["list", "transaction", false],
@@ -168,6 +263,10 @@ it("runs request, prune, approval, dismissal, and allowlist mutations without ca
     requests: [{ id: "new" }],
     allowFrom: { alpha: ["keep", "added", "approve"] },
   });
+  for (const id of ["two", "three"]) {
+    await expect(f.upsert(id)).resolves.toMatchObject({ created: true });
+  }
+  await expect(f.upsert("four")).resolves.toEqual({ code: "", created: false });
 });
 
 it("captures the physical store before yielding and preserves FIFO allowlist edits", async () => {
@@ -261,7 +360,6 @@ it.each(["metadata", "earlier-match", "expired"] as const)(
         return meta?.approval ?? null;
       },
     });
-    expect(changed).toBe(true);
     if (change === "expired") {
       expect(result).toBeNull();
       expect(f.read()).toEqual({ version: 1, requests: [], allowFrom: {} });

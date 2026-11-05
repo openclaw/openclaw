@@ -42,8 +42,8 @@ suite.define(() => {
           ]);
         };
         await openPicker();
-        const selected = picker.getByRole("menuitemradio", { name: "Main agent", exact: true });
-        const writer = picker.getByRole("menuitemradio", { name: "Writer", exact: true });
+        const selected = picker.getByRole("option", { name: "Main agent", exact: true });
+        const writer = picker.getByRole("option", { name: "Writer", exact: true });
         await selected.waitFor({ state: "visible" });
 
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
@@ -74,11 +74,12 @@ suite.define(() => {
         await writer.click();
         await expect.poll(() => trigger.textContent()).toContain("Writer");
         await openPicker();
-        await expect.poll(() => writer.getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => writer.getAttribute("aria-selected")).toBe("true");
         expect(await selected.locator(".agent-select__option-check").count()).toBe(0);
-        const writerCheck = await writer.locator(".agent-select__option-check svg").boundingBox();
-        expect(writerCheck?.width).toBe(check!.width);
-        expect(writerCheck?.height).toBe(check!.height);
+        await writer.locator(".agent-select__option-check svg").waitFor({ state: "visible" });
+        await expect
+          .poll(() => writer.locator(".agent-select__option-check svg").boundingBox())
+          .toMatchObject({ width: check!.width, height: check!.height });
         expect((await writer.boundingBox())?.height).toBeCloseTo(otherRow!.height, 0);
       },
     );

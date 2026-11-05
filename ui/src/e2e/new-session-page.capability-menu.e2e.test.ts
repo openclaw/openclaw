@@ -51,8 +51,8 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__composer");
       const menu = composer.locator(".agent-chat__capability-menu");
-      const draft = menu.getByRole("menuitemcheckbox", { name: "Draft" });
-      await composer.getByRole("button", { name: "Add attachment" }).click();
+      const draft = page.getByRole("switch", { name: /^Draft:/ });
+      await draft.waitFor({ state: "visible" });
       if (atomic) {
         await expect.poll(() => draft.getAttribute("aria-checked")).toBe("false");
         await draft.focus();
@@ -60,21 +60,20 @@ suite.define(() => {
         await expect.poll(() => draft.getAttribute("aria-checked")).toBe("true");
       } else {
         await draft.click();
-        await expect
-          .poll(() => composer.locator(".new-session-page__visibility--draft").isVisible())
-          .toBe(mode === "desktop");
-        await expect
-          .poll(() => page.locator(".new-session-page__draft-toggle").isVisible())
-          .toBe(mode === "mobile");
+        // Draft sits beside Incognito at the top on every width, never in the footer.
+        const toggle = page.locator(".new-session-page__draft-toggle");
+        await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
+        expect(await toggle.isVisible()).toBe(true);
         return;
       }
+      await composer.getByRole("button", { name: "Add attachment" }).click();
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       const release = menu.getByRole("menuitemcheckbox", { name: "Release" });
       await release.click();
-      await menu.getByRole("menuitem", { name: "Back" }).click();
+      await menu.locator('[data-value="back"]').click();
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
-      await menu.getByRole("menuitemcheckbox", { name: /^github/ }).click();
-      await menu.getByRole("menuitem", { name: "Back" }).click();
+      await menu.getByRole("switch", { name: "github", exact: true }).click();
+      await menu.locator('[data-value="back"]').click();
       await menu.getByRole("menuitemcheckbox", { name: "Web search" }).click();
       await page.locator(".new-session-page__message").fill("prepare the release");
       await composer.getByRole("button", { name: "Start session" }).click();

@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { root } from "@openclaw/fs-safe/root";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createMainThreadStallMonitor,
@@ -8,6 +10,7 @@ import {
 } from "./main-thread-stall.js";
 
 const monitors: ReturnType<typeof createMainThreadStallMonitor>[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   for (const monitor of monitors.splice(0)) {
     monitor.stop();
@@ -15,14 +18,76 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function fixture() {
-  let now = 0;
+const emptyReport = { stalls: [], dropped: 0, unattributedDropped: 0, delayMaxMs: 0 };
+
+function fixture(initial = 0) {
+  let now = initial;
   const monitor = createMainThreadStallMonitor(() => now);
   monitors.push(monitor);
   return { monitor, elapse: (milliseconds: number) => (now += milliseconds) };
 }
 
 describe("main-thread stall attribution", () => {
+  // Bun has no V8 Promise continuation hooks.
+  it.skipIf(Boolean(process.versions.bun))(
+    "names a resumed fs-safe write without duplicating nested scopes",
+    async () => {
+      const scoped = await root(tempDirs.make("openclaw-stall-"));
+      const { monitor, elapse } = fixture();
+      monitor.setEventLoopSampling(true);
+      let blocked = false;
+      const writeStalls = await runWithMainThreadTask("schema-store:write", async () => {
+        await Promise.resolve();
+        await scoped.write("synthetic.json", "{}", {
+          assertBeforeMutation: () => {
+            expect(getMainThreadTaskName()).toBe("schema-store:write");
+            if (!blocked) {
+              blocked = true;
+              elapse(1_200);
+            }
+          },
+        });
+        const observed = monitor.drain().stalls;
+        runWithMainThreadTask("schema-store:publish", () => elapse(300));
+        return observed;
+      });
+      expect(getMainThreadTaskName()).toBeUndefined();
+      expect([...writeStalls, ...monitor.drain().stalls]).toMatchObject([
+        { task: "schema-store:write", elapsedMs: 1_200 },
+        { task: "schema-store:publish", elapsedMs: 300 },
+      ]);
+    },
+  );
+
+  it("copies the task context only on label changes and preserves nested timing segments", () => {
+    const { monitor, elapse } = fixture();
+    const enter = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
+    const copyOnReturn = vi.spyOn(AsyncLocalStorage.prototype, "run");
+    try {
+      runWithMainThreadTask("worker:control-decode", () => {
+        elapse(200);
+        runWithMainThreadTask("worker:control-decode", () => elapse(100));
+        elapse(200);
+      });
+      const entries = enter.mock.calls.slice();
+      expect(getMainThreadTaskName()).toBeUndefined();
+      expect(monitor.drain().stalls).toEqual([
+        {
+          elapsedMs: 500,
+          task: "worker:control-decode",
+          taskMs: 200,
+          startedAt: 0,
+          endedAt: 500,
+        },
+      ]);
+      expect(copyOnReturn).not.toHaveBeenCalled();
+      expect(entries).toEqual([["worker:control-decode"]]);
+    } finally {
+      copyOnReturn.mockRestore();
+      enter.mockRestore();
+    }
+  });
+
   it("does not retain the request context that enables heartbeat sampling", async () => {
     const request = new AsyncLocalStorage<string>();
     const observed: (string | undefined)[] = [];
@@ -77,20 +142,31 @@ describe("main-thread stall attribution", () => {
     ]);
   });
 
-  it("reports callbacks at the 250 ms boundary, excluding shorter work and async waits", async () => {
-    const { monitor, elapse } = fixture();
-    runWithMainThreadTask("scheduler:short", () => elapse(249));
-    await runWithMainThreadTask("gateway:rpc:sessions.list", async () => {
-      elapse(250);
-      await Promise.resolve();
-      elapse(5_000);
-    });
-    expect(monitor.drain()).toMatchObject({
-      stalls: [{ elapsedMs: 250, task: "gateway:rpc:sessions.list", taskMs: 250 }],
-      dropped: 0,
-      delayMaxMs: 250,
-    });
-  });
+  it.each([0, 0.125, 2 ** 32 + 0.125])(
+    "reports the 250 ms boundary and excludes waits at clock offset %s",
+    async (offset) => {
+      const { monitor, elapse } = fixture(offset);
+      runWithMainThreadTask("scheduler:short", () => elapse(249));
+      await runWithMainThreadTask("gateway:rpc:sessions.list", async () => {
+        elapse(250);
+        await Promise.resolve();
+        elapse(5_000);
+      });
+      expect(monitor.drain()).toMatchObject({
+        stalls: [
+          {
+            elapsedMs: 250,
+            task: "gateway:rpc:sessions.list",
+            taskMs: 250,
+            startedAt: offset + 249,
+            endedAt: offset + 499,
+          },
+        ],
+        dropped: 0,
+        delayMaxMs: 250,
+      });
+    },
+  );
 
   it("keeps unattributed overflow out of the scoped-stall drop count", () => {
     vi.useFakeTimers();
@@ -118,12 +194,7 @@ describe("main-thread stall attribution", () => {
       dropped: 0,
       delayMaxMs: 1_220,
     });
-    expect(monitor.drain()).toEqual({
-      stalls: [],
-      dropped: 0,
-      unattributedDropped: 0,
-      delayMaxMs: 0,
-    });
+    expect(monitor.drain()).toEqual(emptyReport);
   });
 
   it("returns the original promise without observing its continuations", async () => {
@@ -134,12 +205,7 @@ describe("main-thread stall attribution", () => {
     elapse(5_000);
     ready.resolve();
     await operation;
-    expect(monitor.drain()).toEqual({
-      stalls: [],
-      dropped: 0,
-      unattributedDropped: 0,
-      delayMaxMs: 0,
-    });
+    expect(monitor.drain()).toEqual(emptyReport);
   });
 
   it("restores same-name phases after nested work throws", () => {
@@ -217,12 +283,7 @@ describe("main-thread stall attribution", () => {
       monitor.reset();
       elapse(20);
     });
-    expect(monitor.drain()).toEqual({
-      stalls: [],
-      dropped: 0,
-      unattributedDropped: 0,
-      delayMaxMs: 20,
-    });
+    expect(monitor.drain()).toEqual({ ...emptyReport, delayMaxMs: 20 });
   });
 
   it("bounds retained stalls and releases observation with the Gateway lifetime", () => {
@@ -235,11 +296,6 @@ describe("main-thread stall attribution", () => {
     expect(report.dropped).toBe(4);
     monitor.stop();
     runWithMainThreadTask("maintenance", () => elapse(1_001));
-    expect(monitor.drain()).toEqual({
-      stalls: [],
-      dropped: 0,
-      unattributedDropped: 0,
-      delayMaxMs: 0,
-    });
+    expect(monitor.drain()).toEqual(emptyReport);
   });
 });

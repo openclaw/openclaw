@@ -1,6 +1,6 @@
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -97,9 +97,9 @@ export function readAcknowledgedInitialRun(host: Parameters<typeof adoptStartedC
 export function admitInitialChatTurn(
   host: ChatPageHost,
   run: ReturnType<typeof readAcknowledgedInitialRun>,
-): void {
+): boolean {
   admitInitialTurnHandoff(host, host.sessionKey);
-  admitChatSubmission(host, getChatPendingInputs(host)?.page.items);
+  const admitted = admitChatSubmission(host, getChatPendingInputs(host)?.page.items);
   // Cached history can bind a replacement physical session; only adopt this session's ACK.
   if (
     run &&
@@ -107,5 +107,8 @@ export function admitInitialChatTurn(
     (!run.sessionId || !host.currentSessionId || run.sessionId === host.currentSessionId)
   ) {
     adoptStartedChatRun(host, run.id, run.startedAt);
+    // Run ownership can be new after its user receipt has retired display ownership.
+    return admitted || host.chatRunId === run.id;
   }
+  return admitted;
 }

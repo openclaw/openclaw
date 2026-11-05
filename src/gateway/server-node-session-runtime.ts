@@ -3,6 +3,7 @@ import {
   isPairedDeviceNodeBindingCurrent,
   resolveCurrentPairedDeviceNodeBinding,
 } from "../infra/device-pairing-node-state.js";
+import { recordPairedNodeHostStats } from "../infra/device-pairing-node.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
@@ -378,11 +379,12 @@ export function createGatewayNodeSessionRuntime(params: {
           }),
     );
   };
-  const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
+  const { nodeRegistry, nodeWorkerSupervisorTransport, closeHostStats } = createNodeRegistryRuntime(
     () =>
       new NodeRegistry({
         listRegisteredNodePluginToolCommands: params.listRegisteredNodePluginToolCommands,
         getConfig: params.getConfig,
+        persistHostStats: recordPairedNodeHostStats,
         resolveCurrentPairingState:
           params.resolveCurrentPairingState ?? resolveCurrentPairedDeviceNodeBinding,
         isPairingStateCurrent: params.isPairingStateCurrent ?? isPairedDeviceNodeBindingCurrent,
@@ -501,6 +503,7 @@ export function createGatewayNodeSessionRuntime(params: {
   return {
     nodeRegistry,
     nodeWorkerSupervisorTransport,
+    closeHostStats,
     sessionEventSubscribers,
     sessionMessageSubscribers,
     nodeHasSessionSubscribers: (sessionKey: string) => sessionSubscribers.has(sessionKey.trim()),

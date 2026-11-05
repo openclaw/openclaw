@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { SkillInstallOption } from "../skills/discovery/status.types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { withPlatform } from "../wizard/setup.finalize.test-support.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 const mocks = vi.hoisted(() => ({
@@ -125,19 +126,6 @@ const runtime: RuntimeEnv = {
 };
 
 const supportsHomebrewPrompt = process.platform === "darwin" || process.platform === "linux";
-
-async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
-  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-  Object.defineProperty(process, "platform", {
-    configurable: true,
-    value: platform,
-  });
-  try {
-    return await fn();
-  } finally {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
-  }
-}
 
 describe("setupSkills", () => {
   beforeEach(() => {

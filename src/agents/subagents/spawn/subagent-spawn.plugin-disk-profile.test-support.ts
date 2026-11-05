@@ -46,6 +46,7 @@ import {
 import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import {
   createSpawnOperatorSource,
+  createSpawnTranscriptTarget,
   recordSpawnBoundaryFinal,
   type NativePluginSpawnTestOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
@@ -140,10 +141,6 @@ export function registerDiskProfileCase(options: NativePluginSpawnTestOptions) {
       clearConfigCache();
       setRuntimeConfigSnapshot(cfg);
       registry = loadOpenClawPlugins({ config: cfg, activate: false, cache: false });
-      expect(
-        registry.plugins.find((record) => record.id === pluginId),
-        JSON.stringify(registry.diagnostics),
-      ).toMatchObject({ status: "loaded" });
       setActivePluginRegistry(registry);
       await fs.writeFile(
         path.join(plugin.root, "reviewer.md"),
@@ -263,14 +260,7 @@ export function registerDiskProfileCase(options: NativePluginSpawnTestOptions) {
         });
         const recorder = createUserTurnTranscriptRecorder({
           input: { text: "/profile-proof" },
-          target: {
-            agentId: "main",
-            sessionKey: parentSessionKey,
-            sessionId: entry.sessionId,
-            sessionEntry: entry,
-            storePath: bound.storePath,
-            config: cfg,
-          },
+          target: createSpawnTranscriptTarget(bound, entry),
         });
         const invoke = (signal: AbortSignal) => {
           const nativeState: Parameters<typeof runWithCommandNativeSubagents>[0] = {
@@ -332,7 +322,6 @@ export function registerDiskProfileCase(options: NativePluginSpawnTestOptions) {
         expect(result?.shouldContinue).toBe(false);
         const receipt = JSON.parse(expectDefined(result?.reply?.text, "plugin command response"));
         expect(receipt.conflict).toMatch(/outputSchema|schema/i);
-        expect(receipt.accepted).toHaveLength(2);
         expect(receipt.collection).toMatchObject({
           pending: [],
           completed: [

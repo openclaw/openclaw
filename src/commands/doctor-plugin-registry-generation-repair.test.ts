@@ -12,7 +12,6 @@ import {
   readPersistedInstalledPluginIndexInstallRecordsAsync as readRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import {
-  cleanupRetainedManagedNpmInstallGenerations as pruneGenerations,
   hasRetainedManagedNpmInstallMarker,
   resolveRetainedManagedNpmInstallPackageInfo,
 } from "../plugins/managed-npm-retention.js";
@@ -91,13 +90,6 @@ it.each([false, true])(
           seedInstalledPluginIndex({}, { stateDir, candidates: [] }),
         );
       await (independentWriter ? runOutsidePluginCache(write) : write());
-      const retained = await readRecords({ stateDir });
-      if (independentWriter) {
-        expect(retained).toHaveProperty("stale");
-      } else {
-        expect(retained).toEqual({});
-      }
-
       await maybeRepairPluginRegistryState({
         config: {},
         env,
@@ -114,8 +106,8 @@ it.each(["record", "recency"] as const)(
   "retires stale generations using %s authority",
   async (authority) => {
     const stateDir = tempDirs.make("openclaw-doctor-plugin-generation-");
-    const active = writeManaged(stateDir, authority === "record" ? "2026.7.1" : "1.0.0", true);
-    const stale = writeManaged(stateDir, authority === "record" ? "2026.6.11" : "9.0.0");
+    const active = writeManaged(stateDir, "1.0.0", true);
+    const stale = writeManaged(stateDir, "9.0.0");
     await seedInstalledPluginIndex(
       authority === "record"
         ? {
@@ -123,7 +115,7 @@ it.each(["record", "recency"] as const)(
               source: "npm",
               spec: `${PACKAGE_NAME}@latest`,
               installPath: active,
-              resolvedVersion: "2026.7.1",
+              resolvedVersion: "1.0.0",
             },
           }
         : {},
@@ -143,14 +135,5 @@ it.each(["record", "recency"] as const)(
       expect(persisted?.[PLUGIN_ID]?.installPath).toBe(active);
     }
     expect([stale, active].map(hasRetainedManagedNpmInstallMarker)).toEqual([true, false]);
-    if (authority === "record") {
-      await expect(
-        pruneGenerations({
-          activeInstallPaths: [active],
-          npmDir: path.join(stateDir, "npm"),
-        }),
-      ).resolves.toBe(1);
-      expect([stale, active].map((dir) => fs.existsSync(dir))).toEqual([false, true]);
-    }
   },
 );

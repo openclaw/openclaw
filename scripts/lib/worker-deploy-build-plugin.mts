@@ -289,7 +289,27 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         );
       }
       if (resolvedId === playwrightRuntimePath) {
-        return WORKER_PLAYWRIGHT_RUNTIME;
+        if (this.meta?.openclawStandaloneSource !== true) {
+          return WORKER_PLAYWRIGHT_RUNTIME;
+        }
+        // The source compiler needs the loader's opaque CommonJS types, not inferred named exports.
+        const replacements: readonly (readonly [string, string])[] = [
+          [
+            'import { createRequire } from "node:module";',
+            'import * as playwrightCore from "playwright-core";\nimport coreBundle from "playwright-core/lib/coreBundle";',
+          ],
+          ["const require = createRequire(import.meta.url);", ""],
+          ['require("playwright-core")', "playwrightCore"],
+          ['require("playwright-core/lib/coreBundle")', "coreBundle"],
+        ];
+        let transformed = code;
+        for (const [before, after] of replacements) {
+          if (transformed.split(before).length !== 2) {
+            this.error("Playwright loader changed; update the worker deploy transform");
+          }
+          transformed = transformed.replace(before, after);
+        }
+        return transformed;
       }
       if (resolvedId === photonRuntimePath) {
         if (!code.includes(PHOTON_WASM_INIT)) {

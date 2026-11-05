@@ -9,7 +9,8 @@ import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createChatPaneSessionActionCallbacks } from "./chat-pane-session-controls.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import { handleAbortChat, replayPendingChatAbort } from "./run-lifecycle.ts";
 
 function sessionsWith(...sessions: GatewaySessionRow[]) {
@@ -143,6 +144,7 @@ describe("chat pane Stop intent", () => {
           method,
           {
             [method === "chat.abort" ? "sessionKey" : "key"]: fixture.state.sessionKey,
+            userInitiated: true,
             runId: "original-run",
           },
         ],
@@ -335,7 +337,12 @@ describe("chat pane Stop intent", () => {
       expect(fixture.state.pendingAbort).toBeNull();
       expect(fixture.request.mock.calls).toEqual(
         ownsOriginal
-          ? [["chat.abort", { sessionKey: fixture.session.key, runId: "original-run" }]]
+          ? [
+              [
+                "chat.abort",
+                { sessionKey: fixture.session.key, runId: "original-run", userInitiated: true },
+              ],
+            ]
           : [],
       );
     },
@@ -371,7 +378,12 @@ describe("chat pane Stop intent", () => {
       expect(fixture.state.pendingAbort).toBeNull();
       expect(fixture.request.mock.calls.filter(([method]) => method === "chat.abort")).toEqual(
         sharingRole === "owner"
-          ? [["chat.abort", { sessionKey: fixture.session.key, runId: "original-run" }]]
+          ? [
+              [
+                "chat.abort",
+                { sessionKey: fixture.session.key, runId: "original-run", userInitiated: true },
+              ],
+            ]
           : [],
       );
     },
