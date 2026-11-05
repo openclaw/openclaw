@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   bindAgentToolAvailability,
   finalizeAgentToolAvailability,
+  gateAgentToolExecution,
+  isAgentToolExecutionAvailable,
 } from "./agent-tool-availability.js";
 import { isHostSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
 import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
@@ -25,6 +27,47 @@ const surfaceFor = (turnTools: AnyAgentTool[], sessionTools = turnTools, hostSys
   });
 
 describe("resolveTurnToolSurface", () => {
+  it.each([
+    ["message", false],
+    ["message", true],
+    ["gateway", false],
+  ] as const)(
+    "preserves a %s turn denial behind session declarations (owner denied=%s)",
+    async (toolName, ownerDenied) => {
+      const source = fakeTool(toolName, `turn ${toolName} tool`);
+      source.prepareArguments = () => {
+        throw new Error("denied preparation must not run");
+      };
+      const denied = gateAgentToolExecution(
+        source,
+        `${toolName} is disabled for this turn. Do not retry it.`,
+      );
+      const offered = fakeTool(toolName, `persistent session ${toolName} declaration`);
+      const surface = resolveTurnToolSurface({
+        turnTools: [denied],
+        sessionTools: [offered],
+        ownerOnlyDenied: new Set(ownerDenied ? [toolName] : []),
+        ownerToolCurrentAssertion: () => {
+          throw new Error("denied calls must not consult the current owner grant");
+        },
+      });
+      const projected = surface.tools[0]!;
+      expect(projected.description).toBe(offered.description);
+      expect(projected.parameters).toBe(offered.parameters);
+      expect(projected.prepareArguments).toBeUndefined();
+      expect(isAgentToolExecutionAvailable(projected)).toBe(false);
+      const result = await projected.execute("denied-message", {});
+      expect(result.details).toMatchObject({ gated: true });
+      expect(JSON.stringify(result.content)).toContain(
+        ownerDenied ? "needs the owner's authority" : `${toolName} is disabled for this turn`,
+      );
+      expect(source.execute).not.toHaveBeenCalled();
+      expect(offered.execute).not.toHaveBeenCalled();
+      expect(surface.exportedTools).toEqual([]);
+      expect(surface.callableTools).toEqual([]);
+    },
+  );
+
   it("keeps a gated dependency non-callable for dependent affordances", () => {
     // A spawn tool may enable result collection only while its reader is callable.
     let readerCallable: boolean | undefined;
