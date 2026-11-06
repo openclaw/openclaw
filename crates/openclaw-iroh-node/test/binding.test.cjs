@@ -39,7 +39,7 @@ const API = {
 // Binds a server (accepting ALPN) and a client, both with relays disabled, and dials directly.
 async function directPair() {
   const server = await binding.bind({ secretKey: crypto.randomBytes(32), alpns: [ALPN] });
-  const client = await binding.bind({ secretKey: crypto.randomBytes(32) });
+  const client = await binding.bind({ secretKey: crypto.randomBytes(32), keepAliveMs: 1_000 });
   const accepted = server.accept();
   const conn = await client.connect(server.id(), ALPN, {
     directAddrs: loopbackAddrs(server.boundSockets()),
@@ -55,6 +55,13 @@ test("exports the spike binding API", () => {
     );
     assert.deepEqual(own.toSorted(), methods, cls);
   }
+});
+
+test("rejects a zero keep-alive interval", async () => {
+  await assert.rejects(
+    binding.bind({ secretKey: crypto.randomBytes(32), keepAliveMs: 0 }),
+    /keepAliveMs must be positive/,
+  );
 });
 
 test("rejects a secret key that is not 32 bytes", async () => {
