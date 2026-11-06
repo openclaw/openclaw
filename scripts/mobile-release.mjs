@@ -19,6 +19,17 @@ function git(root, ...args) {
   return run("git", args, root);
 }
 
+function timePreparation(label, operation) {
+  const startedAt = performance.now();
+  try {
+    return operation();
+  } finally {
+    console.log(
+      `[mobile-release] ${label}: ${Math.round(performance.now() - startedAt)}ms elapsed.`,
+    );
+  }
+}
+
 function clean(root) {
   if (git(root, "status", "--porcelain", "--untracked-files=all")) {
     throw new Error(
@@ -28,7 +39,7 @@ function clean(root) {
 }
 
 function mainSha(root) {
-  git(root, "fetch", "--no-tags", "origin", "refs/heads/main");
+  timePreparation("Fetch main", () => git(root, "fetch", "--no-tags", "origin", "refs/heads/main"));
   return git(root, "rev-parse", "FETCH_HEAD");
 }
 
@@ -256,7 +267,7 @@ function testflightNonUploadOutcome(root, plan, sourceSha) {
 }
 
 async function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
-  clean(root);
+  timePreparation("Clean checkout", () => clean(root));
   const isGithubActions = process.env.GITHUB_ACTIONS === "true";
   if (isGithubActions && process.env.GITHUB_RUN_ATTEMPT !== "1") {
     throw new Error(
