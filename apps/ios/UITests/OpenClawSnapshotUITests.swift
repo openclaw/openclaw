@@ -2832,3 +2832,38 @@ extension OpenClawSnapshotUITests {
         }
     }
 }
+
+@MainActor
+final class HiddenPacingDrawerUITests: XCTestCase {
+    func testChatSurvivesDrawerObscurationAndReveal() {
+        let app = XCUIApplication()
+        setupSnapshot(app)
+        app.launchArguments += [
+            "--openclaw-initial-tab", "chat",
+            "--openclaw-initial-destination", "chat",
+            "--openclaw-sidebar-visibility", "hidden",
+            "--openclaw-screenshot-mode",
+        ]
+        app.launch()
+        defer { app.terminate() }
+        let show = app.buttons["RootTabs.Sidebar.Show"]
+        XCTAssertTrue(show.waitForExistence(timeout: 10))
+        self.capture(app, name: "pacing-chat-visible")
+        show.tap()
+        let hide = app.buttons["RootTabs.Sidebar.Hide"]
+        XCTAssertTrue(hide.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["RootTabs.Sidebar.AgentSelector"].exists)
+        self.capture(app, name: "pacing-chat-obscured")
+        hide.tap()
+        XCTAssertTrue(show.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.scrollViews["chat-transcript"].waitForExistence(timeout: 5))
+        self.capture(app, name: "pacing-chat-revealed")
+    }
+
+    private func capture(_ app: XCUIApplication, name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        self.add(attachment)
+    }
+}
