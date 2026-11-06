@@ -331,7 +331,8 @@ openclaw-pending-session-create {
   corner-shape: superellipse(1.5);
 }
 
-:is(.chat-composer-neighbor-card, .session-suggestion) {
+.chat-composer-neighbor-card,
+.session-suggestion {
   padding: 10px 12px;
 }
 

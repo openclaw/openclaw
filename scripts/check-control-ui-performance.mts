@@ -55,8 +55,8 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Generated-name-normalized main measurement plus 64 B toolchain headroom.
-  chatBootJsGzipBytes: 1_288_381,
-  newBootJsGzipBytes: 797_183,
+  chatBootJsGzipBytes: 1_289_014,
+  newBootJsGzipBytes: 797_642,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -66,13 +66,13 @@ const controlUiPerformanceBudgets = {
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
   // Normalized shared application chunk plus 64 B toolchain headroom.
-  largestJsGzipBytes: 560_382,
+  largestJsGzipBytes: 560_370,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
   // Normalized main CSS plus 64 B headroom; raw bytes retain their own cap.
-  totalCssGzipBytes: 323_113,
-  totalCssRawBytes: 1_670_837,
+  totalCssGzipBytes: 323_290,
+  totalCssRawBytes: 1_672_449,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

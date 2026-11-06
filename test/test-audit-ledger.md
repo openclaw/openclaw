@@ -209,19 +209,24 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [193114](https://github.com/openclaw/openclaw/pull/193114): Seven unseeded Run Inspector privacy-list entries removed; all ten cases and seeded privacy assertions remain. Original/candidate/published browser suites pass10/10; scoped checks and fresh review completed, CI32 success/28 skipped and exact security tuple passed. Local tokenjuice dependency failure and export-scan timeout/timing gaps remain disclosed. Squash `4bd434d2a5d4` verified; native checkout removed, managed carrier retained for shared-store contention. No cases removed.
 
+- [193386](https://github.com/openclaw/openclaw/pull/193386): Typing-preview checks now target the animated caret, with active-animation controls before pause and reduced-motion checks. Both omitted CSS rules escape the original assertions and fail the repaired ones; all nine cases remain. Original/candidate/published suites and scoped checks pass; exact-head CI32 success/28 skipped and security pass. Squash `01a5e160dabf` verified; native checkout removed, managed carrier retained. No cases removed.
+
 ## Current qualification
 
-Batch109, pinned main `486a0bddbb95`: the typing-preview assertions now inspect
-the animated child caret and prove active animation before each paused or
-reduced-motion check. The unchanged baseline and restored candidate pass all
-nine browser cases. Independently omitting either CSS stop rule passes both
-original rows and fails both repaired rows with `chat-typing-pulse` instead of
-`none`; all production and temporary instrumentation bytes are restored.
-All seven declarations/nine cases remain. Three test lines and their exact
-per-change allocation are added; the shared ceiling is unchanged. Scoped types,
-typed lint, formatting, ledger MDX, whitespace and the line ratchet pass. The PR
-records fresh review and hosted admission. No case or support-removal credit is
-claimed.
+Batch110, pinned main `57953680cdf7`: remove two obsolete gate declarations/three
+expanded cases and the orphan MCP fixture gate waiter after its last runtime
+consumer was retired. The two HTTP/process cleanup tests remain byte-identical:
+failed readiness kills its captured process, and stopping the captured root joins
+its task-owned descendant. The unchanged five-case baseline passes; the complete
+candidate passes both retained cases through the same tooling runner. Test time
+is 115ms before and 54ms after; routed wall time is 3.47s and 1.61s respectively.
+The change removes 73 test lines and 63 support lines; production is unchanged.
+Source dispositions were already recorded; this adds no census marks. Types,
+typed lint, format, MDX, whitespace, the line ratchet and unused-file scans pass.
+Dependency/full-tree export scans report only the unchanged Talk helper export
+`setSourceConfig`; source comparison attributes it to the pinned baseline, with
+no passing aggregate claim or unrelated repair. The PR records fresh review and
+exact-head hosted admission separately.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
