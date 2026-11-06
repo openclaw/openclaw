@@ -130,6 +130,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                 class="oc-dialog__close"
                 icon="x"
                 label={t(canCancel() ? "common.cancel" : "common.close")}
+                tooltip={false}
                 ref={autofocusRef}
                 autofocus={displayPhase() !== "step"}
                 onClick={() => (canCancel() ? props.onCancel() : props.onClose())}

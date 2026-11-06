@@ -182,6 +182,7 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 class="oc-dialog__close device-pair-setup__close"
                 icon="x"
                 label={t("common.dismiss")}
+                tooltip={false}
                 onClick={() => props.onClose()}
               />
             </div>

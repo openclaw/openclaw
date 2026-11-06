@@ -108,6 +108,7 @@ export function createModelProviderDiscovery(options: DiscoveryOptions) {
                           class="oc-dialog__close"
                           icon="x"
                           label={t("common.cancel")}
+                          tooltip={false}
                           onClick={() => close()}
                         />
                       </div>

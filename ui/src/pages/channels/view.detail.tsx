@@ -292,6 +292,7 @@ export function renderChannelDetail(params: {
             class="oc-dialog__close"
             icon="x"
             label={t("common.close")}
+            tooltip={false}
             onClick={() => params.onClose()}
           />
           <ChannelDetailStatus channelId={params.channelId} props={params.props} />

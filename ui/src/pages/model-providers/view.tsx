@@ -76,6 +76,7 @@ function AddProvider(props: ModelProvidersViewProps) {
               class="oc-dialog__close"
               icon="x"
               label={t("common.close")}
+              tooltip={false}
               disabled={busy()}
               onClick={() => props.onAddProviderToggle()}
             />

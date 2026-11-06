@@ -196,7 +196,6 @@ openclaw-modal-dialog {
 .oc-dialog__close,
 .oc-dialog__icon-button {
   --oc-icon-button-size: var(--overlay-modal-close-size);
-  --icon-button-radius: var(--menu-item-radius);
 }
 
 .oc-dialog__body {

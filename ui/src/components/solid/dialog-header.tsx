@@ -20,6 +20,7 @@ export function DialogHeader(props: {
           class="oc-dialog__close"
           icon="x"
           label={t("common.close")}
+          tooltip={false}
           disabled={props.closeDisabled}
           onClick={() => props.onClose?.()}
         />

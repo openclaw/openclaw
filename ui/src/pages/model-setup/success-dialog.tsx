@@ -62,6 +62,7 @@ export function ModelSetupSuccessDialog(
               class="oc-dialog__close"
               icon="x"
               label={t("common.close")}
+              tooltip={false}
               onClick={() => props.onSuccessClose()}
             />
             <Show when={!props.activation.warning}>

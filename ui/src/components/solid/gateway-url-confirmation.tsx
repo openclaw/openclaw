@@ -64,6 +64,7 @@ function renderConfirmation(props: () => ConfirmationProps) {
             class="oc-dialog__close"
             icon="x"
             label={t("common.close")}
+            tooltip={false}
             onClick={() => props().onCancel()}
           />
           <div class="oc-dialog__description">

@@ -102,6 +102,7 @@ function PickerDialog(props: {
             class="oc-dialog__close"
             icon="x"
             label={t("common.close")}
+            tooltip={false}
             onClick={() => current().onClose()}
           />
           <div class="oc-dialog__description">
