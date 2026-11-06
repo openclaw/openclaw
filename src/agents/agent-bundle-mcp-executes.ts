@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { McpCatalogTool, McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import type { McpAppRequesterIdentity, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
@@ -51,12 +50,14 @@ export function createBundleMcpToolExecuteFactory(
         }
       }
       runtime.markUsed();
-      const { input, callMeta } = hoistHookMeta(originalInput, getBeforeToolCallRequestMeta());
+      // Arguments pass through untouched, including any caller-supplied
+      // `_meta`: hook-authored context rides the MCP request level only.
+      const callMeta = getBeforeToolCallRequestMeta();
       const { serverName, toolName } = tool;
       const invoke = () =>
         callMeta
-          ? runtime.callTool(serverName, toolName, input, { _meta: callMeta })
-          : runtime.callTool(serverName, toolName, input);
+          ? runtime.callTool(serverName, toolName, originalInput, { _meta: callMeta })
+          : runtime.callTool(serverName, toolName, originalInput);
       const result = await (runtime.sessionKey
         ? runWithMcpElicitationHandler(
             createMcpClientElicitationHandler({
@@ -165,7 +166,7 @@ export function createBundleMcpToolExecuteFactory(
           toolName,
           uiResourceUri: tool.uiResourceUri,
           toolCallId,
-          toolInput: input,
+          toolInput: originalInput,
           toolResult: result,
           ...(allowedAppToolNames ? { allowedAppToolNames } : {}),
         });
@@ -179,29 +180,4 @@ export function createBundleMcpToolExecuteFactory(
       }
       return projectMcpCallToolResult(result, details);
     });
-}
-
-/**
- * Moves pipeline-authored `_meta` from `arguments` onto the MCP request level.
- * Without hook-boundary provenance the value is ordinary tool input and stays
- * an argument, even when it is an object named `_meta`.
- */
-function hoistHookMeta(
-  input: unknown,
-  hookMeta: Record<string, unknown> | undefined,
-): {
-  input: unknown;
-  callMeta: Record<string, unknown> | undefined;
-} {
-  if (hookMeta === undefined) {
-    return { input, callMeta: undefined };
-  }
-  if (!isRecord(input) || !isRecord(input._meta)) {
-    return { input, callMeta: hookMeta };
-  }
-  // Copy instead of mutating: the wrapper keeps executeParams for
-  // post-execution loop outcomes and skill matching.
-  const rest = { ...input };
-  delete rest._meta;
-  return { input: rest, callMeta: hookMeta };
 }

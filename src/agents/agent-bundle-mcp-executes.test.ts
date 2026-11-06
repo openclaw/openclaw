@@ -81,10 +81,11 @@ async function materializedInbox(
 }
 
 describe("bundle-mcp execute request-meta provenance", () => {
-  it("forwards hook-authored _meta as MCP request metadata, out of arguments", async () => {
+  it("forwards hook-authored requestMeta as MCP request metadata, out of arguments", async () => {
     hookRunner.hasHooks.mockImplementation((hookName) => hookName === "before_tool_call");
     hookRunner.runBeforeToolCall.mockImplementation(async ({ params }) => ({
-      params: { ...(params as Record<string, unknown>), _meta: stamp },
+      params,
+      requestMeta: stamp,
     }));
     const { callTool, view } = await materializedInbox();
     const tool = wrapToolWithBeforeToolCallHook(view.tools[0]!, hookCtx);
@@ -100,16 +101,7 @@ describe("bundle-mcp execute request-meta provenance", () => {
     await view.dispose();
   });
 
-  it.each([
-    { label: "no hook rewrites", rewrite: false },
-    { label: "a hook preserves model-supplied _meta", rewrite: true },
-  ])("keeps model-supplied _meta in arguments when $label", async ({ rewrite }) => {
-    if (rewrite) {
-      hookRunner.hasHooks.mockImplementation((hookName) => hookName === "before_tool_call");
-      hookRunner.runBeforeToolCall.mockImplementation(async ({ params }) => ({
-        params: { ...(params as Record<string, unknown>), annotated: true },
-      }));
-    }
+  it("keeps model-supplied _meta in arguments when no hook runs", async () => {
     const { callTool, view } = await materializedInbox();
     const tool = wrapToolWithBeforeToolCallHook(view.tools[0]!, hookCtx);
 
@@ -120,12 +112,54 @@ describe("bundle-mcp execute request-meta provenance", () => {
       undefined,
     );
 
+    expect(callTool).toHaveBeenCalledExactlyOnceWith("user-mail", "inbox", {
+      folder: "team",
+      _meta: { revision: 7 },
+    });
+    await view.dispose();
+  });
+
+  it("does not promote mixed-origin _meta: model content stays in arguments while the hook stamp rides request options", async () => {
+    hookRunner.hasHooks.mockImplementation((hookName) => hookName === "before_tool_call");
+    hookRunner.runBeforeToolCall.mockImplementation(async ({ params }) => ({
+      params,
+      requestMeta: stamp,
+    }));
+    const { callTool, view } = await materializedInbox();
+    const tool = wrapToolWithBeforeToolCallHook(view.tools[0]!, hookCtx);
+
+    await tool.execute(
+      "call-mixed",
+      { folder: "team", _meta: { modelFingerprint: "forged-value" } },
+      undefined,
+      undefined,
+    );
+
     expect(callTool).toHaveBeenCalledExactlyOnceWith(
       "user-mail",
       "inbox",
-      rewrite
-        ? { folder: "team", _meta: { revision: 7 }, annotated: true }
-        : { folder: "team", _meta: { revision: 7 } },
+      { folder: "team", _meta: { modelFingerprint: "forged-value" } },
+      { _meta: stamp },
+    );
+    await view.dispose();
+  });
+
+  it("delivers an equal-value hook stamp even when the caller pre-replays it", async () => {
+    hookRunner.hasHooks.mockImplementation((hookName) => hookName === "before_tool_call");
+    hookRunner.runBeforeToolCall.mockImplementation(async ({ params }) => ({
+      params,
+      requestMeta: stamp,
+    }));
+    const { callTool, view } = await materializedInbox();
+    const tool = wrapToolWithBeforeToolCallHook(view.tools[0]!, hookCtx);
+
+    await tool.execute("call-equal", { folder: "team", _meta: stamp }, undefined, undefined);
+
+    expect(callTool).toHaveBeenCalledExactlyOnceWith(
+      "user-mail",
+      "inbox",
+      { folder: "team", _meta: stamp },
+      { _meta: stamp },
     );
     await view.dispose();
   });

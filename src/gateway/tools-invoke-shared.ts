@@ -609,9 +609,7 @@ async function invokeGatewayToolWithSignal(
         return await runWithSessionMcpToolCallAuthority(
           getPluginToolMeta(tool)?.mcp ? assertInvocationCurrent : undefined,
           () =>
-            // Only `_meta` this hook chain changed relative to its own input may
-            // leave `arguments`; model input never does.
-            runWithHookAuthoredMeta(toolArgs, hookResult.params, () =>
+            runWithHookAuthoredMeta(hookResult.requestMeta, () =>
               tool.execute?.(toolCallId, hookResult.params, params.signal),
             ),
         );

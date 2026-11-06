@@ -89,6 +89,8 @@ export type DeferredPluginToolApproval = {
   ctx?: HookContext;
   baseParams: unknown;
   overrideParams?: unknown;
+  /** Hook-authored request metadata surviving the deferred approval round-trip. */
+  requestMeta?: Record<string, unknown>;
 };
 
 export type BeforeToolCallPolicyDiagnosticState = {
@@ -122,6 +124,12 @@ export type HookOutcome =
   | {
       blocked: false;
       params: unknown;
+      /**
+       * Trusted-policy/hook-authored `requestMeta` for this call, published
+       * by the invocation owner into the transport `_meta` lane. Absent when
+       * no hook contributed any; never derived from params content.
+       */
+      requestMeta?: Record<string, unknown>;
       ownerDecision?: true;
       approvalResolution?: PluginApprovalResolution;
       deferredApproval?: DeferredPluginToolApproval;

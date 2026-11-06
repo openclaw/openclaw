@@ -487,9 +487,7 @@ export function wrapToolWithBeforeToolCallHook(
               skillUse = skillUseScope;
               return liveness.run(() =>
                 skillUseScope.run(() =>
-                  // Only `_meta` this pipeline changed relative to its own input
-                  // may leave `arguments` for the MCP request lane.
-                  runWithHookAuthoredMeta(hookParams, executeParams, () =>
+                  runWithHookAuthoredMeta(outcome.requestMeta, () =>
                     (execute as ForwardedToolExecution)(...args),
                   ),
                 ),

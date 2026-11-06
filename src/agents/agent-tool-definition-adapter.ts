@@ -222,9 +222,9 @@ export function toToolDefinitions(
           signal,
           run: async () => {
             // Wrapped tools publish their own provenance from inside the
-            // wrapper; a self-comparison here publishes nothing while still
-            // shadowing any outer invocation's metadata.
-            let pipelineInput: unknown = executeParams;
+            // wrapper; entering the store with nothing here still shadows any
+            // outer invocation's metadata.
+            let requestMeta: Record<string, unknown> | undefined;
             if (!beforeHookWrapped) {
               const preparedParams = await prepareBeforeToolCallExecutionParams({
                 tool,
@@ -271,7 +271,7 @@ export function toToolDefinitions(
                 adjustedParams: hookOutcome.params,
                 finalizerMode: "adapter",
               });
-              pipelineInput = hookParams;
+              requestMeta = hookOutcome.requestMeta;
               const decision = control ? await control.pause(executeParams) : undefined;
               if (decision && !decision.launch) {
                 return { content: [], details: { status: "skipped" } };
@@ -281,7 +281,7 @@ export function toToolDefinitions(
               recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
             }
             assertSourceCurrent();
-            return await runWithHookAuthoredMeta(pipelineInput, executeParams, () =>
+            return await runWithHookAuthoredMeta(requestMeta, () =>
               tool.execute(toolCallId, executeParams, signal, onUpdate),
             );
           },
