@@ -115,12 +115,13 @@ export function installControlUiRpcObserver() {
   type SocketListener = NonNullable<Parameters<WebSocket["addEventListener"]>[1]>;
   type Registration = { listener: EventListener; forget(): void };
   window.WebSocket = class extends OriginalWebSocket {
-    private readonly socketId = ++nextSocketId;
+    private readonly socketId: number;
     private readonly requests = new Map<string, ControlUiRpcRecord>();
     private readonly listeners = new WeakMap<SocketListener, Map<boolean, Registration>>();
 
     constructor(url: string | URL, protocols?: string | string[]) {
       super(url, protocols);
+      this.socketId = ++nextSocketId;
       // Registered first, and directly on the native owner, outside the timers.
       super.addEventListener("message", (event: MessageEvent<unknown>) => {
         if (typeof event.data !== "string") {
