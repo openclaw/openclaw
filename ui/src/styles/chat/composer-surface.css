@@ -883,7 +883,7 @@
 .chat-send-btn {
   width: 36px;
   border-radius: var(--radius-full);
-  background: var(--primary);
+  background: var(--chat-send-bg);
   color: var(--chat-send-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
   transition:
@@ -946,7 +946,7 @@
   min-width: var(--chat-composer-send-size);
   height: var(--chat-composer-send-size);
   padding: 5px;
-  background: var(--primary);
+  background: var(--chat-send-bg);
   color: var(--chat-send-foreground);
   box-shadow: none;
 }

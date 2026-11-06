@@ -226,17 +226,17 @@
   flex-basis: var(--sidebar-rail-action-size);
   margin: calc((var(--sidebar-rail-control-size) - var(--sidebar-rail-action-size)) / 2);
   background: var(--sidebar-rail-action-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-hover-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:active:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-active-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:focus-visible {

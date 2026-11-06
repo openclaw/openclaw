@@ -43,6 +43,7 @@
   --card-highlight: rgba(255, 255, 255, 0.04);
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
+  --chat-send-bg: var(--primary);
   --chat-send-foreground: var(--primary-foreground);
   --chat-send-hover-bg: color-mix(in srgb, var(--primary) 86%, var(--text-strong));
   --chat-send-active-bg: var(--primary-active);
@@ -91,6 +92,7 @@
   --sidebar-rail-control-color: var(--icon-interactive);
   --sidebar-toolbar-action-opacity: 1;
   --sidebar-rail-action-bg: var(--accent);
+  --sidebar-rail-action-foreground: var(--accent-foreground);
   --sidebar-rail-action-hover-bg: var(--accent-hover);
   --sidebar-rail-action-active-bg: var(--accent-active);
 

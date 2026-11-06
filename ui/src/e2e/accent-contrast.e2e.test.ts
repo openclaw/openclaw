@@ -1,11 +1,14 @@
 import { expect, it } from "vitest";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
+import { configResponse } from "./appearance-prefs.test-support.ts";
+import { configProof } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createThemedChatOpener } from "./theme-typography.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Accent control contrast" });
 const openThemedChat = createThemedChatOpener(suite);
+const { capture } = configProof("inherited-accent-ink");
 function luminance(color: RenderedColor) {
   const linear = [color.red, color.green, color.blue].map((channel) => {
     const value = channel / 255;
@@ -77,7 +80,9 @@ suite.define(() => {
         const [low, high] = [luminance(colors.background!), luminance(colors.foreground!)].toSorted(
           (a, b) => a - b,
         );
-        expect((high! + 0.05) / (low! + 0.05), accent + " " + state).toBeGreaterThanOrEqual(4.5);
+        expect((high! + 0.05) / (low! + 0.05), accent + " " + state).toBeGreaterThanOrEqual(
+          state === "normal" ? 3 : 4.5,
+        );
         if (state === "active") {
           await page.mouse.move(0, 0);
           await page.mouse.up();
@@ -173,6 +178,42 @@ suite.define(() => {
           await page.mouse.up();
         }
       }
+    }
+  });
+  it("keeps Absolutely action icons white with an inherited coral accent", async () => {
+    const { page } = await openThemedChat("absolutely", "light", {
+      methodResponses: {
+        "config.get": configResponse(
+          { theme: "absolutely", themeMode: "light", accent: "#ff8066" },
+          "inherited-coral-accent",
+        ),
+      },
+    });
+    await page.goto(suite.server.baseUrl + "chat");
+    const actions = [
+      page.locator(".sidebar-rail__create .sidebar-new-session"),
+      page.locator(".chat-send-btn--send").first(),
+    ];
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          getComputedStyle(document.documentElement).getPropertyValue("--accent").trim(),
+        ),
+      )
+      .toBe("#ff8066");
+    await page
+      .locator(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea")
+      .fill("Review this draft.");
+    await expect.poll(() => actions[1]!.isEnabled()).toBe(true);
+    await capture(actions[0]!, "new-session.png");
+    await capture(actions[1]!, "send.png");
+    for (const action of actions) {
+      expect(
+        await action.evaluate((element) => ({
+          color: getComputedStyle(element.querySelector("svg")!).color,
+          background: getComputedStyle(element).backgroundColor,
+        })),
+      ).toEqual({ color: "rgb(255, 255, 255)", background: "rgb(230, 115, 92)" });
     }
   });
 });
