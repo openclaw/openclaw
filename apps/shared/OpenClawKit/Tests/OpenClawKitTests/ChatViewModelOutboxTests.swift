@@ -106,6 +106,8 @@ actor OutboxTransportState {
     var branchListCalls = 0
     var routeGeneration = 0
     var sendFails: Bool
+    var sendNotDispatched = false
+    var sendRejectionStatus = "error"
     var sendFailsAfterRecording = false
     var sendRejects = false
     var sendResponseErrors = false
@@ -424,6 +426,9 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         if let expectedRoute, await state.routeGeneration != expectedRoute {
             throw OpenClawChatTransportSendError.notDispatched
         }
+        if await self.state.sendNotDispatched {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
         if await self.state.sendFails {
             throw OutboxSendError()
         }
@@ -464,7 +469,7 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         }
         if await self.state.sendRejects {
             // Gateway responded but refused to start the run.
-            return OpenClawChatSendResponse(runId: idempotencyKey, status: "error")
+            return await OpenClawChatSendResponse(runId: idempotencyKey, status: self.state.sendRejectionStatus)
         }
         await self.state.recordSend(
             sessionKey: sessionKey,
@@ -606,7 +611,7 @@ func outboxSessionEntry(
 
 func makeOutboxViewModel(
     transport: OutboxTestTransport,
-    outbox: any OpenClawChatCommandOutbox,
+    outbox: (any OpenClawChatCommandOutbox)?,
     transcriptCache: (any OpenClawChatTranscriptCache)? = nil,
     retryDelaysMs: [UInt64] = [1, 1],
     sessionKey: String = "main",
@@ -652,6 +657,7 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
     private var loadDelayNanoseconds: UInt64 = 0
     private var enqueueRelease: DeleteGate?
     private var recoveryAvailable = true
+    private var enqueueAvailable = true
     private var terminalWriteResult: OpenClawChatOutboxUpdateResult = .updated
     private var terminalWriteGate: OutboxTestGate?
     private var parkingAvailable = true
@@ -681,6 +687,10 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
 
     func setLoadDelayNanoseconds(_ delay: UInt64) {
         self.loadDelayNanoseconds = delay
+    }
+
+    func setEnqueueAvailable(_ available: Bool) {
+        self.enqueueAvailable = available
     }
 
     func setRecoveryAvailable(_ available: Bool) {
@@ -753,6 +763,7 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
     }
 
     func enqueueCommand(_ command: OpenClawChatOutboxCommand) async -> Bool {
+        guard self.enqueueAvailable else { return false }
         if let enqueueRelease {
             await self.enqueueStarted.open()
             await enqueueRelease.wait()
@@ -2237,10 +2248,8 @@ struct ChatViewModelOutboxTests {
         #expect(await store.loadCommands().isEmpty)
     }
 
-    @Test(arguments: [false, true])
-    func `startup rejection retains the original send after typing or switching chats`(
-        switchSession: Bool) async throws
-    {
+    @Test
+    func `startup rejection retains the original send after typing`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
         let transport = OutboxTestTransport(healthy: true)
@@ -2259,13 +2268,7 @@ struct ChatViewModelOutboxTests {
         }
         await sendGate.waitUntilStarted()
         await MainActor.run {
-            if switchSession { vm.switchSession(to: "other") }
             vm.input = "keep the newer draft"
-        }
-        if switchSession {
-            await vm.bootstrapTask?.value
-            try await waitForOutboxState { vm.hasRestoredOutboxMessages }
-            try #require(await MainActor.run { vm.healthOK })
         }
         await sendGate.release()
         await send?.value
@@ -2289,10 +2292,222 @@ struct ChatViewModelOutboxTests {
         #expect(await transport.state.sentIdempotencyKeys == [queued.id])
         #expect(await transport.state.sentMessages == ["retain the first draft"])
         #expect(await transport.state.sentThinkingLevels == [queued.thinking])
-        #expect(await userTexts(vm) == (switchSession ? [] : ["retain the first draft"]))
+        #expect(await userTexts(vm) == ["retain the first draft"])
         #expect(await store.loadCommands().isEmpty)
-        #expect(await MainActor.run { vm.sessionKey } == (switchSession ? "other" : "main"))
+        #expect(await MainActor.run { vm.sessionKey } == "main")
         #expect(await MainActor.run { vm.input } == "keep the newer draft")
+    }
+
+    @Test(arguments: [
+        "not-dispatched", "rejected", "error", "timeout", "socket", "lost-ack", "startup", "accepted",
+    ], [false, true])
+    @MainActor
+    func `live send recovery stays with its original conversation`(outcome: String, durable: Bool) async throws {
+        let (store, databases, databaseDirectory) = try makeOutboxStore()
+        defer {
+            try? databases.close()
+            try? FileManager.default.removeItem(at: databaseDirectory)
+        }
+        let transport = OutboxTestTransport(healthy: true)
+        let gate = OutboxTestGate()
+        await transport.state.update {
+            $0.sendGate = gate
+            $0.sendNotDispatched = outcome == "not-dispatched"
+            $0.sendResponseErrors = outcome == "rejected"
+            $0.sendRejects = outcome == "error" || outcome == "timeout"
+            $0.sendRejectionStatus = outcome
+            $0.sendFails = outcome == "socket"
+            $0.sendFailsAfterRecording = outcome == "lost-ack"
+            $0.sendRestartRejections = outcome == "startup"
+        }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: durable ? store : nil)
+        defer { vm.detachTransport() }
+        vm.load()
+        await vm.bootstrapTask?.value
+        if durable { try await waitForOutboxState { vm.hasRestoredOutboxMessages } }
+        vm.input = "original submission"
+        let send = try #require(vm.send())
+        await gate.waitUntilStarted()
+        vm.switchSession(to: "other")
+        vm.input = "destination draft"
+        await vm.bootstrapTask?.value
+        await gate.release()
+        await send.value
+        #expect(vm.input == "destination draft")
+        #expect(vm.errorText == nil)
+        let commands = await store.loadCommands()
+        let ambiguous = outcome == "socket" || outcome == "lost-ack"
+        let needsReview = durable && ambiguous
+        #expect(commands.count == (needsReview ? 1 : 0))
+        if needsReview {
+            let command = try #require(commands.first)
+            #expect(command.sessionKey == "main" && command.agentID == "main")
+            #expect(command.status == .failed)
+            #expect(command.lastError == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError)
+        }
+        vm.switchSession(to: "main")
+        #expect(vm.input == (needsReview || outcome == "accepted" ? "" : "original submission"))
+        await vm.bootstrapTask?.value
+        if needsReview, outcome == "socket" {
+            try await waitForOutboxState {
+                vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
+            }
+        } else if !durable, ambiguous {
+            #expect(vm.errorText ==
+                "Message delivery could not be confirmed. Check the conversation before retrying.")
+        }
+        #expect(await transport.state.sentMessages ==
+            (outcome == "accepted" || outcome == "lost-ack" ? ["original submission"] : []))
+        vm.detachTransport()
+        await vm.pendingCacheWriteTask?.value
+        await vm.outboxFlushTask?.value
+    }
+
+    @Test(arguments: ["not-dispatched", "rejected", "lost-ack"]) @MainActor
+    func `replaced native owner leaves its failed send in original Gateway custody`(outcome: String) async throws {
+        let (store, databases, databaseDirectory) = try makeOutboxStore()
+        defer {
+            try? databases.close()
+            try? FileManager.default.removeItem(at: databaseDirectory)
+        }
+        let transport = OutboxTestTransport(healthy: true)
+        let gate = OutboxTestGate()
+        await transport.state.update {
+            $0.sendGate = gate
+            $0.sendNotDispatched = outcome == "not-dispatched"
+            $0.sendResponseErrors = outcome == "rejected"
+            $0.sendFailsAfterRecording = outcome == "lost-ack"
+        }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        vm.load()
+        await vm.bootstrapTask?.value
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
+        vm.input = "retired owner submission"
+        let send = try #require(vm.send())
+        await gate.waitUntilStarted()
+        vm.detachTransport()
+        await gate.release()
+        await send.value
+        let command = try #require(await store.loadCommands().first)
+        #expect(command.text == "retired owner submission")
+        #expect(command.status == .failed)
+        #expect(command.sessionKey == "main" && command.agentID == "main")
+        #expect(await databases.store(gatewayID: "different-gateway").loadCommands().isEmpty)
+        let replacement = await makeOutboxViewModel(transport: transport, outbox: store)
+        defer { replacement.detachTransport() }
+        replacement.load()
+        await replacement.bootstrapTask?.value
+        if outcome != "lost-ack" {
+            try await waitForOutboxState {
+                replacement.messages.contains { replacement.outboxState(for: $0.id)?.isFailed == true }
+            }
+        }
+        #expect(await transport.state.sentMessages == (outcome == "lost-ack" ? ["retired owner submission"] : []))
+        replacement.detachTransport()
+        await replacement.pendingCacheWriteTask?.value
+        await replacement.outboxFlushTask?.value
+    }
+
+    @Test(arguments: ["absent", "full", "unavailable"], [
+        "rejected", "accepted", "rejected-newer", "accepted-newer", "socket-navigation",
+    ])
+    @MainActor
+    func `retired submission remains copyable when recovery admission fails`(
+        storage: String, outcome: String) async throws
+    {
+        let accepted = outcome.hasPrefix("accepted")
+        let newer = outcome.hasSuffix("newer")
+        let navigated = outcome == "socket-navigation"
+        let (store, databases, directory) = try makeOutboxStore()
+        defer {
+            try? databases.close()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        if storage == "full" {
+            for index in 0..<OpenClawChatSQLiteTranscriptCache.maxQueuedCommands {
+                var parked = outboxTestCommand(
+                    id: "parked-\(index)",
+                    text: "existing work",
+                    createdAt: Date().timeIntervalSince1970,
+                    sessionKey: "other")
+                parked.status = .failed
+                #expect(await store.enqueueCommand(parked))
+            }
+        }
+        let outbox = ScriptedOutbox(base: store)
+        await outbox.setEnqueueAvailable(storage != "unavailable")
+        let transport = OutboxTestTransport(healthy: true)
+        let gate = OutboxTestGate()
+        await transport.state.update {
+            $0.sendGate = gate
+            $0.sendNotDispatched = !accepted && !navigated
+            $0.sendFailsAfterRecording = navigated
+        }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: storage == "absent" ? nil : outbox)
+        vm.load()
+        await vm.bootstrapTask?.value
+        if storage != "absent" { try await waitForOutboxState { vm.hasRestoredOutboxMessages } }
+        vm.input = "retain without durable admission"
+        let send = try #require(vm.send())
+        await gate.waitUntilStarted()
+        if newer { vm.input = "newer original draft" }
+        if navigated {
+            vm.switchSession(to: "other")
+            vm.input = "destination draft"
+            await vm.bootstrapTask?.value
+        }
+        vm.detachTransport()
+        await gate.release()
+        await send.value
+        let expectedInput = navigated ? "destination draft" : newer ? "newer original draft" :
+            accepted ? "" : "retain without durable admission"
+        #expect(vm.input == expectedInput)
+        let expectedTexts: [String] = (accepted ? [] : ["retain without durable admission"]) +
+            (navigated ? ["destination draft"] : newer ? ["newer original draft"] : [])
+        if navigated {
+            #expect(vm.errorText ==
+                "Message delivery could not be confirmed. Check the conversation before retrying.")
+        }
+        #expect(vm.retiredComposerRecoveryTexts == expectedTexts)
+        #expect(vm.isPresentationOwnerPinned == (!accepted || newer))
+        #expect(!vm.canSend && vm.send() == nil)
+        #expect(vm.composerModelResolver()() == nil)
+        #expect(await transport.state.sentMessages ==
+            (accepted || navigated ? ["retain without durable admission"] : []))
+        vm.clearRetiredComposerRecovery()
+        #expect(!vm.isPresentationOwnerPinned)
+        #expect(vm.retiredComposerRecoveryTexts.isEmpty)
+        await vm.pendingCacheWriteTask?.value
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func `accepted enqueue retires only its captured composer after detachment`(newer: Bool) async throws {
+        let (store, databases, directory) = try makeOutboxStore()
+        defer {
+            try? databases.close()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let outbox = ScriptedOutbox(base: store)
+        await outbox.holdEnqueue()
+        let transport = OutboxTestTransport(healthy: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
+        vm.load()
+        await vm.bootstrapTask?.value
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
+        vm.input = "durable admission owns this input"
+        let send = try #require(vm.send())
+        await outbox.waitUntilEnqueueStarted()
+        if newer { vm.input = "preserve newer draft" }
+        vm.detachTransport()
+        await outbox.releaseEnqueue()
+        await send.value
+        #expect(await store.loadCommands().map(\.text) == ["durable admission owns this input"])
+        #expect(vm.input == (newer ? "preserve newer draft" : ""))
+        #expect(vm.retiredComposerRecoveryTexts == (newer ? ["preserve newer draft"] : []))
+        #expect(vm.isPresentationOwnerPinned == newer)
+        #expect(await transport.state.sentMessages.isEmpty)
+        vm.clearRetiredComposerRecovery()
+        await vm.pendingCacheWriteTask?.value
     }
 
     @Test func `definitive live-send rejection restores draft without queueing`() async throws {

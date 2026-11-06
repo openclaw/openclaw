@@ -88,6 +88,20 @@ public final class OpenClawChatViewModel {
     public internal(set) var isSending = false
     public internal(set) var isSendingAttachmentDraft = false
     public internal(set) var isSubmittingDraft = false
+    var unsecuredLiveSendRecoveryComposerKey: String?
+
+    public var hasUnsecuredLiveSendRecovery: Bool {
+        self.unsecuredLiveSendRecoveryComposerKey != nil
+    }
+
+    public var isLiveSendRecoveryPinned: Bool {
+        self.isTransportDetached && (self.isSubmittingDraft || self.hasUnsecuredLiveSendRecovery)
+    }
+
+    public var isPresentationOwnerPinned: Bool {
+        self.isAttachmentOwnerPinned || self.isLiveSendRecoveryPinned
+    }
+
     private var deferredExternalSessionKey: String?
     private var deferredDeliveryIdentity: DeferredDeliveryIdentity?
     @ObservationIgnored
@@ -896,7 +910,7 @@ extension OpenClawChatViewModel {
         self.bootstrapTask?.cancel()
         self.cancelHistoryInvalidationRefresh()
         self.isLoading = true
-        self.errorText = nil
+        self.errorText = self.composerRecoveryWarning
         self.invalidateSessionMetadataReadiness()
         self.resetSessionReactions()
         self.invalidateProgressCardTarget()
@@ -982,7 +996,7 @@ extension OpenClawChatViewModel {
         guard self.isCurrentBootstrap(context) else { return }
         // An optional progress fetch may already have reported a required Gateway update.
         if self.errorText != OpenClawChatTransportUpgradeMessage.progressCardAgentScope {
-            self.errorText = nil
+            self.errorText = self.composerRecoveryWarning
         }
     }
 

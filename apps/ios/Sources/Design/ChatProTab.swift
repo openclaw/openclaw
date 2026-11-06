@@ -63,16 +63,16 @@ struct ChatProTab: View {
         self.appModel.isGatewayPickerRequestInFlight ||
             self.gatewayController.hasPendingConnectionHandoff ||
             // Route commitment precedes SwiftUI applying the new presentation.
-            // A deliberately pinned attachment owner keeps its existing controls
+            // A deliberately pinned owner keeps its existing controls
             // so the user can remove/finish it rather than becoming stuck.
-            (!self.isAttachmentOwnerPinned && self.appModel.chatPresentation.ownerID != self.appModel
+            (!self.isPresentationOwnerPinned && self.appModel.chatPresentation.ownerID != self.appModel
                 .chatViewModelOwnerID)
     }
 
     /// Session actions write through the chat owner, so they wait out a gateway handoff
     /// even though the toolbar that offers them stays enabled.
     private var areSessionActionsDisabled: Bool {
-        self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned ||
+        self.viewModel == nil || !self.gatewayConnected || self.isPresentationOwnerPinned ||
             self.isGatewayTransitionPending
     }
 
@@ -81,7 +81,8 @@ struct ChatProTab: View {
             // Protect the chat owner during a handoff, but keep the toolbar outside this
             // scope. Automatic reconnects keep the handoff pending while they retry an
             // unreachable gateway, and the toolbar is the way to reach Gateway settings.
-                .disabled(self.isGatewayTransitionPending)
+            // Copy/Clear act only on retained local text and must remain reachable during handoff.
+                .disabled(self.isGatewayTransitionPending && self.viewModel?.hasUnsecuredLiveSendRecovery != true)
                 // The shared canvas supplies color for the native blur. Automatic
                 // edge effects harden to black when the host inserts an opaque fill.
                 .scrollEdgeEffectStyle(.soft, for: .vertical)
@@ -141,7 +142,9 @@ struct ChatProTab: View {
 
     @ViewBuilder
     private var chatSurface: some View {
-        if let viewModel {
+        if let viewModel, viewModel.hasUnsecuredLiveSendRecovery {
+            self.recoverySurface(viewModel: viewModel)
+        } else if let viewModel {
             let owner = self.appModel.chatPresentation
             let presentationID = owner.presentationID
             OpenClawChatView(
@@ -158,22 +161,23 @@ struct ChatProTab: View {
                 showsAssistantAvatars: self.horizontalSizeClass != .compact,
                 composerChrome: .clean,
                 isComposerEnabled: self.gatewayConnected || self.canQueueOffline,
-                isAttachmentInputEnabled: self.gatewayConnected || self.canQueueOffline,
+                isAttachmentInputEnabled: !viewModel.isLiveSendRecoveryPinned &&
+                    (self.gatewayConnected || self.canQueueOffline),
                 messagePlaceholder: self.messagePlaceholder,
                 emptyAssistantIntro: String(localized: "What would you like to work on?"),
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
                 talkControl: Self.shouldExposeCaptureControl(
-                    isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
+                    isAttachmentOwnerPinned: viewModel.isPresentationOwnerPinned,
                     isCaptureInFlight: self.appModel.talkMode.isEnabled) ? self.talkControl : nil,
                 dictationControl: Self.shouldExposeCaptureControl(
-                    isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
+                    isAttachmentOwnerPinned: viewModel.isPresentationOwnerPinned,
                     isCaptureInFlight: self.appModel.isChatDictationPending || self.appModel.isChatDictationActive)
                     ? self.dictationControl
                     : nil,
-                voiceNoteControl: self.voiceNoteControl,
-                speech: self.speech,
+                voiceNoteControl: viewModel.isLiveSendRecoveryPinned ? nil : self.voiceNoteControl,
+                speech: viewModel.isLiveSendRecoveryPinned ? nil : self.speech,
                 mediaPlaybackAllowed: {
-                    !self.appModel.talkMode.isEnabled &&
+                    !viewModel.isLiveSendRecoveryPinned && !self.appModel.talkMode.isEnabled &&
                         !self.appModel.talkMode.hasActivePushToTalkSession &&
                         !self.appModel.voiceNoteRecorder.ownsPendingChatAttachment
                 })
@@ -192,6 +196,34 @@ struct ChatProTab: View {
                 description: Text("The session attaches once the gateway is ready.")
                     .font(OpenClawType.body))
         }
+    }
+
+    private func recoverySurface(viewModel: OpenClawChatViewModel) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Message recovery")
+                .font(OpenClawType.headline)
+            Text(verbatim: viewModel.errorText ?? String(localized: "Copy or clear this draft to finish switching."))
+                .font(OpenClawType.body)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    ForEach(viewModel.retiredComposerRecoveryTexts, id: \.self) { text in
+                        Text(verbatim: text)
+                            .font(OpenClawType.body)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            Button {
+                guard self.appModel.chatPresentation.viewModel === viewModel else { return }
+                viewModel.clearRetiredComposerRecovery()
+            } label: {
+                Text("Clear recovered text and continue")
+                    .font(OpenClawType.body)
+            }
+            .accessibilityIdentifier("chat-clear-retired-draft")
+        }
+        .padding()
     }
 
     /// Voice activity owns the contour while gateway state stays a compact,
@@ -479,7 +511,7 @@ struct ChatProTab: View {
                 {
                     self.pendingChatAction = .newSessionOptions
                 }
-                if let viewModel {
+                if let viewModel, !viewModel.isLiveSendRecoveryPinned {
                     ChatModelControlsMenuItems(
                         viewModel: viewModel,
                         agentModelReference: self.activeAgentModelReference)
@@ -576,9 +608,10 @@ struct ChatProTab: View {
     }
 
     private var gatewayDisplayState: GatewayDisplayState {
-        Self.presentationGatewayState(
+        if self.viewModel?.isLiveSendRecoveryPinned == true { return .disconnected }
+        return Self.presentationGatewayState(
             current: GatewayStatusBuilder.buildChat(appModel: self.appModel),
-            isAttachmentOwnerPinned: self.isAttachmentOwnerPinned,
+            isAttachmentOwnerPinned: self.isPresentationOwnerPinned,
             capturedOwnerID: self.appModel.chatPresentation.ownerID,
             currentOwnerID: self.appModel.chatViewModelOwnerID)
     }
@@ -674,7 +707,7 @@ struct ChatProTab: View {
 
     private var canQueueOffline: Bool {
         self.viewModel?.supportsOfflineTextOutbox == true &&
-            (self.isAttachmentOwnerPinned
+            (self.isPresentationOwnerPinned
                 ? self.appModel.chatPresentation.hasVerifiedOfflineRoutingIdentity
                 : self.appModel.hasVerifiedChatOfflineRoutingIdentity)
     }
@@ -683,8 +716,8 @@ struct ChatProTab: View {
         ColorHexSupport.color(fromHex: self.appModel.gatewayAccentColorHex) ?? OpenClawBrand.accent
     }
 
-    private var isAttachmentOwnerPinned: Bool {
-        self.viewModel?.isAttachmentOwnerPinned == true
+    private var isPresentationOwnerPinned: Bool {
+        self.viewModel?.isPresentationOwnerPinned == true
     }
 
     private var currentAgentID: String {
@@ -696,7 +729,7 @@ struct ChatProTab: View {
     }
 
     private var activeAgentID: String {
-        self.isAttachmentOwnerPinned ? self.appModel.chatPresentation.presentationAgentID : self.currentAgentID
+        self.isPresentationOwnerPinned ? self.appModel.chatPresentation.presentationAgentID : self.currentAgentID
     }
 
     private var activeAgent: AgentSummary? {
@@ -715,7 +748,7 @@ struct ChatProTab: View {
     }
 
     private var agentDisplayName: String {
-        self.isAttachmentOwnerPinned ? self.appModel.chatPresentation.presentationAgentName : self
+        self.isPresentationOwnerPinned ? self.appModel.chatPresentation.presentationAgentName : self
             .currentAgentDisplayName
     }
 
@@ -726,7 +759,7 @@ struct ChatProTab: View {
     }
 
     private var agentBadge: String {
-        self.isAttachmentOwnerPinned ? self.appModel.chatPresentation.presentationAgentBadge : self.currentAgentBadge
+        self.isPresentationOwnerPinned ? self.appModel.chatPresentation.presentationAgentBadge : self.currentAgentBadge
     }
 
     nonisolated static let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [

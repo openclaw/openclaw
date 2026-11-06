@@ -423,6 +423,11 @@ struct OpenClawTypographyTests {
         #expect(menu.contains("Text(self.title)"))
         #expect(menu.contains(".font(OpenClawType.body)"))
         #expect(menu.contains(".font(OpenClawType.caption)"))
+        let recovery = try Self.extract(chatTab, from: "private func recoverySurface", to: "/// Voice activity")
+            .filter { !$0.isWhitespace }
+        #expect(recovery.contains("Text(\"Messagerecovery\").font(OpenClawType.headline)"))
+        #expect(recovery.contains("Text(verbatim:text).font(OpenClawType.body)"))
+        #expect(recovery.contains("Text(\"Clearrecoveredtextandcontinue\").font(OpenClawType.body)"))
     }
 
     @Test func `chat copy and select text surfaces use branded typography`() throws {

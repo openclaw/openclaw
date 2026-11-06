@@ -22,7 +22,7 @@ final class IOSChatViewModelOwner {
 
     private var hasPendingSend: Bool {
         guard let viewModel else { return false }
-        return viewModel.isSubmittingDraft || viewModel.pendingRunCount > 0
+        return viewModel.isSubmittingDraft || viewModel.hasUnsecuredLiveSendRecovery || viewModel.pendingRunCount > 0
     }
 
     func sync(appModel: NodeAppModel) {
@@ -63,6 +63,13 @@ final class IOSChatViewModelOwner {
            Self.transportAgentID(appModel.selectedAgentId).isEmpty,
            self.routingContract.isEmpty || self.routingContract == routingContract
         {
+            self.observePendingSend(appModel: appModel)
+            return
+        }
+        if let viewModel, viewModel.isSubmittingDraft || viewModel.hasUnsecuredLiveSendRecovery {
+            // Revoke the retired route immediately, but keep its composer reachable
+            // until the send has durable custody or the user clears the recovered draft.
+            viewModel.detachTransport()
             self.observePendingSend(appModel: appModel)
             return
         }

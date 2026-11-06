@@ -100,7 +100,10 @@ private actor ChatSendHydrationGateway {
             let text = try XCTUnwrap(params["message"] as? String)
             let runID = try XCTUnwrap(params["idempotencyKey"] as? String)
             self.messages.append(SentMessage(
-                id: UUID().uuidString, text: text, runID: runID, sessionKey: Self.sessionKey(params),
+                id: UUID().uuidString,
+                text: text,
+                runID: runID,
+                sessionKey: Self.sessionKey(params),
                 timestamp: Date().timeIntervalSince1970 * 1000))
             payload = ["runId": runID, "status": self.acknowledgesStartedRun ? "started" : "ok"]
         case "agent.wait":
@@ -163,13 +166,16 @@ final class ChatSendHydrationTests: XCTestCase {
         case pendingHealth
         case startedAcknowledgement
         case differentAccount
+        case differentAccountNewerDraft
+        case differentAccountClearedDraft
         case explicitAgent
         case differentSession
 
         var permitsSend: Bool {
             switch self {
             case .unchanged, .beforeTask, .pendingHealth, .startedAcknowledgement: true
-            case .differentAccount, .explicitAgent, .differentSession: false
+            case .differentAccount, .differentAccountNewerDraft, .differentAccountClearedDraft,
+                 .explicitAgent, .differentSession: false
             }
         }
     }
@@ -181,13 +187,31 @@ final class ChatSendHydrationTests: XCTestCase {
     }
 
     func testExplicitRoutingChangesInvalidatePendingSend() async throws {
-        for transition in [Transition.differentAccount, .explicitAgent, .differentSession] {
+        for transition in [
+            Transition.differentAccount, .differentAccountNewerDraft, .differentAccountClearedDraft,
+            .explicitAgent, .differentSession,
+        ] {
             try await self.checkSend(transition)
         }
     }
 
     func testStartedRunKeepsOptimisticTurnUntilCompletion() async throws {
         try await self.checkSend(.startedAcknowledgement)
+    }
+
+    private func completeStartedRun(
+        owner: IOSChatViewModelOwner,
+        gateway: ChatSendHydrationGateway,
+        text: String) async throws
+    {
+        let pendingModel = try XCTUnwrap(owner.viewModel)
+        XCTAssertEqual(pendingModel.pendingRunCount, 1)
+        XCTAssertEqual(
+            pendingModel.messages.filter { $0.role == "user" && $0.content.contains { $0.text == text } }.count,
+            1,
+            "A started acknowledgement must retain the submitted turn while canonical history lags.")
+        await gateway.waitForRunObservation()
+        try await gateway.completeRun()
     }
 
     private func checkSend(_ transition: Transition) async throws {
@@ -204,8 +228,13 @@ final class ChatSendHydrationTests: XCTestCase {
         options.deviceAuthGatewayID = stableID
         func config(token: String) -> GatewayConnectConfig {
             GatewayConnectConfig(
-                url: url, stableID: stableID, tls: nil, token: token,
-                bootstrapToken: nil, password: nil, nodeOptions: options)
+                url: url,
+                stableID: stableID,
+                tls: nil,
+                token: token,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: options)
         }
         appModel.activeGatewayConnectConfig = config(token: "synthetic-first-account")
         let owner = appModel.chatPresentation
@@ -265,7 +294,9 @@ final class ChatSendHydrationTests: XCTestCase {
                     break
                 case .pendingHealth, .startedAcknowledgement:
                     appModel.gatewayDefaultAgentId = "main"
-                case .differentAccount:
+                case .differentAccount, .differentAccountNewerDraft, .differentAccountClearedDraft:
+                    if transition == .differentAccountNewerDraft { composer.input = "Newer unsent draft" }
+                    if transition == .differentAccountClearedDraft { composer.input = "" }
                     appModel.gatewayDefaultAgentId = "main"
                     appModel.activeGatewayConnectConfig = config(token: "synthetic-second-account")
                 case .explicitAgent:
@@ -284,19 +315,26 @@ final class ChatSendHydrationTests: XCTestCase {
             await ChatSendHydrationObservation.wait {
                 !original.isSending && !original.isSubmittingDraft
             }
+            if !transition.permitsSend {
+                XCTAssertTrue(owner.viewModel === original, "Unsecured recovery must keep its existing owner.")
+                let expectedInput = transition == .differentAccountNewerDraft
+                    ? "Newer unsent draft" : transition == .differentAccountClearedDraft ? "" : text
+                XCTAssertEqual(owner.viewModel?.input, expectedInput)
+                XCTAssertTrue(original.retiredComposerRecoveryTexts.contains(text))
+                if transition == .differentAccountNewerDraft {
+                    XCTAssertTrue(original.retiredComposerRecoveryTexts.contains("Newer unsent draft"))
+                }
+                XCTAssertNil(owner.composerModelResolver()())
+                XCTAssertFalse(original.canSend, "The retired transport must not regain send authority.")
+                XCTAssertNil(original.send())
+                original.clearRetiredComposerRecovery()
+            }
             if transition == .startedAcknowledgement {
                 XCTAssertEqual(original.pendingRunCount, 1)
                 XCTAssertEqual(original.messages.filter { $0.role == "user" }.count, 1)
             }
             if transition == .startedAcknowledgement {
-                let pendingModel = try XCTUnwrap(owner.viewModel)
-                XCTAssertEqual(pendingModel.pendingRunCount, 1)
-                XCTAssertEqual(
-                    pendingModel.messages.filter { $0.role == "user" && $0.content.contains { $0.text == text } }.count,
-                    1,
-                    "A started acknowledgement must retain the submitted turn while canonical history lags.")
-                await gateway.waitForRunObservation()
-                try await gateway.completeRun()
+                try await self.completeStartedRun(owner: owner, gateway: gateway, text: text)
             }
             // The owner must apply deferred identity itself after accepted send activity settles.
             await ChatSendHydrationObservation.wait {
@@ -316,7 +354,7 @@ final class ChatSendHydrationTests: XCTestCase {
             }
             XCTAssertEqual(sent, transition.permitsSend ? [text] : [], transition.rawValue)
             XCTAssertEqual(userRows.count, transition.permitsSend ? 1 : 0, transition.rawValue)
-            XCTAssertEqual(current.input, transition == .explicitAgent ? text : "", transition.rawValue)
+            XCTAssertEqual(current.input, "", transition.rawValue)
             owner.viewModel?.detachTransport()
             await appModel.operatorSession.disconnect()
         } catch {

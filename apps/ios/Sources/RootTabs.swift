@@ -20,7 +20,7 @@ struct RootTabs: View {
         let routingContract: String?
         let isConnected: Bool
         let isRecording: Bool
-        let isAttachmentOwnerPinned: Bool
+        let isPresentationOwnerPinned: Bool
         let newChatRequestID: Int
         let authority: GatewayConnectConfig.ControlUIInputs?
     }
@@ -146,6 +146,7 @@ struct RootTabs: View {
                 guard !Task.isCancelled else { return }
                 self.appModel.chatPresentation.sync(appModel: self.appModel)
                 if let viewModel = self.appModel.chatPresentation.viewModel,
+                   !viewModel.isLiveSendRecoveryPinned,
                    self.appModel.consumeNewChatRequest(self.appModel.newChatRequestID)
                 {
                     _ = await viewModel.startNewSession()
@@ -160,7 +161,7 @@ struct RootTabs: View {
             routingContract: self.appModel.chatSessionRoutingContract,
             isConnected: self.appModel.isOperatorGatewayConnected,
             isRecording: self.appModel.voiceNoteRecorder.ownsPendingChatAttachment,
-            isAttachmentOwnerPinned: self.appModel.chatPresentation.viewModel?.isAttachmentOwnerPinned == true,
+            isPresentationOwnerPinned: self.appModel.chatPresentation.viewModel?.isPresentationOwnerPinned == true,
             newChatRequestID: self.appModel.newChatRequestID,
             authority: self.appModel.activeGatewayConnectConfig?.controlUIInputs)
     }

@@ -6749,6 +6749,7 @@ struct ChatViewModelTests {
         #expect(await transport.sentRunIds().count == 1)
         #expect(await MainActor.run { vm.errorText } == "Chat failed before the run started; try again.")
         #expect(await MainActor.run { !vm.messages.containsUserText("first") })
+        #expect(await MainActor.run { vm.input } == "first")
 
         await sendUserMessage(vm, text: "second")?.value
         #expect(await transport.sentRunIds().count == 2)
@@ -11287,7 +11288,8 @@ struct ChatViewModelTests {
         })
     }
 
-    @Test @MainActor func `send waiting for model patch does not send after session switch`() async throws {
+    @Test(arguments: ["untouched", "newer", "cleared"]) @MainActor
+    func `send waiting for model patch preserves its original draft after session switch`(edit: String) async throws {
         let modelPatchGate = SessionSubscribeGate()
         let modelPatchReleasedCount = AsyncCounter()
         let models = [modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai")]
@@ -11308,6 +11310,7 @@ struct ChatViewModelTests {
         await modelPatchGate.waitUntilBlocked()
         #expect(await transport.patchedModels() == ["openai/gpt-5.4"])
 
+        defer { vm.detachTransport() }
         vm.input = "hello before switch"
         let send = vm.send()
         await waitForObservedState { vm.pendingRunCount == 1 }
@@ -11315,12 +11318,28 @@ struct ChatViewModelTests {
         vm.syncSession(to: "other")
         await vm.bootstrapTask?.value
         #expect(vm.sessionKey == "other" && vm.sessionId == "sess-other" && vm.pendingRunCount == 0)
+        if edit != "untouched" {
+            vm.syncSession(to: "main")
+            vm.input = "newer original draft"
+            if edit == "cleared" { vm.input = "" }
+            vm.syncSession(to: "other")
+        }
+        vm.input = "destination draft"
 
         await modelPatchGate.release()
         await send?.value
         #expect(await modelPatchReleasedCount.current() == 1)
 
         #expect(await transport.sentRunIds().isEmpty)
+        #expect(vm.input == "destination draft")
+        vm.syncSession(to: "main")
+        let expected = switch edit {
+        case "newer": "newer original draft"
+        case "cleared": ""
+        default: "hello before switch"
+        }
+        #expect(vm.input == expected)
+        await vm.bootstrapTask?.value
     }
 
     @Test @MainActor func `stale sync bootstrap restores current active session subscription`() async throws {
