@@ -22,9 +22,9 @@ const enOpenClawIdDialogs = {
     revoke: "Remove access",
     revokeConfirm: "Remove access for {device}",
     revokeOne:
-      "This browser disconnects now. To use it again, approve it from another device or use your recovery kit.",
+      "{device} disconnects now. To use it again, approve it from another device or use your recovery kit.",
     revokeCascade:
-      "This browser loses access now, and so do the devices it approved: {devices}. To restore access, approve them from another device or use your recovery kit.",
+      "{device} loses access now, and so do the devices it approved: {devices}. To restore access, approve them from another device or use your recovery kit.",
     notOwnerDevice:
       "This browser can view devices but cannot remove their access. Use one of your approved owner browsers to make changes.",
     recoveryKitLine:

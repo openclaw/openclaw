@@ -85,9 +85,10 @@ function DeviceRow(props: {
           <p class="muted openclaw-id-devices__hint" role="note">
             {props.approved.length > 0
               ? t("openclawId.revokeCascade", {
+                  device: props.device.label,
                   devices: props.approved.map((device) => device.label).join(", "),
                 })
-              : t("openclawId.revokeOne")}
+              : t("openclawId.revokeOne", { device: props.device.label })}
           </p>
         </Show>
       </div>

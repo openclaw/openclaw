@@ -1,4 +1,5 @@
 # OpenClaw ID Control UI and Access plugin: new tests for the account menu, linking and recovery-kit
 # dialogs, owner approval, Access page and Labs-off parity. No existing tests replaced.
 # Includes one-preparation, owner-key custody, IndexedDB commit and Labs-off dialog regressions.
-3662
+# Includes the Your devices removal-preview regression (names the removed device).
+3683
