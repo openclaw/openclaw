@@ -65,6 +65,8 @@ export type ConfigNodeRenderParams = {
   showHeaderMeta?: boolean;
   /** Keep every nested group of settings closed until it is opened. */
   collapseObjects?: boolean;
+  /** Yield initial collection rows with the form's first-visit presentation. */
+  progressive?: boolean;
   /** State worth reading without opening a nested group, shown on its summary row. */
   summarizeObject?: (path: Array<string | number>, value: unknown) => JSX.Element;
   searchCriteria?: ConfigSearchCriteria;
@@ -94,6 +96,7 @@ export function configChildRenderOptions(params: ConfigNodeRenderParams) {
     compact: params.compact,
     commitOnBlur: params.commitOnBlur,
     collapseObjects: params.collapseObjects,
+    progressive: params.progressive,
     summarizeObject: params.summarizeObject,
     revealSensitive: params.revealSensitive,
     isSensitivePathRevealed: params.isSensitivePathRevealed,

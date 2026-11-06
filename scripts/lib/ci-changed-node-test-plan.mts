@@ -48,6 +48,7 @@ import {
   normalizeSingletonNodeTestJob,
   nodeTestConfigRequiresCanonicalMetadata,
   resolveCanonicalNodeTestConfig,
+  resolveCompleteCanonicalNodeTestConfig,
   isCanonicalNodeTestConfig,
   isRuntimeTestFileIncluded,
   SOURCE_CHANNEL_TEST_POLICY,
@@ -410,6 +411,20 @@ const protectedRuntimeTestFiles = new Set(PR_PROTECTED_RUNTIME_TEST_FILES);
 // opt-in scripts/control-ui-retention census, keep their own config and command.
 const CHANGED_TEST_ROOTS = ["src", "test", "extensions", "packages", "ui"];
 
+function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
+  // Canonical inventories resolve against the process root, even for explicit targets.
+  if (
+    path.resolve(cwd) !== process.cwd() ||
+    !isTestFileTarget(file) ||
+    !lstatSync(path.resolve(cwd, file), { throwIfNoEntry: false })?.isFile()
+  ) {
+    return false;
+  }
+  const config = resolveCompleteCanonicalNodeTestConfig(file, buildVitestRunPlans([file], cwd));
+  // Companions must execute outside the Markdown worker.
+  return config !== undefined && config !== "test/vitest/vitest.markdown.config.ts";
+}
+
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
 export function resolveChangedNodeTestTargets(
   changedPaths: string[],
@@ -428,7 +443,9 @@ export function resolveChangedNodeTestTargets(
     boundedOwners: true,
     baseRef: options.baseRef,
     aggressive: aggressive ? { maxDirectImporters: 20, maxDirectoryTests: 30 } : undefined,
-    adaptiveMarkdown: options.adaptiveMarkdown,
+    adaptiveMarkdown: options.adaptiveMarkdown
+      ? { isIndependentCompanion: (file) => isIndependentMarkdownCompanion(file, cwd) }
+      : undefined,
     combineSiblingWithImportGraph: true,
     resolveAliases: true,
     runtimeOnly: true,

@@ -88,6 +88,8 @@ view lifecycle, and recovery.
 
 Validation refusals, such as a missing plugin manifest or an unsupported archive
 extension, print their specific reason and exit with status `1`.
+If the compiler is missing, the CLI asks you to install `esbuild` in the plugin's
+`devDependencies`, then run `plugins build` again.
 
 ### Provider scaffold
 

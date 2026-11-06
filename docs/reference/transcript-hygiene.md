@@ -80,6 +80,12 @@ Direct Anthropic Messages append-only replay also keeps failed and recovered
 assistant frames separate, along with consecutive user turns. Strict routes
 retain their role-merging behavior.
 
+User-row merging happens at submission, after the current input is resolved.
+Runtime-context carriers and operator updates remain separate from user input,
+preserving their authority and cache boundaries. Bedrock Converse still merges
+all adjacent user rows to satisfy its alternation requirement, including `/btw`
+requests. History limits count adjacent input rows as one turn on merging routes.
+
 ## Global rule: runtime context is not user transcript
 
 Runtime/system context can be added to the model prompt for a turn, but it is

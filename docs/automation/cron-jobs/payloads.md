@@ -256,6 +256,11 @@ Doctor uses normal automation model selection, preserves inherited defaults and
 fallback lists, leaves existing bindings unchanged, and backs up cron state before
 committing. Missing accounts, and personal accounts needing their owner's
 authorization, are left unchanged with job-specific adoption instructions.
+Run `openclaw doctor --lint` to preview missing bindings. Add `--all` to inspect
+unavailable profiles referenced by saved account order. An empty per-agent credential store
+can be valid when credentials are inherited from the shared store; Doctor checks
+effective credentials before reporting a missing profile. It does not remove a
+missing profile from account order or recreate its credentials automatically.
 
 Managed updates and the standard container entrypoint run repairing Doctor before
 activation. A manual source upgrade must include `openclaw doctor --fix` before

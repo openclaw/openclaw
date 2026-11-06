@@ -175,6 +175,11 @@
   padding-top: 0;
 }
 
+/* Keep Setup from painting above its final position while form sections append. */
+.config-content > .settings-page[aria-busy="true"] + .settings-page {
+  visibility: hidden;
+}
+
 .config-content-callout .callout {
   display: flex;
   align-items: center;

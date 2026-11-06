@@ -49,6 +49,7 @@ import {
   isGatewayServerTestFile,
 } from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
+import { markdownTestFiles } from "../test/vitest/vitest.markdown-paths.mjs";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
 import { isSharedVitestExcludedPath } from "../test/vitest/vitest.pattern-file.ts";
 import {
@@ -134,10 +135,10 @@ import {
   resolveLocalFullSuiteProfile,
   type VitestHostInfo,
 } from "./lib/vitest-local-scheduling.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-node-args.mts";
 import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
   resolveDefaultVitestNoOutputTimeoutMs,
-  resolveVitestNodeArgs,
 } from "./lib/vitest-process-env.mts";
 import {
   estimateVitestTestFileSeconds,
@@ -177,7 +178,7 @@ type ChangedTestTargetOptions = {
   combineSiblingWithImportGraph?: boolean;
   boundedOwners?: boolean;
   aggressive?: { maxDirectImporters: number; maxDirectoryTests: number };
-  adaptiveMarkdown?: boolean;
+  adaptiveMarkdown?: { isIndependentCompanion: (file: string) => boolean };
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
   forceFullImportGraph?: boolean;
   resolveAliases?: boolean;
@@ -333,6 +334,7 @@ const LOGGING_VITEST_CONFIG = "test/vitest/vitest.logging.config.ts";
 const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk-light.config.ts";
 const PLUGIN_SDK_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk.config.ts";
 const PLUGINS_VITEST_CONFIG = "test/vitest/vitest.plugins.config.ts";
+const MARKDOWN_VITEST_CONFIG = "test/vitest/vitest.markdown.config.ts";
 const UNIT_FAST_VITEST_CONFIG = "test/vitest/vitest.unit-fast.config.ts";
 const UNIT_FAST_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.unit-fast-isolated.config.ts";
 const UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG = "test/vitest/vitest.unit-fast-fake-timers.config.ts";
@@ -527,6 +529,7 @@ const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const FAILED_SHARD_DIGEST_LIMIT = 12;
 const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND: Record<string, string> = {
+  markdown: MARKDOWN_VITEST_CONFIG,
   unitFast: UNIT_FAST_VITEST_CONFIG,
   unitFastIsolated: UNIT_FAST_ISOLATED_VITEST_CONFIG,
   unitFastFakeTimers: UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG,
@@ -2801,18 +2804,18 @@ export function resolveImportGraphDependents(
 }
 
 /** Fingerprint current workspace inputs from the same graph that selects their consumers. */
-export function createTestInputFingerprint(cwd = process.cwd()) {
+export function createTestInputFingerprint(cwd = process.cwd(), additionalPaths: string[] = []) {
   let dependencies: Map<string, string[]> | undefined;
   const hashes = new Map<string, string | null>();
   return (roots: string[]): string | null => {
     try {
       if (!dependencies) {
         dependencies = new Map();
-        const graph = getImportGraph(cwd, {
-          tooling: true,
-          resolveAliases: true,
-          runtimeOnly: true,
-        });
+        const graph = getImportGraph(
+          cwd,
+          { tooling: true, resolveAliases: true, runtimeOnly: true },
+          additionalPaths,
+        );
         for (const [dependency, importers] of graph.reverseImports) {
           for (const importer of importers) {
             const inputs = dependencies.get(importer) ?? [];
@@ -4705,8 +4708,10 @@ function resolveBoundedChangedTestTargetPlan(
     options.aggressive && options.adaptiveMarkdown
       ? createAdaptiveMarkdownFilter(
           changedPaths,
-          createTestInputFingerprint(cwd),
+          createTestInputFingerprint(cwd, changedPaths),
           adaptiveMarkdownQualification,
+          options.adaptiveMarkdown.isIndependentCompanion,
+          cwd,
         )
       : (owners: string[]) => owners;
   const graphOptions = {
@@ -5084,6 +5089,12 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   if (isCliProcessTestFile(relative)) {
     return "cliProcess";
   }
+  if (
+    markdownTestFiles.includes(relative) ||
+    markdownTestFiles.includes(relative.replace(/\.ts$/u, ".test.ts"))
+  ) {
+    return "markdown";
+  }
   if (resolveUnitFastTimerTestIncludePattern(relative)) {
     return "unitFastFakeTimers";
   }
@@ -5237,6 +5248,12 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
 
 function resolveLightLaneIncludePatterns(kind: string, targetArg: string, cwd: string) {
   const relative = toRepoRelativeTarget(targetArg, cwd);
+  if (kind === "markdown") {
+    const test = markdownTestFiles.includes(relative)
+      ? relative
+      : relative.replace(/\.ts$/u, ".test.ts");
+    return markdownTestFiles.includes(test) ? [test] : null;
+  }
   if (kind === "unitFast") {
     const includePattern = resolveUnitFastTestIncludePattern(relative);
     return includePattern ? [includePattern] : null;

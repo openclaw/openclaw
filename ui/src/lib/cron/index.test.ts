@@ -46,6 +46,21 @@ function newJob(jobId: string, form: Partial<CronState["cronForm"]> = {}) {
   return { request, state, submit };
 }
 
+it.each(["imperative", "declarative"] as const)(
+  "preserves the successful create warning for %s results",
+  async (kind) => {
+    const { request, state, submit } = newJob("retention-warning");
+    const job = createCronJob("retention-warning", "Synthetic warning");
+    const warning = "Protected actions require a restartable operator grant";
+    request.mockResolvedValueOnce(
+      kind === "imperative" ? { ...job, warning } : { created: true, job, warning },
+    );
+    expect((await submit()).result).toEqual({ saved: true, jobId: job.id });
+    expect(state.cronNotice).toBe(warning);
+    expect(state.cronError).toBeNull();
+  },
+);
+
 type Rejection = { form: Partial<CronState["cronForm"]>; field: string; error: string };
 
 function editJob(

@@ -224,10 +224,24 @@ failure recall, graph completeness, and net savings including collection cost.
 
 Canonical pull requests in aggressive selection mode can omit nine qualified
 Markdown tests from the conventional directory fallback. This applies only when
-every changed path is a Markdown source module. Explicit owners, changed tests,
+the change includes a Markdown source module and otherwise contains only test
+budget allocations, regular JavaScript/TypeScript production sources under
+`src`, `extensions` or `packages`, or companion tests with a verified separate CI process.
+Companion tests must have one explicit, complete canonical owner outside the
+shared Markdown worker. Same-worker tests, unknown owners, helpers, fixtures,
+missing or symlinked companion sources, and tooling/configuration changes retain
+full coverage. A changed production companion that affects a qualified test's
+input fingerprint retains that test. Independently checked docs
+keep their existing selection rules. Explicit owners, changed tests,
 import consumers, policy checks and smoke tests retain their existing selection.
 The stateful table test is outside this pilot. Scheduled, main and release runs
 retain their existing full coverage.
+
+Ten pure Markdown test files run in the dedicated `core-markdown` owner. It
+shares Node worker policy, hermetic environment setup, output redaction and
+resource controls with other lanes, without their application transforms or
+custom cleanup runner. The table test keeps its existing unit owner. New tests
+keep the ordinary ownership rules until explicitly moved into this lane.
 
 `config/ci-adaptive-markdown.json` records reviewed input fingerprints. The
 selector uses its existing import graph to hash each test's current transitive
@@ -241,6 +255,10 @@ Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to disable the pilot
 along with aggressive selection. Refresh fingerprints only after reviewing the
 changed input closure and repeating full-versus-selected Node/Bun proof, including
 an injected regression. A successful provider call does not qualify a test.
+
+The Markdown worker reads Node execution flags independently of the test watchdog
+and its other-lane inventories. Updating an unrelated lane's test list does not
+invalidate Markdown qualification. Changes to the Node flag policy still do.
 
 ## Plan in shadow mode
 

@@ -110,7 +110,9 @@ of this skill; initial generation must never overwrite them.
 
    Add repeatable `--release-provenance '<40sha> -> #PR[, #PR]'` inputs when
    release commits cannot carry provenance metadata. These use the same exact
-   marker grammar and current-main validation as commit-body markers.
+   marker grammar and source validation as commit-body markers. A merged
+   release-branch original is valid only while no corresponding current-main
+   forward-port exists; its GitHub merge commit pins the original source.
 
    The verifier automatically reuses public GitHub GraphQL responses from an
    exact base/target SHA snapshot under the worktree's git metadata. Iterative

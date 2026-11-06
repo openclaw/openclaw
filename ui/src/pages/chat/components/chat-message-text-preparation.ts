@@ -3,7 +3,7 @@ import {
   MARKDOWN_PARSE_LIMIT,
   type MarkdownRenderOptions,
 } from "../../../components/markdown-render-options.ts";
-import { partitionMarkdownHtml, toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { partitionMarkdownHtml, toSanitizedMarkdownContent } from "../../../components/markdown.ts";
 import { markdownContentHtml, type MarkdownContent } from "../../../lib/markdown-content.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 
@@ -44,10 +44,14 @@ export function prepareMessageMarkdown(
     : markdownRenderOptions;
   const streaming = opts.isStreaming;
   const prepare = () => {
-    let parts: [MarkdownContent, MarkdownContent] =
-      streaming && renderStreaming
-        ? renderStreaming(source, options, isAssistant ? messageKey : undefined)
-        : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
+    let parts: [MarkdownContent, MarkdownContent];
+    if (streaming && renderStreaming) {
+      parts = renderStreaming(source, options, isAssistant ? messageKey : undefined);
+    } else {
+      const content = toSanitizedMarkdownContent(source, options);
+      const [stable, tail] = partitionMarkdownHtml(markdownContentHtml(content), messageKey);
+      parts = [tail ? stable : content, tail];
+    }
     if (mutableStreaming) {
       parts = ["", markdownContentHtml(parts[0]) + markdownContentHtml(parts[1])];
     }

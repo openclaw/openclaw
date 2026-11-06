@@ -265,7 +265,6 @@ div.chat-thread:where(.chat-thread--annotations) {
 
 .chat-group-messages {
   --chat-message-gap: 2px;
-  --chat-message-type-boundary-gap: var(--space-1);
   position: relative; /* anchors message-local popovers */
   display: flex;
   flex-direction: column;
@@ -1205,7 +1204,6 @@ openclaw-chat-sidebar-region,
   --desktop-panel-height: calc(100% - var(--desktop-header-height));
   --desktop-panel-start: 100%;
   --desktop-panel-top: 0px;
-  --desktop-frame-motion: var(--chat-details-motion);
   grid-template-columns: minmax(0, 1fr) var(--desktop-divider-reserve) minmax(
       0,
       var(--desktop-side-reserve)
@@ -1213,8 +1211,8 @@ openclaw-chat-sidebar-region,
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas: "main-header divider side-header" "main divider side";
   transition:
-    grid-template-columns var(--desktop-frame-motion),
-    grid-template-rows var(--desktop-frame-motion);
+    grid-template-columns var(--chat-details-motion),
+    grid-template-rows var(--chat-details-motion);
 }
 
 /* Animate the shared gutter once: the conversation, scrollport, and reading
@@ -1408,12 +1406,12 @@ openclaw-chat-sidebar-region,
   height: var(--desktop-panel-height);
   opacity: 1;
   transition:
-    top var(--desktop-frame-motion),
-    inset-inline-start var(--desktop-frame-motion),
-    width var(--desktop-frame-motion),
-    height var(--desktop-frame-motion),
-    opacity var(--desktop-frame-motion),
-    display var(--desktop-frame-motion) allow-discrete;
+    top var(--chat-details-motion),
+    inset-inline-start var(--chat-details-motion),
+    width var(--chat-details-motion),
+    height var(--chat-details-motion),
+    opacity var(--chat-details-motion),
+    display var(--chat-details-motion) allow-discrete;
 }
 
 .sidebar-region--desktop [data-region-header="side"] {

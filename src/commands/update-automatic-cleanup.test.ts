@@ -621,8 +621,10 @@ it("does not retire artifacts when another process owns live state", async () =>
         throw new Error("Foreign owner exited before acquiring its lock");
       }),
     ]);
+    vi.spyOn(performance, "now").mockReturnValueOnce(5).mockReturnValue(29);
     const result = await automaticallyCleanUpdateRecovery(second, env);
     expect(result?.advisory?.message).toMatch(/owner|ownership|Gateway/);
+    expect(result?.durationMs).toBe(24);
     expect(fs.existsSync(original)).toBe(true);
     expect(getUpdateRun(second, { env })?.status).toBe("succeeded");
   } finally {
