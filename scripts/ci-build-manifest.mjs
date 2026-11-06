@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
+import { isTestFileTarget } from "./lib/changed-path-facts.mjs";
 import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
@@ -1020,6 +1021,16 @@ const runSqliteSessionLifecycle =
   supportsSqliteSessionLifecycleProof &&
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
+const postgresConformancePlan = existsSync("scripts/lib/postgres-conformance-shards.mts")
+  ? await import(fromTarget("./scripts/lib/postgres-conformance-shards.mts"))
+  : {};
+if (
+  "isPostgresConformanceTestTarget" in postgresConformancePlan &&
+  typeof postgresConformancePlan.isPostgresConformanceTestTarget !== "function"
+) {
+  throw new Error("PostgreSQL conformance test ownership must be a function");
+}
+const { isPostgresConformanceTestTarget } = postgresConformancePlan;
 const postgresConformancePaths = [
   ".github/actions/postgres-conformance/**",
   "**/*.postgres.test.ts",
@@ -1115,7 +1126,15 @@ const runPostgresConformance =
         changedPaths.some(
           (file) =>
             !changedNodeTestPlan.isCiDocumentationPath?.(file) &&
-            postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
+            (isPostgresConformanceTestTarget?.(file) ||
+              postgresConformancePaths.some(
+                (pattern) =>
+                  matchesGlob(file, pattern) &&
+                  // Older targets lack inventory ownership; retain their broad routing.
+                  (!isPostgresConformanceTestTarget ||
+                    !isTestFileTarget(file) ||
+                    isTestFileTarget(pattern)),
+              )),
         ))));
 const runBuildArtifacts =
   runBuiltSourceVerifiers ||
