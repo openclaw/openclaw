@@ -105,6 +105,9 @@ function makeReachableBlocker(status: OpenClawIdStatusResult): string | undefine
   if (status.channel !== "local_operator") {
     return t("openclawId.makeReachableLocalOnly");
   }
+  if (openClawIdAccount()?.previewAccess === false) {
+    return t("openclawId.privatePreviewRequired");
+  }
   return status.services.loaderDomain ? undefined : t("openclawId.needsLoaderDomain");
 }
 
@@ -121,6 +124,9 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
           ? t("openclawId.signInUnconfigured")
           : undefined;
     return [
+      ...(status.services.environment === "staging"
+        ? [statusRow("environment", t("openclawId.stagingPreview"), "info")]
+        : []),
       {
         id: SIGN_IN,
         label: t("openclawId.signIn"),
@@ -148,6 +154,9 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
       content: <div class="sidebar-customize-menu__title">{t("openclawId.menuTitle")}</div>,
     },
   ];
+  if (status.services.environment === "staging") {
+    entries.push(statusRow("environment", t("openclawId.stagingPreview"), "info"));
+  }
   if (status.channel === "tunnel") {
     const connection = status.connection;
     const detail =
@@ -177,6 +186,16 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
     if (status.channel === "local_operator") {
       entries.push(renderSidebarMenuAction(COPY_LINK, t("openclawId.copyRemoteLink"), "link"));
     }
+  } else if (openClawIdAccount()?.previewAccess === false) {
+    entries.push(
+      statusRow(
+        "preview",
+        t("openclawId.privatePreview", {
+          email: openClawIdAccount()?.email ?? t("openclawId.accountFallback"),
+        }),
+        "lock",
+      ),
+    );
   } else {
     const blocker = makeReachableBlocker(status);
     entries.push(
@@ -206,7 +225,17 @@ export function openClawIdSignOutEntries(status: OpenClawIdStatusResult | null):
       ? Boolean(navigator.serviceWorker?.controller)
       : status.channel === "local_operator" && Boolean(openClawIdAccount());
   return available
-    ? [renderSidebarMenuAction(SIGN_OUT, t("openclawId.signOut"), "arrowRight")]
+    ? [
+        renderSidebarMenuAction(
+          SIGN_OUT,
+          t(
+            status.channel !== "tunnel" && openClawIdAccount()?.previewAccess === false
+              ? "openclawId.useAnotherAccount"
+              : "openclawId.signOut",
+          ),
+          "arrowRight",
+        ),
+      ]
     : [];
 }
 
@@ -238,6 +267,10 @@ function offerMakeReachable(
   status: OpenClawIdStatusResult | null,
   account: string,
 ) {
+  if (openClawIdAccount()?.previewAccess === false && !status?.link.linked) {
+    showToast({ severity: "info", message: t("openclawId.privatePreview", { email: account }) });
+    return;
+  }
   const loaderDomain = status?.services.loaderDomain;
   if (!status || status.link.linked || !loaderDomain || makeReachableBlocker(status)) {
     showToast({ severity: "success", message: t("openclawId.signedIn", { account }) });
@@ -306,7 +339,12 @@ export function selectOpenClawIdMenuValue(
           durationMs: 12_000,
         }),
     );
-  } else if (value === MAKE_REACHABLE && client && status?.services.loaderDomain) {
+  } else if (
+    value === MAKE_REACHABLE &&
+    client &&
+    status?.services.loaderDomain &&
+    !makeReachableBlocker(status)
+  ) {
     startMakeReachable(client, status.services.loaderDomain);
   }
   return true;

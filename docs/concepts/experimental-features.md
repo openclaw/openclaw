@@ -307,21 +307,16 @@ remote access**, or in config:
   gateway: {
     openclawId: {
       enabled: true,
-      relayUrl: "https://relay.example.com/",
-      // Needed to turn on remote access for a claw from the account menu
-      // (you sign in with OpenClaw ID first, which needs clientId):
-      issuerUrl: "https://id.example.com/api/auth",
-      clientId: "<public PKCE client id>",
-      discoveryUrl: "https://discovery.example.com",
-      loaderDomain: "claws.example.com",
     },
   },
 }
 ```
 
-No service URL has a production default yet; the Gateway reports
-`unconfigured` until `relayUrl` is set. Changes apply without a restart. See the
-[`openclawId` configuration keys](/gateway/config-gateway) for the full list.
+Enabling the lab fills unset service fields with the staging private-preview
+services. Explicit fields override those defaults. The account menu labels this
+environment **Private preview · staging**. Changes apply without a restart.
+See [preview configuration](/gateway/config-gateway#openclaw-id-private-preview)
+for callback requirements and custom service overrides.
 
 Labs only switches the feature on or off. Everything else lives outside Labs:
 
@@ -351,8 +346,29 @@ the short-lived pending sign-in. The popup returns to
 `<Control UI origin>/openclaw-id/callback`, so register that redirect for the
 client (`http://127.0.0.1/openclaw-id/callback` matches any loopback port). The
 browser keeps the account and its ID token until the token expires or you sign
-out. While signed in, **Turn on remote access** gets its link code from your account
-instead of asking you to paste one.
+out. Discovery checks whether the account can create new claws before the Gateway
+saves account details or offers setup. A denied account sees the private-preview
+message and **Sign out / use another account**. Existing claws and invited
+members keep their access. For enabled accounts, **Turn on remote access** gets
+its link code from the account instead of asking you to paste one.
+
+If preview access is removed during setup, Discovery can refuse registration
+after local ownership has been saved. The dialog keeps that linked result and
+explains that remote access is not enabled. Do not repeat setup, replace the
+recovery kit, or treat signing in with another account as a reset.
+
+Ask the preview operator to restore access. Then get a fresh link code from
+**Add a claw** at `https://claws.<loaderDomain>/link` and run this on the configured
+local Gateway, replacing `NEW_LINK_CODE` with that code:
+
+```sh
+openclaw gateway call openclawId.authority --params '{"action":"publish","enrollmentCode":"NEW_LINK_CODE"}'
+```
+
+This retries registration with the saved ownership and binding; it does not
+create another root or owner device. A `publication.state` of `published`
+confirms registration. This manual recovery is separate from early preview
+denial, which never attempts linking or writes an account profile.
 
 ### How the tunnel reaches the Gateway
 

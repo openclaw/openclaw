@@ -16,6 +16,87 @@ const suite = createControlUiE2eSuite({ name: "OpenClaw ID account menu" });
 const label = "Sign in with OpenClaw ID";
 
 suite.define(() => {
+  it("shows private-preview denial without a link action", async () => {
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), viewport: { width: 1280, height: 844 } },
+      async ({ page }) => {
+        const scenario = {
+          sessionKey: "agent:main:preview-proof",
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "openclawId.status",
+            "openclawId.authority",
+          ],
+          methodResponses: {
+            "openclawId.status": {
+              status: { state: "on" },
+              channel: "local_operator",
+              owner: true,
+              connection: { kind: "local" },
+              link: { linked: false },
+              services: {
+                environment: "staging",
+                issuerUrl: "https://issuer.example.test",
+                clientId: "control-ui",
+                loaderDomain: "claws.example.test",
+              },
+            },
+          },
+        };
+        const gateway = await installMockGateway(page, scenario);
+        await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
+          route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              ...createControlUiMockBootstrapConfig(scenario),
+              openclawIdEnabled: true,
+            }),
+          }),
+        );
+        await page.addInitScript(() =>
+          localStorage.setItem(
+            "openclaw.openclawId.account",
+            JSON.stringify({
+              sub: "fixture-outsider",
+              email: "outsider@example.test",
+              exp: 4102444800,
+              idToken: "synthetic-not-a-token",
+              previewAccess: false,
+            }),
+          ),
+        );
+        await page.goto(`${suite.server.baseUrl}/new`);
+        await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready);
+        await page.locator("openclaw-app-sidebar:visible .sidebar-identity-card").click();
+        const menu = page.locator('.sidebar-identity-menu[data-phase="open"]');
+        await menu
+          .getByText(
+            "OpenClaw ID is in private preview, and outsider@example.test isn't enabled yet.",
+            { exact: true },
+          )
+          .waitFor();
+        expect(await menu.getByText("Private preview · staging", { exact: true }).count()).toBe(1);
+        expect(
+          await menu
+            .getByRole("menuitem", { name: "Sign out / use another account", exact: true })
+            .count(),
+        ).toBe(1);
+        expect(await menu.locator('[data-value="openclaw-id:make-reachable"]').count()).toBe(0);
+        expect(
+          (await gateway.getRequests()).filter(
+            (request) => request.method === "openclawId.authority",
+          ),
+        ).toEqual([]);
+        await page.evaluate(() => document.fonts.ready);
+        await page.screenshot({
+          path: `${suite.artifactDir}/preview-denied.png`,
+          animations: "disabled",
+        });
+      },
+    );
+  });
+
   it("uses one accessible sign-in button and contains signed-in multiline rows", async () => {
     for (const width of [1280, 390]) {
       for (const colorScheme of ["light", "dark"] as const) {

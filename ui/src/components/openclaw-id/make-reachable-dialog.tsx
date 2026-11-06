@@ -5,7 +5,11 @@ import { createSignal, For, Match, Show, Switch } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
-import { requestOpenClawIdLinkCode } from "../../lib/openclaw-id/account.ts";
+import {
+  recordOpenClawIdPreviewRefusal,
+  requestOpenClawIdLinkCode,
+  signOutOfOpenClawId,
+} from "../../lib/openclaw-id/account.ts";
 import {
   announceOwnerDeviceKey,
   ensureOwnerDeviceSigner,
@@ -25,7 +29,11 @@ import type {
   OpenClawIdSignedIn,
   OpenClawIdStatusResult,
 } from "../../lib/openclaw-id/types.ts";
-import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
+import {
+  isOpenClawIdPreviewRefusal,
+  openClawIdUiError,
+  type OpenClawIdUiError,
+} from "../../lib/openclaw-id/ui-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { Icon } from "../solid/icon.tsx";
@@ -40,6 +48,7 @@ registerEnglishCatalog(registerOpenClawIdEnglish);
 
 type Step =
   | { kind: "name" }
+  | { kind: "preview" }
   | { kind: "ownerKey"; preparation: OpenClawIdLinkPreparation }
   | { kind: "kit"; preparation: OpenClawIdLinkPreparation; details: RecoveryKitDetails }
   | { kind: "linking"; hostname: string }
@@ -74,6 +83,13 @@ async function readRelayOnline(client: GatewayBrowserClient): Promise<boolean> {
 function publicationError(publication: OpenClawIdPublication | null): OpenClawIdUiError {
   if (publication?.state === "failed") {
     const mapped = openClawIdUiError(publication, "setup");
+    // Registration follows local commit; switching accounts cannot undo that commit.
+    if (isOpenClawIdPreviewRefusal(publication)) {
+      return {
+        message: t("openclawId.previewRegistrationRecovery"),
+        detail: `${mapped.detail}\nopenclaw gateway call openclawId.authority --params '{"action":"publish","enrollmentCode":"NEW_LINK_CODE"}'`,
+      };
+    }
     if (publication.retryable === true) {
       return { ...mapped, message: `${mapped.message} ${t("openclawId.setupRetrying")}` };
     }
@@ -132,7 +148,9 @@ export function showMakeReachableDialog(params: {
   const lifetime = { signal: openClawIdFeatureSignal(), value: false };
   return withPromiseModalHost<boolean>(lifetime, (modal) => {
     modal.render(() => {
-      const [step, setStep] = createSignal<Step>({ kind: "name" });
+      const [step, setStep] = createSignal<Step>({
+        kind: params.signedIn?.previewAccess === false ? "preview" : "name",
+      });
       const [saved, setSaved] = createSignal(false);
       const [preparing, setPreparing] = createSignal(false);
       const [enrollmentCode, setEnrollmentCode] = createSignal("");
@@ -147,10 +165,10 @@ export function showMakeReachableDialog(params: {
         name: name().trim().toLowerCase(),
       });
       // Asks the Gateway (and through it Discovery) whether the name is free.
-      const checkName = async () => {
+      const checkName = async (code = enrollmentCode()) => {
         setCheck(null);
         setNameError(null);
-        if (!nameRequest().enrollmentCode || !nameRequest().name) {
+        if (!code.trim() || !nameRequest().name) {
           return;
         }
         try {
@@ -158,27 +176,38 @@ export function showMakeReachableDialog(params: {
             await params.client.request<NameCheck>("openclawId.authority", {
               action: "check_name",
               ...nameRequest(),
+              enrollmentCode: code.trim(),
             }),
           );
         } catch (error) {
-          setNameError(openClawIdUiError(error, "setup"));
+          if (recordOpenClawIdPreviewRefusal(error, params.signedIn)) {
+            setStep({ kind: "preview" });
+          } else {
+            setNameError(openClawIdUiError(error, "setup"));
+          }
         }
       };
       // Fills the link code from the signed-in account, then checks the default name.
       const fillCodeFromAccount = async (signedIn: OpenClawIdSignedIn) => {
         const account = signedIn.email ?? t("openclawId.accountFallback");
         try {
-          setEnrollmentCode(await requestOpenClawIdLinkCode(params.client, signedIn));
+          const code = await requestOpenClawIdLinkCode(params.client, signedIn);
+          setEnrollmentCode(code);
           setCodeFromAccount(true);
           setCodeNote(t("openclawId.signedInLinkCode", { account }));
-          await checkName();
+          // Solid writes settle later; check the acquired code, not the stale signal.
+          await checkName(code);
         } catch (error) {
-          setCodeError(openClawIdUiError(error, "linkCode"));
+          if (recordOpenClawIdPreviewRefusal(error, params.signedIn)) {
+            setStep({ kind: "preview" });
+          } else {
+            setCodeError(openClawIdUiError(error, "linkCode"));
+          }
         }
       };
       // The account is fixed for this dialog; prefill once it has rendered.
       const signedIn = params.signedIn;
-      if (signedIn) {
+      if (signedIn && signedIn.previewAccess !== false) {
         queueMicrotask(() => void fillCodeFromAccount(signedIn));
       }
       // Records the address the owner root will sign; Discovery assigns it at registration.
@@ -202,7 +231,11 @@ export function showMakeReachableDialog(params: {
             setStep({ kind: "ownerKey", preparation });
           }
         } catch (error) {
-          setNameError(openClawIdUiError(error, "setup"));
+          if (recordOpenClawIdPreviewRefusal(error, params.signedIn)) {
+            setStep({ kind: "preview" });
+          } else {
+            setNameError(openClawIdUiError(error, "setup"));
+          }
         } finally {
           prepareRunning = false;
           setPreparing(false);
@@ -267,10 +300,15 @@ export function showMakeReachableDialog(params: {
             },
             (id, state) => setLinkStates((current) => ({ ...current, [id]: state })),
           );
+          // Publication refusal does not roll back the saved owner key or binding.
           setStep({ kind: "done", hostname: preparation.hostname, publication });
         } catch (error) {
           ceremony.discard();
-          setStep({ kind: "error", message: openClawIdUiError(error, "setup") });
+          setStep(
+            recordOpenClawIdPreviewRefusal(error, params.signedIn)
+              ? { kind: "preview" }
+              : { kind: "error", message: openClawIdUiError(error, "setup") },
+          );
         }
       };
       const cancel = (event: Event) => {
@@ -297,6 +335,27 @@ export function showMakeReachableDialog(params: {
               <div class="exec-approval-title">{t("openclawId.dialogTitle")}</div>
             </div>
             <Switch>
+              <Match when={step().kind === "preview"}>
+                <p>
+                  {t("openclawId.privatePreview", {
+                    email: params.signedIn?.email ?? t("openclawId.accountFallback"),
+                  })}
+                </p>
+                <openclaw-modal-actions>
+                  <button class="btn" onClick={() => finish(false)}>
+                    {t("common.close")}
+                  </button>
+                  <button
+                    class="btn primary"
+                    onClick={() => {
+                      finish(false);
+                      signOutOfOpenClawId();
+                    }}
+                  >
+                    {t("openclawId.useAnotherAccount")}
+                  </button>
+                </openclaw-modal-actions>
+              </Match>
               <Match when={step().kind === "name"}>
                 <div class="secret-reveal__body">
                   <p>{t("openclawId.nameBody")}</p>
@@ -495,7 +554,11 @@ export function showMakeReachableDialog(params: {
                 {(done) => (
                   <>
                     <div class="secret-reveal__body">
-                      <p>{t("openclawId.doneBody", { host: done().hostname })}</p>
+                      <p>
+                        {isOpenClawIdPreviewRefusal(done().publication)
+                          ? t("openclawId.previewRegistrationSaved")
+                          : t("openclawId.doneBody", { host: done().hostname })}
+                      </p>
                       <Show when={linkStates().relay.state === "warning"}>
                         <p>{t("openclawId.stepRelayOffline")}</p>
                       </Show>

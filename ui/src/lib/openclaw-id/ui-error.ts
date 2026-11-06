@@ -20,6 +20,7 @@ export type OpenClawIdUiError = { message: string; detail: string };
 
 // Only stable codes select a cause. Arbitrary service prose is never primary copy.
 const CODE_KEYS: Record<string, string> = {
+  preview_access_required: "privatePreviewRequired",
   not_prepared: "errorNotPrepared",
   already_linked: "errorAlreadyLinked",
   not_linked: "errorNotLinked",
@@ -76,6 +77,11 @@ function errorCode(error: unknown): string | undefined {
     return error.details.code;
   }
   return "code" in error && typeof error.code === "string" ? error.code : undefined;
+}
+
+/** Whether Discovery refused creation because this account is outside the private preview. */
+export function isOpenClawIdPreviewRefusal(error: unknown): boolean {
+  return errorCode(error) === "preview_access_required";
 }
 
 /** Translate known OpenClaw ID refusals without guessing a cause from backend prose. */

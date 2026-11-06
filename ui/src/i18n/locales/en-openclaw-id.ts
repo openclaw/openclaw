@@ -66,6 +66,15 @@ const enOpenClawId = {
     error_signOut: "Could not sign out of OpenClaw ID. Reload this page and try again.",
     error_open: "Could not open this. Try again.",
     menuTitle: "OpenClaw ID",
+    stagingPreview: "Private preview · staging",
+    privatePreview: "OpenClaw ID is in private preview, and {email} isn't enabled yet.",
+    privatePreviewRequired:
+      "OpenClaw ID is in private preview. This account isn't enabled yet. Sign out and use another account.",
+    previewRegistrationSaved:
+      "This claw is linked locally, but remote access is not enabled. Keep your recovery kit safe.",
+    previewRegistrationRecovery:
+      "Registration was refused by the private preview. Ask the preview operator to restore access, then get a new link code from Add a claw and run the publish command on this Gateway (see Technical details). Do not repeat setup or replace your recovery kit.",
+    useAnotherAccount: "Sign out / use another account",
     approveNewDevice: "Approve a new device",
     approvalNotice: "A new browser is asking for owner access",
     signIn: "Sign in with OpenClaw ID",

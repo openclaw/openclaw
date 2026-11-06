@@ -20,6 +20,7 @@ type IssuerMetadata = {
 type PendingSignIn = {
   issuerUrl: string;
   clientId: string;
+  discoveryUrl?: string;
   redirectUri: string;
   verifier: string;
   nonce: string;
@@ -113,6 +114,10 @@ async function fetchJson(
   }
   try {
     const text = await response.text();
+    // Older Discovery has no access endpoint and may return an HTML/plain-text 404.
+    if (response.status === 404) {
+      return { status: 404, httpOk: false, body: null };
+    }
     return { status: response.status, httpOk: response.ok, body: text ? JSON.parse(text) : null };
   } catch {
     return refusal(
@@ -212,11 +217,38 @@ export function createOpenClawIdSignIn(
     };
   };
 
+  // Discovery owns preview policy, including verified-email and current allowlist checks.
+  const previewAccess = async (discoveryUrl: string | undefined, idToken: string) => {
+    if (!discoveryUrl) {
+      return refusal("unconfigured", "set discoveryUrl to check private-preview access");
+    }
+    const response = await fetchJson(
+      fetchImpl,
+      new URL("/v1/access", discoveryUrl),
+      {
+        headers: { authorization: `Bearer ${idToken}`, accept: "application/json" },
+      },
+      "unavailable",
+    );
+    if (isRefusal(response)) {
+      return response;
+    }
+    if (response.status === 404) {
+      return true;
+    }
+    const body = asRecord(response.body);
+    if (!response.httpOk || typeof body.preview_access !== "boolean") {
+      return refusal("unavailable", "Discovery could not confirm private-preview access");
+    }
+    return body.preview_access;
+  };
+
   return {
     /** Starts a sign-in and returns the issuer URL the browser opens in a popup. */
     async begin(params: {
       issuerUrl: string;
       clientId: string;
+      discoveryUrl?: string;
       redirectUri: unknown;
     }): Promise<{ authorizationUrl: string; state: string } | OpenClawIdSignInRefusal> {
       if (!isCallbackUrl(params.redirectUri)) {
@@ -236,6 +268,7 @@ export function createOpenClawIdSignIn(
       pending.set(state, {
         issuerUrl: params.issuerUrl,
         clientId: params.clientId,
+        discoveryUrl: params.discoveryUrl,
         redirectUri: params.redirectUri,
         verifier,
         nonce,
@@ -261,7 +294,10 @@ export function createOpenClawIdSignIn(
       code: unknown;
       /** Gateway-owned sink, called only after all issuer-token checks pass. */
       onVerifiedAccount?: (account: OpenClawIdAccount) => Promise<void>;
-    }): Promise<{ account: OpenClawIdAccount; idToken: string } | OpenClawIdSignInRefusal> {
+    }): Promise<
+      | { account: OpenClawIdAccount; idToken: string; previewAccess: boolean }
+      | OpenClawIdSignInRefusal
+    > {
       const entry = typeof params.state === "string" ? pending.get(params.state) : undefined;
       if (typeof params.state === "string") {
         pending.delete(params.state);
@@ -324,8 +360,15 @@ export function createOpenClawIdSignIn(
         name: optionalText(claims.name),
         exp: claims.exp,
       };
-      await params.onVerifiedAccount?.(account);
-      return { idToken, account };
+      const access = await previewAccess(entry.discoveryUrl, idToken);
+      if (typeof access !== "boolean") {
+        return access;
+      }
+      // A denied sign-in remains usable for sign-out, but must leave no claw state.
+      if (access) {
+        await params.onVerifiedAccount?.(account);
+      }
+      return { idToken, account, previewAccess: access };
     },
 
     /** Asks Discovery for a one-time link code for the signed-in account. */
@@ -350,6 +393,15 @@ export function createOpenClawIdSignIn(
       }
       if (response.status === 401) {
         return refusal("signed_out", "your OpenClaw ID sign-in expired; sign in again");
+      }
+      if (
+        response.status === 403 &&
+        asRecord(asRecord(response.body).error).code === "preview_access_required"
+      ) {
+        return refusal(
+          "preview_access_required",
+          "this account is not enabled for the private preview",
+        );
       }
       if (!response.httpOk) {
         return refusal("unavailable", `Discovery refused a link code (HTTP ${response.status})`);

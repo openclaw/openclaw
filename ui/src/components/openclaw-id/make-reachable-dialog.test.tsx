@@ -54,9 +54,62 @@ describe("Make reachable publication outcome", () => {
     window.dispatchEvent(new StorageEvent("storage", { key: "openclaw.openclawId.account" }));
   });
 
+  it.each(["account_link_code", "check_name", "prepare"])(
+    "stops at a preview refusal from %s without linking",
+    async (deniedAction) => {
+      const signedIn = {
+        sub: "outsider",
+        email: "outsider@example.test",
+        name: null,
+        exp: 4_102_444_800,
+        idToken: "synthetic",
+      };
+      const storage = installSafeLocalStorageForTesting();
+      storage.setItem("openclaw.openclawId.account", JSON.stringify(signedIn));
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: "openclaw.openclawId.account",
+          newValue: JSON.stringify(signedIn),
+        }),
+      );
+      const request = vi.fn(async (_method: string, params: { action: string }) => {
+        if (params.action === deniedAction) {
+          throw Object.assign(new Error("Private preview"), {
+            details: { code: "preview_access_required" },
+          });
+        }
+        return params.action === "account_link_code"
+          ? { code: "synthetic-code" }
+          : { hostname: "studio-test.claws.test", available: true };
+      });
+      const done = showMakeReachableDialog({
+        client: { request } as unknown as GatewayBrowserClient,
+        loaderDomain: "claws.test",
+        signedIn,
+      });
+      if (deniedAction === "prepare") {
+        await click("Continue");
+      }
+      await vi.waitFor(() =>
+        expect(document.body.textContent).toContain("outsider@example.test isn't enabled yet"),
+      );
+      expect(document.body.textContent).toContain("Sign out / use another account");
+      expect(request.mock.calls.some(([, params]) => params.action === "commit")).toBe(false);
+      expect(document.querySelector("input")).toBeNull();
+      await click("Close");
+      await done;
+    },
+  );
+
   it.each([
     { code: "unavailable", retryable: true, expected: "will keep trying", online: true },
     { code: "internal", retryable: true, expected: "will keep trying", online: true },
+    {
+      code: "preview_access_required",
+      retryable: false,
+      expected: "This claw is linked locally, but remote access is not enabled",
+      online: true,
+    },
     {
       code: "registration_mismatch",
       retryable: false,
@@ -134,6 +187,15 @@ describe("Make reachable publication outcome", () => {
       form.removeEventListener("submit", submitted);
       expect(password.value).toBe("");
       expect(document.body.textContent).toContain(expected);
+      if (code === "preview_access_required") {
+        expect(document.body.textContent).not.toContain("Sign out / use another account");
+        expect(document.body.textContent).not.toContain("Your claw address is");
+        expect(document.body.textContent).toContain('"action":"publish"');
+        expect(document.body.textContent).toContain("Do not repeat setup");
+        expect(request.mock.calls.filter(([, params]) => params.action === "commit")).toHaveLength(
+          1,
+        );
+      }
       if (online && !retryable) {
         expect(document.body.textContent).not.toContain("will keep trying");
       }

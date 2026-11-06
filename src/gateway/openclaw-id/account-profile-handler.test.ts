@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { linkedClaw, serviceFor } from "./openclaw-id.test-support.js";
 
-const issuer = vi.hoisted(() => ({ nonce: "", invalidNonce: false }));
+const issuer = vi.hoisted(() => ({ nonce: "", invalidNonce: false, previewAccess: true }));
 // Inject only external issuer I/O: the PKCE owner, token validation and storage are real.
 vi.mock("./account-sign-in.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./account-sign-in.js")>();
@@ -18,6 +18,12 @@ vi.mock("./account-sign-in.js", async (importOriginal) => {
               issuer: "https://issuer.example.test",
               authorization_endpoint: "https://issuer.example.test/authorize",
               token_endpoint: "https://issuer.example.test/token",
+            });
+          }
+          if (url.endsWith("/v1/access")) {
+            return Response.json({
+              preview_access: issuer.previewAccess,
+              email: "verified@example.test",
             });
           }
           const claims = {
@@ -40,10 +46,15 @@ vi.mock("./account-sign-in.js", async (importOriginal) => {
 const { openclawIdHandlers } = await import("../server-methods/openclaw-id.js");
 
 describe("verified account profile RPC boundary", () => {
-  it.each([false, true])(
-    "ignores browser-asserted profile fields (invalid nonce=%s)",
-    async (invalidNonce) => {
+  it.each([
+    [false, true],
+    [true, true],
+    [false, false],
+  ])(
+    "ignores browser profile fields (invalid nonce=%s, preview=%s)",
+    async (invalidNonce, previewAccess) => {
       issuer.invalidNonce = invalidNonce;
+      issuer.previewAccess = previewAccess;
       const claw = await linkedClaw();
       await claw.authority.recordDiscovery({ owner_account_id: "acct-owner" });
       const { service } = serviceFor(claw.authority);
@@ -60,6 +71,7 @@ describe("verified account profile RPC boundary", () => {
                   enabled: true,
                   issuerUrl: "https://issuer.example.test",
                   clientId: "control-ui",
+                  discoveryUrl: "https://discovery.example.test",
                 },
               },
             }),
@@ -85,8 +97,11 @@ describe("verified account profile RPC boundary", () => {
           idToken: "browser-assertion",
         });
         expect(complete.mock.calls[0]![0]).toBe(!invalidNonce);
+        if (!invalidNonce) {
+          expect(complete.mock.calls[0]![1]).toMatchObject({ previewAccess });
+        }
         expect((await claw.store.read())?.owner_profile).toEqual(
-          invalidNonce
+          invalidNonce || !previewAccess
             ? undefined
             : {
                 sub: "acct-owner",

@@ -21,6 +21,7 @@ import {
   type OpenClawIdCallbackMessage,
 } from "./callback-contract.ts";
 import type { OpenClawIdSignedIn } from "./types.ts";
+import { isOpenClawIdPreviewRefusal } from "./ui-error.ts";
 
 const STORAGE_KEY = "openclaw.openclawId.account";
 const SIGN_OUT_KEY = "openclaw.openclawId.signedOut";
@@ -204,12 +205,13 @@ export async function signInWithOpenClawId(params: {
     const done = await params.client.request<{
       account: Omit<OpenClawIdSignedIn, "idToken">;
       idToken: string;
+      previewAccess: boolean;
     }>("openclawId.authority", {
       action: "account_complete",
       state: started.state,
       code: returned.code,
     });
-    const signedIn = { ...done.account, idToken: done.idToken };
+    const signedIn = { ...done.account, idToken: done.idToken, previewAccess: done.previewAccess };
     assertCurrent();
     getSafeLocalStorage()?.setItem(
       RETURN_KEY,
@@ -221,6 +223,21 @@ export async function signInWithOpenClawId(params: {
     popup?.close();
     throw error;
   }
+}
+
+/** Reflect a new Discovery refusal for the current account without changing existing claw access. */
+export function recordOpenClawIdPreviewRefusal(
+  error: unknown,
+  expectedAccount: OpenClawIdSignedIn | null | undefined,
+): boolean {
+  if (!isOpenClawIdPreviewRefusal(error)) {
+    return false;
+  }
+  const signedIn = openClawIdAccount();
+  if (signedIn && signedIn.idToken === expectedAccount?.idToken) {
+    keep({ ...signedIn, previewAccess: false });
+  }
+  return true;
 }
 
 /** A one-time Discovery link code for the signed-in account, so Make reachable needs no paste. */
@@ -238,10 +255,16 @@ export async function requestOpenClawIdLinkCode(
     }
   };
   assertCurrent();
-  const result = await client.request<{ code: string }>("openclawId.authority", {
-    action: "account_link_code",
-    idToken: signedIn.idToken,
-  });
+  const result = await client
+    .request<{ code: string }>("openclawId.authority", {
+      action: "account_link_code",
+      idToken: signedIn.idToken,
+    })
+    .catch((error: unknown) => {
+      assertCurrent();
+      recordOpenClawIdPreviewRefusal(error, signedIn);
+      throw error;
+    });
   // An already-open dialog may outlive another tab's logout; never give it a late link code.
   assertCurrent();
   return result.code;

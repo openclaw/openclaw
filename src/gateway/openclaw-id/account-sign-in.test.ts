@@ -15,7 +15,10 @@ function jwt(claims: Record<string, unknown>): string {
 // A fake issuer and Discovery: metadata, token endpoint and enrollment codes. Like a
 // real issuer, the token endpoint remembers the authorization request's nonce and
 // S256 challenge (`authorize`) and redeems the code only with the matching verifier.
-function fakeServices(tokenClaims: (nonce: string) => Record<string, unknown>) {
+function fakeServices(
+  tokenClaims: (nonce: string) => Record<string, unknown>,
+  access = () => new Response("not found", { status: 404 }),
+) {
   let nonce = "";
   let challenge = "";
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -26,6 +29,10 @@ function fakeServices(tokenClaims: (nonce: string) => Record<string, unknown>) {
         authorization_endpoint: `${ISSUER}/oauth2/authorize`,
         token_endpoint: `${ISSUER}/oauth2/token`,
       });
+    }
+    if (url.endsWith("/v1/access")) {
+      expect(new Headers(init?.headers).get("authorization")).toMatch(/^Bearer /);
+      return access();
     }
     if (url.endsWith("/oauth2/token")) {
       const body = init?.body;
@@ -59,7 +66,12 @@ function fakeServices(tokenClaims: (nonce: string) => Record<string, unknown>) {
 }
 
 async function begin(signIn: ReturnType<typeof createOpenClawIdSignIn>) {
-  const started = await signIn.begin({ issuerUrl: ISSUER, clientId: "ui", redirectUri: REDIRECT });
+  const started = await signIn.begin({
+    issuerUrl: ISSUER,
+    clientId: "ui",
+    discoveryUrl: "https://discovery.example.test",
+    redirectUri: REDIRECT,
+  });
   if ("ok" in started) {
     throw new Error(started.detail);
   }
@@ -76,6 +88,86 @@ describe("createOpenClawIdSignIn", () => {
     exp: 1_700_003_600,
     email: "owner@example.test",
     name: "Owner",
+  });
+
+  it.each([
+    { email: "owner@OPENCLAW.ORG", verified: true, access: true },
+    { email: "outsider@example.test", verified: true, access: false },
+    { email: "owner@openclaw.org", verified: false, access: false },
+    { email: "owner@openclaw.org", verified: undefined, access: false },
+  ])(
+    "uses Discovery's decision before persisting $email (verified=$verified)",
+    async ({ email, verified, access }) => {
+      const services = fakeServices(
+        (nonce) => ({ ...valid(nonce), email, email_verified: verified }),
+        () => Response.json({ preview_access: access, email }),
+      );
+      const signIn = createOpenClawIdSignIn({ fetchImpl: services.fetchImpl, now });
+      const started = await begin(signIn);
+      services.authorize(started.authorizationUrl);
+      const store = memoryStore();
+      const authority = createOpenClawIdAuthority(store);
+      const done = await signIn.complete({
+        state: started.state,
+        code: "the-code",
+        onVerifiedAccount: (account) => authority.recordVerifiedAccount(account),
+      });
+      expect(done).toMatchObject({ previewAccess: access, account: { email } });
+      expect((await store.read())?.owner_profile?.email).toBe(access ? email : undefined);
+      expect(
+        services.fetchImpl.mock.calls.some(([url]) =>
+          (url instanceof Request ? url.url : String(url)).endsWith("/v1/enrollment-codes"),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["malformed", "outage", "missing config"])(
+    "fails closed on %s without writing account state",
+    async (failure) => {
+      const services = fakeServices(valid, () =>
+        failure === "outage"
+          ? new Response("unavailable", { status: 503 })
+          : Response.json({ email: "owner@example.test" }),
+      );
+      const signIn = createOpenClawIdSignIn({ fetchImpl: services.fetchImpl, now });
+      const started = await signIn.begin({
+        issuerUrl: ISSUER,
+        clientId: "ui",
+        redirectUri: REDIRECT,
+        discoveryUrl: failure === "missing config" ? undefined : "https://discovery.example.test",
+      });
+      if ("ok" in started) {
+        throw new Error(started.detail);
+      }
+      services.authorize(started.authorizationUrl);
+      const onVerifiedAccount = vi.fn();
+      expect(
+        await signIn.complete({ state: started.state, code: "the-code", onVerifiedAccount }),
+      ).toMatchObject({ ok: false });
+      expect(onVerifiedAccount).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves the preview refusal from enrollment codes", async () => {
+    const signIn = createOpenClawIdSignIn({
+      fetchImpl: async () =>
+        Response.json(
+          {
+            error: {
+              code: "preview_access_required",
+              message: "Private preview",
+            },
+          },
+          { status: 403 },
+        ),
+    });
+    expect(
+      await signIn.enrollmentCode({
+        discoveryUrl: "https://discovery.example.test",
+        idToken: "token",
+      }),
+    ).toMatchObject({ ok: false, code: "preview_access_required" });
   });
 
   it("builds a PKCE authorization URL and redeems the code once", async () => {
@@ -273,7 +365,12 @@ describe("createOpenClawIdSignIn", () => {
       now,
     });
     expect(
-      await offline.begin({ issuerUrl: ISSUER, clientId: "ui", redirectUri: REDIRECT }),
+      await offline.begin({
+        issuerUrl: ISSUER,
+        clientId: "ui",
+        discoveryUrl: "https://discovery.example.test",
+        redirectUri: REDIRECT,
+      }),
     ).toMatchObject({ ok: false, code: "issuer_unavailable" });
 
     const garbled = createOpenClawIdSignIn({
@@ -281,7 +378,12 @@ describe("createOpenClawIdSignIn", () => {
       now,
     });
     expect(
-      await garbled.begin({ issuerUrl: ISSUER, clientId: "ui", redirectUri: REDIRECT }),
+      await garbled.begin({
+        issuerUrl: ISSUER,
+        clientId: "ui",
+        discoveryUrl: "https://discovery.example.test",
+        redirectUri: REDIRECT,
+      }),
     ).toMatchObject({ ok: false, code: "issuer_unavailable" });
 
     const foreignToken = createOpenClawIdSignIn({
@@ -295,7 +397,12 @@ describe("createOpenClawIdSignIn", () => {
       now,
     });
     expect(
-      await foreignToken.begin({ issuerUrl: ISSUER, clientId: "ui", redirectUri: REDIRECT }),
+      await foreignToken.begin({
+        issuerUrl: ISSUER,
+        clientId: "ui",
+        discoveryUrl: "https://discovery.example.test",
+        redirectUri: REDIRECT,
+      }),
     ).toMatchObject({ ok: false, code: "issuer_invalid" });
   });
 

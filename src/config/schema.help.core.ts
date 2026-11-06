@@ -122,17 +122,17 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.openclawId":
     "Experimental OpenClaw ID remote access (Labs). When enabled, the Gateway supervises a tunnel child that accepts iroh connections from admitted devices and proxies them to this Gateway. Off by default; while off the Gateway starts no child process, opens no tunnel sockets, and contacts no OpenClaw ID, Discovery or relay service.",
   "gateway.openclawId.enabled":
-    "Turns on experimental OpenClaw ID remote access (default: false). Changes apply without restarting the Gateway. Remote access also needs relayUrl; linking a claw additionally needs issuerUrl, discoveryUrl and loaderDomain.",
+    "Turns on experimental OpenClaw ID remote access (default: false). Changes apply without restarting the Gateway. Unset service fields use the private-preview staging issuer, public Control UI client, Discovery, relay and loader domain. Explicit fields override those defaults; no defaults apply while off.",
   "gateway.openclawId.issuerUrl":
-    "OpenClaw ID issuer used to sign in for identity only while linking a claw. It is never trusted for membership, device approval or which server a client dials.",
+    "Defaults to https://openclaw-id-staging.services-91b.workers.dev/api/auth while enabled. OpenClaw ID issuer used to sign in for identity only while linking a claw. It is never trusted for membership, device approval or which server a client dials.",
   "gateway.openclawId.clientId":
-    "Public OAuth client (authorization code with PKCE) the Control UI uses for Sign in with OpenClaw ID in its account menu. Its redirect URI is <Control UI origin>/openclaw-id/callback; sign-in works only from the Control UI on this machine.",
+    "Defaults to the staging public Control UI client while enabled. Public OAuth client (authorization code with PKCE) the Control UI uses for Sign in with OpenClaw ID in its account menu. Its redirect URI is <Control UI origin>/openclaw-id/callback; sign-in works only from the Control UI on this machine.",
   "gateway.openclawId.discoveryUrl":
-    "Discovery service that mirrors the claw descriptor and membership snapshot and relays mailbox messages. It is untrusted: every statement it returns is verified against the claw's pinned owner root.",
+    "Defaults to https://openclaw-discovery-staging.services-91b.workers.dev while enabled. Discovery service that mirrors the claw descriptor and membership snapshot and relays mailbox messages. It is untrusted: every statement it returns is verified against the claw's pinned owner root.",
   "gateway.openclawId.relayUrl":
-    "The only iroh relay in the tunnel endpoint's relay map (no public n0 relays, DNS or pkarr). Browsers reach the claw only through this relay.",
+    "Defaults to https://relay.staging.crabd.xyz/ while enabled. The only iroh relay in the tunnel endpoint's relay map (no public n0 relays, DNS or pkarr). Browsers reach the claw only through this relay.",
   "gateway.openclawId.loaderDomain":
-    "Bare DNS domain of the OpenClaw ID loader; a linked claw is reachable at https://<name>-<account tag>.<loaderDomain> and its server binding is signed for that hostname.",
+    "Defaults to crabd.xyz while enabled. Bare DNS domain of the OpenClaw ID loader; a linked claw is reachable at https://<name>-<account tag>.<loaderDomain> and its server binding is signed for that hostname.",
   "gateway.openclawId.ownerDeviceInactivityDays":
     "Days an owner device may go without reaching this claw before the claw removes it from its allowlist (default: 90). Devices it approved stay.",
   "gateway.openclawId.memberDeviceInactivityDays":

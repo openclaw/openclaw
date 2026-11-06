@@ -57,13 +57,13 @@ const account = {
   exp: 4_102_444_800,
 };
 
-async function signIn(current: OpenClawIdStatusResult) {
+async function signIn(current: OpenClawIdStatusResult, previewAccess = true) {
   const popup = { location: { href: "" }, close: vi.fn() };
   vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
   const request = vi.fn(async (_method: string, params: Record<string, unknown>) =>
     params.action === "account_begin"
       ? { authorizationUrl: "https://issuer.example.test/authorize", state: "s1" }
-      : { account, idToken: "test-token" },
+      : { account, idToken: "test-token", previewAccess },
   );
   selectOpenClawIdMenuValue("openclaw-id:sign-in", {
     status: current,
@@ -77,7 +77,11 @@ async function signIn(current: OpenClawIdStatusResult) {
       newValue: JSON.stringify({ state: "s1", code: "test-code", error: null }),
     }),
   );
-  await vi.waitFor(() => expect(menu(current).labels).toContain("Sign out of OpenClaw ID"));
+  await vi.waitFor(() =>
+    expect(menu(current).labels).toContain(
+      previewAccess ? "Sign out of OpenClaw ID" : "Sign out / use another account",
+    ),
+  );
   return request;
 }
 
@@ -89,6 +93,31 @@ describe("approved OpenClaw ID account menu", () => {
     flush();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("shows a denied account instead of offering or starting Make reachable", async () => {
+    const current = status();
+    current.services.environment = "staging";
+    const request = await signIn(current, false);
+    expect(menu(current).text).toContain("owner@example.test isn't enabled yet");
+    expect(menu(current).text).toContain("Private preview · staging");
+    expect(menu(current).labels).not.toContain("Turn on remote access");
+    selectOpenClawIdMenuValue("openclaw-id:make-reachable", {
+      status: current,
+      client: { request } as unknown as GatewayBrowserClient,
+      basePath: "",
+    });
+    expect(request.mock.calls.map(([, params]) => params.action)).toEqual([
+      "account_begin",
+      "account_complete",
+    ]);
+  });
+
+  it("keeps an existing claw available when its account cannot create new claws", async () => {
+    const current = status({ link: linked });
+    await signIn(current, false);
+    expect(menu(current).text).toContain("Remote access on");
+    expect(menu(current).labels).toContain("Your devices");
   });
 
   it("is absent when the Labs flag is off", () => {
