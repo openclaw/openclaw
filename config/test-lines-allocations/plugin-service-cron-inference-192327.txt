@@ -1,0 +1,3 @@
+# Issue #192327: service account persistence, personal refusal, capture lifetime and session-lookup regressions.
+# Exactly offsets this change's measured net test growth; inherited base deficit remains visible.
+277

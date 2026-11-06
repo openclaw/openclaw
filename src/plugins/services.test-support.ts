@@ -29,6 +29,7 @@ export function startPluginServices(
 export const createServiceCronHost = (): PluginServiceCronHost => ({
   readEventSources: vi.fn<PluginServiceCronHost["readEventSources"]>(async () => []),
   runEvent: vi.fn<PluginServiceCronHost["runEvent"]>(async () => ({ kind: "invalidated" })),
+  getDefaultAgentId: vi.fn(() => "main"),
   getJob: vi.fn<PluginServiceCronHost["getJob"]>(),
   enqueueRun: vi.fn<PluginServiceCronHost["enqueueRun"]>(),
   status: vi.fn<PluginServiceCronHost["status"]>(async () => ({

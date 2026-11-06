@@ -24,10 +24,13 @@ import { acquireCronInferenceAuthorization } from "../../cron/inference-binding.
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { loadCronJobsStore } from "../../cron/store.js";
+import type { CronJobCreate } from "../../cron/types.js";
+import { createPluginRuntimeCapabilityLease } from "../../plugins/capability-lease.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createPluginServiceCronGetter } from "../../plugins/service-cron.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { connectUserModelAccountAsync } from "../../state/user-model-account-operations.js";
@@ -201,7 +204,27 @@ async function createFixture(stateDir: string, agentDir: string) {
     );
   };
   return {
+    get config() {
+      return cfg;
+    },
     invoke,
+    async addThroughService(job: CronJobCreate & { schedule: { kind: "cron"; expr: string } }) {
+      const lease = createPluginRuntimeCapabilityLease("inference test");
+      const context = createDirectChatContext({ cron, getRuntimeConfig: () => cfg });
+      const getCron = createPluginServiceCronGetter({
+        pluginId: "inference-test",
+        getCron: () => cron,
+        lease,
+        isStopping: () => false,
+        resolveGatewayContext: () => context,
+      });
+      try {
+        await getCron()!.add({ ...job, description: job.description ?? "" });
+        return (await cron.list({ includeDisabled: true }))[0]!;
+      } finally {
+        lease.revoke();
+      }
+    },
     reload,
     stop,
     setCreator,

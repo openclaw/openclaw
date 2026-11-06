@@ -9,6 +9,7 @@ import {
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
+import { captureCronCreatedInference } from "../cron-inference-capture.js";
 import { historyRecord } from "./cron-read.test-support.js";
 import {
   createParams,
@@ -18,6 +19,7 @@ import {
   withFixture,
 } from "./cron.inference-binding.test-support.js";
 import { createCronCallerClient } from "./cron.validation.test-support.js";
+import type { GatewayRequestContext } from "./types.js";
 
 type Fixture = Parameters<Parameters<typeof withFixture>[0]>[0];
 const it = test.extend<{ fixture: Fixture }>({
@@ -63,6 +65,96 @@ function captureAuthority(
 }
 
 describe("cron handler inference binding persistence", () => {
+  it.for(["current", "session:agent:secondary:target"] as const)(
+    "captures the runtime from the qualified session owner for %s",
+    async (sessionTarget, { fixture }) => {
+      fixture.addAgent("secondary");
+      await fixture.setClaudeRuntime("anthropic:work");
+      const key = "agent:secondary:target";
+      await upsertSessionEntryCore(
+        { sessionKey: key, agentId: "secondary" },
+        {
+          sessionId: "foreign-runtime-owner",
+          updatedAt: 1,
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-6",
+          modelOverrideSource: "user",
+          agentRuntimeOverride: "openclaw",
+        },
+      );
+      const captured = await captureCronCreatedInference({
+        job: {
+          sessionTarget,
+          sessionKey: key,
+          payload: {
+            kind: "agentTurn",
+            message: "Run",
+            model: "anthropic/claude-opus-4-6@anthropic:work",
+          },
+        },
+        cfg: fixture.config,
+        agentId: "main",
+        caller: { client: null, context: {} as GatewayRequestContext, signal: undefined },
+      });
+      try {
+        expect(captured?.inferenceBinding).toMatchObject({
+          provider: "anthropic",
+          profileId: "anthropic:work",
+          runtime: "openclaw",
+        });
+      } finally {
+        captured?.disposeInferenceAuthorization();
+      }
+    },
+  );
+
+  it.for(["isolated", "session:agent:main:service-target"] as const)(
+    "captures a stored account through the plugin service for %s",
+    async (target, { fixture }) => {
+      const job = await fixture.addThroughService({
+        ...createParams(),
+        wakeMode: "next-heartbeat",
+        agentId: "main",
+        sessionTarget: target,
+        payload: { kind: "agentTurn", message: "Service account capture" },
+        delivery: { mode: "none" },
+        schedule: { kind: "cron", expr: "0 2 * * *" },
+      });
+      const stored = await fixture.reload();
+      expect(stored.id).toBe(job.id);
+      expect(stored.inferenceBinding).toMatchObject({
+        provider: "openai",
+        profileId: platformId,
+        runtime: "openclaw",
+        source: "auto",
+      });
+      expect((await fixture.resolveAuth(stored.inferenceBinding!)).apiKey).toBe(
+        "synthetic-platform-key",
+      );
+    },
+  );
+
+  it("refuses a service's explicit personal account without a human caller", async ({
+    fixture,
+  }) => {
+    const personal = await fixture.personalAccount();
+    await expect(
+      fixture.addThroughService({
+        ...createParams(),
+        wakeMode: "next-heartbeat",
+        agentId: "main",
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "Personal selection",
+          model: `openai/gpt-4.1@${personal.profileId}`,
+        },
+        delivery: { mode: "none" },
+        schedule: { kind: "cron", expr: "0 2 * * *" },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("replaces a stored account with an explicit native CLI login without replacing the job", async ({
     fixture,
   }) => {

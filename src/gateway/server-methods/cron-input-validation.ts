@@ -5,12 +5,10 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { captureScheduledOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
 import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
@@ -19,15 +17,11 @@ import {
 import { resolveCronDeliveryDefaultsScope } from "../../cron/delivery-defaults.js";
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
-import {
-  acquireCronInferenceAuthorization,
-  captureCronInferenceBinding,
-} from "../../cron/inference-binding.runtime.js";
+import { acquireCronInferenceAuthorization } from "../../cron/inference-binding.runtime.js";
 import {
   requiresExternalCronDelivery,
   resolveDeliveryTarget,
 } from "../../cron/isolated-agent/delivery-target.js";
-import { resolveCarriedCronModelSelection } from "../../cron/isolated-agent/session-carried-model.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
@@ -41,86 +35,21 @@ import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { resolveHookExternalContentSource } from "../../security/external-content-source.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
-import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import type { UserModelAccountSelection } from "../model-account-authority.js";
+import {
+  captureCronCreatedInference,
+  captureCronInferenceForCaller,
+  loadCronRuntimeSessionEntry,
+  type InferenceCaller,
+} from "../cron-inference-capture.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
-import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
-
-type InferenceCaller = Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal">;
-
-/**
- * The entry a job's cron session takes its runtime override from: the target row of a
- * `session:` job, or what a `current` job carries from its creating conversation.
- */
-async function loadCronRuntimeSessionEntry(params: {
-  cfg: OpenClawConfig;
-  job: Pick<CronJob, "sessionTarget" | "sessionKey">;
-  agentId?: string;
-  executionEntry?: SessionEntry;
-  loaded?: { key: string; entry?: SessionEntry };
-}): Promise<Partial<SessionEntry> | undefined> {
-  if (params.executionEntry) {
-    return params.executionEntry;
-  }
-  const sourceKey =
-    params.job.sessionTarget === "current" ? params.job.sessionKey?.trim() : undefined;
-  if (!sourceKey) {
-    return undefined;
-  }
-  const source =
-    params.loaded?.key === sourceKey
-      ? params.loaded.entry
-      : (
-          await loadGatewaySessionEntryReadOnlyInWorker({
-            cfg: params.cfg,
-            key: sourceKey,
-            agentId: params.agentId,
-          })
-        )?.entry;
-  return source ? resolveCarriedCronModelSelection(source) : undefined;
-}
-
-async function captureCronInferenceForCaller(
-  params: Parameters<typeof captureCronInferenceBinding>[0],
-  caller: InferenceCaller,
-) {
-  let selection: UserModelAccountSelection | undefined;
-  let authority: AuthProfileAuthorization | undefined;
-  const inferenceBinding = await captureCronInferenceBinding({
-    ...params,
-    retainAuthorization: (captured) => {
-      authority = captured;
-    },
-    authorizeProfile: async (profileId, inherited) => {
-      // Trusted creator selections already carry their owner's permission. New
-      // personal selections require the same live human authority as chat.
-      if (isUserModelAuthProfileId(profileId) && !inherited) {
-        selection = await preparePersonalModelAccountSelection(caller, profileId);
-        return selection.assertCurrent;
-      }
-      return undefined;
-    },
-  });
-  return {
-    inferenceBinding,
-    assertInferenceSelectionCurrent: () => {
-      selection?.assertCurrent();
-      authority?.assertCurrent();
-    },
-    disposeInferenceAuthorization: () => authority?.dispose(),
-  };
-}
 
 export function requiresExplicitAgentRuntimeToolsAllow(params: {
   job: Pick<CronJob, "payload" | "trigger">;
@@ -368,41 +297,17 @@ export async function captureCronCreatorSession(
         callerScope.agentId,
       )
     : legacyActor;
-  const executionSessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? "";
-  const executionSession =
-    !hasRuntimeAuthority && job.payload.kind === "agentTurn" && executionSessionKey
-      ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionSessionKey, agentId })
-      : undefined;
-  const runtimeSessionEntry =
-    !hasRuntimeAuthority && job.payload.kind === "agentTurn"
-      ? await loadCronRuntimeSessionEntry({
-          cfg,
-          job,
-          agentId,
-          executionEntry: executionSession?.entry,
-          loaded: sessionKey ? { key: sessionKey, entry: loaded?.entry } : undefined,
-        })
-      : undefined;
-  const inference =
-    // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
-    !hasRuntimeAuthority && job.payload.kind === "agentTurn" && job.sessionTarget !== "main"
-      ? await captureCronInferenceForCaller(
-          {
-            cfg,
-            agentId: agentId ?? resolveDefaultAgentId(cfg),
-            model: job.payload.model,
-            isGmailHook:
-              (job.payload.externalContentSource ??
-                resolveHookExternalContentSource(
-                  parseAgentSessionKey(executionSessionKey)?.rest ?? executionSessionKey,
-                )) === "gmail",
-            sessionEntry: callerScope ? creatorSession : undefined,
-            executionSessionEntry: executionSession?.entry,
-            runtimeSessionEntry,
-          },
-          caller,
-        )
-      : undefined;
+  const inference = !hasRuntimeAuthority
+    ? await captureCronCreatedInference({
+        job,
+        cfg,
+        agentId,
+        sessionLookupAgentId: agentId,
+        caller,
+        sessionEntry: callerScope ? creatorSession : undefined,
+        loaded: sessionKey ? { key: sessionKey, entry: loaded?.entry } : undefined,
+      })
+    : undefined;
   return {
     ...inference,
     ...(operatorSource ? { operatorSource } : {}),
