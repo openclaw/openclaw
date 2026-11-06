@@ -6,7 +6,10 @@ import {
 } from "./doctor-health-contributions.test-support.js";
 
 const note = vi.hoisted(() => vi.fn());
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
+vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
+  note,
+}));
 
 beforeEach(() => note.mockClear());
 
