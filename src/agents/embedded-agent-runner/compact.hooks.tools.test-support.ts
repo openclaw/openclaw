@@ -20,6 +20,8 @@ export function mockCompactHooksTools(createTools: typeof createOpenClawCodingTo
   vi.doMock("../agent-tools.js", () => ({
     createOpenClawCodingTools: createTools,
     createOpenClawCodingToolsInternal: createTools,
+  }));
+  vi.doMock("../agent-tools.async.js", () => ({
     createOpenClawCodingToolsInternalAsync: async (...args: Parameters<typeof createTools>) =>
       createTools(...args),
   }));

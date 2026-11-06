@@ -5,10 +5,8 @@ import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createWorkerPlacementTools } from "../worker/worker-placement-tools.js";
-import {
-  createOpenClawCodingToolsInternal as buildTools,
-  createOpenClawCodingToolsInternalAsync,
-} from "./agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.async.js";
+import { createOpenClawCodingToolsInternal as buildTools } from "./agent-tools.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import * as coreCodingTools from "./core-coding-tools.js";

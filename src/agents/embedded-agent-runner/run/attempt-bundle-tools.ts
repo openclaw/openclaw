@@ -19,7 +19,7 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
-import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
+import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool-creator-cap.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { log } from "../logger.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
