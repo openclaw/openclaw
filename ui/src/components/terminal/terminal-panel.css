@@ -716,7 +716,7 @@ openclaw-terminal-panel {
   ::-webkit-scrollbar-thumb {
     background: var(--scrollbar-thumb);
     background-clip: content-box;
-    border: var(--scrollbar-thumb-inset) solid transparent;
+    border: var(--scrollbar-thumb-inset, calc(var(--scrollbar-size) / 4)) solid transparent;
     border-radius: var(--radius-full);
   }
 

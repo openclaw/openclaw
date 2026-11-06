@@ -2753,7 +2753,10 @@ select.data-table-pagination__size {
   overflow: hidden;
 }
 
+/* The palette uses the compact, always-visible overlay scrollbar. */
 .cmd-palette__input {
+  --scrollbar-size: var(--scrollbar-size-compact);
+
   display: block;
   width: 100%;
   min-width: 0;
@@ -2779,13 +2782,6 @@ select.data-table-pagination__size {
 
 .cmd-palette__input::placeholder {
   color: var(--muted);
-}
-
-/* The palette is an overlay surface: compact thumb, always visible (the
-   styled scrollbar never auto-hides). */
-.cmd-palette__input {
-  --scrollbar-size: var(--scrollbar-size-compact);
-  --scrollbar-thumb-inset: var(--scrollbar-thumb-inset-compact);
 }
 
 /* Fades cover only text, never the native far-right scrollbar or actions. */

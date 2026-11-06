@@ -385,9 +385,7 @@
      popovers, phone widths) swap in the 8px/4px pair. Derived from --muted so
      every theme family and both modes follow with no override. */
   --scrollbar-size: 12px;
-  --scrollbar-thumb-inset: 3px;
   --scrollbar-size-compact: 8px;
-  --scrollbar-thumb-inset-compact: 2px;
   --scrollbar-thumb: color-mix(in srgb, var(--muted) 10%, transparent);
   --scrollbar-thumb-near: color-mix(in srgb, var(--muted) 16%, transparent);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 64%, transparent);
@@ -1167,7 +1165,6 @@ textarea,
 @media (max-width: 640px), (pointer: coarse) {
   :root {
     --scrollbar-size: var(--scrollbar-size-compact);
-    --scrollbar-thumb-inset: var(--scrollbar-thumb-inset-compact);
   }
 }
 
@@ -1201,7 +1198,8 @@ textarea,
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   background-clip: content-box;
-  border: var(--scrollbar-thumb-inset) solid transparent;
+  /* One size controls the 2:1 hit-area/thumb ratio; explicit inset overrides still win. */
+  border: var(--scrollbar-thumb-inset, calc(var(--scrollbar-size) / 4)) solid transparent;
   border-radius: var(--radius-full);
 }
 

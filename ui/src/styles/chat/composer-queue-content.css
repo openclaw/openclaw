@@ -31,7 +31,6 @@
   overflow: hidden;
   /* A short list stacked on the composer takes the compact thumb. */
   --scrollbar-size: var(--scrollbar-size-compact);
-  --scrollbar-thumb-inset: var(--scrollbar-thumb-inset-compact);
 }
 
 .chat-queue__global-state {

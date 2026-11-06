@@ -1007,7 +1007,6 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
     overflow-y: auto;
     overscroll-behavior: contain;
     --scrollbar-size: var(--scrollbar-size-compact);
-    --scrollbar-thumb-inset: var(--scrollbar-thumb-inset-compact);
   }
 
   & .chat-pane__sharing-person {

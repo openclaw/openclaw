@@ -453,7 +453,6 @@
       calc(var(--chat-composer-radius) - var(--chat-composer-editor-inset-block))
     );
   }
-
 }
 
 .agent-chat__composer-combobox > textarea:is([data-scroll-fade-top], [data-scroll-fade-bottom]) {

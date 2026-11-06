@@ -27,7 +27,6 @@ const HOST_TOKEN_SOURCES: Record<WidgetThemeToken, string> = {
   "scrollbar-size": "--scrollbar-size",
   "scrollbar-thumb-inset": "--scrollbar-thumb-inset",
   "scrollbar-thumb": "--scrollbar-thumb",
-  "scrollbar-thumb-near": "--scrollbar-thumb-near",
   "scrollbar-thumb-hover": "--scrollbar-thumb-hover",
   "font-body": "--font-body",
   "font-mono": "--mono",

@@ -8,12 +8,6 @@
   box-sizing: border-box;
 }
 
-/* Menus and popovers use the compact thumb. */
-.oc-overlay {
-  --scrollbar-size: var(--scrollbar-size-compact);
-  --scrollbar-thumb-inset: var(--scrollbar-thumb-inset-compact);
-}
-
 @supports not selector(::-webkit-scrollbar) {
   .oc-overlay,
   .oc-modal-dialog,
@@ -23,7 +17,8 @@
     scrollbar-width: thin;
   }
 
-  :is(.oc-overlay, .oc-modal-dialog):hover,
+  .oc-overlay:hover,
+  .oc-modal-dialog:hover,
   .oc-overlay :hover,
   .oc-modal-dialog :hover {
     scrollbar-color: var(--scrollbar-thumb-near) transparent;
@@ -38,48 +33,47 @@
   height: var(--scrollbar-size);
 }
 
-:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-track,
-:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-corner,
-.oc-overlay ::-webkit-scrollbar-track,
-.oc-modal-dialog ::-webkit-scrollbar-track,
-.oc-overlay ::-webkit-scrollbar-corner,
-.oc-modal-dialog ::-webkit-scrollbar-corner {
-  background: transparent;
-}
+/* Separately keyed roots keep selector rejection cheap. Native nesting also keeps
+   shared declarations single in the inline copies used by shadow hosts. */
+.oc-overlay,
+.oc-modal-dialog {
+  &::-webkit-scrollbar-track,
+  &::-webkit-scrollbar-corner,
+  & ::-webkit-scrollbar-track,
+  & ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 
-:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-thumb,
-.oc-overlay ::-webkit-scrollbar-thumb,
-.oc-modal-dialog ::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  background-clip: content-box;
-  border: var(--scrollbar-thumb-inset) solid transparent;
-  border-radius: var(--radius-full);
-}
+  &::-webkit-scrollbar-thumb,
+  & ::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    border-radius: var(--radius-full);
+    border: var(--scrollbar-thumb-inset, calc(var(--scrollbar-size) / 4)) solid transparent;
+    background-clip: content-box;
+  }
 
-/* Same repaint flag as styles/base.css; the property itself is registered there. */
-:is(.oc-overlay, .oc-modal-dialog):hover,
-.oc-overlay :hover,
-.oc-modal-dialog :hover {
-  --scrollbar-hover: 1;
-}
+  &:hover,
+  & :hover {
+    --scrollbar-hover: 1;
+  }
 
-:is(.oc-overlay, .oc-modal-dialog):hover::-webkit-scrollbar-thumb,
-.oc-overlay :hover::-webkit-scrollbar-thumb,
-.oc-modal-dialog :hover::-webkit-scrollbar-thumb {
-  background-color: var(--scrollbar-thumb-near);
-}
+  &:hover::-webkit-scrollbar-thumb,
+  & :hover::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb-near);
+  }
 
-:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-thumb:hover,
-:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-thumb:active,
-.oc-overlay ::-webkit-scrollbar-thumb:hover,
-.oc-overlay ::-webkit-scrollbar-thumb:active,
-.oc-modal-dialog ::-webkit-scrollbar-thumb:hover,
-.oc-modal-dialog ::-webkit-scrollbar-thumb:active {
-  background-color: var(--scrollbar-thumb-hover);
+  &::-webkit-scrollbar-thumb:hover,
+  &::-webkit-scrollbar-thumb:active,
+  & ::-webkit-scrollbar-thumb:hover,
+  & ::-webkit-scrollbar-thumb:active {
+    background-color: var(--scrollbar-thumb-hover);
+  }
 }
 
 /* The anchor owner sets position-anchor; each surface keeps its own placement and size budget. */
 .oc-overlay {
+  --scrollbar-size: var(--scrollbar-size-compact);
+
   position: fixed;
   inset: auto;
   z-index: var(--z-dropdown);

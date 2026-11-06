@@ -94,7 +94,6 @@ openclaw-chat-details[mobile] {
   overflow: auto;
   overscroll-behavior: contain;
   --scrollbar-size: var(--scrollbar-size-compact);
-  --scrollbar-thumb-inset: var(--scrollbar-thumb-inset-compact);
   font-size: 12px;
 }
 .chat-details--docked {
