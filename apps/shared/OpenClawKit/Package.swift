@@ -1,6 +1,17 @@
 // swift-tools-version: 6.3
 
+import Foundation
 import PackageDescription
+
+// Native transport is an explicit build opt-in; ordinary app builds need no XCFramework.
+let nativeIrohEnabled = ProcessInfo.processInfo.environment["OPENCLAW_IROH_NATIVE"] == "1"
+let nativePackages: [Package.Dependency] = nativeIrohEnabled
+    ? [.package(path: "../../../crates/openclaw-iroh-ffi")] : []
+let nativeDependencies: [Target.Dependency] = nativeIrohEnabled
+    ? [.product(name: "OpenClawIroh", package: "openclaw-iroh-ffi",
+                condition: .when(platforms: [.iOS, .macOS]))] : []
+let nativeSettings: [SwiftSetting] = nativeIrohEnabled
+    ? [.define("OPENCLAW_IROH_NATIVE", .when(platforms: [.iOS, .macOS]))] : []
 
 let package = Package(
     name: "OpenClawKit",
@@ -19,7 +30,7 @@ let package = Package(
         .trait(name: "Talk", description: "ElevenLabs cloud TTS / talk support"),
         .default(enabledTraits: ["Talk"]),
     ],
-    dependencies: [
+    dependencies: nativePackages + [
         .package(url: "https://github.com/steipete/ElevenLabsKit", exact: "0.1.3"),
         .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.1"),
         .package(url: "https://github.com/mgriebling/SwiftMath", exact: "1.7.3"),
@@ -44,7 +55,7 @@ let package = Package(
             ]),
         .target(
             name: "OpenClawKit",
-            dependencies: [
+            dependencies: nativeDependencies + [
                 "OpenClawNativeState",
                 "OpenClawProtocol",
                 .product(
@@ -56,7 +67,7 @@ let package = Package(
             resources: [
                 .process("Resources"),
             ],
-            swiftSettings: [
+            swiftSettings: nativeSettings + [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .target(
@@ -77,7 +88,7 @@ let package = Package(
             ]),
         .testTarget(
             name: "OpenClawKitTests",
-            dependencies: [
+            dependencies: nativeDependencies + [
                 "OpenClawKit",
                 "OpenClawChatUI",
                 "OpenClawProtocol",
@@ -85,7 +96,7 @@ let package = Package(
             ],
             path: "Tests/OpenClawKitTests",
             resources: [.copy("Fixtures")],
-            swiftSettings: [
+            swiftSettings: nativeSettings + [
                 .enableUpcomingFeature("StrictConcurrency"),
                 .enableExperimentalFeature("SwiftTesting"),
             ]),
