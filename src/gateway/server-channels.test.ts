@@ -2392,13 +2392,17 @@ describe("server-channels auto restart", () => {
     }
   });
 
-  it("does not allow a second account task to start when stop times out", async () => {
-    const startAccount = vi.fn(
-      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
-        await new Promise<void>(() => {
-          abortSignal.addEventListener("abort", () => {}, { once: true });
-        }),
-    );
+  it("recovers a manual stop timeout through the existing staged start handoff", async () => {
+    const releaseFirstTask = createDeferred();
+    const contexts: ChannelGatewayContext<TestAccount>[] = [];
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      contexts.push(ctx);
+      if (contexts.length === 1) {
+        await releaseFirstTask.promise;
+        throw new Error("late abandoned task failure");
+      }
+      await waitForAbort(ctx.abortSignal);
+    });
     installTestRegistry(
       createTestPlugin({
         startAccount,
@@ -2410,14 +2414,52 @@ describe("server-channels auto restart", () => {
     const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
     await vi.advanceTimersByTimeAsync(5_000);
     await stopTask;
-    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(contexts[0]?.abortSignal.aborted).toBe(true);
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+    ).toMatchObject({
+      running: true,
+      restartPending: false,
+      lastError: "channel stop timed out after 5000ms",
+    });
 
-    const snapshot = manager.getRuntimeSnapshot();
-    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    // Automatic recovery must not override the operator's stop.
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { preserveManualStop: true });
     expect(startAccount).toHaveBeenCalledTimes(1);
-    expect(account?.running).toBe(true);
-    expect(account?.restartPending).toBe(false);
-    expect(account?.lastError).toContain("channel stop timed out");
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+
+    // Preserve this maintenance line's two-stage recovery admission contract.
+    const pending = await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(pending.get(DEFAULT_ACCOUNT_ID)).toEqual({ status: "retry", reason: "task-owned" });
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    const recovered = await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(recovered.get(DEFAULT_ACCOUNT_ID)).toEqual({ status: "handed-off" });
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+    expect(contexts[1]?.abortSignal.aborted).toBe(false);
+
+    contexts[0]?.setStatus({ accountId: DEFAULT_ACCOUNT_ID, lastError: "stale status" });
+    releaseFirstTask.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+    ).toMatchObject({
+      running: true,
+      restartPending: false,
+      lastError: null,
+    });
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(contexts[1]?.abortSignal.aborted).toBe(true);
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+    ).toMatchObject({
+      running: false,
+      restartPending: false,
+    });
   });
 
   it("does not poison auto-restart state when recovery stop times out", async () => {
