@@ -346,6 +346,35 @@ suite.define(() => {
     }
   });
 
+  it("opens the Where picker where its whole list fits on a phone", async () => {
+    await suite.withPage({ ...mobile, viewport: { width: 393, height: 852 } }, async ({ page }) => {
+      await installScenario(page);
+      await page.goto(suite.server.baseUrl + "new?agent=research");
+      await page.locator(".new-session-page__message").waitFor();
+      const trigger = page.locator("#new-session-where-trigger");
+      await trigger.click();
+      const popover = page.locator("#new-session-where-popover");
+      await popover.getByText("Agents API setup").waitFor();
+      await waitForLayoutSettled(page, "#new-session-where-popover");
+      // The trigger sits near the bottom of a phone, so the list must take the roomier side
+      // instead of shrinking into the space below and hiding hosted workspaces.
+      const lastOption = await popover.getByText("Agents API setup").boundingBox();
+      const fit = await popover.evaluate((element, lastBottom) => {
+        const list = element.querySelector(".new-session-page__environment-list")!;
+        const rect = element.getBoundingClientRect();
+        return {
+          inViewport: rect.top >= 0 && rect.bottom <= window.innerHeight,
+          listScrolls: list.scrollHeight > list.clientHeight + 1,
+          lastOptionInside: lastBottom <= rect.bottom,
+        };
+      }, lastOption!.y + lastOption!.height);
+      expect(fit).toEqual({ inViewport: true, listScrolls: false, lastOptionInside: true });
+      await popover.locator('[data-value="gateway"]').click();
+      await popover.waitFor({ state: "hidden" });
+      expect(await trigger.textContent()).toContain("This computer");
+    });
+  });
+
   it("shows the chat header while creating a session", async () => {
     await suite.withPage(mobile, async ({ page }) => {
       const gateway = await installScenario(page);
