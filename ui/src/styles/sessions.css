@@ -217,11 +217,6 @@
     min-height: 44px;
     padding-inline-end: 48px;
   }
-
-  .sessions-filter-popover__clear {
-    width: 44px;
-    height: 44px;
-  }
 }
 
 .session-filter-toggle-group {

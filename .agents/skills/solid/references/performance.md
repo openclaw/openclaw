@@ -72,6 +72,33 @@ These are results for the cited workloads, not universal speedups.
 
 ### WebKit
 
+- For aged-tab comparisons, put each fresh control in its own browser process
+  and match retained session keys, not just pane counts. Use the aged-tab
+  harness's separate `--in-page` run to distinguish application settlement from
+  compound native-input gaps. Zero-delay typing includes key acknowledgments
+  between edits; cancelling `keydown` does not isolate the driver because the
+  engine can invalidate focus styling before dispatch. Corroborate with paced
+  trusted input and browser-local frame measurements. Synthetic input does not
+  cover native editing defaults or IME, and two animation frames are not CPU or
+  presentation timestamps. Do not attribute a gap from resource counts alone.
+- Keep fixture validation outside CPU and input windows. Returning all recorded
+  requests grows with a soak even when the assertion only needs a count; use a
+  scalar count outside measurement. Chromium `Performance.enable` defaults to
+  elapsed task time: request `timeDomain: "threadTicks"` for thread CPU claims.
+- Match once-loaded route styles when isolating progressive aging. In the aged-tab
+  census, Chromium's remaining typing/sidebar gap disappeared after matching
+  external stylesheet residency (77 sheets versus 20 before matching). Report
+  that bounded first-visit cost separately; do not call it an ever-growing
+  subscription or automation backlog. Keep an unmatched run to show the actual
+  cost a used document pays.
+- Zero `document.getAnimations()` does not rule out native animation growth.
+  WebKit filters disconnected targets out of that API and subtree enumeration.
+  Session churn retained nine running `::after` shimmers per removed loading
+  skeleton in WebKit 27.2. Inspect native animation instances after timing;
+  diagnostic enumeration itself can create retaining wrappers. Capturing handles
+  while connected can flush style and mask a short-lived loading-frame failure.
+  Script cancellation stops ticking but may leave native CSS ownership records;
+  test style retirement at the connected owner boundary as well as running counts.
 - Split disclosure expansion and collapse before diagnosing a slow toggle cycle.
   The chat `*-toggle` benchmarks await ARIA/content assertions between two native
   activations, so their input-to-last-commit span includes the intervening driver

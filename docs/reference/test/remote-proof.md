@@ -26,15 +26,15 @@ refs and rejects an explicit `--blacksmith-ref` other than `main`. Choose the
 source revision in your local checkout; its source capsule and frozen dependency
 install preserve that selection independently of the workflow ref. Explicit
 workflow and job selection support explicit focused, routine, and high-memory
-profiles. The default stays 16-class until real smaller-machine qualification
-passes; neither `--class` nor `--type` sizes delegated Testbox leases.
+profiles. The default uses 4 vCPUs, preserving the observed CPU and RAM of the
+pre-November 3 16-class allocation; neither `--class` nor `--type` sizes delegated Testbox leases.
 
 | Workload                                     | Workflow                           | Runner tier | Default job deadline | Maximum explicit deadline |
 | -------------------------------------------- | ---------------------------------- | ----------- | -------------------- | ------------------------- |
-| Focused tests and narrow checks              | `ci-check-focused-testbox.yml`     | 4-class     | 60 minutes           | 60 minutes                |
-| Bounded routine proof                        | `ci-check-routine-testbox.yml`     | 8-class     | 60 minutes           | 120 minutes               |
-| Broad compiler/lint graphs (current default) | `ci-check-testbox.yml`             | 16-class    | 60 minutes           | 240 minutes               |
-| Measured memory-heavy proof                  | `ci-check-high-memory-testbox.yml` | 32-class    | 240 minutes          | 240 minutes               |
+| Focused tests and narrow checks              | `ci-check-focused-testbox.yml`     | 2-class     | 60 minutes           | 60 minutes                |
+| Bounded routine proof                        | `ci-check-routine-testbox.yml`     | 2-class     | 60 minutes           | 120 minutes               |
+| Broad compiler/lint graphs (current default) | `ci-check-testbox.yml`             | 4-class     | 60 minutes           | 240 minutes               |
+| Measured memory-heavy proof                  | `ci-check-high-memory-testbox.yml` | 8-class     | 240 minutes          | 240 minutes               |
 
 Deadlines include hydration. The larger maximum requires an explicit workflow
 `timeout_minutes` input; Crabbox does not forward that input, and `--ttl` does
@@ -174,8 +174,8 @@ Linux ARM cannot provide this proof with Google's x86_64 AAPT2 artifact.
 
 ## Testbox runner sizing
 
-Use the default 16-class workflow for routine remote proof, with a 60-minute
-total-job deadline including hydration. Keep the 32-class
+Use the default 4-class workflow for routine remote proof, with a 60-minute
+total-job deadline including hydration. Keep the 8-class
 rare: record the command and its measured memory need, a smaller-runner OOM,
 or a controlled comparison showing lower total billed cost before selecting it.
 Existing memory-heavy full-suite Testbox PR gates use this exception. A generic

@@ -59,6 +59,7 @@ import {
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { restoreCronScriptOperatorSource } from "../gateway/cron-operator-source.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
@@ -515,6 +516,13 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     let mcp: CronScriptMcpTools | undefined;
     let releaseRuntime = () => {};
     try {
+      // Conditions can act without a model run; restore the original source before preparation.
+      using operator = await restoreCronScriptOperatorSource(
+        params.job,
+        deps.resolveGatewayContext?.(),
+        evaluationScope,
+        params.deliveryAttemptFence,
+      );
       const request = {
         runtimeConfig: selectLiveRuntimeConfig(deps.config),
         jobId: params.job.id,
@@ -528,12 +536,11 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         execTarget: params.job.toolsAllowExecTarget,
         callerOrigin: params.job.toolsAllowProvenance?.callerOrigin,
       };
-      const retained = await resolveCachedRuntime(request, evaluationScope, {
+      const { runtime, release } = await resolveCachedRuntime(request, evaluationScope, {
         cancelSignal: params.abortSignal,
         wallClockMs: params.wallClockMs,
       });
-      const runtime = retained.runtime;
-      releaseRuntime = retained.release;
+      releaseRuntime = release;
       admission = prepareCronRunAdmission({
         scheduledExecution: params.occurrence.mint({
           cfg: runtime.context.config,
@@ -541,7 +548,9 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           runId,
           runSessionKey: runtime.context.sessionKey,
           toolsAllow: request.toolsAllow,
+          operatorAuthority: operator?.authority,
         }),
+        operatorAuthority: operator?.authority,
         cfg: runtime.context.config,
         runId,
         agentId: runtime.context.agentId,
@@ -626,13 +635,12 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           }),
       };
 
-      const selectedRuntime = runtime;
-      return await withPluginRuntimeRegistryScope(selectedRuntime.pluginRegistry, async () => {
+      return await withPluginRuntimeRegistryScope(runtime.pluginRegistry, async () => {
         assertActive();
         registerHeadlessToolSearchCatalog({
           catalogRef,
           tools,
-          hookContext: { ...selectedRuntime.context, runId },
+          hookContext: { ...runtime.context, runId },
         });
         const remainingWallClockMs = Math.ceil(evaluationScope.deadline - performance.now());
         if (remainingWallClockMs <= 0) {

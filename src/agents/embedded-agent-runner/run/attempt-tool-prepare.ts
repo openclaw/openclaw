@@ -232,6 +232,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     messageChannel: attempt.messageChannel,
     modelProvider: attempt.provider,
     modelId: attempt.modelId,
+    modelAuthProfileId: attempt.authProfileId,
     modelApi: attempt.model.api,
     modelBaseUrl: attempt.model.baseUrl,
     modelParams: attempt.model.params,

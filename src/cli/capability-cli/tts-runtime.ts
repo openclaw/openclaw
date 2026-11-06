@@ -66,6 +66,7 @@ export async function runTtsConvert(params: {
         voiceId: params.voiceId,
       },
       timeoutMs: 120_000,
+      signal,
     });
   } else {
     const cfg = await resolveLocalCapabilityRuntimeConfig({
