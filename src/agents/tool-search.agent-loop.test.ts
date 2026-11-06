@@ -3,6 +3,8 @@ import { expect, it, vi } from "vitest";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { Agent, type AgentMessage } from "./runtime/index.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
+import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { singleToolCallStreamFn, toolSearchTestModel } from "./tool-search-loop.test-support.js";
 import {
   createToolSearchCatalogRef,
@@ -85,4 +87,20 @@ it("accepts the quoted scalars a direct call accepts through tool_call", async (
 
   expect(target.execute).toHaveBeenCalledOnce();
   expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({ limit: 3, recursive: true });
+});
+
+it("leaves client tool arguments for the client's schema owner", async () => {
+  const catalogRef = createToolSearchCatalogRef();
+  registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
+  const clientTool = fakeTool("client_pick_file", "Ask the client to pick a file");
+  clientTool.parameters = { type: "object", properties: { limit: { type: "integer" } } };
+  addClientToolsToToolCatalog({ catalogRef, enabled: true, tools: [clientTool] });
+  const control = expectDefined(
+    createToolSearchTools({ catalogRef }).find((tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME),
+    "tool_call control",
+  );
+
+  await control.execute("call-client", { id: clientTool.name, args: { limit: "3" } });
+
+  expect(vi.mocked(clientTool.execute).mock.calls[0]?.[1]).toEqual({ limit: "3" });
 });

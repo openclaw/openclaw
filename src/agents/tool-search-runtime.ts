@@ -158,8 +158,11 @@ function isToolParameters(
 }
 
 function coerceCatalogInput(entry: ToolSearchCatalogEntry, input: unknown): unknown {
+  if (entry.source !== "openclaw" || !isRecord(input)) {
+    return input;
+  }
   const parameters = resolveAgentToolExecutionSchema(entry.tool, entry.parameters);
-  if (!isRecord(input) || !isToolParameters(parameters)) {
+  if (!isToolParameters(parameters)) {
     return input;
   }
   try {
