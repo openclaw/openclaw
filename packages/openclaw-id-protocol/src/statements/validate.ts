@@ -70,6 +70,21 @@ const nonNegative: Check = predicate(
   (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0,
   "expected integer >= 0",
 );
+// A non-empty list of protocol versions (integers >= 1), strictly ascending: one spelling.
+const versionList: Check = predicate(
+  (v) =>
+    Array.isArray(v) &&
+    v.length > 0 &&
+    v.length <= MAX_LIST &&
+    v.every(
+      (item, index) =>
+        typeof item === "number" &&
+        Number.isSafeInteger(item) &&
+        item >= 1 &&
+        (index === 0 || item > v[index - 1]),
+    ),
+  "expected ascending list of versions",
+);
 const clawId: Check = predicate(isClawId, "expected claw id (32 lowercase hex)");
 const randomId: Check = predicate(isRandomId, "expected id (32 lowercase hex)");
 const ed25519Key: Check = predicate(isEd25519PublicKey, "expected ed25519:<64 hex>");
@@ -239,6 +254,7 @@ const V1_BODIES: Record<StatementType, Check> = {
     owner_devices: list(object({ device_pub: ed25519Key, caps: list(oneOf(OWNER_CAPABILITIES)) })),
     owner_peer_keys: list(irohKey),
     members: list(object({ account_id: nonEmptyText, role, peer_keys: list(irohKey) })),
+    protocols: object({ statement: versionList, descriptor: versionList }),
     issued_at: seconds,
   }),
   InviteRedemption: object({
@@ -249,6 +265,13 @@ const V1_BODIES: Record<StatementType, Check> = {
     peer_key: irohKey,
     proof: sha256Hex,
     requested_at: seconds,
+  }),
+  // Added to v1-draft in place (pre-release); see docs/versioning.md, "Owner reset".
+  RootReset: object({
+    claw_id: clawId,
+    new_root_pub: ed25519Key,
+    binding_seq: positive,
+    issued_at: seconds,
   }),
 };
 

@@ -14,6 +14,17 @@ ordinary system input asking the agent to inspect current state and continue.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
 
+The recovery input stays intact in the agent transcript but is hidden from the
+Control UI chat feed, including queued, live, and reloaded history. The continued
+answer remains visible as its own turn. This is not the separate update outcome
+(`restart-sentinel`), which remains visible with any actionable failure guidance.
+
+Control UI status summaries use source-owned copy, not recovery/workflow
+instructions. Their complete summary (including its label) is one line of at most
+64 characters; oversized summaries retain their details behind a disclosure.
+This budget does not truncate agent prompts, ordinary messages, actionable update
+outcomes, or the existing expandable context notices.
+
 A crash or `SIGKILL` cannot write shutdown markers. Startup also recognizes the
 existing persisted nonterminal run identity when it has no live execution owner
 and its run started in the immediately preceding Gateway lifetime. The existing
@@ -100,6 +111,10 @@ own input readiness pending until its retained inputs are admitted. This also
 applies when several logical agents share the same physical store. Database
 reads and writes retain their normal admission rules; recovery does not borrow
 startup's temporary database access or wait for model executions to finish.
+Crash recovery waits for preparation to settle without an interactive request
+deadline. Slow preparation does not disqualify interrupted work; failed preparation
+still prevents unmarked adoption and reports the normal admission diagnostics.
+This requires the updated Gateway, with no marker or schema migration.
 
 <a id="graceful-restarts-drain-first" />
 

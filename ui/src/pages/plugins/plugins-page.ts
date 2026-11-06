@@ -297,6 +297,7 @@ export function createPluginsPage(options: {
     return () => {
       stopKeydown();
       active = false;
+      promptLaunch.reset();
       catalogTask.cancel();
       details.inspection.release();
       details.catalog.release();

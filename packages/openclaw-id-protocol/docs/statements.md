@@ -74,20 +74,21 @@ additive change. v1-draft accepts only `ed25519`.
 
 ## Statement types
 
-| Type               | Body                                                                                                     | Valid signer                             | Owner capability needed                                        |
-| ------------------ | -------------------------------------------------------------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------- |
-| OwnerDeviceCert    | device_pub, peer_keys[W] (<= 10), label, scope `owner`, caps, issued_at, expires_at\|null, root_epoch    | R, or a current owner device of the claw | `approve_device`; caps within the signer's (`caps_escalation`) |
-| ServerBinding      | claw_id, hostname, k_srv, k_gw, binding_seq, root_epoch, issued_at                                       | R only                                   | n/a                                                            |
-| InviteCap          | claw_id, invite_id, role, audience {kind, value}, label, created_at, expires_at, single_use, secret_hash | current owner device (or R)              | `invite`                                                       |
-| MembershipChange   | claw_id, seq, target (by op), issued_at                                                                  | current owner device (or R)              | `manage_members`; `approve_device` for `add_owner_device`      |
-| Revocation         | target_fp, target_kind (`owner_device` \| `peer_key`), reason, root_epoch, issued_at                     | R or any current owner device            | none                                                           |
-| MembershipSnapshot | claw_id, seq, binding_seq, owner_devices[{device_pub, caps}], owner_peer_keys, members[], issued_at      | K_gw of the verified binding             | n/a (a mirror of current state, never an authority)            |
-| InviteRedemption   | claw_id, invite_id, account_id, device_pub, peer_key, proof, requested_at                                | the invitee's own D_I (self-signed)      | n/a                                                            |
+| Type               | Body                                                                                                           | Valid signer                             | Owner capability needed                                        |
+| ------------------ | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------- |
+| OwnerDeviceCert    | device_pub, peer_keys[W] (<= 10), label, scope `owner`, caps, issued_at, expires_at\|null, root_epoch          | R, or a current owner device of the claw | `approve_device`; caps within the signer's (`caps_escalation`) |
+| ServerBinding      | claw_id, hostname, k_srv, k_gw, binding_seq, root_epoch, issued_at                                             | R only                                   | n/a                                                            |
+| InviteCap          | claw_id, invite_id, role, audience {kind, value}, label, created_at, expires_at, single_use, secret_hash       | current owner device (or R)              | `invite`                                                       |
+| MembershipChange   | claw_id, seq, target (by op), issued_at                                                                        | current owner device (or R)              | `manage_members`; `approve_device` for `add_owner_device`      |
+| Revocation         | target_fp, target_kind (`owner_device` \| `peer_key`), reason, root_epoch, issued_at                           | R or any current owner device            | none                                                           |
+| MembershipSnapshot | claw_id, seq, binding_seq, owner_devices[{device_pub, caps}], owner_peer_keys, members[], protocols, issued_at | K_gw of the verified binding             | n/a (a mirror of current state, never an authority)            |
+| InviteRedemption   | claw_id, invite_id, account_id, device_pub, peer_key, proof, requested_at                                      | the invitee's own D_I (self-signed)      | n/a                                                            |
+| RootReset          | claw_id, new_root_pub, binding_seq, issued_at                                                                  | K_gw of the binding being replaced       | n/a (owner reset on the machine, enrollment.md)                |
 
-`root_epoch` is the constant 1 (`ROOT_EPOCH`); any other value is `malformed`. A claw's root
-never changes in this version, so there is no RootRotation statement: owner reset is out of
-scope (OCF-319). The field stays so that statements signed before epochs were removed still
-verify.
+`root_epoch` is the constant 1 (`ROOT_EPOCH`); any other value is `malformed`. There is no
+RootRotation statement and no root epoch: a root is replaced only by an owner reset on the
+machine, vouched for by K_gw with a RootReset (enrollment.md, "Owner reset"). The field stays
+so that statements signed before epochs were removed still verify.
 
 Capabilities: `approve_device`, `bind`, `invite`, `manage_members`. R holds all of them.
 (`bind` stays a certificate capability, but bindings are signed by R alone: clients that pin
@@ -127,12 +128,13 @@ Only the Gateway can run steps 4 and 5. Clients and Discovery verify R's signatu
 removing each other: the kit decides).
 
 Other verifiers: `verifyMembershipSnapshot` (signed by the binding's K_gw, same claw),
-`verifyInviteRedemptionSignature` (self-signed by device_pub).
+`verifyInviteRedemptionSignature` (self-signed by device_pub), `verifyRootResetSignature`
+(signed by the binding's K_gw, same claw) and `verifyRootReset` (below).
 
 Failure codes (stable; callers match codes, never detail text): `malformed`,
 `bad_signature`, `wrong_signer`, `not_an_owner`, `missing_capability`, `caps_escalation`,
-`not_yet_valid`, `root_mismatch`, `wrong_claw`, `host_mismatch`,
-`rollback`, `bad_proof`, `expired`, `audience_mismatch`. The Gateway adds `limit_reached`
+`not_yet_valid`, `root_mismatch`, `owner_reset`, `reset_mismatch`, `wrong_claw`,
+`host_mismatch`, `rollback`, `bad_proof`, `expired`, `audience_mismatch`. The Gateway adds `limit_reached`
 for the caps below.
 
 ## The allowlist model
@@ -196,21 +198,54 @@ browser cannot revoke itself from the Control UI.
 
 ## Pins and rollback (spec section 5, step 3)
 
-A client stores per origin `ClawPin = { claw_id, root_fp, binding_seq }`. A pin from an
-invite link (`r=<fp(R)>`) or a kit starts as `{ claw_id: null, binding_seq: 0 }`. The pinned
-root never changes.
+A client stores per origin `ClawPin = { claw_id, root_fp, binding_seq, k_gw? }`; `k_gw` is the
+K_gw of the last binding verified under the pin (owner reset, below). A pin from an invite link
+(`r=<fp(R)>`) or a kit starts as `{ claw_id: null, binding_seq: 0 }`. A pin never moves to
+another root: after an owner reset the browser is set up again and gets a new pin.
 
 `verifyBindingForPin(evidence, pin, { host, now })` runs before any socket opens.
-Evidence is untrusted Discovery output: `{ root_pub, binding }`.
+Evidence is untrusted Discovery output: `{ root_pub, binding, reset? }` (`descriptorEvidence`).
 
-1. fp(root_pub) must equal the pinned fingerprint -> else `root_mismatch`. A new root is
-   never accepted, whatever signs it.
+1. fp(root_pub) must equal the pinned fingerprint -> else `root_mismatch`, or `owner_reset`
+   when the evidence carries a valid owner reset from the pinned root (below). A new root is
+   never pinned, whatever signs it.
 2. The binding is signed by that root -> else `wrong_signer`.
 3. claw_id matches the pin (if known) -> else `wrong_claw`; `binding.hostname ==
    location.host` -> else `host_mismatch`.
 4. `binding_seq >= pin.binding_seq` -> else `rollback`.
 
 On success the caller stores the returned pin and dials only `binding.k_srv`.
+
+### Owner reset
+
+`owner_reset` means: the pin stored a K_gw, the descriptor's `reset.previous_binding` passes
+steps 2-4 under the pinned root (`reset.previous_root_pub`) and names that same K_gw, and
+`verifyRootReset(previous, reset.statement, evidence)` passes:
+
+1. The RootReset is signed by the previous binding's K_gw (`wrong_signer`, `bad_signature`) for
+   the same claw (`wrong_claw`).
+2. Its binding_seq is higher than the previous binding's (`rollback`).
+3. It names the served root (`root_mismatch`), which differs from the previous one
+   (`reset_mismatch`).
+4. The served binding is signed by that root (`wrong_signer`, `bad_signature`), for the same claw
+   and hostname (`wrong_claw`, `host_mismatch`), with the same K_srv and K_gw and the reset's
+   binding_seq (`reset_mismatch`).
+
+Any failure is reported as `root_mismatch` (the detail names the step), so a forged reset
+still shows the substitution warning. `owner_reset` is not a pass: the client dials nothing,
+stores nothing, and offers to set the browser up again with the new kit. It proves only that
+whoever holds the K_gw this browser already verified changed the root, which is what owner
+reset means.
+
+The K_gw must come from the pin, not from the descriptor: the previous binding is signed only by
+the old root, and a reset is often done because that root's kit leaked. With the old kit alone,
+an attacker could sign a previous binding naming their own K_gw. A pin without `k_gw` (a fresh
+pin from an invite link or kit that never verified a binding, or a pin stored before this field
+existed) therefore always gets `root_mismatch` for a new root.
+
+Accepted edge case: the descriptor carries only the latest reset. A browser that missed two
+resets (pinned to R, the descriptor shows R' -> R'') gets `root_mismatch` and is set up again
+the same way.
 
 ### Freshness (freshness/v1)
 
@@ -249,7 +284,8 @@ disagree. It contains: the kit (text, root seed, R, fp, display fp), named keys,
 the vector claw's current owner devices (`owners`, the allowlist device signatures are checked
 against), valid statements with their signing input in hex, invalid statements with the expected
 error code (and anchor when not the default), and pin checks (fresh pin, rollback,
-substitution, host mismatch, a new root).
+substitution, host mismatch, a new root, an owner reset vouched for by the pinned K_gw, one
+whose RootReset K_gw did not sign, and a genuine reset seen by a pin without `k_gw`).
 
 Regenerate after an intentional change:
 
@@ -274,6 +310,9 @@ node --import ./scripts/tsx.mjs -e 'const { buildStatementVectors } = await impo
 - MembershipSnapshot adds `owner_devices` (key and granted caps), `owner_peer_keys` and
   `binding_seq` (relay admission needs owner devices, Discovery's owner mailbox needs owner
   device keys and their caps, consumers
-  need to tie a snapshot to a binding), and carries no `revoked` list.
+  need to tie a snapshot to a binding), and carries no `revoked` list. It also carries
+  `protocols`, the versions the Gateway accepts (versioning.md, "Choosing a version").
 - K_gw is separate from K_srv: the Gateway never reads the tunnel child's key file
   (process-model.md).
+- New statement type `RootReset`, signed by K_gw: owner reset on the machine replaces the
+  spec's root rotation (enrollment.md, "Owner reset").
