@@ -82,7 +82,7 @@ it.each([undefined, "daily-model"] as const)(
       });
       await source.appendMessageAsync(assistant);
       const restored = await SessionManager.openAsync(scope);
-      const entry = restored.getEntries().find((entry) => entry.type === "message");
+      const entry = restored.getEntries().find((candidate) => candidate.type === "message");
       expect(entry?.type).toBe("message");
       if (entry?.type !== "message" || entry.message.role !== "assistant") {
         throw new Error("Expected stored assistant failure");
