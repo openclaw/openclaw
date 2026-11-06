@@ -43,6 +43,8 @@ it.skipIf(!live)(
       const params = isolatedParams({ version: 1, profiles: {} }, "unused", root, root);
       params.modelId = modelId;
       params.timeoutMs = 120_000;
+      params.streamParams = { maxTokens: 1_024 };
+      params.thinkLevel = "off";
       params.authorization = {
         owner: "host",
         model: { provider: "openai", id: modelId, api: "openai-responses", baseUrl } as Model,

@@ -7,6 +7,7 @@ import { resolveCodexAppServerHomeScope } from "./config.js";
 import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
 import { assertCodexPassiveTurnItems } from "./protocol-validators.js";
 import { isJsonObject } from "./protocol.js";
+import { isCodexResponsesOAuth } from "./responses-oauth.js";
 
 type CodexIsolatedCompletionParams = Parameters<
   NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>
@@ -69,6 +70,13 @@ export async function runCodexIsolatedCompletion(
   }
   params.assertCurrent?.();
   const outputSchema = isJsonObject(params.outputSchema) ? params.outputSchema : undefined;
+  const hasStreamParams =
+    params.streamParams?.maxTokens !== undefined || params.streamParams?.temperature !== undefined;
+  if (hasStreamParams && isCodexResponsesOAuth(preparedAuth)) {
+    throw new Error(
+      "ChatGPT token sharing does not support explicit token or temperature limits; select an API-key model.",
+    );
+  }
   const isolation = resolveCodexBoundedTurnIsolation(options);
   if (authRequirement === "api-key" && !baseUrl) {
     throw new Error("Codex native isolated completion requires its prepared Responses endpoint.");
@@ -89,12 +97,13 @@ export async function runCodexIsolatedCompletion(
       ? {
           modelProvider: "openai",
           threadConfig: { openai_base_url: baseUrl },
-          requireInferenceRoute: authRequirement === "api-key",
         }
       : {}),
     authRequirement,
+    requireInferenceRoute: authRequirement === "api-key" || hasStreamParams,
     timeoutMs: params.timeoutMs,
     thinkLevel: params.thinkLevel,
+    streamParams: params.streamParams,
     signal: params.abortSignal,
     assertCurrent: params.assertCurrent,
     agentDir: params.agentDir,
