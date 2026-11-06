@@ -1,0 +1,3 @@
+103
+# Cover nested pending/update/completion through the real producer and reply bridge,
+# plus hidden-child, wrapper-failure, and independent-call controls for #194168.

@@ -62,6 +62,7 @@ import {
   emitToolActivityEvent,
   isExecToolName,
   toolStartData,
+  resolveCompletedToolActivityWrappers,
 } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import {
@@ -482,6 +483,12 @@ export async function prepareToolExecutionEnd(
     }
 
     terminalMeta.activity = itemData;
+    if (
+      startData?.visibleChildStarted &&
+      [...resolveCompletedToolActivityWrappers(ctx)].some((call) => call.activity === itemData)
+    ) {
+      itemData.hideFromChannelProgress = true;
+    }
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "tool",
