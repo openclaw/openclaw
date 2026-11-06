@@ -221,19 +221,29 @@ type SessionRunHost = {
   chatRunId?: string | null;
   sessionKey: string;
   sessionsResult?: SessionsListResult | null;
+  chatPendingInputs?: { sessionKey: string; queuedInputs: readonly { runId?: string }[] };
 };
 
 function hasSessionRun(host: SessionRunHost, includeSubagents: boolean): boolean {
   if (host.chatRunId) {
     return true;
   }
-  const key = normalizeDefaultMainSessionAliasForUi(host.sessionKey);
+  const sessionKey = host.sessionKey;
+  const key = normalizeDefaultMainSessionAliasForUi(sessionKey);
+  // Input parked in follow-up custody keeps the row queued, but it waits for
+  // another owner (such as a quiet automation); it renders as queued, not a run.
+  const parked = new Set(
+    host.chatPendingInputs?.sessionKey === sessionKey
+      ? host.chatPendingInputs.queuedInputs.map((input) => input.runId)
+      : [],
+  );
   return Boolean(
     key &&
     host.sessionsResult?.sessions.some(
       (session) =>
         normalizeDefaultMainSessionAliasForUi(session.key) === key &&
-        (isSessionRunStateActive(session) ||
+        ((isSessionRunStateActive(session) &&
+          !(session.activeRunIds?.length && session.activeRunIds.every((id) => parked.has(id)))) ||
           (includeSubagents && session.hasActiveSubagentRun === true)),
     ),
   );

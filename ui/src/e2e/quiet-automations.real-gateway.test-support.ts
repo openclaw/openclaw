@@ -19,6 +19,8 @@ export const quietFixture = {
   error: "The release readiness endpoint rejected this check.",
   prompt: "QUIET_AUTOMATION_CHECK: inspect release readiness and record the current result.",
   waiting: "Still waiting for the release approval. Nothing has changed since the last check.",
+  human: "Also confirm the changelog entry before the release.",
+  humanReply: "The changelog entry is confirmed.",
 };
 export type QuietOutcome = "blocked" | "no_change" | "progress" | "done" | "error";
 
@@ -94,6 +96,7 @@ export async function startQuietProvider(options: { baseline?: boolean } = {}) {
   let callsInStep = 0;
   let sequence = 0;
   let quietChecks = 0;
+  let humanTurns = 0;
   let started = createDeferred();
   let release = createDeferred();
   let receivedPriorMeaningfulResult: unknown;
@@ -120,6 +123,19 @@ export async function startQuietProvider(options: { baseline?: boolean } = {}) {
             tools?: Array<{ name: string }>;
             input?: Array<{ role?: string; content?: string | Array<{ text?: string }> }>;
           } = JSON.parse((await buffer(request)).toString("utf8"));
+          const userTexts =
+            body.input
+              ?.filter((item) => item.role === "user")
+              .map((item) => JSON.stringify(item.content ?? "")) ?? [];
+          // A human turn queued behind an automation answers the human, not the check.
+          if (
+            userTexts.findLastIndex((text) => text.includes(quietFixture.human)) >
+            userTexts.findLastIndex((text) => text.includes(quietFixture.prompt))
+          ) {
+            humanTurns++;
+            writeReply(response, quietFixture.humanReply, ++sequence);
+            return;
+          }
           const call = callsInStep++;
           const id = ++sequence;
           if (step === "create") {
@@ -246,6 +262,7 @@ export async function startQuietProvider(options: { baseline?: boolean } = {}) {
     receivedPriorMeaningfulResult: () => receivedPriorMeaningfulResult,
     promptDiagnostics: () => promptDiagnostics,
     requests: () => sequence,
+    humanTurns: () => humanTurns,
     diagnostics: () => ({ requests: sequence, failure, requestsSeen, clientErrors, connections }),
     async stop() {
       release.resolve();

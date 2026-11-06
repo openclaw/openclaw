@@ -31,6 +31,10 @@ export function createDiagnosticMessageLifecycle(
   // Processed events still matter without a session ref; queue-depth/state events do not.
   const canTrackSessionState = (ref: MessageLifecycleRef): boolean =>
     params.enabled && params.trackSessionState && Boolean(ref.sessionId || ref.sessionKey);
+  const isRunActive = (ref: MessageLifecycleRef): boolean =>
+    ref.sessionKey
+      ? isSessionRunActiveForKey(ref.sessionKey)
+      : Boolean(ref.sessionId && isSessionRunActive(ref.sessionId));
 
   return {
     markProcessing(): void {
@@ -48,13 +52,7 @@ export function createDiagnosticMessageLifecycle(
         sessionId: ref.sessionId,
         sessionKey: ref.sessionKey,
         // Receiving input precedes admission; retained cleanup may still hold its turn.
-        state: (
-          ref.sessionKey
-            ? isSessionRunActiveForKey(ref.sessionKey)
-            : ref.sessionId && isSessionRunActive(ref.sessionId)
-        )
-          ? "processing"
-          : "waiting",
+        state: isRunActive(ref) ? "processing" : "waiting",
         reason: params.processingReason,
       });
     },
@@ -64,11 +62,15 @@ export function createDiagnosticMessageLifecycle(
       if (!canTrackSessionState(ref)) {
         return;
       }
+      // This message's dispatch is done, but another operation (for example a
+      // scheduled run this input queued behind) may still own the session.
+      // Controller retirement projects idle when that owner ends.
       logSessionStateChange({
         sessionId: ref.sessionId,
         sessionKey: ref.sessionKey,
-        state: "idle",
+        state: isRunActive(ref) ? "processing" : "idle",
         reason,
+        consumeQueuedTurn: true,
       });
     },
 

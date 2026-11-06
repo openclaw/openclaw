@@ -257,6 +257,15 @@ export function isRpcSourceQueued(ref: RpcSourceRef | undefined): boolean {
   );
 }
 
+/** Projection only: accepted input parked in follow-up custody, not yet claimed by a turn. */
+export function isRpcSourceParkedFollowup(ref: RpcSourceRef): boolean {
+  return (
+    isRpcSourceQueued(ref) &&
+    ref.input.custody.enqueued === true &&
+    ref.input.injection === undefined
+  );
+}
+
 /** Waiting input may be discarded by a committed history cut; producers must settle first. */
 export function isRpcSourceWaitingForTurn(ref: RpcSourceRef): boolean {
   return (

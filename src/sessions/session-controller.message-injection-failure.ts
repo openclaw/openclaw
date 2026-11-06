@@ -17,6 +17,7 @@ import {
   MessageInjectionWithdrawnError,
 } from "../auto-reply/reply/message-injection-authority.js";
 import { SessionPendingInputCustodyError } from "../config/sessions/session-pending-input-custody-error.js";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { hasPromptImageInput } from "../media/prompt-image-input.js";
 import type {
@@ -44,7 +45,12 @@ export function resolveReplyBackendQueueMessageMismatch(
     const runContext = backend.runId ? getAgentRunContext(backend.runId) : undefined;
     // A new human turn must keep its own visible answer. Steering shares the
     // active turn's output owner, so leave this input with FIFO followup admission.
-    if (runContext?.isControlUiVisible === false && runContext.projectSessionMessages === false) {
+    // Scheduled automation prose is audit-only and a no_change result publishes
+    // nothing, so an automation run cannot own a human answer either.
+    if (
+      (runContext?.isControlUiVisible === false && runContext.projectSessionMessages === false) ||
+      readAutomationDisplayState(backend.runId) !== "ordinary"
+    ) {
       return "input_visibility_mismatch";
     }
     const activeFingerprint = normalizeOptionalString(

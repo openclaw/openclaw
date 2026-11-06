@@ -163,7 +163,11 @@ export type ChatGuardianNotice = {
 
 export type { ToolApprovalReview } from "../../../../src/shared/tool-approval-reviews.js";
 
-export type ChatQueueDisplayItem = ChatQueueItem & { serverQueued?: true };
+export type ChatQueueDisplayItem = ChatQueueItem & {
+  serverQueued?: true;
+  /** Gateway fact: a scheduled automation run owns the session ahead of this input. */
+  waitingFor?: "automation";
+};
 
 export type ChatQueueItem = {
   id: string;
