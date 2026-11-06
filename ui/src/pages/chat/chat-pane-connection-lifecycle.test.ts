@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionSuggestionsListResult } from "../../../../packages/gateway-protocol/src/schema/sessions-suggestions.js";
 /* @vitest-environment jsdom */
@@ -16,6 +17,7 @@ import { mockDocumentVisibility as trackVisibility } from "../../test-helpers/mo
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
 import { makeRequestMock, requestCalls } from "./chat-host.test-support.ts";
 import {
@@ -181,6 +183,117 @@ const setConnected = (pane: TestChatPane, value: boolean) =>
   Object.defineProperty(pane, "isConnected", { configurable: true, value });
 
 describe("chat pane connection lifecycle", () => {
+  it.each([true, false])(
+    "reactivation retries failed live admission only when retryable (%s)",
+    async (retryable) => {
+      vi.useFakeTimers();
+      let recovered = false;
+      const recoveredMessages = [{ role: "assistant", content: "Recovered shared history" }];
+      const h = reconnectPane(
+        { messages: recoveredMessages, sessionId: "foreground-retry" },
+        {
+          "sessions.messages.subscribe": (params: { key: string }) => {
+            if (!recovered) {
+              if (!retryable) {
+                throw new Error("Live observation denied");
+              }
+              throw new GatewayProtocolRequestTimeoutError({
+                method: "sessions.messages.subscribe",
+                timeoutMs: 30_000,
+                requestSent: true,
+              });
+            }
+            return { key: params.key };
+          },
+        },
+      );
+      h.pane.presented = false;
+      const admitted = syncSelectedSessionMessageSubscription(h.state);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(await admitted).toBe(false);
+      expect(chatHistoryRequests(h.state).historyLoad).toMatchObject({
+        phase: "failed",
+        retryable,
+      });
+      const before = requestCalls(h.request, "sessions.messages.subscribe").length;
+      recovered = true;
+      h.pane.presented = true;
+      h.pane.prepareRender();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requestCalls(h.request, "sessions.messages.subscribe")).toHaveLength(
+        before + Number(retryable),
+      );
+      expect(requestCalls(h.request, "chat.send")).toHaveLength(0);
+      if (retryable) {
+        expect(await chatHistoryRequests(h.state).subscriptionReady).toBe(true);
+        expect(h.state.chatSessionMessageSubscription?.key).toBe(h.state.sessionKey);
+        expect(chatHistoryRequests(h.state).subscriptionError).toBeUndefined();
+        expect(h.state.chatMessages).toEqual(recoveredMessages);
+        expect(chatHistoryRequests(h.state).historyLoad.phase).toBe("committed");
+      }
+    },
+  );
+
+  it.each(["foreground", "retry"] as const)(
+    "retries a failed approval upgrade via %s",
+    async (entry) => {
+      const h = openingPane(true);
+      h.dispatchConnect();
+      await h.requested;
+      h.subscription.resolve({
+        key: h.state.sessionKey,
+        initialHistory: { ok: true, payload: h.history },
+      });
+      h.pane.applyGatewaySnapshot(h.connected);
+      await h.approvalRequested;
+      h.approval.reject(
+        new GatewayProtocolRequestTimeoutError({
+          method: "sessions.messages.subscribe",
+          timeoutMs: 30_000,
+          requestSent: true,
+        }),
+      );
+      await waitForSolid(() =>
+        expect(chatHistoryRequests(h.state).historyLoad).toMatchObject({
+          phase: "failed",
+          retryable: true,
+        }),
+      );
+      expect(h.state.chatSessionMessageSubscription?.key).toBe(h.state.sessionKey);
+      const original = h.request.getMockImplementation()!;
+      h.request.mockImplementation((...args) =>
+        args[0] === "sessions.messages.subscribe"
+          ? Promise.resolve({
+              key: h.state.sessionKey,
+              approvalReplay: {
+                sessionKey: h.state.sessionKey,
+                approvals: [],
+                updatedAtMs: 1,
+                truncated: false,
+              },
+            })
+          : original(...args),
+      );
+      const before = requestCalls(h.request, "sessions.messages.subscribe").length;
+      if (entry === "foreground") {
+        h.pane.presented = false;
+        h.pane.prepareRender();
+        h.pane.presented = true;
+        h.pane.prepareRender();
+      } else {
+        h.pane.render().layout!.primary.chat.onRefresh();
+      }
+      await waitForSolid(() =>
+        expect(requestCalls(h.request, "sessions.messages.subscribe")).toHaveLength(before + 1),
+      );
+      expect(await chatHistoryRequests(h.state).subscriptionReady).toBe(true);
+      expect(h.state.chatSessionApprovalReplay).toMatchObject({
+        sessionKey: h.state.sessionKey,
+        complete: true,
+      });
+    },
+  );
+
   it("uses a snapshot hydrated during connect preparation for the pipelined delta", async () => {
     const h = openingPane();
     const snapshot = {

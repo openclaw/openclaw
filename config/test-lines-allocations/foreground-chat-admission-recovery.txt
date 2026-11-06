@@ -1,0 +1,2 @@
+126
+# Cover exhausted admission, terminal denial, foreground/manual upgrade recovery, and preservation of a usable same-session observer until replacement admission succeeds.

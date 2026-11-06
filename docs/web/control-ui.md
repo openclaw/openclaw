@@ -155,7 +155,10 @@ access to an unavailable conversation.
 
 A saved chat can restore its archived or read-only composer and parent breadcrumb
 while reconnecting. These saved display facts never authorize actions; live session
-state replaces them when the connection returns.
+state replaces them when the connection returns. If a temporary transcript or
+live-message subscription failure exhausted its retries, returning to that chat
+starts a fresh read attempt. Access denials are not retried automatically, and
+returning to a chat does not resend messages.
 
 If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
 
