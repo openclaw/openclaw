@@ -26,7 +26,7 @@ it("keeps boot Brotli savings and cheaper deferred compression without changing 
   const deferredGzip = deferred.find((variant) => variant.fileName.endsWith(".gz"))!.source;
   expect(compressed.byteLength).toBeLessThanOrEqual(deferredGzip.byteLength);
   expect(gunzipSync(deferredGzip)).toEqual(Buffer.from(source));
-  expect(deferredGzip).toEqual(Buffer.from(canonicalGzip(Buffer.from(source), 11)));
+  expect(deferredGzip).toEqual(Buffer.from(canonicalGzip(Buffer.from(source), 12)));
   const unrelatedBoot = await createControlUiPrecompressedAssetVariants(
     "assets/app.js",
     source,
