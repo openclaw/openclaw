@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
@@ -502,6 +502,26 @@ const supportsPublishedDriverUpdate = targetWorkflow.includes(
 );
 const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
 const androidTestTier = !fullNativeValidation && !useCompatibleAndroidCi;
+// Wear production strings feed the phone generator; only its test/debug inputs
+// are independent. Shared modules, build inputs and missing paths keep all rows.
+const narrowAndroidUnitTests =
+  ordinaryPullRequest &&
+  !frozenTarget &&
+  !useCompatibleAndroidCi &&
+  changedPaths !== null &&
+  changedPaths.length > 0 &&
+  changedPaths.every(
+    (file) =>
+      /^(?:apps\/android\/app\/src\/|apps\/android\/wear\/src\/(?:test|androidTest|debug)\/)/u.test(
+        file,
+      ) && lstatSync(file, { throwIfNoEntry: false })?.isFile(),
+  );
+const runAndroidPhoneTests =
+  !narrowAndroidUnitTests ||
+  changedPaths?.some((file) => file.startsWith("apps/android/app/")) === true;
+const runAndroidWearTests =
+  !narrowAndroidUnitTests ||
+  changedPaths?.some((file) => file.startsWith("apps/android/wear/")) === true;
 // Unit tests do not compile the benchmark. Keep its build when inputs
 // change, or when the existing changed-path manifest cannot narrow scope.
 const androidBenchmarkChanged =
@@ -1840,15 +1860,20 @@ const manifest = {
     runAndroid
       ? [
           // android-ci-contract-v3: phone variants, Wear modules, Android lint, benchmark, and ktlint.
-          {
-            check_name: "android-test-play",
-            task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
-          },
-          {
-            check_name: "android-test-third-party",
-            task: "test-third-party",
-          },
-          ...(!useCompatibleAndroidCi
+          ...(runAndroidPhoneTests
+            ? [
+                {
+                  check_name: "android-test-play",
+                  task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
+                },
+                {
+                  check_name: "android-test-third-party",
+                  task: "test-third-party",
+                  ...(androidTestTier && !runAndroidWearTests ? { app_lint: "third-party" } : {}),
+                },
+              ]
+            : []),
+          ...(!useCompatibleAndroidCi && runAndroidWearTests
             ? [
                 {
                   check_name: "android-test-wear",
