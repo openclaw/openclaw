@@ -33,7 +33,6 @@ it.each([
     entries: [],
     omission: "none",
   });
-  runtimeMocks.upsertSessionEntryCore.mockImplementation(async (_scope, patch) => patch);
   const work = createDeferred();
   runtimeMocks.agentCommandFromIngress.mockReset().mockReturnValue(work.promise);
   const h = new NodeEventHarness();
@@ -83,14 +82,8 @@ it("admits an incognito share before the agent finishes and retains its actor cu
   };
   const owner = createMemorySessionActorOwner(location);
   onTestFinished(() => owner.close());
-  const authority = { assertCurrent() {}, authorize() {} };
-  const actor = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    {
-      assertCurrent() {},
-      assertReadable() {},
-    },
-  );
+  const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
+  const actor = await owner.acquire({ database: owner.identity, sessionKey }, authority);
   onTestFinished(() => actor.release());
   assert(actor.storage);
   await actor.storage.mutate(
