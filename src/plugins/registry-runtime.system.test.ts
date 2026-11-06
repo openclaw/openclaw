@@ -19,7 +19,11 @@ import { createPluginRuntime } from "./runtime/index.js";
 it("keeps plugin runtime snapshot readers independent of config IO and mutation facades", () => {
   expect(
     findSourceImportBackedges(
-      ["src/plugins/registry-runtime.ts", "src/plugins/runtime/system-events.ts"],
+      [
+        "src/plugins/registry-runtime.ts",
+        "src/plugins/runtime/system-events.ts",
+        "src/gateway/auth-policy.ts",
+      ],
       ["src/config/config.ts", "src/config/io.ts", "src/config/mutate.ts"],
     ),
   ).toEqual([]);
