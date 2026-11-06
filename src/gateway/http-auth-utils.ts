@@ -483,7 +483,9 @@ export async function authorizeControlUiSessionOwnerReadRequestOrReply(
       {
         profileId: profile.profileId,
         sessionCap: requestAuth.operatorRolePolicy?.sessions.others,
-        cfg: params.cfg ?? getRuntimeConfig(),
+        // Awaited image I/O can outlive a source-policy reload. The Gateway's
+        // live reader, not its request-start snapshot, owns each visibility check.
+        cfg: (params.getRuntimeConfig ?? getRuntimeConfig)(),
         membership,
       },
       creatorMatches,

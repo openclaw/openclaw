@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
   isSessionEntryDataSql,
@@ -194,7 +195,7 @@ it.each(["end", "error"] as const)(
       expect(
         (
           await loadTranscriptEvents({ ...fixture.target, sessionId: fixture.entry.sessionId })
-        ).filter((entry) => entry.type === "custom_message"),
+        ).filter((entry) => asOptionalRecord(entry)?.type === "custom_message"),
       ).toHaveLength(phase === "error" ? 1 : 0);
     } finally {
       await fixture.close();
