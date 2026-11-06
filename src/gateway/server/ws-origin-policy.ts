@@ -1,6 +1,6 @@
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
@@ -78,11 +78,11 @@ export function disconnectDisallowedGatewayPolicyClients(
         );
         roleAuthorityRevoked =
           currentRole !== undefined &&
-          (!roleScopesAllow({
+          (resolveMissingRequestedScope({
             role: "operator",
             requestedScopes: client.connect.scopes ?? [],
             allowedScopes: currentRole.scopes,
-          }) ||
+          }) !== null ||
             currentRole.accessPolicyPlugin !==
               client.internal?.operatorAccessAuthority?.requiredPolicyPlugin);
       } catch {

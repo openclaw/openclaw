@@ -726,6 +726,7 @@ it("keeps model-account actions usable when identity refresh overlaps ChatGPT co
     email: "ada@example.test",
     name: "Ada",
   });
+  harness.emitHello(gatewayHelloForMethods([], ["operator.write"]));
   const page = mountProfilePage(harness.context);
 
   await waitForFast(() => expect(page.querySelector(".profile-auth-add-account")).not.toBeNull());
@@ -838,6 +839,14 @@ it("replaces a retired profile read when the same ID gains profile qualification
 
 it.each([
   { scopes: ["operator.read"], summary: "You can view settings and activity." },
+  {
+    scopes: ["operator.read.no-credential-enrollment"],
+    summary: "You can view settings and activity.",
+  },
+  {
+    scopes: ["operator.write.no-credential-enrollment"],
+    summary: "You have permission to send messages and make changes.",
+  },
   { scopes: ["operator.write"], summary: "You have permission to send messages and make changes." },
   {
     scopes: ["operator.sessions.read"],

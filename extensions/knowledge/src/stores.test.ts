@@ -168,6 +168,18 @@ it("passive discovery, including operator provider reads, never creates storage"
   expect(snap.stores.every((s) => s.state === "unprovisioned")).toBeTruthy();
   expect((await f.service.status({}, f.reader)).writesEnabled).toBe(false);
   expect((await f.service.status({}, f.as("main"))).writesEnabled).toBe(true);
+  expect(
+    (await f.service.status({}, operatorContext(f.api, ["operator.read.no-credential-enrollment"])))
+      .writesEnabled,
+  ).toBe(false);
+  expect(
+    (
+      await f.service.status(
+        {},
+        operatorContext(f.api, ["operator.write.no-credential-enrollment"]),
+      )
+    ).writesEnabled,
+  ).toBe(true);
   expect(((await query(f, "records")) as Output<"records">).total).toBe(0);
   expect(((await query(f, "status")) as Output<"status">).store).toBe("unprovisioned");
   expect(await f.storesDir()).toStrictEqual([]);

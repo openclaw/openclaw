@@ -6,6 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { isSharedGatewayOwnerRunAuthority } from "../agents/harness/host-private-capabilities.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
@@ -14,13 +15,14 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
 import { ensureSkillLibrarySchema } from "../skills/library/store.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import * as profileReader from "../state/user-profile-list.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
@@ -163,6 +165,40 @@ function toolAuthority() {
     "operator tool authority",
   );
 }
+
+it("retains shared-owner source identity without restoring attenuated enrollment grants", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const owner = ensureGatewayOwnerProfile("Gateway owner");
+    const client = createOperatorClient({ profileId: owner.id, scopes: ["operator.admin"] });
+    client.usesSharedGatewayAuth = true;
+    client.sharedGatewaySessionGeneration = "synthetic-shared-generation";
+    client.connect.client.id = GATEWAY_CLIENT_IDS.CONTROL_UI;
+    client.connect.client.mode = GATEWAY_CLIENT_MODES.WEBCHAT;
+    client.internal = { authenticatedOperator: true, operatorRoleActor: { kind: "system" } };
+    const context = createContext();
+    const original = await capture({ client, context });
+    using _ = { [Symbol.dispose]: original.release };
+    expect(isSharedGatewayOwnerRunAuthority(original.authority)).toBe(true);
+    const narrowed = await capture({
+      client: {
+        ...client,
+        connect: { ...client.connect, scopes: ["operator.write.no-credential-enrollment"] },
+        internal: { operatorRunAuthority: original.authority },
+      },
+      context,
+    });
+    try {
+      expect(isSharedGatewayOwnerRunAuthority(narrowed.authority)).toBe(true);
+      expect(narrowed.authority.source).toBe(original.authority.source);
+      expect(narrowed.authority.scopes).toEqual(["operator.write.no-credential-enrollment"]);
+      expect(resolveMissingOperatorScope(["operator.write"], narrowed.authority.scopes)).toBe(
+        "operator.write",
+      );
+      expect(narrowed.authority.assertCurrent).not.toThrow();
+    } finally {
+      narrowed.release();
+    }
+  }));
 
 it.each(["unprofiled backend", "synthetic owner"] as const)(
   "does not mint durable operator authority for an authenticated %s",

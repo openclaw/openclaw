@@ -201,6 +201,9 @@ it("grants only same-plugin gateway routes with least-privilege scopes", () => {
   ]);
   expect(adminTabs[2]).not.toHaveProperty("requiresGatewayAuth");
   expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([grant("logbook")]);
+  expect(listControlUiPluginTabAuthGrants(["operator.write.no-credential-enrollment"])).toEqual([
+    { ...grant("logbook"), scopes: ["operator.read.no-credential-enrollment"] },
+  ]);
 });
 
 it("uses the first dispatched gateway route as descriptor owner", () => {

@@ -30,7 +30,13 @@ import type {
 import { changedAgents, type Stores } from "./stores.js";
 
 type Outcome = StoresChangeOutput["outcome"];
-const OPERATOR_READ = new Set(["operator.read", "operator.write", "operator.admin"]);
+const OPERATOR_READ = new Set([
+  "operator.read",
+  "operator.write",
+  "operator.read.no-credential-enrollment",
+  "operator.write.no-credential-enrollment",
+  "operator.admin",
+]);
 /** Change rejected before anything was journaled or written. */
 class Rejected extends Error {
   constructor(

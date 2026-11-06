@@ -4,11 +4,16 @@ import { executePluginCommand, matchPluginCommand, registerPluginCommand } from 
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
-function registerScopedCommand(handler: Parameters<typeof registerPluginCommand>[1]["handler"]) {
+function registerScopedCommand(
+  handler: Parameters<typeof registerPluginCommand>[1]["handler"],
+  requiredScopes: NonNullable<Parameters<typeof registerPluginCommand>[1]["requiredScopes"]> = [
+    "operator.pairing",
+  ],
+) {
   registerPluginCommand("demo-plugin", {
     name: "pairlike",
     description: "Scoped command",
-    requiredScopes: ["operator.pairing"],
+    requiredScopes,
     handler,
   });
   return expectDefined(matchPluginCommand("/pairlike"), "scoped plugin command match").command;
@@ -81,3 +86,23 @@ it.each([
     expect(handler).toHaveBeenCalledTimes(allowed ? 1 : 0);
   },
 );
+
+it.each([
+  ["operator.read", "operator.write", false],
+  ["operator.read", "operator.write.no-credential-enrollment", true],
+  ["operator.write", "operator.write.no-credential-enrollment", true],
+  ["operator.write", "operator.read.no-credential-enrollment", false],
+  ["operator.pairing", "operator.write.no-credential-enrollment", false],
+  ["operator.read.no-credential-enrollment", "operator.read", true],
+] as const)("retains command requirement %s for grant %s", async (required, grant, allowed) => {
+  const handler = vi.fn(async () => ({ text: "ran" }));
+  await executePluginCommand({
+    command: registerScopedCommand(handler, [required]),
+    channel: "webchat",
+    isAuthorizedSender: true,
+    commandBody: "/pairlike",
+    gatewayClientScopes: [grant],
+    config: {},
+  });
+  expect(handler).toHaveBeenCalledTimes(allowed ? 1 : 0);
+});

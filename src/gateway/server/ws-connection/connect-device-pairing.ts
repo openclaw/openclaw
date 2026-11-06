@@ -24,7 +24,7 @@ import {
   listEffectivePairedDeviceRoles,
   requestDevicePairing,
 } from "../../../infra/device-pairing.js";
-import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../../../shared/operator-scope-compat.js";
 import { isBrowserCopilotClient } from "../../../utils/message-channel.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
 import { retireDeviceTokenClients } from "../../device-token-client-lifecycle.js";
@@ -178,11 +178,11 @@ export async function authorizeGatewayConnectDevice(
       ): boolean =>
         pairedCandidate?.publicKey === devicePublicKey &&
         hasEffectivePairedDeviceRole(pairedCandidate, role) &&
-        roleScopesAllow({
+        resolveMissingRequestedScope({
           role,
           requestedScopes,
           allowedScopes: resolvePairedAccessScopes(pairedCandidate),
-        });
+        }) === null;
       const pairingPlanParams = {
         reason,
         existingPairedDevice,
@@ -217,8 +217,13 @@ export async function authorizeGatewayConnectDevice(
         ) {
           const livePairedScopes = resolvePairedAccessScopes(livePaired);
           scopes = normalizeSortedUniqueTrimmedStringList(
-            [...scopes, ...plan.autoApproveOperatorScopes].filter((scope) =>
-              roleScopesAllow({ role, requestedScopes: [scope], allowedScopes: livePairedScopes }),
+            [...scopes, ...plan.autoApproveOperatorScopes].filter(
+              (scope) =>
+                resolveMissingRequestedScope({
+                  role,
+                  requestedScopes: [scope],
+                  allowedScopes: livePairedScopes,
+                }) === null,
             ),
           );
           connectParams.scopes = scopes;

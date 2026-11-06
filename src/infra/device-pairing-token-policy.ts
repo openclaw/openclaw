@@ -1,5 +1,5 @@
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import {
   listApprovedPairedDeviceRoles,
   resolveApprovedDeviceScopeBaseline,
@@ -43,11 +43,13 @@ export function scopesWithinApprovedDeviceBaseline(params: {
   if (!params.approvedScopes) {
     return false;
   }
-  return roleScopesAllow({
-    role: params.role,
-    requestedScopes: params.scopes,
-    allowedScopes: params.approvedScopes,
-  });
+  return (
+    resolveMissingRequestedScope({
+      role: params.role,
+      requestedScopes: params.scopes,
+      allowedScopes: params.approvedScopes,
+    }) === null
+  );
 }
 
 export function verifyPairedDeviceToken(
@@ -100,7 +102,9 @@ export function verifyPairedDeviceToken(
     return { ok: false, reason: "scope-mismatch" };
   }
   const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
-  if (!roleScopesAllow({ role, requestedScopes, allowedScopes: entry.scopes })) {
+  if (
+    resolveMissingRequestedScope({ role, requestedScopes, allowedScopes: entry.scopes }) !== null
+  ) {
     return { ok: false, reason: "scope-mismatch" };
   }
   return entry.issuer ? { ok: true, issuer: entry.issuer } : { ok: true };
@@ -130,11 +134,11 @@ export function reusablePairedDeviceToken(
     }) &&
     scopesWithinApprovedDeviceBaseline({ role, scopes: existing.scopes, approvedScopes }) &&
     deviceTokenIssuerMatches(existing, params.issuer) &&
-    roleScopesAllow({
+    resolveMissingRequestedScope({
       role,
       requestedScopes,
       allowedScopes: existing.scopes,
-    })
+    }) === null
     ? existing
     : null;
 }

@@ -412,6 +412,32 @@ describe("session-scoped method admission", () => {
   });
 });
 
+it("admits bounded ordinary actions without admitting personal credential acquisition", () => {
+  const bounded = "operator.write.no-credential-enrollment";
+  allow("tools.invoke", [bounded]);
+  allow("users.listModelAccounts", [bounded]);
+  allow("users.github.status", [bounded]);
+  allow("users.github.disconnect", [bounded]);
+  for (const method of ["users.authConnect.start", "users.authConnect.answer"]) {
+    deny(WRITE, method, [bounded]);
+    allow(method, [WRITE]);
+  }
+  for (const method of ["users.github.authorize.start", "users.github.authorize.poll"]) {
+    deny(READ, method, [bounded]);
+    deny(READ, method, ["operator.read.no-credential-enrollment"]);
+    allow(method, [READ]);
+    expectProjection(method, {}, [READ], [bounded], []);
+  }
+  expectProjection("tools.invoke", {}, [WRITE, ADMIN], [bounded], [bounded]);
+  expectProjection(
+    "users.github.status",
+    {},
+    [READ],
+    [bounded],
+    ["operator.read.no-credential-enrollment"],
+  );
+});
+
 describe("session-only dictation admission", () => {
   const scopes = ["operator.sessions.write"];
   const sessionKey = "agent:main:guest-dictation";

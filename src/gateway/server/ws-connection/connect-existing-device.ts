@@ -6,7 +6,7 @@ import {
 } from "../../../infra/device-pairing.js";
 import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-bootstrap-profile.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
-import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../../../shared/operator-scope-compat.js";
 import {
   isMobileNodeBootstrapConnect,
   isSetupCodeHandoffBootstrapClient,
@@ -101,7 +101,11 @@ export async function authorizeExistingGatewayDevice(params: {
   if (scopes.length > 0 && !state.remoteIngressPrincipal) {
     const scopesAllowed =
       pairedScopes.length > 0 &&
-      roleScopesAllow({ role, requestedScopes: scopes, allowedScopes: pairedScopes });
+      resolveMissingRequestedScope({
+        role,
+        requestedScopes: scopes,
+        allowedScopes: pairedScopes,
+      }) === null;
     if (!scopesAllowed && !(await requirePairing("scope-upgrade", paired))) {
       return { ok: false, handoffBootstrapProfile };
     }
@@ -140,11 +144,11 @@ export async function authorizeExistingGatewayDevice(params: {
     );
     const pairedAllowsHandoff =
       pairedRoles.includes("operator") &&
-      roleScopesAllow({
+      resolveMissingRequestedScope({
         role: "operator",
         requestedScopes: retryBootstrapOperatorScopes,
         allowedScopes: pairedScopes,
-      });
+      }) === null;
     if (!pairedAllowsHandoff && !(await requirePairing("scope-upgrade", paired))) {
       return { ok: false, handoffBootstrapProfile };
     }

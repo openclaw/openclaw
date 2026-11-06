@@ -19,7 +19,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   intersectOperatorScopes,
   resolveMissingOperatorScope,
-  roleScopesAllow,
+  resolveMissingRequestedScope,
 } from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
@@ -312,19 +312,20 @@ export async function captureGatewayOperatorRunAuthority(input: {
     const scopes = intersectOperatorScopes(inherited.scopes, params.client?.connect.scopes ?? []);
     const continuation = continuationAuthorities.get(inherited);
     const source = params.independentContinuation ? (continuation ?? inherited) : inherited;
-    const authority = roleScopesAllow({
-      role: "operator",
-      requestedScopes: source.scopes,
-      allowedScopes: scopes,
-    })
-      ? source
-      : createAdmittedRunOperatorAuthority({
-          ...source,
-          scopes,
-          get modelPolicy() {
-            return source.modelPolicy;
-          },
-        });
+    const authority =
+      resolveMissingRequestedScope({
+        role: "operator",
+        requestedScopes: source.scopes,
+        allowedScopes: scopes,
+      }) === null
+        ? source
+        : createAdmittedRunOperatorAuthority({
+            ...source,
+            scopes,
+            get modelPolicy() {
+              return source.modelPolicy;
+            },
+          });
     if (continuation && !params.independentContinuation && authority !== inherited) {
       continuationAuthorities.set(authority, continuation);
     }
@@ -559,11 +560,11 @@ export async function captureGatewayOperatorRunAuthority(input: {
       !originalActorCurrent ||
       params.hasCurrentClientAuthority?.() === false ||
       !isGatewayCurrent() ||
-      !roleScopesAllow({
+      resolveMissingRequestedScope({
         role: "operator",
         requestedScopes: scopes,
         allowedScopes: client.connect.scopes ?? [],
-      })
+      }) !== null
     ) {
       throw new Error("Gateway caller authority is no longer active.");
     }

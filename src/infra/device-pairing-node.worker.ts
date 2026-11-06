@@ -1,5 +1,5 @@
 import type { NodeHostStats } from "../shared/node-host-stats.js";
-import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import type { NodePairingPendingSnapshot } from "./device-pairing-admission.types.js";
@@ -159,11 +159,14 @@ export const nodePairingOperations = {
           kind: "node-pending",
           ...toPendingSnapshot(device, pending),
         });
-        const missingScope = resolveMissingRequestedScope({
-          role: "operator",
-          requestedScopes: resolveNodePairApprovalScopes(pending.commands ?? []),
-          allowedScopes: callerScopes ?? [],
-        });
+        const missingScope = resolveNodePairApprovalScopes(pending.commands ?? []).find(
+          (scope) =>
+            !roleScopesAllow({
+              role: "operator",
+              requestedScopes: [scope],
+              allowedScopes: callerScopes ?? [],
+            }),
+        );
         if (missingScope) {
           return { value: { status: "forbidden", missingScope }, persist: false };
         }

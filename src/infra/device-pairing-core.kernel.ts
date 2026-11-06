@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { revokeDeviceBootstrapTokensForDeviceInDatabase } from "./device-bootstrap.worker-kernel.js";
 import type {
@@ -66,12 +66,13 @@ function canRefreshPendingDevicePairingRequest(
     return false;
   }
   return incomingScopes.every((scope) =>
-    incomingRoles.some((role) =>
-      roleScopesAllow({
-        role,
-        requestedScopes: [scope],
-        allowedScopes: existingScopes,
-      }),
+    incomingRoles.some(
+      (role) =>
+        resolveMissingRequestedScope({
+          role,
+          requestedScopes: [scope],
+          allowedScopes: existingScopes,
+        }) === null,
     ),
   );
 }

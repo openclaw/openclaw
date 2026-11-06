@@ -194,7 +194,31 @@ export function resolvePluginCommandAuthorizationRefusal(
       : undefined;
     const hasAdmin = scopes?.has(ADMIN_SCOPE) === true;
     const missingScope = scopes
-      ? requiredScopes.find((scope) => !hasAdmin && !scopes.has(scope))
+      ? requiredScopes.find((scope) => {
+          if (hasAdmin || scopes.has(scope)) {
+            return false;
+          }
+          // Keep legacy exact-membership semantics; only the new capabilities add matches.
+          switch (scope) {
+            case "operator.read":
+              return (
+                !scopes.has("operator.read.no-credential-enrollment") &&
+                !scopes.has("operator.write.no-credential-enrollment")
+              );
+            case "operator.write":
+              return !scopes.has("operator.write.no-credential-enrollment");
+            case "operator.read.no-credential-enrollment":
+              return (
+                !scopes.has("operator.read") &&
+                !scopes.has("operator.write") &&
+                !scopes.has("operator.write.no-credential-enrollment")
+              );
+            case "operator.write.no-credential-enrollment":
+              return !scopes.has("operator.write");
+            default:
+              return true;
+          }
+        })
       : requiredScopes[0];
     if (missingScope && (scopes !== undefined || params.senderIsOwner !== true)) {
       logVerbose(`Plugin command /${command.name} blocked: missing gateway scope ${missingScope}`);

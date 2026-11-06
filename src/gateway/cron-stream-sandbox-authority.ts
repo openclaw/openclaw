@@ -26,7 +26,7 @@ import {
 } from "../sessions/session-controller.lifecycle.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import { resolveCronSkillsSnapshot } from "../skills/runtime/cron-snapshot.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
@@ -264,11 +264,11 @@ export async function prepareCronStreamSandboxAuthority(params: {
             (identity.profile.githubLogin ?? null) !== operator.githubLogin)) ||
         !isDeepStrictEqual(sourceRolePolicy(role), originalRole) ||
         (role &&
-          !roleScopesAllow({
+          resolveMissingRequestedScope({
             role: "operator",
             requestedScopes: operator.scopes,
             allowedScopes: role.scopes,
-          }))
+          }) !== null)
       ) {
         throw unavailable();
       }

@@ -12,6 +12,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
 type ModelAccountsSnapshot = {
@@ -279,6 +280,9 @@ export class ModelAccountsState {
   }
 
   openSignIn() {
+    if (!this.canEnroll) {
+      return;
+    }
     this.signIn = { providers: [], provider: "", method: "" };
     const pending = this.runAction(
       "request",
@@ -313,6 +317,7 @@ export class ModelAccountsState {
   startConnect() {
     const choice = this.signIn;
     if (
+      !this.canEnroll ||
       !choice?.providers.some(
         (provider) =>
           provider.id === choice.provider &&
@@ -404,7 +409,19 @@ export class ModelAccountsState {
   answerStep(stepId: string, value: unknown) {
     const flow = this.connectFlow;
     const step = flow?.step;
-    if (!this.connected || !flow || !step || step.id !== stepId || step.type === "progress") {
+    if (
+      !canCallGatewayMethod(
+        this.props.target.read().gateway,
+        "users.authConnect.answer",
+        "operator.write",
+        { requireAdvertisement: false },
+      ) ||
+      !this.connected ||
+      !flow ||
+      !step ||
+      step.id !== stepId ||
+      step.type === "progress"
+    ) {
       return undefined;
     }
     // Do not retain submitted secrets while the Gateway runs the provider-owned step.
@@ -484,6 +501,15 @@ export class ModelAccountsState {
         this.publish();
       }
     }
+  }
+
+  get canEnroll() {
+    return canCallGatewayMethod(
+      this.props.target.read().gateway,
+      "users.authConnect.start",
+      "operator.write",
+      { requireAdvertisement: false },
+    );
   }
 
   get busy() {

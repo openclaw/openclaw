@@ -18,6 +18,8 @@ const enModelAccounts = {
       noPerson: "Not identified",
       personalDescription:
         "Sign-in saves an account for this person on this Gateway. Shared and agent accounts stay unchanged.",
+      enrollmentUnavailable:
+        "This connection cannot add credentials. You can still use saved accounts or clear a new-chat default. To add an account, ask your administrator for credential enrollment access and reconnect.",
       signInUnavailable: "Sign-in unavailable",
       connectionSettings: "Connection settings",
       unavailable: {

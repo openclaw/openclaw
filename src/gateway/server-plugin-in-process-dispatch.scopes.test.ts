@@ -117,6 +117,16 @@ describe("registered plugin SDK scope attenuation", () => {
     { original: "write", scoped: "read", effective: "read" },
     { original: "read", scoped: "write", effective: "read" },
     { original: "admin", scoped: "write", effective: "write" },
+    {
+      original: "write.no-credential-enrollment",
+      scoped: "write",
+      effective: "write.no-credential-enrollment",
+    },
+    {
+      original: "read",
+      scoped: "write.no-credential-enrollment",
+      effective: "read.no-credential-enrollment",
+    },
   ] as const)(
     "retains the original $original source within scoped $scoped authority",
     async ({ original, scoped, effective }) => {
@@ -211,9 +221,13 @@ describe("registered plugin SDK scope attenuation", () => {
         expect(accepted.assertCurrent).not.toThrow();
 
         const writeResult = await invoke(true);
-        expect(writeResult.ok).toBe(effective === "write");
-        expect(handler).toHaveBeenCalledTimes(effective === "write" ? 2 : 1);
-        if (effective === "read") {
+        expect(writeResult.ok).toBe(
+          effective === "write" || effective === "write.no-credential-enrollment",
+        );
+        expect(handler).toHaveBeenCalledTimes(
+          effective === "write" || effective === "write.no-credential-enrollment" ? 2 : 1,
+        );
+        if (effective === "read" || effective === "read.no-credential-enrollment") {
           expect(writeResult.error).toMatchObject({ message: "missing scope: operator.write" });
         }
 
@@ -232,7 +246,9 @@ describe("registered plugin SDK scope attenuation", () => {
         sourceController.abort(new Error("original operator source revoked"));
         expect(recaptured.authority.signal?.aborted).toBe(true);
         await expect(invoke(false)).rejects.toThrow("original operator source revoked");
-        expect(handler).toHaveBeenCalledTimes(effective === "write" ? 2 : 1);
+        expect(handler).toHaveBeenCalledTimes(
+          effective === "write" || effective === "write.no-credential-enrollment" ? 2 : 1,
+        );
       } finally {
         releases.forEach((release) => release());
       }
@@ -260,8 +276,28 @@ describe("native tool scope provenance", () => {
     broad?: boolean;
     admin?: boolean;
     denied?: boolean;
+    expectedScopes?: OperatorScope[];
   }>([
     { name: "staff write minimum", source: write, broad: true },
+    {
+      name: "bounded write minimum",
+      source: ["operator.write.no-credential-enrollment"],
+      broad: true,
+      expectedScopes: ["operator.write.no-credential-enrollment"],
+    },
+    {
+      name: "bounded exact",
+      source: ["operator.write.no-credential-enrollment"],
+      explicit: ["operator.write.no-credential-enrollment"],
+      broad: true,
+      expectedScopes: ["operator.write.no-credential-enrollment"],
+    },
+    {
+      name: "bounded exact escalation",
+      source: ["operator.write.no-credential-enrollment"],
+      explicit: write,
+      denied: true,
+    },
     { name: "staff read minimum", source: readScopes, read: true, broad: true },
     { name: "admin minimum", source: admin, broad: true, admin: true },
     { name: "original Guest ceiling", source: sessionWrite, scoped: admin },
@@ -312,6 +348,9 @@ describe("native tool scope provenance", () => {
       expect(client?.connect.scopes?.includes("operator.admin") ?? false).toBe(
         testCase.admin ?? false,
       );
+      if (testCase.expectedScopes) {
+        expect(client?.connect.scopes).toEqual(testCase.expectedScopes);
+      }
       respond(true, {
         broad: roleScopesAllow({
           role: "operator",

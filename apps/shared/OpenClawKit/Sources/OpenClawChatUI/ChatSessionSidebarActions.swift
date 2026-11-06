@@ -36,10 +36,14 @@ public struct OpenClawSessionMenuConnection {
     func allows(_ method: String, scope: String = "operator.write") -> Bool {
         let methods = self.hello.features["methods"]?.value as? [AnyCodable] ?? []
         let scopes = (self.hello.auth["scopes"]?.value as? [AnyCodable] ?? []).compactMap { $0.value as? String }
-        let broadRead = scopes.contains("operator.read") || scopes.contains("operator.write")
+        let broadWrite = scopes.contains("operator.write") ||
+            scopes.contains("operator.write.no-credential-enrollment")
+        let broadRead = broadWrite || scopes.contains("operator.read") ||
+            scopes.contains("operator.read.no-credential-enrollment")
         let scopedRead = broadRead || scopes.contains("operator.sessions.write")
         return self.isCurrent() && methods.contains(.init(method)) &&
             (scopes.contains("operator.admin") || scopes.contains(scope) ||
+                (scope == "operator.write" && broadWrite) ||
                 (scope == "operator.read" && broadRead) || (scope == "operator.sessions.read" && scopedRead))
     }
 

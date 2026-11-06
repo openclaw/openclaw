@@ -6,7 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getPairedDevice, requestDevicePairing } from "../../infra/device-pairing.js";
 import { normalizeDeviceAuthScopes } from "../../shared/device-auth.js";
-import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../../shared/operator-scope-compat.js";
 import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { isOperatorScope } from "../operator-scopes.js";
 import { broadcastRejectedDevicePairing } from "../pairing-events.js";
@@ -65,11 +65,11 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       const rolePolicy = resolveOperatorRolePolicy(client, context.getRuntimeConfig());
       if (
         rolePolicy &&
-        !roleScopesAllow({
+        resolveMissingRequestedScope({
           role: "operator",
           requestedScopes,
           allowedScopes: rolePolicy.scopes,
-        })
+        }) !== null
       ) {
         respondError(
           respond,
@@ -80,11 +80,11 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       }
       const currentScopes = client?.connect.scopes ?? [];
       if (
-        !roleScopesAllow({
+        resolveMissingRequestedScope({
           role: "operator",
           requestedScopes: currentScopes,
           allowedScopes: requestedScopes,
-        })
+        }) !== null
       ) {
         respondError(
           respond,
@@ -170,11 +170,11 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
         const rolePolicy = resolveOperatorRolePolicy(client, context.getRuntimeConfig());
         if (
           rolePolicy &&
-          !roleScopesAllow({
+          resolveMissingRequestedScope({
             role: "operator",
             requestedScopes: result.scopes,
             allowedScopes: rolePolicy.scopes,
-          })
+          }) !== null
         ) {
           respondError(
             respond,

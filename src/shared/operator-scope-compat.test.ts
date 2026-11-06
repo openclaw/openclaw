@@ -10,6 +10,26 @@ import {
 function allows(role: string, requestedScopes: string[], allowedScopes: string[]) {
   return roleScopesAllow({ role, requestedScopes, allowedScopes });
 }
+
+it("separates ordinary actions from enrollment-bearing grants", () => {
+  const write = "operator.write.no-credential-enrollment";
+  const read = "operator.read.no-credential-enrollment";
+  expect(allows("operator", ["operator.write", "operator.read"], [write])).toBe(true);
+  expect(allows("operator", ["operator.read"], [read])).toBe(true);
+  expect(allows("operator", ["operator.write"], [read])).toBe(false);
+  expect(resolveMissingOperatorScope(["operator.write"], [write])).toBe("operator.write");
+  expect(resolveMissingOperatorScope(["operator.read"], [write])).toBe("operator.read");
+  expect(
+    resolveMissingRequestedScope({
+      role: "operator",
+      requestedScopes: ["operator.read"],
+      allowedScopes: [read],
+    }),
+  ).toBe("operator.read");
+  expect(intersect(["operator.read"], [write])).toEqual([read]);
+  expect(intersect([write], ["operator.read"])).toEqual([read]);
+  expect(intersect(["operator.write"], [write])).toEqual([write]);
+});
 const operator = (scopes: string[]) => scopes.map((scope) => `operator.${scope}`);
 
 it.each([
@@ -23,6 +43,8 @@ it.each([
   ["write", "talk", true],
   ["admin", "cron", true],
   ["write", "cron", true],
+  ["write.no-credential-enrollment", "cron", true],
+  ["read.no-credential-enrollment", "cron", false],
   ["cron", "cron", true],
   ["cron", "write", false],
   ["cron", "read", false],
@@ -72,6 +94,8 @@ it.each([
   [[], ["sessions.write"], []],
   [["write"], ["write"], ["write"]],
   [["write"], ["cron"], ["cron"]],
+  [["write.no-credential-enrollment"], ["cron"], ["cron"]],
+  [["cron"], ["write.no-credential-enrollment"], ["cron"]],
   [["cron"], ["write"], ["cron"]],
 ])("intersects operator grants %j with ceiling %j", (grants, ceiling, expected) => {
   expect(intersect(operator(grants), operator(ceiling))).toEqual(operator(expected));

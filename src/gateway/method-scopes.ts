@@ -5,8 +5,15 @@ import {
   isBrowserProxyNodeInvokeCommand,
 } from "../infra/node-commands.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
-import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
-import { operatorScopeSatisfied, roleScopesAllow } from "../shared/operator-scope-compat.js";
+import {
+  resolvePersonalCredentialEnrollmentScope,
+  resolveReservedGatewayMethodScope,
+} from "../shared/gateway-method-policy.js";
+import {
+  intersectOperatorScopes,
+  operatorScopeSatisfied,
+  resolveMissingRequestedScope,
+} from "../shared/operator-scope-compat.js";
 import {
   resolveSessionMethodScope,
   type SessionOperatorScope,
@@ -243,11 +250,11 @@ export function projectOperatorScopesForMethod(params: {
     params.sessionScope ?? resolveSessionMethodScope(params.method, params.requestParams);
   return params.requestedScopes.flatMap((requestedScope) => {
     if (
-      roleScopesAllow({
+      resolveMissingRequestedScope({
         role: "operator",
         requestedScopes: [requestedScope],
         allowedScopes: params.allowedScopes,
-      })
+      }) === null
     ) {
       return [requestedScope];
     }
@@ -262,7 +269,12 @@ export function projectOperatorScopesForMethod(params: {
       sessionScope,
       params.method,
     );
-    return authorization.allowed && authorization.sessionScope ? [authorization.sessionScope] : [];
+    if (!authorization.allowed) {
+      return [];
+    }
+    return authorization.sessionScope
+      ? [authorization.sessionScope]
+      : intersectOperatorScopes([requestedScope], params.allowedScopes);
   });
 }
 
@@ -324,6 +336,16 @@ export function authorizeOperatorScopesForRequiredScope(
 ):
   | { allowed: true; sessionScope?: SessionOperatorScope }
   | { allowed: false; missingScope: OperatorScope } {
+  const enrollmentScope = method && resolvePersonalCredentialEnrollmentScope(method);
+  if (enrollmentScope) {
+    return resolveMissingRequestedScope({
+      role: "operator",
+      requestedScopes: [enrollmentScope],
+      allowedScopes: scopes,
+    }) === null
+      ? { allowed: true }
+      : { allowed: false, missingScope: enrollmentScope };
+  }
   if (operatorScopeSatisfied(requiredScope, scopes)) {
     return { allowed: true };
   }

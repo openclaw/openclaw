@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import type { ControlUiLinkReaderDescriptor } from "../shared/control-ui-link-reader.js";
+import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
 import { resolveControlUiPluginTabPathname } from "./control-ui-contract.js";
 import { controlUiPluginAssetPrefix } from "./control-ui-plugin-assets-contract.js";
 import { isControlUiPluginAllowed } from "./control-ui-plugin-policy.js";
@@ -20,7 +21,7 @@ import {
   type OperatorScope,
 } from "./method-scopes.js";
 import type { GatewayMethodRegistryView } from "./methods/descriptor.js";
-import { SESSION_READ_SCOPE } from "./operator-scopes.js";
+import { READ_NO_CREDENTIAL_ENROLLMENT_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import {
   findMatchingPluginHttpRoutes,
@@ -227,6 +228,11 @@ export function listControlUiPluginTabAuthGrants(
     return [];
   }
   const grants = new Map<string, ControlUiPluginTabAuthGrant>();
+  // Ordinary admission cannot mint the legacy enrollment-bearing read grant.
+  const readScope =
+    resolveMissingOperatorScope([READ_SCOPE], callerScopes) === null
+      ? READ_SCOPE
+      : READ_NO_CREDENTIAL_ENROLLMENT_SCOPE;
   const basePath = getRuntimeConfigSnapshot()?.gateway?.controlUi?.basePath;
   for (const plugin of registry.plugins) {
     if (
@@ -242,7 +248,7 @@ export function listControlUiPluginTabAuthGrants(
       pluginId: plugin.id,
       path: assetPath,
       match: "prefix",
-      scopes: [READ_SCOPE],
+      scopes: [readScope],
     });
   }
   for (const tab of projectControlUiPluginTabs(registry.controlUiDescriptors ?? [], callerScopes)) {
@@ -265,7 +271,7 @@ export function listControlUiPluginTabAuthGrants(
       pluginId: tab.pluginId,
       path: route.path,
       match: route.match,
-      scopes: [READ_SCOPE],
+      scopes: [readScope],
     });
   }
   return [...grants.values()];

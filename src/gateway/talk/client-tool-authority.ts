@@ -10,6 +10,7 @@ import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/
 import { normalizeElevatedLevel } from "../../auto-reply/thinking.shared.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { resolveRealtimeVoiceAgentConsultToolsAllow } from "../../talk/agent-consult-tool.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveChatSendCallerContext } from "../server-methods/gateway-client-identity.js";
@@ -33,7 +34,7 @@ export function resolveTalkAgentConsultAuthority(
       (cap) => cap !== GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
     );
   }
-  if (senderIsOwner || scopes?.includes(WRITE_SCOPE) === true) {
+  if (operatorScopeSatisfied(WRITE_SCOPE, scopes ?? [])) {
     return { senderIsOwner, ...(replyCaller ? { replyCaller } : {}) };
   }
   return {

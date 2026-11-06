@@ -580,6 +580,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
       },
       {
         name: (id: string) => controlUiStableChunkName(id) ?? null,
+        debugName: "control-ui-stable-chunks",
         test: (id: string) => controlUiStableChunkName(id) !== undefined,
         priority: 20,
       },

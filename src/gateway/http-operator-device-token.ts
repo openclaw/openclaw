@@ -6,7 +6,7 @@ import { verifyPairingToken } from "../infra/pairing-token.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { checkDeviceTokenPeer } from "./openclaw-id/device-token-binding.js";
 
-const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
+const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read.no-credential-enrollment";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 
 /**

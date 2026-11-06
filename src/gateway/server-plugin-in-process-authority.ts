@@ -17,7 +17,12 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  operatorScopeSatisfied,
+  resolveMissingRequestedScope,
+  roleScopesAllow,
+} from "../shared/operator-scope-compat.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import { isInProcessSessionRun } from "./in-process-session-run.js";
 import {
@@ -529,19 +534,22 @@ export function resolveInProcessGatewayDispatch(
       broad &&
       operatorScopes &&
       roleScopesAllow({ role: "operator", requestedScopes: [broad], allowedScopes: operatorScopes })
-      ? broad
+      ? (intersectOperatorScopes([broad], operatorScopes).find((candidate) =>
+          operatorScopeSatisfied(broad, [candidate]),
+        ) ?? requested)
       : requested;
   });
   // Narrow by authority, not literal membership: write also authorizes reads
   // and Talk, including tools called by a synthetic continuation.
   const syntheticScopes = operatorScopes
     ? syntheticScopeMode === "exact"
-      ? requestedSyntheticScopes.filter((requestedScope) =>
-          roleScopesAllow({
-            role: "operator",
-            requestedScopes: [requestedScope],
-            allowedScopes: operatorScopes,
-          }),
+      ? requestedSyntheticScopes.filter(
+          (requestedScope) =>
+            resolveMissingRequestedScope({
+              role: "operator",
+              requestedScopes: [requestedScope],
+              allowedScopes: operatorScopes,
+            }) === null,
         )
       : projectOperatorScopesForMethod({
           method,
@@ -612,7 +620,9 @@ export function resolveInProcessGatewayDispatch(
       : undefined;
   // The host grants only request admission and the wait for that request's own verdict;
   // it never gives the plugin reviewer scopes.
-  const requestScopes = hostApprovalRequestOwnerId ? [WRITE_SCOPE] : syntheticScopes;
+  const requestScopes = hostApprovalRequestOwnerId
+    ? intersectOperatorScopes([WRITE_SCOPE], operatorScopes ?? [])
+    : syntheticScopes;
   const baseSyntheticClient = createSyntheticPluginRuntimeClient({
     ...(operatorAuthority
       ? { authenticatedUserProfile: operatorAuthority.authenticatedUserProfile }

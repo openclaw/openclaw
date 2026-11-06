@@ -8,7 +8,7 @@ import {
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type {
   WorkerOperationHandlers,
@@ -77,11 +77,11 @@ function bootstrapProfileAllowsRequest(params: {
 }): boolean {
   return (
     params.allowedProfile.roles.includes(params.requestedRole) &&
-    roleScopesAllow({
+    resolveMissingRequestedScope({
       role: params.requestedRole,
       requestedScopes: params.requestedScopes,
       allowedScopes: params.allowedProfile.scopes,
-    })
+    }) === null
   );
 }
 

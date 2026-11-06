@@ -15,6 +15,7 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { HumanMentionWebPush } from "./event-web-push.js";
+import { makeSubscription } from "./event-web-push.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -110,34 +111,6 @@ vi.mock("./session-sharing.js", async (importOriginal) => ({
 
 const { createEventWebPushDelivery } = await import("./event-web-push.js");
 let authorityCompleted = createDeferred();
-
-function makeSubscription(
-  id: string,
-  profileId: string | null = null,
-  preferences: Partial<BoundWebPushSubscription["devicePreferences"]> = {},
-): BoundWebPushSubscription {
-  return {
-    subscriptionId: `subscription-${id}`,
-    endpoint: `https://push.example.test/${id}`,
-    keys: { p256dh: `p256dh-${id}`, auth: `auth-${id}` },
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    deviceId: id,
-    userProfileId: profileId,
-    devicePreferences: {
-      enabled: true,
-      label: "",
-      detailLevel: "identified",
-      categories: {
-        agentFinished: true,
-        agentQuestion: true,
-        humanMentioned: true,
-        scheduledTaskFailed: true,
-      },
-      ...preferences,
-    },
-  };
-}
 
 function humanMention(overrides: Partial<HumanMentionWebPush> = {}): HumanMentionWebPush {
   return {
@@ -281,6 +254,35 @@ describe("event Web Push classification", () => {
   });
 
   afterEach(() => vi.restoreAllMocks());
+
+  it.each(["token", "role"])(
+    "keeps the synthetic notification grant within the bounded %s ceiling",
+    async (ceiling) => {
+      const boundedRead = "operator.read.no-credential-enrollment";
+      const subscription = makeSubscription("browser-device", "bob");
+      setSubscriptions(subscription);
+      setPaired(
+        pairedOperator("browser-device", [ceiling === "token" ? boundedRead : "operator.read"]),
+      );
+      mocks.rolePolicy.mockReturnValue({
+        scopes: [ceiling === "role" ? boundedRead : "operator.read"],
+        agents: "*",
+        sessions: { others: "view" },
+      });
+      setCompletionSession();
+      finishAgent(createDelivery(), {}, researchContext);
+      await authorityCompleted.promise;
+
+      expect(mocks.send).toHaveBeenCalledOnce();
+      expect(mocks.canReceive).toHaveBeenCalledWith(
+        expect.objectContaining({
+          client: expect.objectContaining({
+            connect: expect.objectContaining({ scopes: [boundedRead] }),
+          }),
+        }),
+      );
+    },
+  );
 
   it("includes the selected avatar only for identified agent notifications", async () => {
     const identified = makeSubscription("identified");

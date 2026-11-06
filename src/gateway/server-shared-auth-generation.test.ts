@@ -7,7 +7,11 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
 } from "../secrets/runtime.js";
-import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import {
+  captureGatewayAuthPolicy,
+  isGatewayAuthGrantCurrent,
+  isGatewayAuthPolicyCurrent,
+} from "./auth-policy.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import {
   disconnectStaleSharedGatewayAuthClients,
@@ -154,6 +158,30 @@ it("revokes only the removed proxy identity, including retained disconnected sou
   expect(removed.sourceInvalidated).toBe(true);
   expect(removed.socket.close).toHaveBeenCalledWith(4001, "gateway auth changed");
 });
+
+it.each(["operator.read", "operator.write"] as const)(
+  "revokes a retained %s grant when credential enrollment is removed",
+  (scope) => {
+    const identity = "retained@example.test";
+    const initial = proxyConfig();
+    initial.gateway!.auth!.identityScopes = { [identity]: [scope] };
+    const client = proxyClient(initial);
+    const next = structuredClone(initial);
+    next.gateway!.auth!.identityScopes![identity] = [`${scope}.no-credential-enrollment`];
+    expect(isGatewayAuthPolicyCurrent(client.authPolicy, initial)).toBe(true);
+    expect(isGatewayAuthGrantCurrent(client.authPolicy, initial)).toBe(true);
+    expect(isGatewayAuthPolicyCurrent(client.authPolicy, next)).toBe(false);
+    expect(isGatewayAuthGrantCurrent(client.authPolicy, next)).toBe(false);
+
+    disconnectStaleSharedGatewayAuthClients({
+      clients: [client],
+      expectedGeneration: sharedGeneration(next),
+      transition: { previous: initial, next },
+    });
+    expect(client.sourceInvalidated).toBe(true);
+    expect(client.socket.close).toHaveBeenCalledWith(4001, "gateway auth changed");
+  },
+);
 
 it("keeps explicit all-source revocation independent of proxy policy fencing", () => {
   const initial = proxyConfig();

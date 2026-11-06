@@ -157,7 +157,7 @@ function SignInChoice(props: StateProps & { pending: boolean; cancel: JSX.Elemen
           <button
             type="button"
             class="btn btn--sm primary profile-auth-connect-start"
-            disabled={props.pending || state().busy || !choice()?.method}
+            disabled={props.pending || state().busy || !state().canEnroll || !choice()?.method}
             onClick={() => void props.actions.startConnect()}
           >
             {t("profilePage.modelAccounts.connectAction")}
@@ -324,7 +324,7 @@ function SignIn(props: StateProps) {
                   <WizardStepControls
                     step={step()}
                     value={state().stepValue}
-                    busy={state().busy}
+                    busy={state().busy || !state().canEnroll}
                     inputId="profile-account-auth-answer"
                     leadingAction={cancel()}
                     onValueChange={(value) => state().setStepValue(step().id, value)}
@@ -516,7 +516,12 @@ export function ModelAccountsSection(props: StateProps & { inventory: JSX.Elemen
             <button
               type="button"
               class="btn btn--sm primary profile-auth-add-account"
-              disabled={props.actions.saving() || state().busy}
+              disabled={props.actions.saving() || state().busy || !state().canEnroll}
+              title={
+                !state().canEnroll
+                  ? t("profilePage.modelAccounts.enrollmentUnavailable")
+                  : undefined
+              }
               onClick={() => state().openSignIn()}
             >
               {t("profilePage.modelAccounts.addAccount")}
@@ -531,6 +536,9 @@ export function ModelAccountsSection(props: StateProps & { inventory: JSX.Elemen
         </>
       }
     >
+      <Show when={state().target && !state().canEnroll}>
+        <p class="muted">{t("profilePage.modelAccounts.enrollmentUnavailable")}</p>
+      </Show>
       <Show when={state().target && snapshot().phase !== "connected"}>
         <SettingsRow
           title={t("profilePage.modelAccounts.signInUnavailable")}

@@ -53,7 +53,7 @@ import {
 import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkCanonicalUserProfileEmail } from "../../state/user-profile-writes.js";
-import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withoutMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -65,12 +65,12 @@ import {
 import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { createGitHubOAuthLifecycle } from "../github-oauth-lifecycle.js";
 import { bindPersonalGitHubPublicationSelection } from "../github-personal-publication.js";
-import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import {
   expectReceiptBackedPersonalGitHubAuthority,
   preparePersonalGitHubPoll,
+  revokePersonalGitHubRole,
 } from "./users-github.authority.test-support.js";
 
 type AuthorityChange = Parameters<Parameters<typeof observeUserGitHubConnectionAuthority>[0]>[0];
@@ -108,9 +108,7 @@ async function start(client = alice): Promise<UsersGitHubAuthorizeStartResult> {
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   return respond.mock.calls[0]![1] as UsersGitHubAuthorizeStartResult;
 }
-function preparePoll(client = alice) {
-  preparePersonalGitHubPoll(owner(client));
-}
+const preparePoll = (client = alice) => preparePersonalGitHubPoll(owner(client));
 async function connect(client = alice) {
   const started = await start(client);
   preparePoll(client);
@@ -124,16 +122,7 @@ async function connect(client = alice) {
   }
   return { ...connection, selection: connection.selection };
 }
-function blockAlice() {
-  config.gateway = {
-    roles: {
-      definitions: { blocked: { scopes: [], agents: [], sessions: { others: "none" } } },
-      default: "blocked",
-    },
-  };
-  setUserProfileRole(owner(), "blocked");
-  invalidateOperatorRolePolicy(owner());
-}
+const blockAlice = () => revokePersonalGitHubRole(config, owner());
 async function pendingRefresh() {
   expireUserGitHubAccessToken(owner());
   const refresh = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
@@ -186,8 +175,12 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     });
   });
 
-  it("revokes prepared publication credentials from the disconnect receipt without host reads", async () => {
+  it("keeps restricted status and disconnect owner-bound after legacy-read enrollment", async () => {
     const connection = await connect();
+    alice.connect.scopes = ["operator.read.no-credential-enrollment"];
+    expect((await rpc(alice, "users.github.status")).mock.lastCall?.[1].personal.state).toBe(
+      "connected",
+    );
     const bound = await bindPersonalGitHubPublicationSelection(
       {
         owner: owner(),

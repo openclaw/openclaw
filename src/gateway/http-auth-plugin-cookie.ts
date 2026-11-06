@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { resolveControlUiPluginAuthCookieGrants } from "./control-ui-plugin-auth-cookie.js";
@@ -191,11 +191,11 @@ export function bindControlUiPluginCookieRequestAuthority(
             grant.path === admitted.path &&
             grant.match === admitted.match &&
             grant.profileId === admitted.profileId &&
-            roleScopesAllow({
+            resolveMissingRequestedScope({
               role: "operator",
               requestedScopes: admitted.scopes,
               allowedScopes: grant.scopes,
-            }),
+            }) === null,
         ),
       )
     ) {

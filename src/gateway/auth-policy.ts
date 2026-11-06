@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { readRuntimeConfig as getRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import type { GatewayAuthPolicy } from "./auth-policy.types.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { resolveIdentityOperatorScopes } from "./operator-identity-scopes.js";
@@ -158,16 +158,16 @@ function areGatewayAuthGrantsEquivalent(
       return false;
     }
     return (
-      roleScopesAllow({
+      resolveMissingRequestedScope({
         role: "operator",
         requestedScopes: previousScopes,
         allowedScopes: nextScopes,
-      }) &&
-      roleScopesAllow({
+      }) === null &&
+      resolveMissingRequestedScope({
         role: "operator",
         requestedScopes: nextScopes,
         allowedScopes: previousScopes,
-      })
+      }) === null
     );
   } catch {
     return false;

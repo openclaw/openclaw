@@ -35,7 +35,10 @@ internal fun canReactToSession(
   if (
     !connected || !methodAdvertised || catalog || session.archived == true ||
     access.role?.trim() != "operator" || access.sessionCap == "none" ||
-    access.scopes.none { it.trim() == "operator.write" || it.trim() == "operator.admin" }
+    access.scopes.none {
+      it.trim() == "operator.write" || it.trim() == "operator.admin" ||
+        it.trim() == "operator.write.no-credential-enrollment"
+    }
   ) {
     return false
   }

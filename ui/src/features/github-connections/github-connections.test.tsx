@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 import { expect, it, vi } from "vitest";
+import type { PersonalGitHubStatus } from "../../../../packages/gateway-protocol/src/schema/users.ts";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { registerGitHubConnectionsEnglish } from "../../i18n/locales/en-github-connections.ts";
 import { disconnectedGitHub } from "../../pages/profile/profile-rpc.test-support.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -122,6 +124,46 @@ function mount(
     },
   };
 }
+
+it.each(["operator.read.no-credential-enrollment", "operator.write.no-credential-enrollment"])(
+  "allows GitHub status and disconnect, but not enrollment with %s",
+  async (scope) => {
+    const connected: PersonalGitHubStatus = {
+      ...disconnected,
+      state: "connected",
+      refreshState: "available",
+      account: { accountId: 2, login: "personal-account" },
+    };
+    let account = connected;
+    const request = vi.fn(async (method: string) => {
+      if (method === "users.github.disconnect") {
+        account = {
+          ...connected,
+          state: "disconnected",
+          account: null,
+          refreshState: "not_applicable",
+        };
+        return {};
+      }
+      return method === "users.github.status" ? { personal: account, system } : status();
+    });
+    const h = mount([scope], "profile-a", request);
+    await h.waitText(["@personal-account", "Verify"]);
+    const manageLabel = registerGitHubConnectionsEnglish.catalog.githubConnections.manage;
+    expect(h.button(manageLabel).disabled).toBe(false);
+    h.text(["This connection cannot connect or replace personal credentials."]);
+    expect(h.button("Verify").disabled).toBe(false);
+    h.button(manageLabel).click();
+    await waitForFast(() => expect(h.button("Disconnect")).toBeDefined());
+    expect(h.button("Disconnect").disabled).toBe(false);
+    h.button("Disconnect").click();
+    await h.waitText(["Not connected"], ["@personal-account"]);
+    expect(request).toHaveBeenCalledWith("users.github.disconnect", {});
+    expect(
+      request.mock.calls.some(([method]) => method.startsWith("users.github.authorize.")),
+    ).toBe(false);
+  },
+);
 
 it.each([
   ["unchanged", ["operator.admin"]],

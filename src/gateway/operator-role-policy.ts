@@ -8,7 +8,7 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
@@ -254,11 +254,11 @@ export function authorizeCurrentOperatorRoleScopes(
   const policy = resolveOperatorRolePolicy(client, cfg);
   if (
     policy &&
-    !roleScopesAllow({
+    resolveMissingRequestedScope({
       role: "operator",
       requestedScopes: client?.connect.scopes ?? [],
       allowedScopes: policy.scopes,
-    })
+    }) !== null
   ) {
     return errorShape(
       ErrorCodes.FORBIDDEN,

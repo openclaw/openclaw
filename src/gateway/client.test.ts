@@ -21,6 +21,7 @@ import type { GatewayClientOptions } from "./client.js";
 import {
   createAuthFailureMessage,
   createClientTestIdentity,
+  deviceAuthScopeCases,
   firstMockArg,
   waitForFast,
 } from "./client.test-support.js";
@@ -2034,29 +2035,7 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
-  it.each([
-    {
-      label: "stored scopes",
-      storedScopes: ["operator.read", "operator.write"],
-      requestedScopes: undefined,
-      deviceToken: undefined,
-      expectedScopes: ["operator.read", "operator.write"],
-    },
-    {
-      label: "requested scopes",
-      storedScopes: ["operator.write"],
-      requestedScopes: ["operator.admin"],
-      deviceToken: undefined,
-      expectedScopes: ["operator.admin"],
-    },
-    {
-      label: "explicit device token",
-      storedScopes: ["operator.admin", "operator.read"],
-      requestedScopes: ["operator.pairing"],
-      deviceToken: "explicit-device-token",
-      expectedScopes: ["operator.pairing"],
-    },
-  ])(
+  it.each(deviceAuthScopeCases)(
     "selects and signs device auth with $label",
     ({ storedScopes, requestedScopes, deviceToken, expectedScopes }) => {
       loadDeviceAuthTokenMock.mockReturnValue({

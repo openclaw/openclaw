@@ -37,6 +37,7 @@ import {
 } from "../http-auth-plugin-cookie.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
+import type { OperatorScope } from "../operator-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { isApprovalRecordVisibleToClient } from "../server-methods/approval-shared.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
@@ -350,7 +351,9 @@ async function withCookieSessionReader(
       key?: string,
     ) => Promise<{ statusCode: number; result: DispatchResult | undefined }>;
     blockCatalog: () => { entered: Promise<void>; release: () => void };
+    forwardedScopes: () => readonly string[] | undefined;
   }) => Promise<void>,
+  scopes: OperatorScope[] = ["operator.read"],
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const config: OpenClawConfig = {
@@ -361,8 +364,8 @@ async function withCookieSessionReader(
               roles: {
                 default: "blocked",
                 definitions: {
-                  reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "view" } },
-                  blocked: { agents: "*", scopes: ["operator.read"], sessions: { others: "none" } },
+                  reader: { agents: "*", scopes, sessions: { others: "view" } },
+                  blocked: { agents: "*", scopes, sessions: { others: "none" } },
                 },
               },
             },
@@ -415,7 +418,7 @@ async function withCookieSessionReader(
           pluginId: "route",
           path: SECURE_HOOK_PATH,
           match: "exact" as const,
-          scopes: ["operator.read" as const],
+          scopes,
         };
         setControlUiPluginAuthCookie(cookieResponse.res, [grant], {
           generation: resolveControlUiPluginAuthCookieGeneration("http-generation", config),
@@ -426,6 +429,7 @@ async function withCookieSessionReader(
           throw new Error("expected signed HTTP plugin cookie");
         }
         const cookie = value.split(";", 1)[0]!;
+        let forwardedScopes: readonly string[] | undefined;
         const dispatchHttp = async (method: SessionReadMethod, key = "agent:main:shared") => {
           let result: DispatchResult | undefined;
           const handler = setup(
@@ -433,6 +437,7 @@ async function withCookieSessionReader(
               createRoute({
                 gatewayMethodDispatchAllowed: true,
                 handler: async () => {
+                  forwardedScopes = getPluginRuntimeGatewayRequestScope()?.client?.connect.scopes;
                   result = await dispatchGatewayMethod(
                     method,
                     method === "sessions.list" ? {} : { key },
@@ -477,6 +482,7 @@ async function withCookieSessionReader(
           await run({
             readerId: reader.id,
             ownerEmail,
+            forwardedScopes: () => forwardedScopes,
             dispatch,
             dispatchHttp,
             blockCatalog: () => {
@@ -512,6 +518,22 @@ async function expectSession(dispatch: SessionDispatch, name: string, session: u
 }
 
 describe("plugin HTTP authenticated session reads", () => {
+  it.each([
+    "operator.read.no-credential-enrollment",
+    "operator.write.no-credential-enrollment",
+  ] as const)(
+    "preserves %s through a signed cookie, HTTP runtime and SDK dispatch",
+    async (scope) => {
+      await withCookieSessionReader(
+        true,
+        async ({ dispatch, forwardedScopes }) => {
+          expectSessionKeys(await dispatch("sessions.list"), ["own-draft", "shared"]);
+          expect(forwardedScopes()).toEqual([scope]);
+        },
+        [scope],
+      );
+    },
+  );
   it.each([false, true])(
     "keeps signed viewer privacy and shared access (roles=%s)",
     async (roles) => {

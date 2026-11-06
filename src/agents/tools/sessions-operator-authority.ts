@@ -1,7 +1,10 @@
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { readOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  operatorScopeSatisfied,
+} from "../../shared/operator-scope-compat.js";
 import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -52,13 +55,18 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
     },
   );
   assertCurrent();
+  // Same-source host authorities may be attenuated independently. Their shared
+  // identity preserves liveness, not the selected source's broader grant.
+  const scopes = [
+    ...sources.map((source) => source.scopes),
+    ...(invocation ? [invocation.scopes] : []),
+    ...(retained ? [scope?.client?.connect.scopes ?? []] : []),
+  ].reduce(intersectOperatorScopes);
   return {
     authority,
+    scopes,
     assertCurrent,
-    allows: (requested: string) =>
-      sources.every((source) => operatorScopeSatisfied(requested, source.scopes)) &&
-      (!invocation || operatorScopeSatisfied(requested, invocation.scopes)) &&
-      (!retained || operatorScopeSatisfied(requested, scope?.client?.connect.scopes ?? [])),
+    allows: (requested: string) => operatorScopeSatisfied(requested, scopes),
   };
 }
 

@@ -144,7 +144,14 @@ async function mount(
   const accountPicker = () => accounts.querySelector<HTMLElement>(auth("account-picker"))!;
   const accountTrigger = () =>
     accountPicker().querySelector<HTMLButtonElement>(".picker-select__trigger")!;
-  await waitForSolid(() => expect(button(auth("add-account")).disabled).toBe(false));
+  await waitForSolid(() =>
+    expect(button(auth("add-account"))?.disabled).toBe(
+      !scopes.includes("operator.write") && !scopes.includes("operator.admin"),
+    ),
+  );
+  if (initialAccounts.length) {
+    await waitForSolid(() => expect(accountTrigger().disabled).toBe(false));
+  }
   return {
     accounts,
     showAccounts(next: UserModelAccount[]) {
@@ -301,6 +308,60 @@ it.each([12, 100])("does not rescan %s unchanged accounts on status publications
   h.showAccounts(accounts.with(0, { ...accounts[0]!, label: "Renamed" }));
   h.refresh();
   await waitForSolid(() => expect(h.current()).toContain("Renamed"));
+});
+
+it("keeps saved model account choices usable without credential enrollment", async () => {
+  const h = await mount(
+    async (method) => ({
+      links:
+        method === "users.selectModelAccount"
+          ? [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 2 }]
+          : [],
+    }),
+    { scopes: ["operator.write.no-credential-enrollment"], accounts: [personal, work] },
+  );
+  expect(h.button(auth("add-account")).disabled).toBe(true);
+  expect(h.text()).toContain("This connection cannot add credentials.");
+  expect(h.accountTrigger().disabled).toBe(false);
+  h.showAccounts([
+    { ...personal, selected: false },
+    { ...work, selected: true },
+  ]);
+  await h.chooseAccount(work.authProfileId);
+  await waitForSolid(() => expect(h.calls("users.selectModelAccount")).toHaveLength(1));
+  h.expectCall("users.selectModelAccount", { authProfileId: work.authProfileId });
+  await waitForSolid(() => {
+    expect(h.current()).toContain(work.label);
+    expect(h.accountTrigger().disabled).toBe(false);
+  });
+  h.showAccounts([{ ...personal, selected: false }, work]);
+  await h.chooseAccount("gateway-default");
+  await waitForSolid(() => expect(h.calls("users.unlinkAuthProfile")).toHaveLength(1));
+  h.expectCall("users.unlinkAuthProfile", { provider: "openai" });
+  expect(h.calls("users.authConnect.start")).toHaveLength(0);
+  expect(h.calls("users.authConnect.answer")).toHaveLength(0);
+  h.unmount();
+});
+
+it("keeps a provider attempt cancellable when enrollment access is removed", async () => {
+  const h = await mount(async () => ({ status: "cancelled" }));
+  await h.start();
+  h.emit({
+    hello: {
+      type: "hello-ok",
+      protocol: 3,
+      auth: {
+        role: "operator",
+        scopes: ["operator.write.no-credential-enrollment"],
+      },
+    },
+  });
+  await waitForSolid(() => expect(h.button(ui.submit).disabled).toBe(true));
+  expect(h.button(auth("connect-cancel")).disabled).toBe(false);
+  h.button(auth("connect-cancel")).click();
+  await waitForSolid(() => expect(h.calls("users.authConnect.cancel")).toHaveLength(1));
+  expect(h.calls("users.authConnect.answer")).toHaveLength(0);
+  h.unmount();
 });
 
 it("refreshes account defaults and appends later pages without losing earlier choices", async () => {

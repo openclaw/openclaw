@@ -92,6 +92,11 @@ suite.define(() => {
                   sessions: { others: "view" },
                   scopes: ["operator.sessions.write"],
                 },
+                bounded: {
+                  agents: "*",
+                  sessions: { others: "view" },
+                  scopes: ["operator.write.no-credential-enrollment"],
+                },
                 administrator: {
                   agents: "*",
                   sessions: { others: "write" },
@@ -271,6 +276,49 @@ suite.define(() => {
               await access.getByRole("button", { name: "Request admin", exact: true }).count(),
             ).toBe(0);
             expect((await listPairing()).pending).toHaveLength(0);
+            await adminClient.request("users.setRole", { profileId: guest.id, role: "bounded" });
+            await expect.poll(auth).toMatchObject({
+              scopes: ["operator.write.no-credential-enrollment"],
+              roleAllowsAdmin: false,
+            });
+            await page.getByRole("button", { name: "Add account", exact: true }).waitFor();
+            expect(
+              await page.getByRole("button", { name: "Add account", exact: true }).isDisabled(),
+            ).toBe(true);
+            const proof = await evaluateControlUiContext(page, async (app) => {
+              const client = app.gateway.snapshot.client!;
+              const created = await client.request<{ key: string }>("sessions.create", {
+                agentId: "main",
+                label: "Bounded operator proof",
+              });
+              const denied: string[] = [];
+              for (const [method, params] of [
+                ["users.authConnect.start", { provider: "synthetic", method: "api-key" }],
+                [
+                  "users.authConnect.answer",
+                  { connectId: "synthetic", stepId: "synthetic", value: "synthetic-not-a-secret" },
+                ],
+                ["users.github.authorize.start", {}],
+                [
+                  "users.github.authorize.poll",
+                  { requestId: "11111111-1111-4111-8111-111111111111" },
+                ],
+              ] as const) {
+                try {
+                  await client.request(method, params);
+                } catch (error) {
+                  if (error instanceof Error && error.message.includes("missing scope")) {
+                    denied.push(method);
+                  } else {
+                    throw error;
+                  }
+                }
+              }
+              return { created, denied };
+            });
+            expect(proof.created.key).toBeTruthy();
+            expect(proof.denied).toHaveLength(4);
+            await capture("bounded-profile-real.png", "openclaw-model-accounts");
             await writeFile(
               path.join(suite.artifactDir, "guest-access-real.json"),
               JSON.stringify(
@@ -284,6 +332,12 @@ suite.define(() => {
                   promotedAuth,
                   pendingApprovalScopes: pending[0]?.scopes,
                   reloadedAuth,
+                  boundedProof: {
+                    sessionCreated: Boolean(proof.created.key),
+                    denied: proof.denied,
+                  },
+                  limitation:
+                    "Real Gateway/browser and session creation; no model invocation or external OAuth",
                 },
                 null,
                 2,

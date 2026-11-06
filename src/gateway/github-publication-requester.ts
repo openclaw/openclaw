@@ -6,7 +6,11 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  resolveMissingRequestedScope,
+  roleScopesAllow,
+} from "../shared/operator-scope-compat.js";
 import {
   decodeGitHubPublicationRequester,
   type GitHubPublicationRequesterSnapshot,
@@ -186,11 +190,11 @@ function prepareRequesterPolicy(
         allowedScopes: snapshot.scopes,
       }) ||
       (role &&
-        (!roleScopesAllow({
+        (resolveMissingRequestedScope({
           role: "operator",
           requestedScopes: snapshot.scopes,
           allowedScopes: role.scopes,
-        }) ||
+        }) !== null ||
           (role.accessPolicyPlugin && role.accessPolicyPlugin !== snapshot.grant?.pluginId)))
     ) {
       throw new GitHubPublicationRequesterUnavailableError();

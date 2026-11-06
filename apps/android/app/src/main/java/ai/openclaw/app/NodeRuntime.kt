@@ -195,6 +195,8 @@ private const val OperatorAdminScope = "operator.admin"
 private const val OperatorPairingScope = "operator.pairing"
 private const val OperatorReadScope = "operator.read"
 private const val OperatorWriteScope = "operator.write"
+private const val OperatorReadNoCredentialEnrollmentScope = "operator.read.no-credential-enrollment"
+private const val OperatorWriteNoCredentialEnrollmentScope = "operator.write.no-credential-enrollment"
 
 private data class GatewayAppearancePreferences(
   val profileId: String?,
@@ -341,10 +343,14 @@ internal fun selectGatewayDevicePairingCapabilities(
 
 internal fun operatorScopesAllowRead(scopes: Collection<String>): Boolean =
   scopes.any { scope ->
-    scope == OperatorReadScope || scope == OperatorWriteScope || scope == OperatorAdminScope
+    scope == OperatorReadScope || scope == OperatorWriteScope || scope == OperatorAdminScope ||
+      scope == OperatorReadNoCredentialEnrollmentScope || scope == OperatorWriteNoCredentialEnrollmentScope
   }
 
-internal fun operatorScopesAllowWrite(scopes: Collection<String>): Boolean = scopes.any { scope -> scope == OperatorWriteScope || scope == OperatorAdminScope }
+internal fun operatorScopesAllowWrite(scopes: Collection<String>): Boolean =
+  scopes.any { scope ->
+    scope == OperatorWriteScope || scope == OperatorAdminScope || scope == OperatorWriteNoCredentialEnrollmentScope
+  }
 
 internal fun operatorScopesAllowAdmin(scopes: Collection<String>): Boolean = OperatorAdminScope in scopes
 

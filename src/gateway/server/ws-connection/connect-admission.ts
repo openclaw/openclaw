@@ -27,7 +27,10 @@ import {
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
-import { intersectOperatorScopes, roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  resolveMissingRequestedScope,
+} from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
@@ -310,11 +313,11 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
           ? "Remote Control UI ingress requires a signed device identity."
           : Object.values(connectParams.auth ?? {}).some((credential) => credential !== undefined)
             ? "Remote Control UI ingress requires a credential-free signed device; reconnect without stored credentials."
-            : !roleScopesAllow({
+            : resolveMissingRequestedScope({
                   role,
                   requestedScopes: scopes,
                   allowedScopes: remoteIngress.operatorScopeCeiling,
-                })
+                }) !== null
               ? "Remote Control UI scopes must stay within this grant's operator scope ceiling."
               : undefined;
     if (denied) {

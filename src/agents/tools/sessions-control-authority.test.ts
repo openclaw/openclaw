@@ -1,9 +1,12 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { assignSessionOwner } from "../../config/sessions/session-accessor.sqlite-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runWithOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
+import * as runtimeClients from "../../gateway/server-plugin-runtime-client.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -133,6 +136,77 @@ describe("prepared session control target", () => {
       }),
     ).not.toBeNull();
   }
+
+  it.each([
+    "legacy",
+    "standalone-bounded",
+    "prepared",
+    "caller",
+    "invocation-authority",
+    "invocation-scopes",
+    "retained-authority",
+    "retained-scopes",
+  ])("emits only the $0 same-source session-control grant", async (ceiling) => {
+    const boundedScope = "operator.write.no-credential-enrollment";
+    const { request } = seedTarget("scope-" + ceiling, {
+      createdActor: { type: "human", source: "profile", id: callerId },
+    });
+    const { authority } = issueAuthority(callerId);
+    const bounded = createAdmittedRunOperatorAuthority({ ...authority, scopes: [boundedScope] });
+    expect(bounded.source).toBe(authority.source);
+    const prepared = ["standalone-bounded", "prepared"].includes(ceiling) ? bounded : authority;
+    const retainedClient = runtimeClients.createSyntheticPluginRuntimeClient({
+      operatorRunAuthority: ceiling === "retained-authority" ? bounded : authority,
+      scopes: [ceiling === "retained-scopes" ? boundedScope : "operator.write"],
+    });
+    const emitted = vi.spyOn(runtimeClients, "createSyntheticPluginRuntimeClient");
+    const check = async () => {
+      const captured = captureSessionControlAuthority(prepared);
+      expect(captured?.authority).toBe(prepared);
+      expect(captured?.allows("operator.write")).toBe(true);
+      await withCapture({ ...request, authority: prepared }, (capture) => {
+        expect(capture.assertCurrent).not.toThrow();
+        expect(emitted).toHaveBeenCalled();
+        for (const [params] of emitted.mock.calls) {
+          expect(params?.scopes).toEqual([ceiling === "legacy" ? "operator.write" : boundedScope]);
+        }
+      });
+    };
+    try {
+      if (["prepared", "caller"].includes(ceiling)) {
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: request.sessionKey,
+            operatorAuthority: ceiling === "caller" ? bounded : authority,
+          },
+          check,
+        );
+      } else if (ceiling.startsWith("invocation-")) {
+        await runWithOperatorToolGatewayAuthority(
+          {
+            operatorRunAuthority: ceiling === "invocation-authority" ? bounded : authority,
+            scopes: [ceiling === "invocation-scopes" ? boundedScope : "operator.write"],
+            signal: new AbortController().signal,
+          },
+          check,
+        );
+      } else if (ceiling.startsWith("retained-")) {
+        await withPluginRuntimeGatewayRequestScope(
+          {
+            client: retainedClient,
+            hasCurrentClientAuthority: () => true,
+            isWebchatConnect: () => false,
+          },
+          check,
+        );
+      } else {
+        await check();
+      }
+    } finally {
+      emitted.mockRestore();
+    }
+  });
 
   it.each([
     { relationship: "creator", allowed: true },

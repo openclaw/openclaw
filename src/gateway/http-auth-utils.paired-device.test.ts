@@ -178,6 +178,33 @@ async function ordinaryReadStatus(token: string): Promise<number | null> {
   }
 }
 
+it.each(["operator.read.no-credential-enrollment", "operator.write.no-credential-enrollment"])(
+  "preserves a paired device grant on Control UI reads with %s",
+  async (scope) => {
+    await withOpenClawTestState({ label: "bounded-http-device-read" }, async () => {
+      const token = await pairBrowser([scope]);
+      const req = createRequest({
+        path: "/control-ui-config.json",
+        authorization: `Bearer ${token}`,
+      });
+      const res = new ServerResponse(req);
+      try {
+        const result = await authorizeControlUiReadRequestOrReply({
+          req,
+          res,
+          auth: AUTH_TOKEN,
+          cfg: {},
+          getResolvedAuth: () => AUTH_TOKEN,
+          getRuntimeConfig: () => ({}),
+        });
+        expect(result?.operatorScopes).toEqual([scope]);
+      } finally {
+        res.destroy();
+      }
+    });
+  },
+);
+
 it("keeps a saved tunnel-bound token refused on HTTP after a Gateway start with the switch off", async () => {
   await withOpenClawTestState({ label: "openclaw-id-http-restart-off" }, async () => {
     const token = await pairBrowser(["operator.admin"]);

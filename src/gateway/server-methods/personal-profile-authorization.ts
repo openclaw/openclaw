@@ -1,4 +1,7 @@
-import { intersectOperatorScopes, roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  resolveMissingRequestedScope,
+} from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRolePolicyAuthority } from "../../state/user-channel-identity-operations.js";
 import { hasCurrentGatewayOperatorAccess } from "../operator-access-policy.js";
 import {
@@ -17,7 +20,12 @@ type Request = Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal
 /** Intersect the live role ceiling with the socket grant, preserving scope implications. */
 export function currentPersonalProfileClient(
   options: Request,
-  scope: "operator.read" | "operator.write" | "operator.sessions.read",
+  scope:
+    | "operator.read"
+    | "operator.write"
+    | "operator.read.no-credential-enrollment"
+    | "operator.write.no-credential-enrollment"
+    | "operator.sessions.read",
   owner?: string | { profileId: string; role: string | null; githubLogin?: string | null },
 ) {
   const { client, context } = options;
@@ -59,11 +67,11 @@ export function currentPersonalProfileClient(
   const scopes = policy ? intersectOperatorScopes(granted, policy.scopes) : granted;
   if (
     client.connect.role !== "operator" ||
-    !roleScopesAllow({
+    resolveMissingRequestedScope({
       role: "operator",
       requestedScopes: [scope],
       allowedScopes: scopes,
-    })
+    }) !== null
   ) {
     throw new Error(`Personal profile requires current ${scope} permission.`);
   }
@@ -79,7 +87,12 @@ export function currentPersonalProfileClient(
 /** Prepare canonical role facts off-thread; live checks consume the profile owner's revisions. */
 export async function preparePersonalProfileAction(
   options: Request,
-  scope: "operator.read" | "operator.write" | "operator.sessions.read" = "operator.read",
+  scope:
+    | "operator.read"
+    | "operator.write"
+    | "operator.read.no-credential-enrollment"
+    | "operator.write.no-credential-enrollment"
+    | "operator.sessions.read" = "operator.read",
   callerSignal?: AbortSignal,
 ): Promise<{ owner: string; signal: AbortSignal; assertCurrent: () => void }> {
   const { client, context } = options;

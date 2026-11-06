@@ -1,5 +1,9 @@
 import type { OperatorScope } from "../../../src/gateway/operator-scopes.js";
-import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
+import { resolvePersonalCredentialEnrollmentScope } from "../../../src/shared/gateway-method-policy.js";
+import {
+  resolveMissingRequestedScope,
+  roleScopesAllow,
+} from "../../../src/shared/operator-scope-compat.js";
 import {
   resolveBaseSessionMutationRequiredScope,
   resolveSessionMethodScope,
@@ -72,6 +76,16 @@ export function canPresentGatewayMethod(
   const auth = snapshot?.hello?.auth;
   if (!auth || !Array.isArray(auth.scopes)) {
     return false;
+  }
+  const enrollmentScope = resolvePersonalCredentialEnrollmentScope(method);
+  if (enrollmentScope) {
+    return (
+      resolveMissingRequestedScope({
+        role: auth.role,
+        requestedScopes: [enrollmentScope],
+        allowedScopes: auth.scopes,
+      }) === null
+    );
   }
   return roleScopesAllow({
     role: auth.role,

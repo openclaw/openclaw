@@ -15,6 +15,39 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   getPluginRuntimeGatewayRequestScope: () => requestScope,
 }));
 
+function uploadRequest(scopes = ["operator.write"]) {
+  const store = memoryStore();
+  const req = new IncomingMessage(new Socket());
+  req.push(JSON.stringify(sampleUpload()));
+  req.push(null);
+  req.method = "POST";
+  req.headers["content-type"] = "application/json";
+  const res = new ServerResponse(req);
+  onTestFinished(() => {
+    req.destroy();
+    res.destroy();
+  });
+  requestScope.revalidate.mockReset().mockResolvedValue(undefined);
+  requestScope.hasCurrentClientAuthority.mockReset().mockReturnValue(true);
+  requestScope.client.connect.scopes = scopes;
+  const handler = createBeamRequestHandler({
+    store,
+    now: () => 100,
+    resolveControlUiBasePath: () => undefined,
+  });
+  return { store, res, run: () => handler(req, res) };
+}
+
+it.each([
+  ["operator.write.no-credential-enrollment", 200],
+  ["operator.read.no-credential-enrollment", 403],
+] as const)("admits Beam uploads only with ordinary write authority: %s", async (scope, status) => {
+  const { store, res, run } = uploadRequest([scope]);
+  await run();
+  expect(res.statusCode).toBe(status);
+  expect(Boolean(await store.get(sampleUpload().beamId))).toBe(status === 200);
+});
+
 it.each(["body", "revalidation"] as const)(
   "rejects authority revoked during %s without uploading",
   async (phase) => {
@@ -25,6 +58,7 @@ it.each(["body", "revalidation"] as const)(
     const res = new ServerResponse(req);
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
+    requestScope.client.connect.scopes = ["operator.write"];
     requestScope.hasCurrentClientAuthority.mockReset().mockReturnValue(true);
     requestScope.revalidate.mockReset().mockImplementation(async () => {
       entered.resolve();

@@ -581,6 +581,7 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
       const { authProfileId } = connected;
       const link = { provider: "synthetic", authProfileId };
       expect(connected.links).toMatchObject([link]);
+      client.connect.scopes = ["operator.write.no-credential-enrollment"];
       expect(await rpc("users.listModelAccounts")).toMatchObject({
         profileId: owner,
         accounts: [{ ...link, authType: "token", selected: true }],
@@ -590,9 +591,13 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
       expect(await rpc("users.unlinkAuthProfile", { provider: "synthetic" })).toEqual({
         links: [],
       });
-      for (const method of ["users.linkAuthProfile", "users.selectModelAccount"]) {
-        expect(await rpc(method, { authProfileId })).toMatchObject({ links: [link] });
-      }
+      expect(await rpc("users.selectModelAccount", { authProfileId })).toMatchObject({
+        links: [link],
+      });
+      client.connect.scopes = ["operator.admin"];
+      expect(await rpc("users.linkAuthProfile", { authProfileId })).toMatchObject({
+        links: [link],
+      });
       expect(JSON.stringify([await rpc("users.listModelAccounts"), connected])).not.toContain(
         credential.token,
       );
@@ -610,6 +615,47 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
       deliverCommit.resolve();
       sql.restore();
       settlement[Symbol.dispose]();
+      await service.stop();
+    }
+  }));
+
+it("rolls back provider credentials when legacy write is downgraded before commit", ({ signal }) =>
+  withAccount("enrollment-downgrade@example.test", async (owner) => {
+    const client = createOperatorClient({ profileId: owner, scopes: ["operator.write"] });
+    const writer = role(["operator.write"]);
+    const cfg = rolesConfig({ default: "writer", definitions: { writer } });
+    const context = accountContext(client, () => cfg);
+    const service = createModelAccountConnectService({ getConfig: () => cfg });
+    context.modelAccountConnectService = service;
+    resolveMethod.mockResolvedValue({
+      id: "token",
+      label: "Synthetic token",
+      kind: "token",
+      run: async () => ({ profiles: [{ profileId: "ignored-shared-id", credential }] }),
+    } satisfies ProviderAuthMethod);
+    using settlement = observeWizardSettlement(signal);
+    const stages: string[] = [];
+    using _ = observeAccountAdmission((stage) => {
+      stages.push(stage);
+      if (stage === "commit") {
+        writer.scopes = ["operator.write.no-credential-enrollment"];
+      }
+    });
+    try {
+      const response = await callAccount(client, context, "users.authConnect.start", {
+        profileId: owner,
+        provider: "synthetic",
+        method: "token",
+      });
+      expect(response).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ connectId: expect.any(String) }),
+      );
+      await settlement.wait();
+      expect(stages).toEqual(["transaction", "commit"]);
+      expect(await listUserModelAccountsAsync({ profileId: owner })).toEqual({ accounts: [] });
+      expect(await listUserProfileAuthLinksAsync(owner)).toEqual([]);
+    } finally {
       await service.stop();
     }
   }));

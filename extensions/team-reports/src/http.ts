@@ -154,7 +154,11 @@ export function createTeamReportsHttpHandler(options: {
     if (
       !scopes.some(
         (scope) =>
-          scope === "operator.read" || scope === "operator.write" || scope === "operator.admin",
+          scope === "operator.read" ||
+          scope === "operator.write" ||
+          scope === "operator.read.no-credential-enrollment" ||
+          scope === "operator.write.no-credential-enrollment" ||
+          scope === "operator.admin",
       )
     ) {
       return send(403, "text/plain", "Forbidden: operator.read scope required.\n");

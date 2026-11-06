@@ -18,7 +18,7 @@ import {
   type PairedDevice,
 } from "../infra/device-pairing.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 
 const DEVICE_PAIRING_CHECK_ID = "core/doctor/device-pairing";
 
@@ -176,13 +176,13 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     if (
       requestedRoles.some(
         (role) =>
-          !roleScopesAllow({
+          resolveMissingRequestedScope({
             role,
             requestedScopes: requestedScopes.filter((scope) =>
               role === "operator" ? scope.startsWith("operator.") : !scope.startsWith("operator."),
             ),
             allowedScopes: approvedScopes,
-          }),
+          }) !== null,
       )
     ) {
       return {
@@ -237,11 +237,11 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
       }
       if (
         token.scopes.length > 0 &&
-        !roleScopesAllow({
+        resolveMissingRequestedScope({
           role,
           requestedScopes: token.scopes,
           allowedScopes: approvedScopes,
-        })
+        }) !== null
       ) {
         const recoveryCommand = role === "node" ? `${rotateCommand} --no-scopes` : rotateCommand;
         findings.push({

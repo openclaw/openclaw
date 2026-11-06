@@ -12,7 +12,10 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { resolveLocalNodeId } from "../../../node-host/local-id.js";
-import { intersectOperatorScopes, roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  resolveMissingRequestedScope,
+} from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
 import {
@@ -284,7 +287,12 @@ export async function attachAuthenticatedGatewayConnect(
   connectParams.scopes = scopes;
   if (role === "operator" && authenticatedUserId) {
     const addedIdentityScopes = scopes.filter(
-      (scope) => !roleScopesAllow({ role, requestedScopes: [scope], allowedScopes: deviceScopes }),
+      (scope) =>
+        resolveMissingRequestedScope({
+          role,
+          requestedScopes: [scope],
+          allowedScopes: deviceScopes,
+        }) !== null,
     );
     if (addedIdentityScopes.length > 0) {
       logGateway.info(
