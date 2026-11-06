@@ -83,6 +83,7 @@ export type InviteRecord = {
 
 /** An admitted node; it has no account, role, owner capabilities or approval descendants. */
 export type NodeRecord = {
+  description: NodeRedemptionBody["description"];
   label: string;
   listed_seq: number;
   added_by: OwnerApprover;
@@ -96,7 +97,7 @@ export type NodeInviteRecord = {
   cap: NodeInviteCapBody;
   proof_key: string;
   status: "open" | "pending" | "consumed";
-  pending: Pick<NodeRedemptionBody, "peer_key" | "requested_at"> | null;
+  pending: Pick<NodeRedemptionBody, "peer_key" | "requested_at" | "description"> | null;
   created_by: OwnerApprover;
 };
 

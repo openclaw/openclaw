@@ -9,6 +9,7 @@ import {
   buildNodeJoinLink,
   computeNodeRedemptionProof,
   parseNodeJoinLink,
+  nodeVerificationCode,
 } from "./node-invites.js";
 
 // Fixed cross-language vectors are the independent expected proof bytes, not a round-trip alone.
@@ -32,6 +33,32 @@ describe("node join link and proof", () => {
         peer_key: `iroh:${fixture.keys.node.ed25519.slice(8)}`,
       }),
     ).toBe(fixture.node_invite.proof);
+  });
+
+  it("matches the independent six-digit code vector and binds the complete approved description", async () => {
+    const parts = {
+      claw_id: "0123456789abcdef0123456789abcdef",
+      invite_id: "ffeeddccbbaa99887766554433221100",
+      peer_key: formatIrohEndpointKey(hexToBytes(fixture.keys.node.ed25519.slice(8))),
+      description: {
+        display_name: "Build node",
+        platform: "linux",
+        commands: ["system.run"],
+        caps: ["system"],
+      },
+    };
+    // Independently calculated using Python hashlib + sorted compact JSON.
+    expect(await nodeVerificationCode(parts)).toBe("168017");
+    expect(fixture.node_invite.verification_code).toBe("168017");
+    for (const changed of [
+      { ...parts, claw_id: "00".repeat(16) },
+      { ...parts, invite_id: "00".repeat(16) },
+      { ...parts, peer_key: formatIrohEndpointKey(new Uint8Array(32)) },
+      { ...parts, description: { ...parts.description, commands: ["camera.snap"] } },
+      { ...parts, description: { ...parts.description, caps: ["camera"] } },
+    ]) {
+      expect(await nodeVerificationCode(changed)).not.toBe("168017");
+    }
   });
 
   it("rejects ambiguous or secret-leaking links", () => {

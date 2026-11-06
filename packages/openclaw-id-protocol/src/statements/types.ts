@@ -244,8 +244,21 @@ export type NodeInviteCapBody = Pick<
   "claw_id" | "invite_id" | "label" | "created_at" | "expires_at" | "secret_hash"
 >;
 
+/** Bounds for self-reported node metadata; declarations never grant authority. */
+export const MAX_NODE_DISPLAY_NAME = 128;
+export const MAX_NODE_PLATFORM = 64;
+export const MAX_NODE_SURFACE_ITEMS = 64;
+export const MAX_NODE_SURFACE_NAME = 128;
+export type NodeDescription = {
+  display_name: string;
+  platform: string;
+  commands: string[];
+  caps: string[];
+};
+
 /** Self-signed by W (the same raw key encoded as ed25519: in the envelope). */
 export type NodeRedemptionBody = {
+  description: NodeDescription;
   claw_id: string;
   invite_id: string;
   peer_key: IrohEndpointKey;

@@ -205,6 +205,9 @@ direction, including an owner D or R with the same raw bytes as node W.
    `NodeInviteCap { claw_id, invite_id, label, created_at, expires_at, secret_hash }`, and
    calls `registerNodeInvite(state, cap, proofKey, context)` directly. K_gw alone cannot
    register one. Node invites are always single-use; no audience/account or role is present.
+   Creators default to `DEFAULT_NODE_INVITE_LIFETIME_SECONDS` (600 seconds / 10 minutes).
+   Registration enforces `MAX_NODE_INVITE_LIFETIME_SECONDS` (3600 seconds / 1 hour) from
+   creation and from registration, without a clock-skew extension. Expired caps are refused.
 2. `buildNodeJoinLink` encodes `NodeJoinLink` as
    `openclaw-node://join#i=<invite_id>.<base64url secret>&c=<claw_id>&r=<fp(R) hex>&h=<hostname>&relay=<URL>`.
    Values are URL-encoded. `parseNodeJoinLink` is the strict CLI/deep-link decoder. All five
@@ -216,14 +219,19 @@ direction, including an owner D or R with the same raw bytes as node W.
    HMAC-SHA-256(proof key, `"openclaw/node-invite-proof/v1\0"` || JCS({ claw_id, invite_id,
    peer_key })), lowercase hex. The existing proof-key derivation is shared, but the HMAC
    domain and signed statement type are separate from member invitations.
-4. W signs `NodeRedemption { claw_id, invite_id, peer_key, proof, requested_at }`. The
+4. W signs `NodeRedemption { claw_id, invite_id, peer_key, description, proof, requested_at }`. The
    envelope's `signer` is `ed25519:` with the same raw 32 bytes as `peer_key` (`iroh:`).
    The node sends `node_redemption` mail with W-signed Discovery authentication, no bearer
    token. `submitNodeRedemption(state, input, now)` checks W, invite, expiry and HMAC, then
-   records **pending**, reserves the invite and notifies owners. It admits nothing.
-5. An owner with `manage_members` (or R) signs `MembershipChange` at current seq + 1,
+   records **pending**, including the signed self-reported `description`, reserves the invite
+   and notifies owners. It admits nothing. A pending redemption cannot be replaced in place.
+5. The node terminal and owner approval dialog both show `nodeVerificationCode` for the
+   pending redemption. The dialog shows its display name, platform, commands and capabilities.
+   The owner must compare the codes and review that surface, then **explicitly click Approve**.
+   Opening or leaving the dialog open never approves a node automatically.
+   An owner with `manage_members` (or R) signs `MembershipChange` at current seq + 1,
    `add_node { peer_key, label, invite_id }`, directly at the Gateway. It must match the
-   pending node W; it consumes the invite. `deny_invite { invite_id }` also handles nodes.
+   pending node W; it consumes the invite and retains its approved description in `NodeRecord`. `deny_invite { invite_id }` also handles nodes.
    Owner-device approval through the mailbox is refused. R retains its existing mailbox
    supremacy, but must still name a matching pending node redemption.
 6. The node polls `getNodeDescriptor` using W, honoring rate-limit backoff. Only when W is
@@ -232,6 +240,29 @@ direction, including an owner D or R with the same raw bytes as node W.
    with `verifyBindingForPin`, applies `assessFreshness` to the snapshot, and dials only the
    verified K_srv. A pending/denied node gets no descriptor through node authentication.
    No node mailbox-read permission or user sign-in is needed.
+
+### Verification code and self-reported surface
+
+`NodeDescription` is `{ display_name, platform, commands: string[], caps: string[] }`.
+It is required in W-signed `NodeRedemption.description`, retained in
+`NodeInviteRecord.pending.description` and copied to `NodeRecord.description` on approval.
+The name/platform describe what the node claims to be; they are not verified identity or authority.
+Render them as untrusted text, never HTML, terminal escapes or instructions.
+
+The strict schema rejects missing/unknown fields, duplicate list entries, malformed Unicode,
+empty strings, C0 controls and DEL. Lengths use UTF-16 code units: display name at most
+`MAX_NODE_DISPLAY_NAME` (128), platform `MAX_NODE_PLATFORM` (64); commands and caps each
+contain at most `MAX_NODE_SURFACE_ITEMS` (64) unique names of at most
+`MAX_NODE_SURFACE_NAME` (128) units each. Empty command/capability lists are allowed.
+These bounds also bound the serialized signed description; no free-form nested payload is allowed.
+
+`nodeVerificationCode({ claw_id, invite_id, peer_key, description })` computes SHA-256 over
+UTF-8 `"openclaw/node-verification-code/v1\0"` followed by JCS of exactly those four fields.
+Interpret the first four digest bytes as an unsigned big-endian integer, reduce modulo
+1,000,000 and display six decimal digits with leading zeroes. List order is signed and stays
+unchanged for code calculation. Proof and timestamps are excluded so Gateway receipt time
+cannot change the code. The fixture `node_invite.verification_code` is a cross-language vector.
+The code is for human comparison, not a credential, signature or automatic-approval signal.
 
 ### Discovery bootstrap routing
 
@@ -256,9 +287,10 @@ Never send the invite secret or proof key to the configured Discovery origin.
 ### Node authority and lifecycle
 
 `AuthorityState.nodes` is keyed by W. `NodeRecord` holds `label`, `listed_seq`, `added_by`
-(root or approving owner fingerprint), `last_seen` and `invite_id`. `node_invites` is a
+(root or approving owner fingerprint), `last_seen`, `invite_id` and `description`. `node_invites` is a
 separate map of `NodeInviteRecord`. Both invite maps share an ID namespace and a total
-`MAX_INVITES` cap (100), the one-week registration limit and spent-record cleanup.
+`MAX_INVITES` cap (100) and spent-record cleanup. Node links have the stricter one-hour
+registration limit above; the member-invite lifetime is unchanged.
 Removing an owner deletes the open node invites it registered, as for member invites;
 already admitted nodes do not become owner approval descendants.
 
@@ -283,6 +315,11 @@ As for existing member invites, expiry of an unresolved pending redemption after
 belongs to the Gateway's persistence/scheduling owner.
 
 On the first node-role connect after signed admission, the Gateway may automatically approve
-that W's node device pairing and initial command surface. This is a one-time Gateway action,
+that W's node device pairing and initial command surface **only within the owner-approved
+`NodeRecord.description.commands` and `.caps`**. Both announced sets must be subsets of those
+stored sets (exact names, no wildcard expansion). Any additional command or capability goes
+through normal capability approval; do not silently approve it or overwrite the stored consent.
+The self-reported description by itself is informational: only the explicit owner approval
+establishes this upper bound, and existing execution policy still applies. This is a one-time Gateway action,
 not owner/member authority. A later manual pairing removal must suppress automatic re-pairing;
 it does not silently become a new invitation. The Gateway owns that provenance and suppression.

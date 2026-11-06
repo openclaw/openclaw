@@ -9,7 +9,7 @@ import {
   utf8,
   type Bytes,
 } from "./bytes.js";
-import { hmacSha256 } from "./crypto.js";
+import { hmacSha256, sha256 } from "./crypto.js";
 import { INVITE_SECRET_BYTES, inviteSecretHash } from "./invites.js";
 import { canonicalize } from "./jcs.js";
 import {
@@ -19,8 +19,35 @@ import {
   type IrohEndpointKey,
   type KeyFingerprint,
 } from "./keys.js";
-import type { NodeInviteCapBody, SignedStatement, UnixSeconds } from "./statements/types.js";
+import type {
+  NodeInviteCapBody,
+  NodeRedemptionBody,
+  SignedStatement,
+  UnixSeconds,
+} from "./statements/types.js";
 import { failure, verifyNodeRedemptionSignature, type VerifyResult } from "./statements/verify.js";
+
+/** Node links default to ten minutes and must never outlive one hour. */
+export const DEFAULT_NODE_INVITE_LIFETIME_SECONDS = 600;
+export const MAX_NODE_INVITE_LIFETIME_SECONDS = 3600;
+
+/** Shared human comparison code; not a credential or substitute for explicit approval. */
+export async function nodeVerificationCode(
+  parts: Pick<NodeRedemptionBody, "claw_id" | "invite_id" | "peer_key" | "description">,
+): Promise<string> {
+  const { claw_id, invite_id, peer_key, description } = parts;
+  const digest = await sha256(
+    concatBytes(
+      utf8("openclaw/node-verification-code/v1\0"),
+      utf8(canonicalize({ claw_id, invite_id, peer_key, description })),
+    ),
+  );
+  const value = new DataView(digest.buffer, digest.byteOffset, digest.byteLength).getUint32(
+    0,
+    false,
+  );
+  return String(value % 1_000_000).padStart(6, "0");
+}
 
 /** Node link fields. `relay_url` is a routing hint, not a trust anchor. */
 export type NodeJoinLink = {

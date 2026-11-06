@@ -10,6 +10,10 @@ import {
 } from "../keys.js";
 import { checkVersion, SUPPORTED_STATEMENT_VERSIONS, type StatementVersion } from "../version.js";
 import {
+  MAX_NODE_DISPLAY_NAME,
+  MAX_NODE_PLATFORM,
+  MAX_NODE_SURFACE_ITEMS,
+  MAX_NODE_SURFACE_NAME,
   MEMBER_ROLES,
   MEMBERSHIP_OPS,
   OWNER_CAPABILITIES,
@@ -112,9 +116,9 @@ function nullable(check: Check): Check {
 }
 
 // A list of unique items, each passing `check`.
-function list(check: Check, minLength = 0): Check {
+function list(check: Check, minLength = 0, maxLength = MAX_LIST): Check {
   return (value, path) => {
-    if (!Array.isArray(value) || value.length < minLength || value.length > MAX_LIST) {
+    if (!Array.isArray(value) || value.length < minLength || value.length > maxLength) {
       fail(path, "expected list");
     }
     value.forEach((item, index) => check(item, `${path}[${index}]`));
@@ -162,6 +166,20 @@ function tagged(field: string, variants: Record<string, Check>): Check {
   };
 }
 
+// These fields are shown in a terminal; reject embedded terminal controls at the signed boundary.
+// oxlint-disable-next-line no-control-regex
+const NODE_CONTROL_RE = /[\u0000-\u001f\u007f]/;
+const nodeText = (max: number): Check =>
+  predicate(
+    (v) => isText(v) && v.length > 0 && v.length <= max && !NODE_CONTROL_RE.test(v),
+    `expected non-empty text of at most ${max} UTF-16 code units without control characters`,
+  );
+const nodeDescription = object({
+  display_name: nodeText(MAX_NODE_DISPLAY_NAME),
+  platform: nodeText(MAX_NODE_PLATFORM),
+  commands: list(nodeText(MAX_NODE_SURFACE_NAME), 0, MAX_NODE_SURFACE_ITEMS),
+  caps: list(nodeText(MAX_NODE_SURFACE_NAME), 0, MAX_NODE_SURFACE_ITEMS),
+});
 const role = oneOf(MEMBER_ROLES);
 const ownerDeviceCertBody = object({
   device_pub: ed25519Key,
@@ -224,6 +242,7 @@ const V1_BODIES: Record<StatementType, Check> = {
     secret_hash: sha256Hex,
   }),
   NodeRedemption: object({
+    description: nodeDescription,
     claw_id: clawId,
     invite_id: randomId,
     peer_key: irohKey,
