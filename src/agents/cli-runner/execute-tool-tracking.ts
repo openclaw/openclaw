@@ -84,6 +84,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   let didDeliverSourceReplyViaMessageTool = false;
   let sourceReplyDelivered: true | undefined;
   let terminalSourceReplyDelivered = false;
+  let latestStartedTool: CliLoopbackCall | string | undefined;
   let inFlightUnclassifiedMcpRequests = 0;
   let inFlightMessagingToolCalls = 0;
   const inFlightPreparedMessagingCalls = new Set<McpLoopbackToolCallStart>();
@@ -235,6 +236,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     args: Record<string, unknown>;
     result?: unknown;
     isError: boolean;
+    isLatestToolResult: boolean;
   }) => {
     const deliveryFact = readEmbeddedMessageDeliveryFact(
       readToolResultDetails(params.result)?.messageDelivery,
@@ -280,7 +282,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       deliveredCurrentSourceReply || sourceReplyPayload
         ? resolveMessageToolSourceReplyFinal(toolArgs, context.params.messageToolFinalByDefault)
         : undefined;
-    terminalSourceReplyDelivered = deliveredCurrentSourceReply && sourceReplyFinal === true;
+    if (params.isLatestToolResult) {
+      terminalSourceReplyDelivered = deliveredCurrentSourceReply && sourceReplyFinal === true;
+    }
     // WebChat sends every targetless message through the internal sink while the run's
     // own reply mode stays automatic; a final send there is still this turn's answer.
     if (
@@ -361,6 +365,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       onToolCallStart: (call) => {
         terminalSourceReplyDelivered = false;
         const retained = retainCliLoopbackCall(call);
+        latestStartedTool = retained;
         const candidates = matchingActiveCliTools(call);
         // Parallel same-name calls can reach the loopback out of stream order.
         // Bind only a unique name+arguments match; ambiguity is safer than a wrong outcome.
@@ -460,6 +465,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
             args: call.args,
             result: "result" in call ? call.result : undefined,
             isError: call.outcome !== "completed",
+            isLatestToolResult:
+              candidates.length === 1 &&
+              (latestStartedTool === candidates[0] ||
+                (typeof latestStartedTool === "string" &&
+                  latestStartedTool === candidates[0].boundToolCallId)),
           });
         } else if (call.outcome === "completed") {
           const artifact = extractToolResultMediaArtifact(call.result);
@@ -477,6 +487,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   };
   const handleCliToolUseStart = (event: CliToolUseStartDelta) => {
     terminalSourceReplyDelivered = false;
+    latestStartedTool = event.toolCallId;
     if (event.kind !== "server_tool_use") {
       const activeTool: ActiveCliTool = {
         toolName: event.name,
@@ -553,6 +564,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ...pending,
         result: event.result,
         isError: event.isError,
+        isLatestToolResult:
+          latestStartedTool === event.toolCallId ||
+          (activeTool?.loopbackCall !== undefined && latestStartedTool === activeTool.loopbackCall),
       });
     }
     return activeTool?.loopbackAmbiguous ? undefined : activeTool?.loopbackCall?.current.args;

@@ -189,8 +189,10 @@ function recordToolOutcome(
   args: Record<string, unknown>,
   outcome: "completed" | "failed" | "unknown" = "completed",
   result?: unknown,
+  beforeResult?: () => void,
 ) {
   const captureHandle = markMcpLoopbackToolCallStarted({ captureKey, toolName, args });
+  beforeResult?.();
   if (!captureHandle) {
     return;
   }
@@ -1466,6 +1468,8 @@ it.each([
   ["identical emoji final", true, "source", "required", "✅", true, "✅"],
   ["distinct emoji final", true, "source", "required", "❌", true, "✅"],
   ["continued work", undefined, "source", "required", "The operation failed", false],
+  ["overlapping work", true, "source", "required", "Fresh check result", false],
+  ["overlapping default final", undefined, "source", "required", "Fresh check result", false],
   ["progress", false, "source", "required", "Final answer", false],
   ["other conversation", true, "other", "required", "Final answer", false],
   ["partial delivery", true, "partial", "required", "Final answer", false],
@@ -1483,6 +1487,8 @@ it.each([
     context.params.currentChannelId = "source-chat";
     context.params.terminalReplyExpectation = terminalReplyExpectation;
     mockCaptureSpawn((input, captureKey) => {
+      const checkArgs = { command: "check-result" };
+      let overlappingCheck: ReturnType<typeof markMcpLoopbackToolCallStarted>;
       recordToolOutcome(
         captureKey,
         "message",
@@ -1515,9 +1521,27 @@ it.each([
               : {}),
           },
         },
+        () => {
+          if (_label.startsWith("overlapping")) {
+            overlappingCheck = markMcpLoopbackToolCallStarted({
+              captureKey,
+              toolName: "exec",
+              args: checkArgs,
+            });
+          }
+        },
       );
+      if (overlappingCheck) {
+        recordMcpLoopbackToolCallResultForHandle({
+          captureHandle: overlappingCheck,
+          toolName: "exec",
+          args: checkArgs,
+          outcome: "completed",
+        });
+        markMcpLoopbackToolCallFinished(overlappingCheck);
+      }
       if (_label === "continued work") {
-        recordToolOutcome(captureKey, "exec", { command: "check-result" }, "completed");
+        recordToolOutcome(captureKey, "exec", checkArgs, "completed");
       }
       input.onStdout?.(text);
     });
