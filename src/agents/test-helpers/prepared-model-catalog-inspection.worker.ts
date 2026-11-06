@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { queryObjects } from "node:v8";
 import { parentPort } from "node:worker_threads";
 import { mockNativeModuleExports } from "../../../test/helpers/native-module-mock.js";
 import type * as Catalog from "./prepared-model-catalog-inspection.js";
@@ -38,6 +40,13 @@ mockNativeModuleExports(new URL("../prepared-model-runtime.full-catalog.ts", imp
   },
 });
 const facts = await import("../../config/resolution-facts.js");
+const { getRuntimeConfigSnapshot, getRuntimeConfigSourceSnapshot } =
+  await import("../../config/runtime-snapshot.js");
+const { isDeeplyFrozenPlainData } = await import("../../shared/immutable-data.js");
+const configIds = new WeakMap<object, number>();
+let nextConfigId = 0;
+const configCaptures: WeakRef<object>[] = [];
+const captureControl = new WeakRef({});
 const { registerResolvedAgentDir, resolveRegisteredAgentIdForDir, unregisterResolvedAgentDir } =
   await import("../agent-dir-registry.js");
 const { resolveUsableCustomProviderApiKey } = await import("../model-auth-provider-config.js");
@@ -64,43 +73,85 @@ port.on = (event, listener) => {
 };
 const post = port.postMessage.bind(port);
 port.postMessage = (message: { status: string; value?: object }, transferList) => {
-  let response = message;
-  if (message.status === "ok" && message.value) {
-    const { input, sourceConfigForSecrets } = task.value;
-    const runtimeFacts = facts.getConfigResolutionFacts(input.config);
-    const sourceFacts = facts.getConfigResolutionFacts(sourceConfigForSecrets);
-    const { provider, copyProbePath, existingAgentIds, expectedCredential } = task.inspection ?? {};
-    const requestCopies = sqliteCopies;
-    if (copyProbePath) {
-      inspectSharedAuthLegacyRowsReadOnly(copyProbePath, { artifactPreservingReadOnly: true });
+  void (async () => {
+    let response = message;
+    if (message.status === "ok" && message.value) {
+      const { input, sourceConfigForSecrets } = task.value;
+      const runtimeFacts = facts.getConfigResolutionFacts(input.config);
+      const sourceFacts = facts.getConfigResolutionFacts(sourceConfigForSecrets);
+      const { provider, copyProbePath, existingAgentIds, expectedCredential } =
+        task.inspection ?? {};
+      const requestCopies = sqliteCopies;
+      if (copyProbePath) {
+        inspectSharedAuthLegacyRowsReadOnly(copyProbePath, { artifactPreservingReadOnly: true });
+      }
+      const inspection: Catalog.CatalogInspection = {
+        sqliteCopies: requestCopies,
+        ...(copyProbePath ? { copyHookObserved: sqliteCopies > requestCopies } : {}),
+        plans,
+        runtimeFactsAbsent: runtimeFacts === null,
+        sourceFactsAbsent: sourceFacts === null,
+        sameResolutionFacts: runtimeFacts === sourceFacts,
+      };
+      if (task.inspection?.observeConfigSnapshots) {
+        const requested = [input.config, sourceConfigForSecrets];
+        inspection.configSnapshots = [
+          getRuntimeConfigSnapshot(),
+          getRuntimeConfigSourceSnapshot(),
+        ].map((config, index) => {
+          if (!config) {
+            throw new Error("Catalog request did not publish its config");
+          }
+          if (!configIds.has(config)) {
+            configIds.set(config, ++nextConfigId);
+          }
+          return {
+            id: configIds.get(config)!,
+            frozen: isDeeplyFrozenPlainData(config),
+            valuesMatchRequest: isDeepStrictEqual(config, requested[index]),
+            factsMatchRequest: isDeepStrictEqual(
+              facts.serializeConfigResolutionFacts(config),
+              facts.serializeConfigResolutionFacts(requested[index]),
+            ),
+          };
+        });
+      }
+      if (task.inspection?.collectConfigCaptures) {
+        configCaptures.push(new WeakRef(getRuntimeConfigSnapshot({ capture: true })!));
+        // Observe retired publications while the real worker still owns its registrations.
+        for (let pass = 0; pass < 2; pass++) {
+          await new Promise<void>((resolve) => {
+            setImmediate(() => {
+              queryObjects(WeakRef);
+              resolve();
+            });
+          });
+        }
+        inspection.configCaptureCollection = {
+          live: configCaptures.flatMap((ref, index) => (ref.deref() ? [index] : [])),
+          controlCollected: captureControl.deref() === undefined,
+        };
+      }
+      const { agentDir, env, config } = input;
+      if (existingAgentIds) {
+        const scope = { agentId: "foreign", agentDir, env };
+        inspection.foreignReleased = unregisterResolvedAgentDir(scope);
+        inspection.registeredAgentId = resolveRegisteredAgentIdForDir(agentDir, env);
+      }
+      if (provider) {
+        const credential = resolveUsableCustomProviderApiKey({ cfg: config, provider, env });
+        inspection.credentialMatches = credential?.apiKey === expectedCredential;
+        const key = `models.providers.${provider}.apiKey`;
+        inspection.authoredRef = facts.getAuthoredConfigSecretRef(config, key);
+        inspection.resolvedEnvRef = facts.getResolvedConfigEnvSecretRef(config, key);
+      }
+      response = { ...message, value: { ...message.value, inspection } };
     }
-    const inspection: Catalog.CatalogInspection = {
-      sqliteCopies: requestCopies,
-      ...(copyProbePath ? { copyHookObserved: sqliteCopies > requestCopies } : {}),
-      plans,
-      runtimeFactsAbsent: runtimeFacts === null,
-      sourceFactsAbsent: sourceFacts === null,
-      sameResolutionFacts: runtimeFacts === sourceFacts,
-    };
-    const { agentDir, env, config } = input;
-    if (existingAgentIds) {
-      const scope = { agentId: "foreign", agentDir, env };
-      inspection.foreignReleased = unregisterResolvedAgentDir(scope);
-      inspection.registeredAgentId = resolveRegisteredAgentIdForDir(agentDir, env);
+    if (Array.isArray(transferList)) {
+      post(response, transferList);
+    } else {
+      post(response, transferList);
     }
-    if (provider) {
-      const credential = resolveUsableCustomProviderApiKey({ cfg: config, provider, env });
-      inspection.credentialMatches = credential?.apiKey === expectedCredential;
-      const key = `models.providers.${provider}.apiKey`;
-      inspection.authoredRef = facts.getAuthoredConfigSecretRef(config, key);
-      inspection.resolvedEnvRef = facts.getResolvedConfigEnvSecretRef(config, key);
-    }
-    response = { ...message, value: { ...message.value, inspection } };
-  }
-  if (Array.isArray(transferList)) {
-    post(response, transferList);
-  } else {
-    post(response, transferList);
-  }
+  })();
 };
 await import("../prepared-model-catalog.worker.js");

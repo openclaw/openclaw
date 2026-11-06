@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import fs from "node:fs";
 import { createServer } from "node:http";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import { createConfigIO } from "../config/io.factory.js";
@@ -9,6 +10,7 @@ import * as configRuntime from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
@@ -17,6 +19,7 @@ import {
   prepareModelCatalogWorkerContext,
 } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput as workerInput } from "./prepared-model-catalog-worker.js";
+import type { PreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.types.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import { createCatalogInspectionPool } from "./test-helpers/prepared-model-catalog-inspection.js";
 
@@ -44,6 +47,175 @@ type CredentialCase = [
   value: string,
   loader?: { authored: string; env?: NodeJS.ProcessEnv; pending?: boolean; resolved?: boolean },
 ];
+
+it.each([false, true])(
+  "republishes immutable config pairs and replaces provenance (aliased: %s)",
+  async (aliased) => {
+    const pluginFile = await state.writeText(
+      "config-plugin/index.cjs",
+      `module.exports = { id: "${provider}", register() {} };`,
+    );
+    await state.writeJson("config-plugin/openclaw.plugin.json", {
+      id: provider,
+      providers: [provider],
+      modelCatalog: { discovery: { [provider]: "runtime" } },
+      configSchema: { type: "object", additionalProperties: false },
+    });
+    const env = {
+      ...state.env,
+      SOURCE_KEY: "same-fixture-key",
+      OTHER_KEY: "same-fixture-key",
+      CHANGED_KEY: "new-fixture-key",
+    };
+    const load = async (workspace: string, authored = "${SOURCE_KEY}") => {
+      const workspaceDir = path.join(state.workspaceDir, workspace);
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      const snapshot = await loadConfig(
+        {
+          plugins: { allow: [], load: { paths: [pluginFile] }, slots: { memory: "none" } },
+          agents: { defaults: { workspace: workspaceDir } },
+          models: {
+            providers: {
+              [provider]: {
+                baseUrl: "https://fixture.invalid",
+                api: "openai-completions",
+                apiKey: authored,
+                models: Array.from({ length: 256 }, (_, index) => ({
+                  id: `configured-${index}`,
+                  name: `Configured ${index}`,
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                })),
+              },
+            },
+          },
+        },
+        env,
+      );
+      return {
+        ...snapshot,
+        sourceConfig: aliased ? snapshot.config : snapshot.sourceConfig,
+        workspaceDir,
+      };
+    };
+    const initial = await load("one");
+    configRuntime.setRuntimeConfigSnapshot(initial.config, initial.sourceConfig);
+    const prepared = await prepareWorkspaceBuildGroup(
+      [
+        {
+          agentId: "main",
+          agentDir: state.agentDir(),
+          workspaceDir: initial.workspaceDir,
+          config: initial.config,
+          env,
+          skipCredentials: true,
+        },
+      ],
+      "static",
+    );
+    const input = (snapshot: Awaited<ReturnType<typeof load>>) => {
+      configRuntime.setRuntimeConfigSnapshot(snapshot.config, snapshot.sourceConfig);
+      return workerInput({
+        agentFacts: {
+          ...prepared.agentFacts[0]!,
+          input: {
+            ...prepared.agentFacts[0]!.input,
+            config: snapshot.config,
+            workspaceDir: snapshot.workspaceDir,
+          },
+        },
+        pluginMetadataSnapshot: loadPluginMetadataSnapshot({
+          config: snapshot.config,
+          env,
+          workspaceDir: snapshot.workspaceDir,
+        }),
+      });
+    };
+    const { pool } = createCatalogInspectionPool(env);
+    let collectedCaptures = 0;
+    const run = async (value: PreparedModelCatalogWorkerInput, collect = false) => {
+      const result = await pool.run(
+        {
+          context: prepareModelCatalogWorkerContext(value),
+          value,
+          request: {
+            kind: "catalog",
+            syntheticAuth: [],
+            clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
+          },
+          inspection: {
+            observeConfigSnapshots: true,
+            collectConfigCaptures: aliased && collect,
+            provider,
+            expectedCredential: value.input.config.models!.providers![provider]!.apiKey as string,
+          },
+        },
+        { timeoutMs: 30_000 },
+      );
+      expect(result.status).toBe("ok");
+      expect(result.inspection.credentialMatches).toBe(true);
+      expect(result.inspection.configSnapshots).toEqual([
+        expect.objectContaining({
+          frozen: true,
+          valuesMatchRequest: true,
+          factsMatchRequest: true,
+        }),
+        expect.objectContaining({
+          frozen: true,
+          valuesMatchRequest: true,
+          factsMatchRequest: true,
+        }),
+      ]);
+      if (aliased && collect) {
+        expect(result.inspection.configCaptureCollection).toEqual({
+          live: [collectedCaptures++],
+          controlCollected: true,
+        });
+      }
+      return result.inspection.configSnapshots!.map(({ id }) => id);
+    };
+    try {
+      const one = input(initial);
+      const two = input(await load("two"));
+      const firstIds = await run(one, true);
+      const secondIds = await run(two, true);
+      expect(firstIds[0] === firstIds[1]).toBe(aliased);
+      expect(secondIds[0] === secondIds[1]).toBe(aliased);
+      for (let refresh = 0; refresh < 2; refresh++) {
+        expect(await run(input(await load("one")), refresh === 0)).toEqual(firstIds);
+        expect(await run(input(await load("two")))).toEqual(secondIds);
+      }
+      const provenance = input(await load("one", "${OTHER_KEY}"));
+      expect(provenance.input.config).toEqual(one.input.config);
+      expect(provenance.sourceConfigForSecrets).toEqual(one.sourceConfigForSecrets);
+      expect(provenance.sourceConfigResolutionFacts).not.toEqual(one.sourceConfigResolutionFacts);
+      const nextIds = await run(provenance);
+      expect(nextIds[0]).not.toBe(firstIds[0]);
+      expect(nextIds[1]).not.toBe(firstIds[1]);
+      const changed = input(await load("one", "${CHANGED_KEY}"));
+      expect(await run(changed)).not.toEqual(nextIds);
+      // Absence and known-empty facts have different literal/SecretRef interpretation.
+      const absent = {
+        ...changed,
+        sourceConfigForSecrets: structuredClone(changed.sourceConfigForSecrets),
+        sourceConfigResolutionFacts: null,
+      };
+      const absentIds = await run(absent);
+      expect(
+        await run({
+          ...absent,
+          sourceConfigResolutionFacts: { unresolvedPaths: [], envSecretRefs: [] },
+        }),
+      ).not.toEqual(absentIds);
+    } finally {
+      await pool.close();
+    }
+  },
+);
+
 it.each<CredentialCase>([
   ["config", "synthetic-worker-config-key"],
   ["config", NON_ENV_SECRETREF_MARKER],

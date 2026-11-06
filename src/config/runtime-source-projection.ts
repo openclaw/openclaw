@@ -1,4 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { getConfigResolutionFacts } from "./resolution-facts.js";
 import {
   captureRuntimeConfigWithSource,
   getRuntimeConfigCapture,
@@ -6,6 +8,8 @@ import {
 import { getRuntimeConfigSnapshot, getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
 import { projectRuntimeChangesOntoSource } from "./source-value-projection.js";
 import type { OpenClawConfig } from "./types.js";
+
+const immutableCaptures = new WeakMap<OpenClawConfig, OpenClawConfig>();
 
 /** Captures runtime and authored values together for one admitted preparation generation. */
 export function captureRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
@@ -15,7 +19,19 @@ export function captureRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
   if (getRuntimeConfigCapture(config)) {
     return config;
   }
-  return captureRuntimeConfigWithSource(config, projectConfigOntoRuntimeSourceSnapshot(config));
+  const source = projectConfigOntoRuntimeSourceSnapshot(config);
+  // Standalone captures can follow immutable inputs. Publications own their capture
+  // separately; memoizing by their live origin would retain retired full config copies.
+  const reusable = config === source && isDeeplyFrozenPlainData(config);
+  const previous = reusable ? immutableCaptures.get(config) : undefined;
+  if (previous && getConfigResolutionFacts(previous) === getConfigResolutionFacts(config)) {
+    return previous;
+  }
+  const captured = captureRuntimeConfigWithSource(config, source);
+  if (reusable) {
+    immutableCaptures.set(config, captured);
+  }
+  return captured;
 }
 
 /** Projects a runtime-derived config back onto the active authored source snapshot. */

@@ -4,10 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { MessagePort } from "node:worker_threads";
 import { expect, it } from "vitest";
-import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
-import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
   publishRemoteModelCatalogSnapshot,
   withRemoteModelCatalogSnapshot,
@@ -16,7 +12,6 @@ import {
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import {
   createCatalogFixture,
@@ -26,40 +21,13 @@ import {
   PLUGIN_ID,
   PROVIDER_ID,
 } from "./prepared-model-catalog-worker.test-support.js";
-import type {
-  PreparedModelCatalogWorkerInput,
-  PreparedModelCatalogWorkerTask,
-  PreparedModelWorkerResult,
-} from "./prepared-model-catalog-worker.types.js";
-import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
+import type { PreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.types.js";
+import {
+  catalogTask,
+  usePreparedCatalogWorkerFixtures,
+} from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-const { makeTempDir, observeWorkers } = usePreparedCatalogWorkerFixtures();
-
-function createCatalogPool(env: NodeJS.ProcessEnv) {
-  return new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
-    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
-    maxWorkers: 1,
-    idleTimeoutMs: 0,
-    restartOnError: false,
-    workerOptions: {
-      resourceLimits: { maxOldGenerationSizeMb: 512 },
-      workerData: { sourceCaptureDirectory: makeTempDir("openclaw-catalog-heap-captures-") },
-      env,
-    },
-  });
-}
-
-function catalogTask(value: PreparedModelCatalogWorkerInput): PreparedModelCatalogWorkerTask {
-  return {
-    context: prepareModelCatalogWorkerContext(value),
-    value,
-    request: {
-      kind: "catalog",
-      syntheticAuth: [],
-      clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: value.input.env }),
-    },
-  };
-}
+const { makeTempDir, observeWorkers, createCatalogPool } = usePreparedCatalogWorkerFixtures();
 
 it("shares remote catalog revisions across workspaces without retaining superseded copies", async () => {
   const fixture = await createCatalogFixture(makeTempDir, 0);
@@ -150,6 +118,370 @@ it("shares remote catalog revisions across workspaces without retaining supersed
   } finally {
     await pool.close();
     observer.close();
+    setRemoteModelCatalogOverlaySourcesForTest();
+  }
+}, 120_000);
+
+it("refreshes remote-derived catalogs without recapturing unchanged registrations", async () => {
+  const bundledRoot = makeTempDir("openclaw-catalog-refresh-bundled-");
+  const extra = "catalog-expansion-fixture";
+  const borrowed = "catalog-borrowed-fixture";
+  const synthetic = "catalog-synthetic-fixture";
+  const fixture = await createCatalogFixture(makeTempDir, 0, {
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+  });
+  const scopeMarker = `${fixture.marker}.scope`;
+  fs.mkdirSync(path.join(bundledRoot, extra));
+  writeFixtureFiles(path.join(bundledRoot, extra), {
+    "index.cjs": `const fs = require("node:fs");
+module.exports = { id: ${JSON.stringify(extra)}, register(api) {
+  const record = event => fs.appendFileSync(${JSON.stringify(scopeMarker)}, event + "\\n");
+  record("registered");
+  api.lifecycle.onDispose(() => record("disposed"));
+  api.registerProvider({ id: ${JSON.stringify(extra)}, label: "Expansion fixture", auth: [],
+    catalog: { run() { return { provider: {
+      api: "openai-completions", baseUrl: "https://catalog.invalid/v1",
+      models: [{ id: "expanded-model", name: "Expanded model" }]
+    } }; } }
+  });
+} };`,
+    "package.json": {
+      name: extra,
+      version: "0.0.0",
+      openclaw: { extensions: ["./index.cjs"] },
+    },
+    "openclaw.plugin.json": {
+      id: extra,
+      providers: [extra],
+      modelCatalog: { discovery: { [extra]: "runtime" } },
+      configSchema: { type: "object", additionalProperties: false },
+    },
+  });
+  fs.mkdirSync(path.join(bundledRoot, borrowed));
+  writeFixtureFiles(path.join(bundledRoot, borrowed), {
+    "index.cjs": `const fs = require("node:fs");
+module.exports = { id: ${JSON.stringify(borrowed)}, register(api) {
+  api.registerProvider({ id: ${JSON.stringify(synthetic)}, label: "Synthetic fixture", auth: [],
+    prepareSyntheticAuth() { throw new Error("Unexpected borrowed auth probe"); }
+  });
+  api.registerProvider({ id: ${JSON.stringify(borrowed)}, label: "Borrowed fixture", auth: [],
+    catalog: { async run(context) {
+      let key = null;
+      try {
+        key = (await api.runtime.modelAuth.resolveApiKeyForProvider({
+          cfg: api.config, workspaceDir: context.workspaceDir, provider: ${JSON.stringify(synthetic)}
+        })).apiKey;
+      } catch (error) {
+        if (error.code !== "missing-provider-auth") throw error;
+      }
+      fs.writeFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER + ".auth", JSON.stringify(key));
+      return { provider: { api: "openai-completions", baseUrl: "https://catalog.invalid/v1",
+        models: [{ id: "borrowed-model", contextWindow: 8192, maxTokens: 4096 }]
+      } };
+    } }
+  });
+} };`,
+    "package.json": {
+      name: borrowed,
+      version: "0.0.0",
+      openclaw: { extensions: ["./index.cjs"] },
+    },
+    "openclaw.plugin.json": {
+      id: borrowed,
+      providers: [borrowed, synthetic],
+      configSchema: { type: "object", additionalProperties: false },
+      modelCatalog: { discovery: { [borrowed]: "runtime" } },
+    },
+  });
+  writeFixtureFiles(path.join(fixture.root, "plugin"), {
+    "index.cjs": `const fs = require("node:fs");
+module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
+  fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, __filename + "\\n");
+  api.lifecycle.onDispose(() => fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER + ".disposed", __filename + "\\n"));
+} };`,
+    "openclaw.plugin.json": {
+      id: PLUGIN_ID,
+      providers: [PROVIDER_ID],
+      configSchema: { type: "object", properties: { revision: { type: "number" } } },
+      modelCatalog: {
+        providers: {
+          [PROVIDER_ID]: {
+            api: "openai-completions",
+            baseUrl: "https://catalog.invalid/v1",
+            models: [{ id: "manifest-model", contextWindow: 8192, maxTokens: 4096 }],
+          },
+        },
+      },
+    },
+  });
+  // Both URLs serve the default config across the documented v1 -> v2 catalog upgrade.
+  const catalog = (revision: string, version: number, price: number): ActiveRemoteModelCatalog => ({
+    sourceUrl: `https://catalog.openclaw.ai/models/v${version}/catalog.json`,
+    revision,
+    generatedAt: price,
+    providers: {
+      [PROVIDER_ID]: {
+        models: [
+          {
+            id: `remote-${price}`,
+            contextWindow: 8192,
+            maxTokens: 4096,
+            cost: { input: price, output: price, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+    },
+    recommendations: {},
+    pricing: {},
+    upstreamPricing: {},
+  });
+  const config = {
+    plugins: {
+      ...fixture.config.plugins,
+      allow: [...fixture.config.plugins.allow, borrowed, extra],
+      entries: {
+        ...fixture.config.plugins.entries,
+        [borrowed]: { enabled: true },
+        [extra]: { enabled: true },
+      },
+    },
+    models: {
+      providers: {
+        [PROVIDER_ID]: {
+          api: "openai-completions" as const,
+          apiKey: "synthetic-catalog-key",
+          baseUrl: "https://catalog.invalid/v1",
+          models: [],
+        },
+      },
+    },
+  };
+  const metadata = loadPluginMetadataSnapshot({
+    config,
+    env: fixture.env,
+    workspaceDir: fixture.workspaceDir,
+  });
+  const input = (remoteCatalog: ActiveRemoteModelCatalog | null, revision?: number) => ({
+    ...createPreparedModelCatalogWorkerInput({
+      agentFacts: makeCatalogAgentFacts(
+        catalogInput(fixture, {
+          config: {
+            ...config,
+            plugins: {
+              ...config.plugins,
+              entries: {
+                ...config.plugins.entries,
+                [PLUGIN_ID]: { enabled: true, config: { revision } },
+              },
+            },
+          },
+        }),
+      ),
+      pluginMetadataSnapshot: metadata,
+    }),
+    remoteCatalog,
+  });
+  const registrations = () => fs.readFileSync(fixture.marker, "utf8").trim().split("\n");
+  const pool = createCatalogPool(fixture.env);
+  const authKey = (value: PreparedModelCatalogWorkerInput) =>
+    value.remoteCatalog ? `synthetic-${value.remoteCatalog.generatedAt}` : null;
+  const taskFor = (value: PreparedModelCatalogWorkerInput) => {
+    const task = catalogTask(value);
+    const key = authKey(value);
+    task.request = {
+      ...task.request,
+      providerIds: [PROVIDER_ID, borrowed],
+      syntheticAuth: [
+        {
+          providerRef: synthetic,
+          result: key ? { apiKey: key, source: "fixture", mode: "api-key" } : null,
+        },
+      ],
+    };
+    return task;
+  };
+  const run = async (value: PreparedModelCatalogWorkerInput, omitMetadata = false) => {
+    const task = taskFor(value);
+    if (omitMetadata) {
+      const { remoteCatalog: _remote, pluginMetadataSnapshot: _metadata, ...request } = value;
+      task.value = request;
+    }
+    const result = await pool.run(task, { timeoutMs: 30_000 });
+    if (result.status !== "ok" || result.kind !== "catalog") {
+      throw new Error(JSON.stringify(result));
+    }
+    const models = result.runtimeModels.get(PROVIDER_ID);
+    expect(models).toBeDefined();
+    expect(result.runtimeModels.get(borrowed)).toContainEqual(
+      expect.objectContaining({ id: "borrowed-model" }),
+    );
+    expect(JSON.parse(fs.readFileSync(`${fixture.marker}.auth`, "utf8"))).toBe(authKey(value));
+    if (!value.remoteCatalog) {
+      expect(models).toContainEqual(expect.objectContaining({ id: "manifest-model" }));
+    }
+    return models!.filter((model) => model.id.startsWith("remote-"));
+  };
+  try {
+    const first = input(catalog("A", 1, 1));
+    await run(first);
+    const expanded = taskFor(input(catalog("B", 1, 2)));
+    expanded.request = { ...expanded.request, providerIds: [PROVIDER_ID, borrowed, extra] };
+    // Reject only after the worker acquires the expanded registry, before it can publish B.
+    const failed = await pool.run(expanded, {
+      timeoutMs: 30_000,
+      onRequest: async () => ({ input: false, timeoutMs: 30_000 }),
+    });
+    expect(failed).toMatchObject({
+      status: "failed",
+      error: "prepared model catalog request retired before discovery",
+    });
+    expect(fs.readFileSync(scopeMarker, "utf8")).toBe("registered\ndisposed\n");
+    expect(fs.existsSync(`${fixture.marker}.disposed`)).toBe(false);
+    expect((await run(first, true)).map((model) => model.id)).toEqual(["remote-1"]);
+    expect(registrations()).toHaveLength(1);
+    const retried = await pool.run(expanded, { timeoutMs: 30_000 });
+    expect(retried).toMatchObject({ status: "ok", kind: "catalog" });
+    if (retried.status === "ok" && retried.kind === "catalog") {
+      expect(retried.runtimeModels.get(borrowed)).toContainEqual(
+        expect.objectContaining({ id: "borrowed-model" }),
+      );
+      expect(retried.runtimeModels.get(extra)).toContainEqual(
+        expect.objectContaining({ id: "expanded-model" }),
+      );
+    }
+    expect(JSON.parse(fs.readFileSync(`${fixture.marker}.auth`, "utf8"))).toBe("synthetic-2");
+    expect(fs.readFileSync(scopeMarker, "utf8")).toBe("registered\ndisposed\nregistered\n");
+    expect(fs.existsSync(`${fixture.marker}.disposed`)).toBe(false);
+    for (const remote of [catalog("A", 1, 1), catalog("B", 1, 2), catalog("B", 2, 3), null]) {
+      for (const omitMetadata of [false, true]) {
+        const rows = await run(input(remote), omitMetadata);
+        expect(rows.map((model) => model.id)).toEqual(
+          remote ? [`remote-${remote.generatedAt}`] : [],
+        );
+        if (remote) {
+          expect(rows[0]!.cost.input).toBe(remote.generatedAt);
+        }
+      }
+    }
+    expect(registrations()).toHaveLength(1);
+    expect(new Set(registrations()).size).toBe(1);
+    expect(fs.existsSync(`${fixture.marker}.disposed`)).toBe(false);
+    await run(input(catalog("C", 2, 4), 1));
+    expect(registrations()).toHaveLength(2);
+    expect(new Set(registrations()).size).toBe(2);
+    expect(fs.readFileSync(`${fixture.marker}.disposed`, "utf8").trim()).toBe(registrations()[0]);
+    expect(fs.readFileSync(scopeMarker, "utf8")).toBe(
+      "registered\ndisposed\nregistered\ndisposed\n",
+    );
+  } finally {
+    await pool.close();
+  }
+}, 120_000);
+
+it("collects superseded remote snapshots while reusing registered catalog callbacks", async () => {
+  setRemoteModelCatalogOverlaySourcesForTest();
+  const fixture = await createCatalogFixture(makeTempDir, 0);
+  writeFixtureFiles(path.join(fixture.root, "plugin"), {
+    "index.cjs": `
+const fs = require("node:fs");
+const state = globalThis[Symbol.for("catalog.remote.retention")] ??= {
+  snapshots: new Map(), configs: new Map(), callbacks: [], captures: [], control: new WeakRef({})
+};
+module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
+  state.captures.push(new WeakRef(api.config));
+  const run = async () => {
+    // Observe the actual worker scope without adding a production inspection seam.
+    const catalog = globalThis[Symbol.for("openclaw.asyncContext")].getStore()
+      [Symbol.for("openclaw.remoteModelCatalogScope")].catalog;
+    state.snapshots.set(catalog.revision, new WeakRef(catalog));
+    const config = api.runtime.config.current();
+    state.configs.set(config.plugins.entries[${JSON.stringify(PLUGIN_ID)}].config.revision, new WeakRef(config));
+    for (let pass = 0; pass < 2; pass++) {
+      await new Promise(resolve => setImmediate(() => {
+        require("node:v8").queryObjects(WeakRef);
+        resolve();
+      }));
+    }
+    fs.writeFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, JSON.stringify({
+      snapshots: [...state.snapshots].filter(([, ref]) => ref.deref()).map(([revision]) => revision),
+      configs: [...state.configs].filter(([, ref]) => ref.deref()).map(([revision]) => revision),
+      callbacks: state.callbacks.filter(ref => ref.deref()).length,
+      captures: state.captures.filter(ref => ref.deref()).length,
+      controlCollected: state.control.deref() === undefined
+    }));
+    return { provider: { api: "openai-completions", baseUrl: "https://catalog.invalid/v1",
+      models: [{ id: catalog.revision, name: catalog.revision }]
+    } };
+  };
+  state.callbacks.push(new WeakRef(run));
+  api.registerProvider({ id: ${JSON.stringify(PROVIDER_ID)}, label: "Retention fixture", auth: [],
+    catalog: { run }
+  });
+} };`,
+    "openclaw.plugin.json": {
+      id: PLUGIN_ID,
+      providers: [PROVIDER_ID],
+      configSchema: { type: "object", properties: { revision: { type: "number" } } },
+      modelCatalog: { discovery: { [PROVIDER_ID]: "runtime" } },
+    },
+  });
+  const metadata = loadPluginMetadataSnapshot({
+    config: fixture.config,
+    env: fixture.env,
+    workspaceDir: fixture.workspaceDir,
+  });
+  const pool = createCatalogPool(fixture.env);
+  try {
+    for (const [index, revision] of ["A", "B", "C", "D"].entries()) {
+      const value = {
+        ...createPreparedModelCatalogWorkerInput({
+          agentFacts: makeCatalogAgentFacts(
+            catalogInput(fixture, {
+              config: {
+                ...fixture.config,
+                plugins: {
+                  ...fixture.config.plugins,
+                  entries: {
+                    [PLUGIN_ID]: { enabled: true, config: { revision: index === 3 ? 1 : 0 } },
+                  },
+                },
+              },
+            }),
+          ),
+          pluginMetadataSnapshot: metadata,
+        }),
+        remoteCatalog: {
+          sourceUrl: "https://catalog.openclaw.ai/models/v2/catalog.json",
+          revision,
+          generatedAt: index,
+          providers: {},
+          recommendations: {},
+          pricing: {},
+          upstreamPricing: {},
+        },
+      };
+      // The second request observes the settled predecessor after all worker owners advance.
+      for (let request = 0; request < 2; request++) {
+        const result = await pool.run(catalogTask(value), { timeoutMs: 30_000 });
+        expect(result).toMatchObject({ status: "ok", kind: "catalog" });
+        if (result.status === "ok" && result.kind === "catalog") {
+          expect(result.runtimeModels.get(PROVIDER_ID)).toContainEqual(
+            expect.objectContaining({ id: revision }),
+          );
+        }
+      }
+      expect(JSON.parse(fs.readFileSync(fixture.marker, "utf8"))).toEqual({
+        snapshots: [revision],
+        configs: [index === 3 ? 1 : 0],
+        callbacks: 1,
+        captures: 1,
+        controlCollected: true,
+      });
+    }
+  } finally {
+    await pool.close();
     setRemoteModelCatalogOverlaySourcesForTest();
   }
 }, 120_000);

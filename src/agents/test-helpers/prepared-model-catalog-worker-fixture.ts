@@ -6,9 +6,11 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { FixtureReceiptChannel } from "../../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { captureClawInstallSchemaVersionFacts } from "../../claws/provenance-runtime-read.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -24,7 +26,13 @@ import {
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "../plugin-model-catalog.js";
+import { prepareModelCatalogWorkerContext } from "../prepared-model-catalog-fingerprints.js";
 import * as catalogWorker from "../prepared-model-catalog-worker.js";
+import type {
+  PreparedModelCatalogWorkerInput,
+  PreparedModelCatalogWorkerTask,
+  PreparedModelWorkerResult,
+} from "../prepared-model-catalog-worker.types.js";
 import { isPreparedModelCatalogFull } from "../prepared-model-runtime.full-catalog.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import type {
@@ -148,6 +156,18 @@ export function usePreparedCatalogWorkerFixtures(
     });
   });
   return {
+    createCatalogPool: (env: NodeJS.ProcessEnv) =>
+      new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
+        workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
+        maxWorkers: 1,
+        idleTimeoutMs: 0,
+        restartOnError: false,
+        workerOptions: {
+          resourceLimits: { maxOldGenerationSizeMb: 512 },
+          workerData: { sourceCaptureDirectory: tempDirs.make("openclaw-catalog-heap-captures-") },
+          env,
+        },
+      }),
     readCatalogWorkers: (): readonly Worker[] => [...workers],
     observeWorkers: (onWorker?: (worker: Worker) => void) => {
       const spawned: Worker[] = [];
@@ -438,4 +458,18 @@ export function writeCatalogFailureControl(
           if (catalogControl === "alias") return { providers: { [${JSON.stringify(aliasId)}]: {
             baseUrl: "https://worker-catalog.invalid/v1", api: "openai-completions", models: legacyModels,
           } } };`;
+}
+
+export function catalogTask(
+  value: PreparedModelCatalogWorkerInput,
+): PreparedModelCatalogWorkerTask {
+  return {
+    context: prepareModelCatalogWorkerContext(value),
+    value,
+    request: {
+      kind: "catalog",
+      syntheticAuth: [],
+      clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: value.input.env }),
+    },
+  };
 }
