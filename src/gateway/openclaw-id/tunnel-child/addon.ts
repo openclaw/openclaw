@@ -46,9 +46,7 @@ type IrohHomeRelayWatcher = { next(): Promise<IrohHomeRelayStatus[] | null> };
 export type IrohEndpoint = {
   id(): string;
   boundSockets(): string[];
-  online(): Promise<void>;
-  /** Missing from bindings built before relay status was exposed. */
-  watchHomeRelay?(): Promise<IrohHomeRelayWatcher>;
+  watchHomeRelay(): Promise<IrohHomeRelayWatcher>;
   accept(): Promise<IrohConnection | null>;
   close(): Promise<void>;
 };
@@ -61,6 +59,8 @@ export type IrohBinding = {
     alpns?: Uint8Array[];
     bindAddr?: string;
   }): Promise<IrohEndpoint>;
+  /** The endpoint class; bindings built before relay status was exposed lack its watcher. */
+  Endpoint: { prototype: Partial<Pick<IrohEndpoint, "watchHomeRelay">> };
 };
 
 const PACKAGE_NAME = "@openclaw/iroh-node";
@@ -92,7 +92,13 @@ export function loadIrohBinding(): IrohBinding {
     }
     try {
       // SAFETY: the iroh-node package exports this binding surface; IrohBinding lists only what the child calls.
-      return require(specifier) as IrohBinding;
+      const loaded = require(specifier) as IrohBinding;
+      // The child needs the relay watcher: it reports relay denials and ends when the
+      // endpoint closes, which lets the child exit on its own.
+      if (typeof loaded.Endpoint.prototype.watchHomeRelay !== "function") {
+        throw new Error("built without the home relay watcher");
+      }
+      return loaded;
     } catch (error) {
       errors.push(
         `${specifier}: ${(error instanceof Error ? error.message : String(error)).split("\n")[0]}`,

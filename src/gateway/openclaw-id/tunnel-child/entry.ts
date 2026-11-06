@@ -126,12 +126,8 @@ async function serve(
 }
 
 // Reports relay attachment and relay-side admission denials as they change.
-// Bindings without the relay watcher only report coming online.
+// The watcher ends when the endpoint closes.
 function followHomeRelay(endpoint: IrohEndpoint, onChange: (state: RelayState) => void): void {
-  if (!endpoint.watchHomeRelay) {
-    void endpoint.online().then(() => onChange({ online: true, denied: null }));
-    return;
-  }
   void endpoint.watchHomeRelay().then(async (watcher) => {
     let state: RelayState = { online: false, denied: null };
     for (let list = await watcher.next(); list; list = await watcher.next()) {
