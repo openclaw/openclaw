@@ -15,9 +15,7 @@ export const proofRegions = {
 export function summarizeDetailsGeometry(
   frames: ReturnType<ReturnType<typeof installPaneChromeProbe>["read"]>["detailsFrames"],
 ) {
-  const firstIndex = frames.findIndex((frame) =>
-    frame.sections.some((row) => row.section === "session" && row.height > 0),
-  );
+  const firstIndex = frames.findIndex((frame) => frame.sections.some((row) => row.height > 0));
   const populated = firstIndex < 0 ? [] : frames.slice(firstIndex);
   let topMovementPx = 0;
   let heightMovementPx = 0;

@@ -47,21 +47,8 @@ const SUMMARY = ["running", "queued", "done", "failed", "stopped"] as const;
 // Rows list what still needs attention first: live work, then failures.
 const ORDER: Record<State, number> = { running: 0, queued: 1, failed: 2, stopped: 3, done: 4 };
 
-function subagentState(row: ChatSubagentActivityRow): State {
-  return row.status === "waiting" ? "running" : row.status;
-}
-
-function tally<T>(rows: readonly T[], state: (row: T) => State): Tally {
-  const counts = { running: 0, queued: 0, failed: 0, stopped: 0, done: 0 };
-  for (const row of rows) {
-    counts[state(row)] += 1;
-  }
-  return counts;
-}
-
-function attentionOrder<T>(rows: readonly T[], state: (row: T) => State): T[] {
-  return rows.toSorted((a, b) => ORDER[state(a)] - ORDER[state(b)]);
-}
+const subagentState = (row: ChatSubagentActivityRow): State =>
+  row.status === "waiting" ? "running" : row.status;
 
 /**
  * One collapsible kind of background work. The heading keeps the observed counts
@@ -206,7 +193,9 @@ export function ChatDetailsBackground(
     Boolean(hasLoadedDetailsSubagents(props.details) || props.details.subagentSessionsUnavailable),
   );
   const roster = createMemo(() => listSubagents(props.details));
-  const subagents = createMemo(() => attentionOrder(roster(), subagentState));
+  const subagents = createMemo(() =>
+    roster().toSorted((a, b) => ORDER[subagentState(a)] - ORDER[subagentState(b)]),
+  );
   const unlisted = createMemo(() => subagents().filter((row) => !row.listed));
   const desktopPresentation = createMemo(() => props.desktopSubagents);
   const collection = createMemo(() => roster().filter((row) => row.listed));
@@ -255,11 +244,13 @@ export function ChatDetailsBackground(
     };
   });
   const subagentTally = createMemo(() => {
-    const counts = tally(activityReady() ? subagents() : [], subagentState);
-    if (!activityReady()) {
+    const counts = { running: 0, queued: 0, failed: 0, stopped: 0, done: 0 };
+    if (cachedActivity()) {
       for (const entry of summary()?.counts ?? []) {
         counts[entry.status === "waiting" ? "running" : entry.status] += entry.count;
       }
+    } else {
+      for (const row of subagents()) counts[subagentState(row)] += 1;
     }
     return counts;
   });

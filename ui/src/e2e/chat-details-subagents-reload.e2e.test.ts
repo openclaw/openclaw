@@ -95,7 +95,7 @@ suite.define(() => {
           const frames: DetailsFrame[] = [];
           const sample = () => {
             const panel = document.querySelector(".chat-pane-cache__pane--active .chat-details");
-            if (panel?.querySelector("section.chat-details-session")?.checkVisibility()) {
+            if (panel?.querySelector("[data-details-group]")?.checkVisibility()) {
               const top = panel.getBoundingClientRect().top;
               frames.push({
                 rows: panel.querySelectorAll(".chat-subagent-activity__row").length,
