@@ -5,6 +5,16 @@ export function sidebarPresentationProbe() {
     glyphs: string[];
     avatars: string[];
     images: string[];
+    avatarDisplay: Array<{
+      classes: string;
+      initials: string;
+      emoji: string | null;
+      color: string | null;
+      state: string | null;
+    }>;
+    avatarNodes: number[];
+    avatarDescendants: number;
+    participantCount: string | null;
     ownerAvatars: number;
     presenceAvatars: number;
     unread: number;
@@ -31,6 +41,37 @@ export function sidebarPresentationProbe() {
     return template.content.firstElementChild?.innerHTML ?? "invalid CSS artwork";
   };
   const frames: Frame[] = [];
+  const nodeIds = new WeakMap<Element, number>();
+  let nextNodeId = 0;
+  const avatarFacts = (row: Element) => {
+    const avatars = [...row.querySelectorAll<HTMLElement>('[class*="avatar"]')];
+    return {
+      avatarDisplay: avatars.map((avatar) => ({
+        classes: avatar.className,
+        initials: avatar.querySelector(".viewer-avatar__initials")?.textContent ?? "",
+        emoji: avatar.getAttribute("data-avatar"),
+        color: avatar.getAttribute("style"),
+        state: avatar.getAttribute("data-avatar-state"),
+      })),
+      avatarNodes: avatars.map((avatar) => {
+        let id = nodeIds.get(avatar);
+        if (id === undefined) {
+          id = ++nextNodeId;
+          nodeIds.set(avatar, id);
+        }
+        return id;
+      }),
+      avatarDescendants: avatars.reduce(
+        (count, avatar) =>
+          count +
+          (avatar.parentElement?.closest('[class*="avatar"]')
+            ? 0
+            : 1 + avatar.querySelectorAll("*").length),
+        0,
+      ),
+      participantCount: row.querySelector(".session-owner-stack__count")?.textContent ?? null,
+    };
+  };
   let stopped = false;
   const pendingFrames: Array<() => void> = [];
   const channel = new MessageChannel();
@@ -87,6 +128,7 @@ export function sidebarPresentationProbe() {
         })),
         rows: rows.map((row) => ({
           key: row.getAttribute("data-session-key") ?? "",
+          ...avatarFacts(row),
           avatars: [...row.querySelectorAll('[class*="avatar"]')].map((avatar) => avatar.className),
           images: [...row.querySelectorAll("img")].map((image) => image.getAttribute("src") ?? ""),
           ownerAvatars: row.querySelectorAll('.sidebar-session-indicator [class*="avatar"]').length,
