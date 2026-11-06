@@ -1,12 +1,14 @@
 import { readFile } from "node:fs/promises";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { GatewayFrame } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -96,7 +98,9 @@ function defineSkillWorkshopEnableSuite(params: {
   }
 
   suite.define(() => {
-    it("turns the plugin on from the Workshop page and loads it without a reload", async () => {
+    it("turns the plugin on from the Workshop page and loads it without a reload", async ({
+      signal,
+    }) => {
       const dashboard = await instance.cli(["dashboard", "--json"]);
       expect(dashboard.code, dashboard.stderr).toBe(0);
       const fragment = new URL(JSON.parse(dashboard.stdout).browserUrl).hash;
@@ -110,10 +114,20 @@ function defineSkillWorkshopEnableSuite(params: {
           permissions: ["local-network-access"],
         },
         async ({ page }) => {
-          const sent: Array<{ method?: string }> = [];
-          page.on("websocket", (socket) =>
-            socket.on("framesent", ({ payload }) => sent.push(JSON.parse(payload.toString()))),
-          );
+          const sent: Array<{ id?: string; method?: string }> = [];
+          const enableResponse = createDeferred<boolean>();
+          page.on("websocket", (socket) => {
+            socket.on("framesent", ({ payload }) => sent.push(JSON.parse(payload.toString())));
+            socket.on("framereceived", ({ payload }) => {
+              const frame: GatewayFrame = JSON.parse(payload.toString());
+              if (
+                frame.type === "res" &&
+                sent.some(({ id, method }) => id === frame.id && method === "plugins.setEnabled")
+              ) {
+                enableResponse.resolve(frame.ok);
+              }
+            });
+          });
           const workshopRequests = () =>
             sent.filter((frame) => frame.method?.startsWith("skills.workshop."));
           const url = new URL(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main", "chat"));
@@ -132,6 +146,8 @@ function defineSkillWorkshopEnableSuite(params: {
           expect(await page.getByRole("tab", { name: "Skill workshop" }).count()).toBe(1);
 
           await enable.click();
+          // Publication can precede lifecycle cleanup; join the RPC before reload or another write.
+          await expect(withinTest(enableResponse.promise, signal)).resolves.toBe(true);
           // The Gateway publishes the plugin and the open page loads it in place.
           await page.getByText("No learned skills yet").waitFor({ timeout: 60_000 });
           // Focus moves from the departed button to the panel, not the page body.

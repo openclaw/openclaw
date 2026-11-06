@@ -1,0 +1,3 @@
+# Join the browser enable response before readback, reload, or a second plugin mutation.
+# Exact net growth against 454088a9018a226808d9e6b74d430747659bc03c; existing two-case fixture only.
+16
