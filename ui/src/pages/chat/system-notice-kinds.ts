@@ -1,3 +1,4 @@
+import { t } from "../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 
 registerChatMessageMetadataEnglish();
@@ -10,9 +11,8 @@ export type PendingInputStatus =
 
 type SystemNoticeKind = {
   labelKey: string;
-  // Fixed operator summary shown instead of the raw model prompt. Omit when the
-  // producer emits variable, informative text (reasons, doctor hints) that must
-  // stay visible; the notice then keeps the message body under the kind label.
+  // Explicit status copy, never the model-facing instruction. Other kinds retain
+  // their detailed context or actionable update outcomes unchanged.
   summaryKey?: string;
   // Collapse the variable body behind a disclosure. For bulky injected context
   // (skill instructions, continuation summaries) the label stays visible while
@@ -25,10 +25,6 @@ type SystemNoticeKind = {
 };
 
 const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
-  restart: {
-    labelKey: "common.system",
-    showTimestamp: true,
-  },
   // Older scheduled conversation turns lack the run metadata for an activity row.
   cron: {
     labelKey: "chat.messages.forwardedAutomation",
@@ -67,4 +63,28 @@ export function resolveSystemNoticeKind(
     return pluginSteeringNotice;
   }
   return sourceTool === undefined ? undefined : systemNoticeKinds[sourceTool];
+}
+
+/** Explicit status copy has a 64-character total budget, not a wrap width.
+ * Oversized copy becomes a bounded summary with intact details, never clipping.
+ */
+export function projectSystemNoticeSummary(params: {
+  label: string;
+  text: string;
+  detailed: boolean;
+  statusOnly?: boolean;
+}) {
+  if (!params.statusOnly) {
+    return { label: params.label, text: params.text, collapsedBody: params.detailed };
+  }
+  const label = params.label.replace(/\s+/gu, " ").trim();
+  const summary = label + ": " + params.text;
+  const short = !/[\r\n\u2028\u2029]/u.test(summary) && summary.length <= 64;
+  return short
+    ? { label: summary, text: "", collapsedBody: false }
+    : {
+        label: label.length <= 64 ? label : t("common.system"),
+        text: params.text,
+        collapsedBody: true,
+      };
 }
