@@ -12,7 +12,6 @@ import {
   registerEmbeddingCapabilityCliTests,
 } from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
-import { registerMediaUnderstandingCapabilityCliTests } from "./capability-cli.media-understanding.test-support.js";
 import {
   invalidModelRunOptionCases,
   preparedModel,
@@ -959,21 +958,26 @@ describe("capability cli", () => {
     },
   );
 
-  it.each([false, true])("cancels pending model execution (Gateway: %s)", async (gateway) => {
+  it.each(["local", "gateway", "audio"])("cancels pending %s execution", async (kind) => {
     await interruptCapability((waitForAbort) => {
-      if (gateway) {
+      if (kind === "gateway") {
         mocks.callGateway.mockImplementationOnce(({ signal }) => waitForAbort(signal));
-      } else {
+      } else if (kind === "local") {
         mocks.completeWithPreparedSimpleCompletionModel.mockImplementationOnce(({ options }) =>
           waitForAbort(options?.signal),
         );
+      } else {
+        mocks.transcribeAudioFile.mockImplementationOnce((_params, execution) =>
+          waitForAbort(execution?.signal),
+        );
+        return runCap("infer", "audio", "transcribe", "--file", "memo.m4a", "--json");
       }
-      return runModelProbe(...(gateway ? ["--gateway"] : []));
+      return runModelProbe(...(kind === "gateway" ? ["--gateway"] : []));
     });
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
     expect(mocks.runtime.log).not.toHaveBeenCalled();
     expect(mocks.runtime.error).not.toHaveBeenCalled();
-    expect(mocks.releaseSimpleCompletion).toHaveBeenCalledTimes(gateway ? 0 : 1);
+    expect(mocks.releaseSimpleCompletion).toHaveBeenCalledTimes(kind === "local" ? 1 : 0);
   });
 
   it("defaults tts status to gateway transport", async () => {
@@ -1516,9 +1520,25 @@ describe("capability cli", () => {
       outputs: [{ path: selected, text: "selected input bytes" }],
     });
   });
-  registerMediaUnderstandingCapabilityCliTests({
-    transcribeAudioFile: mocks.transcribeAudioFile,
-    runtimeLog: mocks.runtime.log,
+  it("reports actual audio attribution and forwards request hints", async () => {
+    const hints = { language: "en", prompt: "Focus on names" };
+    mocks.transcribeAudioFile.mockResolvedValueOnce({
+      text: "meeting notes",
+      provider: "fixture-asr",
+      model: "fixture-actual-model",
+    });
+    await runCap(
+      "infer",
+      "audio",
+      "transcribe",
+      ...cliOptions({ file: "memo.m4a", model: "openai/whisper-1", ...hints }),
+    );
+    expect(mocks.transcribeAudioFile.mock.calls[0]?.[0]).toMatchObject(hints);
+    const output = mocks.runtime.log.mock.calls.at(-1)?.[0];
+    expect(output).toContain("provider: fixture-asr");
+    expect(output).toContain("model: fixture-actual-model");
+    expect(output).toContain(path.resolve("memo.m4a"));
+    expect(output).toContain("meeting notes");
   });
 
   it.each([

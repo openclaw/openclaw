@@ -70,9 +70,6 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
                 language: opts.language,
                 prompt: opts.prompt,
               },
-              // An accepted interrupt cancels the pending transcription request instead of
-              // letting it finish and only suppressing its late output. CLI execution has no
-              // separate authority fence, so the signal alone guards each request attempt.
               signal ? { signal, assertCurrent: () => signal.throwIfAborted() } : undefined,
             )
           : await describeVideoFile(input);
