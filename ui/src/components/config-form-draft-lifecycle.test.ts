@@ -44,7 +44,7 @@ describe("config form draft lifetimes", () => {
         onPatch: vi.fn(),
         ...overrides,
       });
-    const validations = () => validate.mock.calls.filter(([input]) => input === schema).length;
+    const validations = () => validate.mock.calls.filter(([entry]) => entry === schema).length;
     const structuredDraft = () => container.querySelector("openclaw-config-form-structured-draft");
     render();
     expect(validations()).toBe(1);
