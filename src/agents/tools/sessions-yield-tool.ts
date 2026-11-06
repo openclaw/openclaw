@@ -60,7 +60,9 @@ function formatPendingChildrenMessage(children: readonly UnsettledRequesterChild
       `${describeChildCount(paused.length)} spawned by an earlier turn of this session ${paused.length === 1 ? "is" : "are"} paused by ${paused.length === 1 ? "its" : "their"} own sessions_yield and will not complete until an incoming continuation arrives: ${paused.map(describePendingChild).join("; ")}. An authorized caller can send that continuation with sessions_send; owning a child does not grant that tool. Otherwise the work stays waiting.`,
     );
   }
-  parts.push("This turn owns no new claim, so no yield is needed: end this turn normally.");
+  parts.push(
+    "This call did not pause this turn or claim a new wait. Continue any independent unfinished work; end the turn normally only after that work is complete.",
+  );
   return parts.join(" ");
 }
 
