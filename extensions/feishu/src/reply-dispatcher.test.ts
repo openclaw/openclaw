@@ -380,7 +380,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       typeof call[0] === "string" ? call[0] : "",
     );
   }
-
   it.each(["disabled", "stale seconds"])("suppresses typing for %s messages", async (reason) => {
     if (reason === "disabled") {
       resolveFeishuAccountMock.mockReturnValue(
@@ -432,7 +431,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }
     },
   );
-
   it.each([
     { name: "serialized byte envelope", renderMode: "auto", oversized: true },
     { name: "six-table card fallback", renderMode: "card", oversized: false },
@@ -711,7 +709,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     return { result, options, dispatcher, deliveries, entered };
   }
-
   it.each([
     {
       error: false,
@@ -839,7 +836,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await expect(result.ensureNoVisibleReplyFallback("failed-cleanup")).resolves.toBe(false);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
-
   it.each(["controls", "media"] as const)(
     "retains an idle-owned receipt when a later %s delivery overlaps close",
     async (kind) => {
@@ -964,7 +960,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(0);
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
-
   it.each([
     {
       agentId: "agent",
@@ -990,7 +985,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       );
     },
   );
-
   it.each(["⚠️ Exec failed", "The file is ready.\n\n⚠️ Exec failed"])(
     "retains the answer exactly once before error final %s",
     async (text) => {
@@ -1004,7 +998,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expectNoStaticReply();
     },
   );
-
   it.each(["auto", "card"] as const)(
     "settles an empty %s reply without static content",
     async (mode) => {
@@ -1089,6 +1082,16 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["partial old", [2, "A. X.", true, false, 2, "X. Y.", ["X.", 1], null], ["A. X.", "X. Y.X."]],
     ["old unseen", [2, "A.", ["A.", 1], null, 2, "X. Y.", ["X.", 1], null], ["A.", "X. Y.X."]],
     ["two old", [2, "A. X.", ["A.", 1], null, 2, 2, "X. Y.", ["X.", 1], null], ["A. X.", "X. Y."]],
+    ["open old", [2, "A. X.", ["A.", 1], 2, "X. Y.", ["X.", 1], null], ["A. X.\n\nX. Y."]],
+    [
+      "replaced rest",
+      [2, "A. B. X.", ["A.", 1], null, 2, "Y.", ["B.", 1], null, 2, "X. Z.", ["X.", 1]],
+      ["A. B. X.", "Y.B.", "X. Z."],
+    ],
+    ["restart lag", [2, "A. X.", ["A.", 1], null, 2, "Y.", ["X.", 1]], ["A. X.", "Y.X."]],
+    ["restart rw", [2, "A. X.", ["A.", 1], null, 2, "X. Y.", "Y.", ["X.", 1]], ["A. X.", "Y.X."]],
+    ["old indent", [2, "A    X", ["A", 1], null, 2, "    XY", ["    X", 1]], ["A    X", "    XY"]],
+    ["open indent", [2, "A    X", ["A", 1], 2, "    XY", ["    X", 1]], ["A    X\n\n    XY"]],
     ["old twin", [2, "X.", ["X.", 1], null, 2, "Y.", ["X.", 1], null], ["X.", "Y.X."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
@@ -1362,7 +1365,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(2);
     expectClosed("final answer", 1);
   });
-
   it.each([
     { name: "rejected final after visible preview", mode: "card", visible: true, rejected: true },
     { name: "accepted final before close failure", mode: "card", visible: true, rejected: false },
@@ -1452,7 +1454,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
-
   it.each([true, false])(
     "retains the native close error and its cause after media failure with visible=%s",
     async (visible) => {
@@ -1511,7 +1512,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(delivery).toMatchObject(accepted("accepted answer", ["om_stream", "om-media"]));
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
-
   it("shares one closed streaming settlement with every delayed payload owner", async () => {
     const { options, firstMedia, secondMedia, firstPending, secondPending } = await holdMediaPair(
       "first",
