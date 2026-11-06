@@ -438,14 +438,14 @@ export function renderChatComposerView(
             ]}
           >
             <Show when={props.incognito}>
-              {() => {
+              {(_incognito) => {
                 // The mounted input owns the tint, including replacement by a banner or question.
                 onSettled(() => {
                   const pane = state.composerInput?.closest(".chat-pane-cache__pane");
                   pane?.setAttribute("data-incognito", "true");
                   return () => pane?.removeAttribute("data-incognito");
                 });
-                return undefined;
+                return null;
               }}
             </Show>
             {context().menus.slashMenuVisible ? (
