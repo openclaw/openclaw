@@ -52,6 +52,7 @@ import {
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 import { registerChannelAutostartRecoveryTests } from "./server-channels.recovery.test-support.js";
 import {
+  createRawHealthOverrideFixture,
   createTestPlugin,
   createTestChannelRegistry,
   createTestChannelManager,
@@ -2813,23 +2814,10 @@ describe("server-channels auto restart", () => {
   ])(
     "matches health overrides for '$requestedId' against '$rawId'",
     ({ rawId, requestedId, expected }) => {
-      const manager = setupChannel(
-        {
-          resolveAccount: () => ({ enabled: true, configured: true }),
-        },
-        {
-          getRuntimeConfig: () => ({
-            channels: {
-              discord: {
-                accounts: {
-                  [rawId]: { healthMonitor: { enabled: false } },
-                },
-              },
-            },
-          }),
-        },
-      );
+      const { resolveAccount, getRuntimeConfig } = createRawHealthOverrideFixture(rawId);
+      const manager = setupChannel({ resolveAccount }, { getRuntimeConfig });
       expect(manager.isHealthMonitorEnabled("discord", requestedId)).toBe(expected);
+      expect(resolveAccount).not.toHaveBeenCalled();
     },
   );
 

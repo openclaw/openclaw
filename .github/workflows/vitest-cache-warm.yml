@@ -211,7 +211,7 @@ jobs:
           key: ${{ runner.os }}-dist-build-v3-${{ github.sha }}
 
       - name: Restore test Node runtime
-        if: ${{ matrix.platform == 'linux' }}
+        if: ${{ matrix.platform == 'linux' && steps.test-node.outputs.version != env.RELEASE_BUILD_NODE_VERSION }}
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ steps.test-node.outputs.version }}
@@ -250,7 +250,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: /var/tmp/openclaw-vitest-fs-cache
+          path: .cache/openclaw-vitest-fs-cache
           key: ${{ steps.setup-node-env.outputs.vitest-cache-key }}
 
       - name: Save Node compile cache
@@ -258,7 +258,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: /var/tmp/openclaw-node-compile-cache
+          path: .cache/openclaw-node-compile-cache
           key: ${{ steps.setup-node-env.outputs.node-compile-cache-key }}
 
       - name: Assert cache warming succeeded

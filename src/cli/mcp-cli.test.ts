@@ -388,6 +388,25 @@ it.each`
   },
 );
 
+it.each(
+  ["__proto__", "constructor", "prototype"].flatMap((key) =>
+    ["--env", "--header"].map((flag) => ({ key, flag })),
+  ),
+)("rejects reserved key $key in $flag without changing config", async ({ key, flag }) => {
+  await writeMcpServers({ existing: { command: "node", enabled: false } });
+  const before = await fs.readFile(configPath, "utf8");
+  await expectFailure(
+    `${flag} key "${key}" is reserved; use a different key name.`,
+    "add",
+    "docs",
+    ...(flag === "--env" ? ["--command", "node"] : ["--url", "https://mcp.example.com/mcp"]),
+    "--no-probe",
+    flag,
+    ` ${key} =SYNTHETIC_SECRET`,
+  );
+  expect(await fs.readFile(configPath, "utf8")).toBe(before);
+});
+
 it("rejects hexadecimal MCP timeout options before writing configuration", async () => {
   await expect(
     mcp("add", "docs", "--url", "https://mcp.example.com/mcp", "--timeout", "0x10", "--no-probe"),

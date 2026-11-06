@@ -4,6 +4,7 @@ import { expect, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
+import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -20,10 +21,7 @@ import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { registerMessageActionElements } from "./components/chat-message-action-elements.ts";
-import {
-  prepareChatMessageRender,
-  resolveMessageActionDetails,
-} from "./components/chat-message-markdown-view.tsx";
+import { resolveMessageActionDetails } from "./components/chat-message-markdown-view.tsx";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
 import {
   createChatTranscript,
@@ -245,7 +243,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     currentAgentId: "main",
     onSessionSelect: () => undefined,
     onOpenSidebar: () => undefined,
-    onChatScroll: () => undefined,
     basePath: "",
     ...overrides,
     transcript,
@@ -380,7 +377,8 @@ export function getThinkingReasoningValueLabel(container: Element): string {
     "[data-chat-thinking-preview-committed]:not([hidden]), " +
       "[data-chat-thinking-preview-index]:not([hidden])",
   );
-  return preview?.textContent?.trim() ?? "";
+  // The level text precedes the optional Default badge.
+  return preview?.firstChild?.textContent?.trim() ?? "";
 }
 
 export function createDragEvent(type: string, types = ["Files"]): Event {
@@ -404,6 +402,7 @@ export function replaceSkillCommands(
       skillDisplayName,
       description,
       source: "skill" as const,
+      skillReferenceable: true,
       skillModelVisible: true,
     })),
   ]);

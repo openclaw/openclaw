@@ -1,16 +1,8 @@
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
-import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
-import type { StageSandboxMediaResult } from "../../auto-reply/reply/stage-sandbox-media.js";
-import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
-import { parseInboundMediaUri } from "../../media/media-reference.js";
 import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { DEVICE_FOLDER_ATTACHMENTS_UNSUPPORTED } from "../../worker/node-workspace-protocol.js";
@@ -22,13 +14,10 @@ import {
   logAttachmentFailure,
   parseMessageWithAttachments,
   stripImageMediaMarkers,
-  UnsupportedAttachmentError,
 } from "../chat-attachments.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
-import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
-import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { resolveExplicitOriginBindingTargets } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -36,36 +25,17 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-// Managed inbound PDFs can be read host-side from the media-store root, even
-// for locked-down agents, so sandbox staging may safely fall back to that path.
-function isManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
-  const mime = ref.mimeType.trim().toLowerCase();
-  if (
-    mime !== "application/pdf" &&
-    !mime.endsWith("+pdf") &&
-    path.extname(ref.path.split(/[?#]/u)[0] ?? "").toLowerCase() !== ".pdf"
-  ) {
-    return false;
-  }
-  try {
-    return parseInboundMediaUri(ref.mediaRef) !== null;
-  } catch {
-    return false;
-  }
-}
-
-/** Parse and pre-stage attachments before the caller's synchronous pre-ACK checks. */
+/** Validate and durably offload attachments before input custody and ACK. */
 export async function prepareChatSendAttachments(params: {
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
   admission: AdmittedChatSend;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
-  client?: GatewayRequestHandlerOptions["client"];
 }) {
-  const { request, session, admission, respond, context, client } = params;
+  const { request, session, admission, respond, context } = params;
   const { inboundMessage, normalizedAttachments, explicitOrigin } = request;
-  const { cfg, sessionKey, agentId, resolvedSessionModel, clientRunId } = session;
+  const { cfg, agentId, resolvedSessionModel, clientRunId } = session;
   const {
     activeRunAbort,
     chatSendTraceAttributes,
@@ -138,179 +108,16 @@ export async function prepareChatSendAttachments(params: {
           parsedImages = parsed.images;
           imageOrder = parsed.imageOrder;
           offloadedRefs = parsed.offloadedRefs;
-          const stagingEntry =
-            admission.initialSessionEntry ?? admission.admittedSessionEntry ?? session.entry;
-          const selectedSkills = stagingEntry
-            ? (stagingEntry.skillLibrarySelections ??
-              stagingEntry.skillsSnapshot?.librarySelections)
-            : request.systemInputProvenance
-              ? undefined
-              : (
-                  await prepareSkillLibrarySessionCreation(
-                    client,
-                    context.getRuntimeConfig ?? cfg,
-                    resolveOperatorSessionCreation(client),
-                  )
-                ).skillLibrarySelections;
-          const requestedWorkspaceDir = resolveIngressWorkspaceOverrideForSessionRun({
-            spawnedBy: stagingEntry?.spawnedBy,
-            workspaceDir: stagingEntry?.spawnedWorkspaceDir,
-            cwd: stagingEntry?.spawnedCwd,
-          });
-          const existingSkillsSnapshot = stagingEntry?.skillsSnapshot;
-          const abortSignal = activeRunAbort.controller.signal;
-          // Stage media before ACK so permanent client errors stay 4xx and retryable
-          // staging failures stay 5xx. Managed PDFs retain their host-readable fallback.
-          const prestageMediaPathOffloads = async (): Promise<MediaFact[]> => {
-            const mediaPathRefs = offloadedRefs.filter(
-              (ref) => !parsedSupportsImages || !ref.mimeType.startsWith("image/"),
-            );
-            if (mediaPathRefs.length === 0) {
-              return [];
-            }
-            try {
-              const [
-                { prepareSandboxWorkspaceForSession },
-                { SANDBOX_MEDIA_MAX_BYTES, stageSandboxMedia },
-              ] = await Promise.all([
-                import("../../agents/sandbox/context.js"),
-                import("../../auto-reply/reply/stage-sandbox-media.js"),
-              ]);
-              abortSignal.throwIfAborted();
-              assertInputCurrent();
-              const refsByManagedPath = (refs: OffloadedRef[]): MediaFact[] =>
-                refs.map((ref) => ({
-                  path: ref.path,
-                  contentType: ref.mimeType,
-                  fileName: ref.label,
-                  workspaceDir: path.dirname(ref.path),
-                }));
-              // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
-              const refsToStage = mediaPathRefs.filter(
-                (ref) =>
-                  !(ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref)),
-              );
-              if (refsToStage.length === 0) {
-                return refsByManagedPath(mediaPathRefs);
-              }
-
-              const configuredWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-              const workspaceDir = requestedWorkspaceDir ?? configuredWorkspaceDir;
-              if (
-                getAgentWorkspaceAccess(workspaceDir, "prepareTurnAttachments")
-                  ?.prepareTurnAttachments
-              ) {
-                return refsByManagedPath(mediaPathRefs);
-              }
-              const skillsSnapshot = selectedSkills?.length
-                ? (
-                    await (
-                      await import("../../skills/runtime/session-snapshot.js")
-                    ).resolveReusableWorkspaceSkillSnapshot({
-                      workspaceDir: configuredWorkspaceDir,
-                      config: cfg,
-                      agentId,
-                      existingSnapshot: existingSkillsSnapshot,
-                      librarySelections: selectedSkills,
-                      assertCurrent: assertInputCurrent,
-                    })
-                  ).snapshot
-                : undefined;
-              abortSignal.throwIfAborted();
-              assertInputCurrent();
-              using preparedWorkspace = await prepareSandboxWorkspaceForSession({
-                config: cfg,
-                agentId,
-                sessionKey,
-                workspaceDir,
-                skillsSnapshot,
-              });
-              assertInputCurrent();
-              if (!preparedWorkspace) {
-                return refsByManagedPath(mediaPathRefs);
-              }
-
-              const stagingCtx: MsgContext = {
-                media: refsToStage.map((ref) => ({ path: ref.path, contentType: ref.mimeType })),
-              };
-              let stageResult: StageSandboxMediaResult;
-              try {
-                stageResult = await stageSandboxMedia({
-                  ctx: stagingCtx,
-                  sessionCtx: stagingCtx as TemplateContext,
-                  cfg,
-                  agentId,
-                  sessionKey,
-                  workspaceDir,
-                  skillsSnapshot,
-                  preparedWorkspace,
-                  abortSignal,
-                });
-              } catch (stageErr) {
-                // Cancellation is terminal; only ordinary managed-PDF failures can use
-                // the host-readable fallback. Other files must fail before ACK.
-                if (
-                  (abortSignal.aborted && Object.is(stageErr, abortSignal.reason)) ||
-                  refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))
-                ) {
-                  throw stageErr;
-                }
-                return refsByManagedPath(mediaPathRefs);
-              }
-
-              // stageSandboxMedia preserves an absolute source path when no copy lands;
-              // the staged map is the authoritative success signal.
-              const stagedSources = stageResult.staged;
-              const missing = refsToStage.filter((_ref, index) => !stagedSources.has(index));
-              const unstageable = missing.filter((ref) => !isManagedInboundPdfOffloadRef(ref));
-              if (unstageable.length > 0) {
-                throw new Error(
-                  `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${unstageable.map((ref) => ref.path).join(", ")})`,
-                );
-              }
-              if (stagingEntry?.pendingWorktree || stagingEntry?.pendingProjectGitUrl) {
-                // The pre-ACK copy validates staging in the current workspace. Deferred
-                // preparation will bind another one, so let reply staging use the managed
-                // originals there instead of certifying this interim copy as final.
-                return mediaPathRefs.map((ref) => ({
-                  path: ref.path,
-                  url: ref.mediaRef,
-                  contentType: ref.mimeType,
-                  fileName: ref.label,
-                }));
-              }
-              const stagedMedia = stagingCtx.media ?? [];
-              // Preserve request order while mixing sandbox-relative paths with managed
-              // host paths used by pass-through or fallback PDFs.
-              const resolvedByRef = new Map(
-                refsToStage.map((ref, index) => [ref, stagedMedia[index]] as const),
-              );
-              return mediaPathRefs.map((ref) => {
-                const resolved = resolvedByRef.get(ref);
-                return {
-                  path: resolved?.path ?? ref.path,
-                  url: ref.mediaRef,
-                  contentType: resolved?.contentType ?? ref.mimeType,
-                  fileName: ref.label,
-                  workspaceDir: preparedWorkspace.workspace.workspaceDir,
-                };
-              });
-            } catch (err) {
-              if (
-                (abortSignal.aborted && Object.is(err, abortSignal.reason)) ||
-                err instanceof SessionMutationAuthorizationChangedError ||
-                err instanceof MediaOffloadError ||
-                err instanceof UnsupportedAttachmentError
-              ) {
-                throw err;
-              }
-              throw new MediaOffloadError(
-                `[Gateway Error] Failed to stage attachments into agent workspace: ${formatErrorMessage(err)}`,
-                { cause: err },
-              );
-            }
-          };
-          mediaPathOffloads = await prestageMediaPathOffloads();
+          // The accepted input keeps durable originals. The turn's media preparation
+          // owns the final workspace, cancellation, and visible staging failures.
+          mediaPathOffloads = offloadedRefs
+            .filter((ref) => !parsedSupportsImages || !ref.mimeType.startsWith("image/"))
+            .map((ref) => ({
+              path: ref.path,
+              url: ref.mediaRef,
+              contentType: ref.mimeType,
+              fileName: ref.label,
+            }));
         },
         {
           phase: "agent-turn",
@@ -322,7 +129,7 @@ export async function prepareChatSendAttachments(params: {
         },
       );
       assertInputCurrent();
-      // Pass-through media still needs awaited cleanup when preparation was cancelled.
+      // Offloaded media still needs awaited cleanup when preparation was cancelled.
       activeRunAbort.controller.signal.throwIfAborted();
       prepareAttachmentsMs = roundedChatSendTimingMs(
         performance.now() - prepareAttachmentsStartedAtMs,
@@ -345,7 +152,7 @@ export async function prepareChatSendAttachments(params: {
     }
     cleanupAdmittedRun();
     clearAgentRunContext(clientRunId, lifecycleGeneration);
-    logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
+    logAttachmentFailure(context.logGateway, "chat.send attachment offload failed", err);
     respond(
       false,
       undefined,

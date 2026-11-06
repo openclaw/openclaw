@@ -21,6 +21,13 @@ the release-only proofs described in the scheduled-workflow guide.
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Ordinary manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed. The exact-head `release_gate` exception evaluates the fetched pull request merge tree and retains its macOS, iOS-build, and generated-native-locale decisions while still verifying native sources.
 
+The Node Runtime Conformance workflow selects TypeScript and Rust proofs from
+exact PR revisions using the same input lists as scheduled proof reuse.
+TypeScript-only tooling changes omit Rust; Rust configuration changes omit
+TypeScript. Shared protocol versions, fixtures, and crate changes retain both.
+Deleted, unknown, malformed, or capped diff inputs retain both proofs. Manual
+runs and existing scheduled proof policies remain unchanged.
+
 ### PR vs hourly vs release
 
 Ordinary `pull_request` runs, including contributions from forks, use the
@@ -100,6 +107,16 @@ SwiftFormat run inside the moved Apple jobs and move with them; no new jobs are
 introduced. Standalone native Periphery workflows and iOS screenshot jobs retain
 their existing selection.
 
+For ordinary current-checkout PRs, known Python skill changes select that skill's
+complete Ruff and pytest suite. Shared, missing, unknown or mixed inputs retain
+all skill suites. Scheduled and release runs retain full coverage.
+
+Android phone source changes can skip Wear unit tests. Wear test/debug-only
+changes can skip phone unit tests. Both phone lint variants remain selected,
+including when third-party lint moves from the omitted Wear row to its phone
+row. Wear production strings feed phone generation, so those changes, shared
+modules, build inputs, missing files and full validation retain all unit rows.
+
 ### Published-driver update cell
 
 `scripts/lib/ci-published-driver-update-plan.mts` excludes ordinary PRs, even
@@ -162,6 +179,13 @@ the later lazy boot-identity table. The update must preserve that launch alongsi
 the existing session, transcript, search, and SQLite reclamation assertions. This
 is persisted-state upgrade proof; it does not exercise a running remote node.
 
+After the Docker cell, the same job reuses its verified candidate tarball for the
+[native systemd survivor flow](/help/testing-updates-plugins#native-systemd-update-matrix),
+initially against published `2026.10.9`. Its separate fifteen-minute step requires
+the installed updater to replace and verify the real user service, preserve the
+shared survivor seed, and stop the owned service after proof. It adds no runner
+or matrix fanout; the Docker cell keeps its existing twenty-minute budget.
+
 Labeler skips PR edits without title or base-branch changes. These ignored edits use isolated per-run concurrency groups so they cannot cancel running labeling or replace useful pending work. Opened, reopened, synchronize, and title/base-edit events retain the shared per-PR group and supersede older labeling runs. Issue labeling and manual backfills retain their existing non-cancelling ref group.
 
 Affected `main` pushes and exact-head `release_gate` fallbacks retain one required `ios-build (smoke)` phase and its Xcode, Swift, and Watch Rust tooling. Current smoke always runs Swift lint and compiles the app and test bundles once with `build-for-testing`. The retained `scripts/lib/ci-ios-smoke-plan.mjs` owner describes the existing voice/media/typography and Access/chat lifecycle simulator groups from their source owners. Both groups own the app's real hosted startup and linked runtime sources; the voice group also audits Watch and ActivityWidget typography. Their selected test files and fixtures select their respective group. Build/test configuration and unavailable path metadata retain both groups.
@@ -169,6 +193,8 @@ Affected `main` pushes and exact-head `release_gate` fallbacks retain one requir
 When neither simulator group is selected, smoke uses a generic simulator build destination and skips simulator selection, boot, and SimSlim preparation. Selected groups keep separate `test-without-building` invocations against the same built products. The preflight and iOS job summaries record each group's selection and reasons. Repository variable `OPENCLAW_CI_IOS_SIMULATOR_FULL=true` (or `1`) retains both groups for selected historical PR jobs; it cannot re-enable iOS on an ordinary PR. Main, scheduled, manual, release-gate, and compatibility planning retain full group selection. Existing historical execution contracts remain unchanged.
 
 Smoke still omits Rust tests and the broader app/notification lifecycle and Watch simulator suites. A failed, cancelled, or unexpectedly skipped smoke still fails `openclaw/ci-gate`.
+
+ESP-specific tests do not run in mobile CI, including full manual/release validation and screenshot capture. The iOS app still builds its ESP feature, and its standalone ESP tests remain available for local execution. ESP-only test and vendored-library changes do not select simulator test groups.
 
 Hourly main-tier CI retains `ios-build (tests)`, including Rust, voice cleanup, native Access, and every focused app/notification lifecycle test, including its Watch messaging and activation coverage. Managed attachment UI/export proof, Watch operation simulator suites, and Watch delivery UI proof belong to full-tier manual/release validation; hourly runs also exclude screenshot capture. Main-tier and smoke builds use the selected simulator's native architecture without compiler indexing; voice and lifecycle tests retain logs and xcresult bundles without Xcode's verbose diagnostic collection. Only a canceled selected scheduled `ios-build` on upstream `main` can pass the aggregate with a coalescing notice; this delegates proof to a later job rather than validating the canceled revision. Other failures, unexpected skips, and cancellations remain failures. See [scheduled iOS aggregation](/ci/scheduled-workflows#hourly-main-ci).
 
@@ -221,7 +247,7 @@ The iOS, macOS, and both shared OpenClawKit Periphery scans use Xcode 27 on GitH
 - **TUI PTY** runs two built-CLI artifact canaries in `build-artifacts` on main, ordinary manual/release CI, and PRs selecting their existing test owner: a local model roundtrip and a real Gateway connection. The complete suite is defined in `test/vitest/vitest.tui-pty.config.ts`. Narrow pull-request plans omit the named PTY process proofs and run the source-only harness assertion test as an exact target under that same config, without requiring dist. Manual/release full plans retain the `core-runtime-tui-pty` descriptor; PRs have no broad fallback. CI consumes that descriptor only through the built-artifact selection flag, so the full suite has no executing matrix row; manual and release CI also run only the canaries. Upstream `main` push compaction omits the full descriptor while keeping the canaries.
 - **SQLite session lifecycle** runs for its existing storage/session owner scope on PRs, exact-head PR fallbacks, and main; ordinary manual/release CI retains it. Owner selection covers the built-CLI migration, restart, compaction, cleanup, and session RPC proof only when the diff touches its direct storage/session owners or a reachable session path in the embedded runner. The `build-artifacts` verifier wave runs it against the runtime already built in that job, after the isolated startup-memory measurement. It overlaps independent readers on Blacksmith and stays serial on hosted runners; ordinary manual and release dispatches always select it when the target contains the proof.
 - **CI routing and plugin contract helper edits** use the same changed-owner Node plan and static correctness gates as other PRs. Historical fast-only scope hints cannot bypass that plan or select whole contract families. Hourly main and ordinary manual/release validation retain their complete routing and contract inventories.
-- **Release tooling fast lane** applies when an upstream pull request carries the `release-fast-lane` label and every changed path is release tooling (`.github/workflows/**`, `scripts/**`, `test/scripts/**`, `.agents/skills/release-*/**`, `docs/reference/RELEASING.md`) or independently checked documentation. The manifest keeps `security-fast`, `check-shard`, `check-docs`, and the changed Node rows, relaxes the compact packing-policy proof to those rows, and skips every other lane; the preflight step summary lists the admitted and skipped lanes under `Release fast lane`. A declined label (out-of-scope path, global Node input, fork, push, dispatch, docs-only) warns and keeps ordinary selection. Hourly full main CI still covers the merged result.
+- **Release tooling fast lane** applies when an upstream pull request carries the `release-fast-lane` label and every changed path is release tooling (`.github/workflows/**`, `scripts/**`, `test/scripts/**`, `.agents/skills/release-*/**`, `docs/reference/RELEASING.md`) or independently checked documentation. The manifest keeps `security-fast`, `check-shard`, `check-docs`, and the changed Node rows, relaxes the compact packing-policy proof to those rows, and skips every other lane; the preflight step summary lists the admitted and skipped lanes under `Release fast lane`. The existing `security-fast` job still checks the test-line budget against the checked-out merge’s first parent, without installing dependencies or starting the full baseline bundle. A declined label (out-of-scope path, global Node input, fork, push, dispatch, docs-only) warns and keeps ordinary selection. Hourly full main CI still covers the merged result.
 - **QA Smoke on PRs and `main`** runs when the diff touches the qa-lab harness, `qa/` scenario data, the matrix/telegram channels the smoke profile drives, Docker packaging scripts, or the gate's orchestration. Generic runtime, UI, workspace-package, and dependency changes do not select smoke by themselves. Exact-head PR fallbacks use the same owner map. Ordinary manual CI and Full Release Validation retain the complete smoke profile; missing changed paths or an older planner without the selector retain coverage when the target supports the smoke harness.
 - **Docker seed** uses `resolveDockerSeedLanes` to select exactly `published-upgrade-survivor` on every admitted upstream main run, hourly by default and independently of changed paths. It runs `legacy-operator-state` with `auto-auth` against an exact published predecessor. Frozen targets declaring that scenario in their inert catalog retain the same composition; historical targets without that declaration keep the `base` fallback, and invalid catalogs fail. Pull requests and exact-head `release_gate` fallbacks defer the complete survivor to hourly main and Full Release Validation. They retain selected Node and static correctness gates, plus the other Docker lanes through `resolveChangedDockerSeedLanes` and its owner map. No survivor case or assertion is removed. Main and selected PR Docker lanes prepare the complete runtime, workspace package declarations, and public SDK types with `pnpm build:ci-artifacts`, then use the shared package helper with `--skip-build` and its tarball integrity check. Full declaration generation remains in the hourly protected cache warmer and ordinary manual/release package builds. Ordinary manual CI, including Full Release Validation's `normal_ci` child and its `npm-beta`/`npm-stable` scopes, retains full package generation and all six Docker lanes. Targets must declare the Docker seed capability; older targets without the tier selector retain the main/release survivor fallback. Docs-only main pushes remain excluded at the workflow trigger. Expanded release history stays in Package Acceptance and the weekly Update Migration workflow.
 - **Control UI performance** uses the dedicated `run_control_ui_performance` output. Production UI files, plugin browser entries, and the UI build/performance policies select it. Other modules select it when a runtime import path from a UI source or performance script reaches them; workspace aliases use the shared import-graph owner. Type-only edges remain covered by static checks. Unrelated inputs retain hourly main and ordinary manual/release validation. Test-only files remain with their changed-test owner. Historical targets retain their existing performance-script availability contract.

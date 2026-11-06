@@ -189,6 +189,13 @@ keep the existing synchronous fallback.
     const blob = await blobs.lookup("artifact-1");
     ```
 
+    Gateway close fences new plugin shared-state operations, including resident
+    reads, with terminal `STATE_DATABASE_READ_ADMISSION_INVALIDATED` errors.
+    Accepted operations finish before shared-state retirement. SDK retry runners
+    do not retry this refusal or a retiring shared-state worker. Custom recovery
+    loops can use `isStateDatabaseAdmissionClosedError` from
+    `openclaw/plugin-sdk/retry-runtime` to stop at the same boundary.
+
     Keyed stores use the boot-selected `state` family engine. To open an additional
     physical state root, pass `env: { ...process.env, OPENCLAW_STATE_DIR: root }`
     in the store options. Every root retains the same keyed-store contract and,

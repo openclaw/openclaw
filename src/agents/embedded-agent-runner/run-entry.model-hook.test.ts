@@ -9,6 +9,7 @@ import {
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { FailoverError } from "../failover-error.js";
 import { resetFallbackSkipCacheForTest } from "../fallback-skip-cache.test-support.js";
 import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
@@ -24,6 +25,54 @@ afterEach(() => {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
   resetFallbackSkipCacheForTest();
+});
+
+it("stops a late routing result when the logical run closes before admission", async () => {
+  await withOpenClawTestState({ label: "hook-closed-preparation" }, async (state) => {
+    const cfg = createModelFallbackConfig("fixture/primary", ["fixture/backup"]);
+    setRuntimeConfigSnapshot(cfg);
+    const runId = "hook-closed-preparation";
+    const admission = prepareSystemAgentRunAdmission(cfg, runId, "main", "routing-test");
+    const entered = createDeferred();
+    const release = createDeferred();
+    const registry = createEmptyPluginRegistry();
+    registry.typedHooks.push({
+      pluginId: "local-routing",
+      hookName: "before_model_resolve",
+      source: "test",
+      handler: async () => {
+        entered.resolve();
+        await release.promise;
+        return { modelOverride: "late-model" };
+      },
+    });
+    setActivePluginRegistry(registry);
+    initializeGlobalHookRunner(registry);
+    const attempt = vi.fn(async (provider: string, model: string) =>
+      makeResult({ provider, model }),
+    );
+    const pending = runEmbeddedAgentEntry({
+      preparedRunAdmission: admission,
+      selection: { cfg, provider: "fixture", model: "primary", agentDir: state.agentDir() },
+      modelResolve: { prompt: "Synthetic canceled request" },
+      identity: { runId, agentId: "main", sessionId: runId },
+      harness: createDirectHarness(state.workspaceDir, "openclaw"),
+      behavior: { kind: "maintenance" },
+      sessionOverride: { kind: "preserve" },
+      runCandidate: attempt,
+    });
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "routing did not start");
+      admission.close();
+      release.resolve();
+      await expect(pending).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+      expect(attempt).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+      admission.close();
+    }
+  });
 });
 
 it.each<[string, string[] | undefined, string[], boolean, boolean]>([

@@ -148,7 +148,7 @@ export function projectSessionParticipant(
   return {
     identity: { type: "profile", id },
     ...(profile?.label ? { label: profile.label } : {}),
-    ...(profile?.hasUploadedAvatar ? { avatarUrl: profile.avatarUrl } : {}),
+    ...(profile ? { avatarUrl: profile.avatarUrl } : {}),
   };
 }
 

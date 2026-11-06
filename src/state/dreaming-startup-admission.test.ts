@@ -33,6 +33,10 @@ import {
 } from "../plugin-sdk/session-store-runtime.js";
 import { readSessionTranscriptEvents } from "../plugin-sdk/session-transcript-runtime.js";
 import { appendSqliteSessionTranscriptEventForTest } from "../plugin-sdk/sqlite-runtime-testing.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import { getPluginInstance, getPluginOriginalValue } from "../plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
@@ -90,6 +94,8 @@ const disabledCron = {
 
 function createManagedMemoryCore(config: OpenClawConfig, logger: OpenClawPluginApi["logger"]) {
   const runtime = createTestPluginApi().runtime;
+  const resourceHost = new LegacyPluginSdkResourceHost();
+  onTestFinished(() => resourceHost.close());
   Object.assign(runtime, { config: { current: () => config } });
   const owner = createPluginRegistry({ logger, runtime, activateGlobalSideEffects: false });
   const record = createPluginRecord({
@@ -106,7 +112,9 @@ function createManagedMemoryCore(config: OpenClawConfig, logger: OpenClawPluginA
     api,
     bindGateway() {
       const gateway = createGatewayRequestContext(makeContextParams());
-      bindGatewayContextResolver(runtime, () => gateway);
+      const resolver = () => gateway;
+      bindLegacyPluginSdkResourceHost(resolver, resourceHost);
+      bindGatewayContextResolver(runtime, resolver);
     },
     dispose: () => getPluginInstance(record)!.dispose(),
   };
@@ -434,7 +442,10 @@ it.for([
     const service = owner.registry.services.find(
       (entry) => entry.service.id === "memory-core-index",
     )?.service;
-    assert(registeredRuntime && service && service.apiVersion !== 2, "Missing indexing lifecycle");
+    assert(
+      registeredRuntime && service && service.apiVersion !== 2 && service.apiVersion !== 3,
+      "Missing indexing lifecycle",
+    );
     const runtime = (getPluginOriginalValue(registeredRuntime, instance) ??
       registeredRuntime) as typeof registeredRuntime;
     // Service restarts reopen indexes only after a manager has run in this process.

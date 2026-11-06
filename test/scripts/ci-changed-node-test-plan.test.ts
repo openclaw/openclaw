@@ -9,6 +9,7 @@ import { buildChildEnv, resolveShardPlans } from "../../scripts/ci-run-node-test
 import {
   createChangedNodeTestShards as createChangedNodeTestShardsWithSmoke,
   hasUiE2eAffectingChange,
+  packChangedNodeBoundary,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
@@ -16,6 +17,7 @@ import {
   createSelectedNodeTestShardBundles,
   isRuntimeTestFileIncluded,
   type CompactNodeTestShard,
+  type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
 import {
@@ -53,6 +55,26 @@ import {
   writeFiles,
 } from "./ci-changed-node-test-plan.test-support.js";
 
+it.each([
+  [".github/workflows/pr-tooling-darwin.yml"],
+  ["scripts/lib/ci-node-test-plan.mts"],
+  ["test/vitest/vitest.tooling.config.ts"],
+  ["test/non-isolated-runner.ts"],
+])("selects Darwin admission guards for %s", (file) => {
+  const targets = resolvePolicyTestTargets([file]);
+  const closureGuard = "test/scripts/pr-wrapper-source-closure.test.ts";
+  expect(targets).toContain(closureGuard);
+  expect(
+    isRuntimeTestFileIncluded(closureGuard, {
+      changedPaths: [file],
+      includePrExemptRuntimeTests: false,
+    }),
+  ).toBe(true);
+  if (!file.startsWith("scripts/lib/ci-")) {
+    expect(targets).toContain("test/scripts/ci-workflow-cost.test.ts");
+  }
+});
+
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function toolingShard(
@@ -84,6 +106,118 @@ function toolingShard(
     ...overrides,
   };
 }
+
+describe("selected boundary setup sharing", () => {
+  const runner = "blacksmith-8vcpu-ubuntu-2404";
+  const boundary: NodeTestShard = {
+    checkName: "checks-node-changed-boundary",
+    shardName: "changed-boundary",
+    configs: ["test/vitest/vitest.boundary.config.ts"],
+    requiresDist: false,
+    runner,
+  };
+  const tooling = () => ({
+    ...toolingShard(
+      "tooling",
+      ["test/scripts/ci-workflow-cost.test.ts"],
+      40,
+      { runner },
+      { runner, env: { OPENCLAW_VITEST_MAX_WORKERS: "2" } },
+    ),
+    configs: [],
+  });
+
+  it("keeps the complete boundary process and selected tooling in one serial allocation", () => {
+    const selected = tooling();
+    const [packed] = packChangedNodeBoundary([selected, boundary]);
+    expect(packed).toMatchObject({ runner, planConcurrency: 1, predictedTestSeconds: 130 });
+    const plans = resolveShardPlans({
+      OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(packed?.groups),
+    });
+    expect(plans).toHaveLength(2);
+    expect(plans[0]).toMatchObject({
+      kind: "group",
+      name: "changed-boundary",
+      plan: { configs: boundary.configs },
+    });
+    expect(plans[1]).toMatchObject({ kind: "group", plan: selected.groups[0] });
+    expect(selected.groups).toHaveLength(1);
+  });
+
+  it.each([
+    { measurement: "complete", prices: [1, 1], allocations: 1 },
+    { measurement: "missing", prices: [1, undefined], allocations: 2 },
+    { measurement: "expensive", prices: [75, 1], allocations: 2 },
+  ])(
+    "shares boundary setup only for a short $measurement tooling selection",
+    ({ prices, allocations }) => {
+      // Recorded CI run 42235536470 executed these separate one-file processes in 9s.
+      const files = [
+        "test/scripts/lint-suppressions.test.ts",
+        "test/scripts/update-restart-module-outcome.test.ts",
+      ];
+      const timings = Object.fromEntries(
+        files.flatMap((file, index) =>
+          prices[index] === undefined ? [] : [[file, prices[index]!]],
+        ),
+      );
+      const readTimings = vi.spyOn(testTimings, "readToolingFileTimings").mockReturnValue(timings);
+      try {
+        const selected = expectDefined(
+          createSelectedNodeTestShardBundles(files, {
+            runnerBackend: "hybrid",
+          }),
+          "selected tooling plan",
+        );
+        const packed = packChangedNodeBoundary([
+          ...selected.map((job) => ({ ...job, configs: [] })),
+          boundary,
+        ]);
+        expect(packed).toHaveLength(allocations);
+        expect(selectedFiles(packed).toSorted()).toEqual(files.toSorted());
+        const groups = packed.flatMap((job) => job.groups ?? []);
+        expect(groups.filter((group) => group.configs.includes(boundary.configs[0]!))).toEqual(
+          allocations === 1
+            ? [
+                {
+                  shard_name: "changed-boundary",
+                  configs: boundary.configs,
+                  requiresDist: false,
+                  runner,
+                },
+              ]
+            : [],
+        );
+        expect(
+          groups.filter((group) => group.includePatterns).map((group) => group.includePatterns),
+        ).toEqual(selected.flatMap((job) => job.groups.map((group) => group.includePatterns)));
+        expect(packed.every((job) => job.runner === runner && job.planConcurrency !== 2)).toBe(
+          true,
+        );
+      } finally {
+        readTimings.mockRestore();
+      }
+    },
+  );
+
+  it("retains the standalone gate when setup, concurrency, or timing cannot be shared", () => {
+    const base = tooling();
+    const variants = [
+      { predictedSeconds: 61, predictedTestSeconds: 61 },
+      { runner: "blacksmith-32vcpu-ubuntu-2404" },
+      { planConcurrency: 2 },
+      { pretestBuildMode: "runtime" as const },
+      { requiresDist: true },
+      { env: { OPENCLAW_VITEST_MAX_WORKERS: "4" } },
+      { groups: [{ ...base.groups[0]!, configs: ["test/vitest/vitest.infra.config.ts"] }] },
+    ];
+    for (const variant of variants) {
+      const shards = [{ ...base, ...variant }, boundary];
+      expect(packChangedNodeBoundary(shards)).toBe(shards);
+    }
+    expect(packChangedNodeBoundary([boundary])).toEqual([boundary]);
+  });
+});
 
 function canonicalOwner(jobs: CompactNodeTestShard[], shardName: string) {
   const job = expectDefined(
@@ -150,7 +284,13 @@ it.each([
 ] as const)(
   "selects real-Gateway tests through their source, fixture, and protocol owners: %s",
   (file, expected) => {
-    expect(hasUiE2eAffectingChange([file], { family: "real-gateway" })).toBe(expected);
+    const timings = vi.spyOn(testTimings, "readUiE2eFileTimings");
+    try {
+      expect(hasUiE2eAffectingChange([file], { family: "real-gateway" })).toBe(expected);
+      expect(timings).not.toHaveBeenCalled();
+    } finally {
+      timings.mockRestore();
+    }
   },
 );
 
@@ -1074,7 +1214,9 @@ describe("CI changed Node test plan", () => {
       for (const job of selected.filter((candidate) => candidate.groups)) {
         const embeddedGroups =
           job.groups?.filter(
-            (group) => !group.includePatterns?.includes(lintSuppressionInventoryTest),
+            (group) =>
+              !group.configs.includes("test/vitest/vitest.boundary.config.ts") &&
+              !group.includePatterns?.includes(lintSuppressionInventoryTest),
           ) ?? [];
         for (const group of embeddedGroups) {
           const { job: ownerJob, group: owner } = canonicalOwner(full, group.shard_name);
@@ -1085,9 +1227,8 @@ describe("CI changed Node test plan", () => {
           }
           expect(group.runner).toBe(owner.runner);
           expectProjectedNodeTestResources(job, group, ownerJob, owner, envScratch);
-          for (const key of ["pretestBuildMode", "timeoutMinutes"] as const) {
-            expect(job[key], key).toEqual(ownerJob[key]);
-          }
+          expect(job.pretestBuildMode).toEqual(ownerJob.pretestBuildMode);
+          expect(job.timeoutMinutes ?? 60).toBeLessThanOrEqual(ownerJob.timeoutMinutes ?? 60);
           expect(job.predictedSeconds).toBeGreaterThan(0);
           expect(job.predictedSeconds).toBeLessThanOrEqual(300);
           expect(group.timing_key).toContain("#selector-");
@@ -1113,7 +1254,11 @@ describe("CI changed Node test plan", () => {
           expect(timings.compactGroupSeconds.blacksmith[group.shard_name]).toBeUndefined();
         }
       }
-      expect(selected.filter((shard) => !shard.groups)).toEqual([
+      expect(
+        selected
+          .flatMap((shard) => [...(shard.groups ?? [shard])])
+          .filter((group) => group.configs.includes("test/vitest/vitest.boundary.config.ts")),
+      ).toEqual([
         expect.objectContaining({
           configs: ["test/vitest/vitest.boundary.config.ts"],
           requiresDist: false,
@@ -1172,7 +1317,8 @@ describe("CI changed Node test plan", () => {
               "pretestBuildMode",
             ]);
             expectProjectedNodeTestResources(job, group, ownerJob, owner, envScratch);
-            expectSameFields(job, ownerJob, ["runner", "timeoutMinutes"]);
+            expect(job.runner).toBe(ownerJob.runner);
+            expect(job.timeoutMinutes ?? 60).toBeLessThanOrEqual(ownerJob.timeoutMinutes ?? 60);
           }
         }
       }

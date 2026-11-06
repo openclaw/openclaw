@@ -1,5 +1,5 @@
 import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
-import { type Mock, vi } from "vitest";
+import { expect, type Mock, vi } from "vitest";
 import type {
   GatewayBrowserClient,
   GatewayEventFrame,
@@ -16,6 +16,7 @@ import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createChannelsState } from "../channels/view.test-support.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
 import "./custodian-page.tsx";
@@ -261,4 +262,25 @@ export async function mountPage(
   document.body.append(provider);
   await page.updateComplete;
   return { page, provider };
+}
+
+export function button(page: HTMLElement, selector: string) {
+  return page.querySelector<HTMLButtonElement>(selector)!;
+}
+export async function element<T extends HTMLElement>(
+  page: HTMLElement,
+  selector: string,
+): Promise<T> {
+  return waitForFast(() => {
+    const found = page.querySelector<T>(selector);
+    expect(found).not.toBeNull();
+    return found!;
+  });
+}
+export async function fill(page: TestCustodianPage, selector: string, value: string) {
+  const field = await element<HTMLInputElement | HTMLTextAreaElement>(page, selector);
+  field.value = value;
+  field.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  await page.updateComplete;
+  return field;
 }

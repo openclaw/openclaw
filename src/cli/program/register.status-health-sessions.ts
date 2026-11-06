@@ -5,7 +5,7 @@ import type { sessionsCommand } from "../../commands/sessions.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import { throwExpectedCliError } from "../failure-output.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
 import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import type { SessionsImportOptions } from "../sessions-import.js";

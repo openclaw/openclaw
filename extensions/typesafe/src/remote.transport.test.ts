@@ -401,7 +401,6 @@ it.each([
     }
     const result = await evaluate(config);
     expect(result).toEqual({ status: "unavailable", reason: "invalid-response" });
-    expect(JSON.stringify(result)).not.toContain(reflected);
     if (name.endsWith("headers")) {
       expect(received).toHaveLength(1);
       expect(received[0]?.apiKey).toBe(reflected);

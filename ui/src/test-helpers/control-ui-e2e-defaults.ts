@@ -23,6 +23,7 @@ export const defaultControlUiFeatureMethods = [
   "chat.abort",
   "chat.history",
   "chat.send",
+  "chat.steerNow",
   "chat.metadata",
   "chat.startup",
   "config.apply",
@@ -60,6 +61,7 @@ export const defaultControlUiFeatureMethods = [
   "sessions.search",
   "system.info",
   "users.github.status",
+  "users.channelIdentity",
   "users.github.authorize.start",
   "users.github.authorize.poll",
   "users.github.authorize.cancel",
@@ -108,6 +110,10 @@ export function createControlUiDefaultResponses(scenario: {
   const now = new Date();
   const date = now.toISOString().slice(0, 10);
   return {
+    // Unbound catalog fixtures retain native identity; bound/error scenarios
+    // supply explicit outcomes without materializing sessions during a read.
+    "sessions.catalog.resolve": null,
+    "beam.owned.resolve": null,
     "approval.history": { items: [] } satisfies ApprovalHistoryResult,
     "exec.approval.grants.list": { grants: [] } satisfies ExecApprovalGrantsListResult,
     "openclaw.chat.history": { turns: [] } satisfies SystemAgentChatHistoryResult,
@@ -157,6 +163,7 @@ export function createControlUiDefaultResponses(scenario: {
     } satisfies ChannelsPairingListResult,
     "plugins.catalog.categories": { categories: [] } satisfies PluginsCatalogCategoriesResult,
     "plugins.catalog.browse": { items: [] } satisfies PluginsCatalogBrowseResult,
+    "users.channelIdentity": { status: "ready", accounts: [] },
     "users.self": profile
       ? { profile }
       : {

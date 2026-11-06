@@ -79,6 +79,8 @@ const { values } = parseArgs({
     "cpu-throttle": { type: "string", default: "1" },
     "low-memory": { type: "boolean", default: false },
     trace: { type: "boolean", default: false },
+    "profile-interval-us": { type: "string", default: "1000" },
+    "no-opt": { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     theme: { type: "string", default: "light" },
     "thread-cpu-time": { type: "boolean", default: false },
@@ -119,6 +121,10 @@ if (values.theme !== "light" && values.theme !== "dark") {
 const theme = values.theme;
 const pairs = Number(values.pairs);
 const cpuThrottle = Number(values["cpu-throttle"]);
+const profileIntervalUs = Number(values["profile-interval-us"]);
+if (!Number.isInteger(profileIntervalUs) || profileIntervalUs < 50) {
+  throw new Error("profile-interval-us must be an integer of at least 50");
+}
 const assetLatencyMs = Number(values["asset-latency-ms"]);
 if (!Number.isFinite(assetLatencyMs) || assetLatencyMs < 0) {
   throw new Error("asset-latency-ms must be nonnegative");
@@ -331,6 +337,7 @@ type Result = {
     after?: Awaited<ReturnType<typeof captureRetention>> & { artifact: string };
   };
   longTasks?: { count: number; totalMs: number; maxMs: number };
+  cls?: number;
   requests?: Record<string, number>;
   scenarioEvidence?: InteractionEvidence;
   domBefore?: { nodes: number; menuItems: number; namedAnchors: number };
@@ -403,9 +410,14 @@ if (values["process-wakeups"]) {
   }
 }
 const browserExecutable = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const memoryArgs = values["low-memory"]
-  ? ["--enable-low-end-device-mode", "--js-flags=--max-old-space-size=128"]
-  : [];
+const memoryArgs = values["low-memory"] ? ["--enable-low-end-device-mode"] : [];
+const v8Flags = [
+  ...(values["low-memory"] ? ["--max-old-space-size=128"] : []),
+  ...(values["no-opt"] ? ["--no-opt"] : []),
+];
+if (v8Flags.length) {
+  memoryArgs.push(`--js-flags=${v8Flags.join(" ")}`);
+}
 const browser = await chromium.launch({
   executablePath: browserExecutable,
   args: memoryArgs,
@@ -583,8 +595,9 @@ try {
           load: os.loadavg(),
         },
         collection: trace
-          ? "CDP trace + 1ms CPU profiler (overhead included)"
+          ? `CDP trace + ${profileIntervalUs}µs CPU profiler (overhead included)`
           : "untraced CDP metrics",
+        v8Optimization: values["no-opt"] ? "disabled for diagnostics" : "default",
         metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
         functionCounts: values["function-counts"]
           ? "Precise coverage starts before navigation and resets after preparation; diagnostic overhead, not timing evidence."
@@ -979,7 +992,7 @@ try {
               });
               tracing = true;
               await cdp.send("Profiler.enable");
-              await cdp.send("Profiler.setSamplingInterval", { interval: 1000 });
+              await cdp.send("Profiler.setSamplingInterval", { interval: profileIntervalUs });
               await cdp.send("Profiler.start");
               profiling = true;
             }
@@ -1092,7 +1105,59 @@ try {
                 durations.push(...list.getEntries().map((entry) => entry.duration));
               });
               observer.observe({ type: "longtask" });
-              return { durations, observer };
+              const shifts: Array<{ at: number; value: number }> = [];
+              const recordShifts = (entries: PerformanceEntry[]) => {
+                for (const entry of entries) {
+                  if (!Reflect.get(entry, "hadRecentInput")) {
+                    shifts.push({
+                      at: entry.startTime,
+                      value: Number(Reflect.get(entry, "value")),
+                    });
+                  }
+                }
+              };
+              const shiftObserver = PerformanceObserver.supportedEntryTypes.includes("layout-shift")
+                ? new PerformanceObserver((list) => recordShifts(list.getEntries()))
+                : undefined;
+              shiftObserver?.observe({ type: "layout-shift" });
+              return {
+                read() {
+                  durations.push(...observer.takeRecords().map((entry) => entry.duration));
+                  observer.disconnect();
+                  if (shiftObserver) {
+                    recordShifts(shiftObserver.takeRecords());
+                    shiftObserver.disconnect();
+                  }
+                  const start = performance.getEntriesByName("interaction:start").at(-1)!.startTime;
+                  const end = performance.getEntriesByName("interaction:end").at(-1)!.startTime;
+                  let cls = 0;
+                  let windowValue = 0;
+                  let windowStart = -Infinity;
+                  let previousShift = -Infinity;
+                  for (const shift of shifts) {
+                    if (shift.at < start || shift.at > end) {
+                      continue;
+                    }
+                    // CLS is the largest burst: less than 1s between shifts, at most 5s long.
+                    if (shift.at - previousShift < 1_000 && shift.at - windowStart < 5_000) {
+                      windowValue += shift.value;
+                    } else {
+                      windowStart = shift.at;
+                      windowValue = shift.value;
+                    }
+                    previousShift = shift.at;
+                    cls = Math.max(cls, windowValue);
+                  }
+                  return {
+                    longTasks: {
+                      count: durations.length,
+                      totalMs: durations.reduce((sum, duration) => sum + duration, 0),
+                      maxMs: Math.max(0, ...durations),
+                    },
+                    cls: shiftObserver ? cls : undefined,
+                  };
+                },
+              };
             });
             const before = await metrics(cdp);
             if (values["function-counts"]) {
@@ -1163,15 +1228,7 @@ try {
             result.heapBeforeBytes = before.JSHeapUsedSize;
             result.heapAfterBytes = after.JSHeapUsedSize;
             result.heapDeltaBytes = after.JSHeapUsedSize - before.JSHeapUsedSize;
-            result.longTasks = await taskProbe.evaluate(({ durations, observer }) => {
-              durations.push(...observer.takeRecords().map((entry) => entry.duration));
-              observer.disconnect();
-              return {
-                count: durations.length,
-                totalMs: durations.reduce((sum, duration) => sum + duration, 0),
-                maxMs: Math.max(0, ...durations),
-              };
-            });
+            Object.assign(result, await taskProbe.evaluate((probe) => probe.read()));
             await taskProbe.dispose();
             if (processSession && processWakeupReader && result.processWakeups?.before) {
               try {
@@ -1535,6 +1592,7 @@ const summary = viewports
                 "taskMs",
                 "layoutMs",
                 "styleMs",
+                "cls",
                 ...(values["renderer-process-metrics"] ? ["rendererCpuMs" as const] : []),
               ] as const
             ).map((metric) => [
@@ -1616,10 +1674,11 @@ const rows = summary
         result.viewport === row.viewport &&
         result.bundle === row.bundle,
     );
-    const metric = (name: "scriptMs" | "taskMs" | "layoutMs" | "styleMs") => {
+    const metric = (name: "scriptMs" | "taskMs" | "layoutMs" | "styleMs" | "cls") => {
       const value = row.metrics[name];
+      const precision = name === "cls" ? 4 : 1;
       return value
-        ? `${value.median.toFixed(1)} / ${value.p95.toFixed(1)} / ${value.min.toFixed(1)}–${value.max.toFixed(1)}`
+        ? `${value.median.toFixed(precision)} / ${value.p95.toFixed(precision)} / ${value.min.toFixed(precision)}–${value.max.toFixed(precision)}`
         : "—";
     };
     const links = representative
@@ -1635,12 +1694,12 @@ const rows = summary
           )
           .join(" ")
       : "";
-    return `<tr><td>${escapeHtml(row.viewport)}</td><td>${escapeHtml(row.step)}</td><td>${row.bundle}</td><td>${row.passed}/${row.failed}/${row.skipped}</td><td>${metric("scriptMs")}</td><td>${metric("taskMs")}</td><td>${metric("layoutMs")}</td><td>${metric("styleMs")}</td><td>${row.trace?.longTasks?.median ?? "—"}</td><td>${links}</td></tr>`;
+    return `<tr><td>${escapeHtml(row.viewport)}</td><td>${escapeHtml(row.step)}</td><td>${row.bundle}</td><td>${row.passed}/${row.failed}/${row.skipped}</td><td>${metric("scriptMs")}</td><td>${metric("taskMs")}</td><td>${metric("layoutMs")}</td><td>${metric("styleMs")}</td><td>${metric("cls")}</td><td>${row.trace?.longTasks?.median ?? "—"}</td><td>${links}</td></tr>`;
   })
   .join("\n");
 await writeFile(
   path.join(artifactDir, "report.html"),
-  `<!doctype html><meta charset="utf-8"><title>Warm interactions</title><style>body{font:15px system-ui;padding:24px}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #bbb;text-align:left}a{margin-right:6px}</style><h1>Production-renderer warm interactions</h1><p>${trace ? "Trace and CPU sampling overhead included." : "Untraced CDP metric deltas."} ${values["selector-stats"] ? "CSS selector instrumentation overhead included; selectors ranked by elapsed microseconds." : ""} Theme: ${theme}. Cells: median / p95 / min–max (ms). Wall time in JSON is automation-to-assertion, not INP. Synthetic Gateway; native clocks. <a href="manifest.json">Manifest</a> <a href="summary.json">Summary</a></p><table><tr><th>Viewport</th><th>Step</th><th>Bundle</th><th>Pass/fail/skip</th><th>Script</th><th>Task</th><th>Layout</th><th>Style</th><th>Long tasks</th><th>Evidence</th></tr>${rows}</table>`,
+  `<!doctype html><meta charset="utf-8"><title>Warm interactions</title><style>body{font:15px system-ui;padding:24px}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #bbb;text-align:left}a{margin-right:6px}</style><h1>Production-renderer warm interactions</h1><p>${trace ? "Trace and CPU sampling overhead included." : "Untraced CDP metric deltas."} ${values["selector-stats"] ? "CSS selector instrumentation overhead included; selectors ranked by elapsed microseconds." : ""} Theme: ${theme}. Cells: median / p95 / min–max; times in ms, CLS unitless. Wall time in JSON is automation-to-assertion, not INP. Synthetic Gateway; native clocks. <a href="manifest.json">Manifest</a> <a href="summary.json">Summary</a></p><table><tr><th>Viewport</th><th>Step</th><th>Bundle</th><th>Pass/fail/skip</th><th>Script</th><th>Task</th><th>Layout</th><th>Style</th><th>CLS</th><th>Long tasks</th><th>Evidence</th></tr>${rows}</table>`,
 );
 console.log(`Warm interaction artifacts: ${artifactDir}`);
 if (results.some((result) => result.status === "failed")) {

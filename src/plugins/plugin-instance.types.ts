@@ -74,6 +74,7 @@ export type PluginModuleLoaderRecovery = {
 
 /** Runtime and setup loaders use the same instance-owned captured source. */
 export interface PluginModuleLoaderOwner extends PluginInstanceResource, PluginInstanceAdmission {
+  setupPreparationFailure?: Error;
   controlPlaneInitialized: boolean;
   sourceDigest?: string;
   onModuleDispose(cleanup: () => void | Promise<void>): void;

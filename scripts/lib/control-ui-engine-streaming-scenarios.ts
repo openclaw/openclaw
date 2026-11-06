@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
+import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import { createControlUiStreamingReply } from "../../ui/src/test-helpers/control-ui-streaming-reply.ts";
+import { createTeamScaleHistoryFixture } from "../../ui/src/test-helpers/control-ui-team-scale-history-fixture.ts";
 import {
   createEngineTranscript,
   engineProbeInitScript,
@@ -8,11 +9,138 @@ import {
   type EngineScenario,
 } from "./control-ui-engine-boot-scenarios.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
+import { createControlUiStreamingReply } from "./control-ui-streaming-fixture.ts";
 
 const sessionKey = "agent:main:interaction-a";
 const secondSessionKey = "agent:main:interaction-b";
 const activePane = ".chat-pane-cache__pane--active";
 const inputSelector = ".agent-chat__composer-combobox textarea";
+
+function streamOnsetScenario(messages = 2_000, preparation = false): EngineScenario {
+  const text = "First streamed token.";
+  const runId = "engine-streaming-boundary";
+  return {
+    id: preparation
+      ? "streaming-working-preparation"
+      : `streaming-onset${messages === 400 ? "-short" : ""}`,
+    explicitOnly: true,
+    route: controlUiSessionPath(sessionKey),
+    expected: preparation
+      ? "An empty first delta prepares the working indicator over retained history."
+      : "The first answer delta commits without replacing retained history.",
+    initScript: engineProbeInitScript(),
+    fixtureOverrides: (_sandbox, base) => ({
+      sessions: base.sessions.map((row) =>
+        row.key === sessionKey
+          ? {
+              ...row,
+              hasActiveRun: !preparation,
+              status: preparation ? "done" : "running",
+              activeRunIds: preparation ? [] : [runId],
+            }
+          : row,
+      ),
+      sessionTranscripts: {
+        [sessionKey]: {
+          messages: createTeamScaleHistoryFixture({
+            messageCount: messages,
+            inlineWidgets: 0,
+            now: 1_800_000_000_000,
+            richTranscript: true,
+            sessionInfo: base.sessions[0]!,
+            assets: new Map(),
+            models: [],
+          }).historyMessages,
+          ...(!preparation
+            ? { inFlightRun: { runId, text: "", startedAt: 1_800_005_000_000 } }
+            : {}),
+        },
+      },
+    }),
+    prepare: async (page) => {
+      await page.waitForFunction(() => Reflect.get(window, "__engineBootReadiness")?.readyMs > 0);
+      if (preparation) {
+        await page.locator(`${activePane} .chat-working-indicator`).waitFor({ state: "hidden" });
+      }
+      await frames(page);
+    },
+    run: async (page) =>
+      page.evaluate(
+        async ({
+          selector,
+          text: expectedText,
+          runId: activeRunId,
+          sessionKey: activeSessionKey,
+          preparation: prepareWorking,
+        }) => {
+          const pane = document.querySelector<HTMLElement>(selector)!;
+          const thread = pane.querySelector<HTMLElement>(".chat-thread")!;
+          const retained = Array.from(thread.querySelectorAll(".chat-virtual-row"));
+          // SAFETY: The benchmark installs the typed mock before this production page loads.
+          const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+          return new Promise<Record<string, number | boolean>>((resolve, reject) => {
+            let committedAt: number | undefined;
+            const timeout = setTimeout(() => {
+              observer.disconnect();
+              reject(
+                new Error(
+                  `Streaming boundary did not commit: ${JSON.stringify({
+                    workingIndicator: Boolean(thread.querySelector(".chat-working-indicator")),
+                    entries: Array.from(thread.querySelectorAll("[data-entry-id]")).map((row) =>
+                      row.getAttribute("data-entry-id"),
+                    ),
+                  })}`,
+                ),
+              );
+            }, 10_000);
+            const observer = new MutationObserver(() => {
+              const committed = prepareWorking
+                ? thread.querySelector(".chat-working-indicator")
+                : thread.querySelector(".chat-bubble.streaming .chat-text");
+              if (
+                !committed ||
+                (!prepareWorking && !committed.textContent?.includes(expectedText))
+              ) {
+                return;
+              }
+              committedAt = performance.now();
+              observer.disconnect();
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => {
+                  clearTimeout(timeout);
+                  resolve({
+                    applicationMs: committedAt! - startedAt,
+                    eventToFrameMs: performance.now() - startedAt,
+                    retainedRows: retained.length,
+                    survivingRows: retained.filter((row) => row.isConnected).length,
+                    committed: true,
+                  });
+                }),
+              );
+            });
+            observer.observe(thread, { childList: true, subtree: true, characterData: true });
+            const startedAt = performance.now();
+            performance.mark(
+              prepareWorking
+                ? "engine:working-preparation:start"
+                : "engine:streaming-boundary:start",
+            );
+            gateway.emit("chat", {
+              sessionKey: activeSessionKey,
+              runId: activeRunId,
+              seq: 1,
+              state: "delta",
+              message: {
+                role: "assistant",
+                content: prepareWorking ? [] : [{ type: "text", text: expectedText }],
+              },
+            });
+          });
+        },
+        { selector: activePane, text, runId, sessionKey, preparation },
+      ),
+  };
+}
 
 function installStreamingWorkCounters() {
   const work = { disclosureChecks: 0, nativeScrollToCalls: 0 };
@@ -42,7 +170,7 @@ function streamScenario(options: {
   messages?: number;
   rate?: number;
   panes?: number;
-  content?: "markdown" | "tool-code";
+  content?: "markdown" | "tool-code" | "mixed";
 }): EngineScenario {
   const messages = options.messages ?? 400;
   const reply = createControlUiStreamingReply(options.rate ?? 30, options.content);
@@ -63,6 +191,8 @@ function streamScenario(options: {
     id: options.id,
     route: controlUiSessionPath(sessionKey),
     explicitOnly: options.id !== "streaming-645-deltas",
+    // Narrow layouts present only the active pane, so simultaneous input needs desktop.
+    viewports: streams.length === 2 ? ["desktop"] : undefined,
     expected: `${streams.length} pane(s) retain native input, the complete ${reply.deltas.length}-delta reply, and tail follow over ${messages} messages at ${reply.deltasPerSecond} Hz.`,
     initScript: `${engineProbeInitScript(true)};(${installStreamingWorkCounters.toString()})();`,
     fixtureOverrides: (_sandbox, base) => ({
@@ -77,6 +207,7 @@ function streamScenario(options: {
           stream.sessionKey,
           {
             messages: createEngineTranscript(messages),
+            ...(reply.mixed ? { thinkingLevel: "on" } : {}),
             inFlightRun: {
               runId: stream.runId,
               text: "Preparing synthetic reply.",
@@ -99,7 +230,9 @@ function streamScenario(options: {
               })),
             },
           }
-        : undefined,
+        : reply.mixed
+          ? { chatShowThinking: true, chatShowToolCalls: true }
+          : undefined,
     prepare: async (page) => {
       if (streams.length === 1) {
         await waitForEngineTranscript(page, messages);
@@ -157,7 +290,7 @@ function streamScenario(options: {
       await page.evaluate((input) => Reflect.get(window, "__streamingReply").start(input), {
         ...reply,
         streams,
-        burstSize: 1,
+        burstSize: reply.mixed ? 5 : 1,
         observeTextVisibility: false,
       });
       const typing = new AbortController();
@@ -174,6 +307,41 @@ function streamScenario(options: {
         }
       })();
       try {
+        if (reply.mixed) {
+          await page.waitForFunction(
+            (count) => Reflect.get(window, "__streamingReply").read().delivered >= count,
+            Math.floor(reply.deltas.length / 3),
+          );
+          await page
+            .locator(`${activePane} .chat-activity-group__summary[aria-expanded='false']`)
+            .last()
+            .click();
+          const imageTool = page.locator(`${activePane} [data-message-id*='mixed-tool-24']`);
+          const toolSummary = imageTool.locator(
+            ".chat-tool-msg-summary[aria-expanded='false'], .chat-tool-row[aria-expanded='false']",
+          );
+          if (await toolSummary.count()) {
+            await toolSummary.first().click();
+          }
+          // Disclosure clicks can scroll before their deferred layout commit. Admit
+          // a visible off-tail state before the native action resets follow intent.
+          await page.locator(`${activePane} .chat-thread`).evaluate((thread) => {
+            thread.scrollBy({ top: -thread.clientHeight, behavior: "instant" });
+          });
+          const latest = page.locator(`${activePane} .chat-scroll-to-bottom`);
+          await latest.waitFor({ state: "visible" });
+          await latest.click();
+          await page.waitForFunction((selector) => {
+            const thread = document.querySelector<HTMLElement>(`${selector} .chat-thread`)!;
+            return Math.abs(thread.scrollHeight - thread.clientHeight - thread.scrollTop) <= 2;
+          }, activePane);
+          const toggle = page.locator(".sidebar-session-pagination__button").first();
+          await toggle.click();
+          await page.waitForFunction(() => {
+            const samples = Reflect.get(window, "__streamingReply").sidebarInputs();
+            return samples.length === 1 && samples[0].nextFrameMs !== undefined;
+          });
+        }
         await page.waitForFunction(
           (count) => Reflect.get(window, "__streamingReply").read().delivered === count,
           reply.deltas.length * streams.length,
@@ -198,7 +366,11 @@ function streamScenario(options: {
         await input;
         await page.evaluate(() => Reflect.get(window, "__streamingReply").stop());
       }
-      const result = await page.evaluate(() => Reflect.get(window, "__streamingReply").finish());
+      const result = await page.evaluate(() => {
+        const snapshot = Reflect.get(window, "__streamingReply").finish();
+        Reflect.set(window, "__engineStreamingResult", snapshot);
+        return snapshot;
+      });
       const retained = await composers.evaluateAll((inputs) =>
         inputs.map((element) => {
           if (!(element instanceof HTMLTextAreaElement)) {
@@ -237,6 +409,73 @@ function streamScenario(options: {
         ) {
           throw new Error("Streaming lost the expanded tool output");
         }
+        if (reply.mixed) {
+          const plainText = reply.text
+            .replace(/^#{1,6} /gmu, "")
+            .replace(/^```[^\n]*\n/gmu, "")
+            .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
+            .replace(/\*\*([^*]+)\*\*/gu, "$1")
+            .replace(/^\| ---.*\n/gmu, "")
+            .replace(/[|`\s]/gu, "");
+          if (pane.finalMarkdownText?.replace(/\s/gu, "") !== plainText) {
+            throw new Error("Mixed streaming lost complete rendered Markdown text");
+          }
+          if (
+            !pane.reasoning?.items.some(
+              (item: { text: string }) => item.text === reply.mixed!.reasoning,
+            )
+          ) {
+            throw new Error("Mixed streaming lost reasoning");
+          }
+          for (let tool = 1; tool <= reply.mixed.toolCount; tool++) {
+            if (
+              !pane.toolResults.some(
+                (entry: { toolCallId: string; output: string; resultReceived: boolean }) =>
+                  entry.toolCallId === `mixed-tool-${tool}` &&
+                  entry.resultReceived &&
+                  entry.output === `Mixed tool result ${tool}.`,
+              )
+            ) {
+              throw new Error(`Mixed streaming lost tool result ${tool}`);
+            }
+          }
+        }
+      }
+      if (reply.mixed) {
+        // Verify offscreen media after timing: following the long reply leaves its earlier
+        // attachment above the viewport. Native scroll brings the owning row into view.
+        await page.locator(`${activePane} .chat-bubble.streaming`).evaluate((bubble) => {
+          const thread = bubble.closest<HTMLElement>(".chat-thread")!;
+          thread.scrollTop +=
+            bubble.getBoundingClientRect().top -
+            thread.getBoundingClientRect().top -
+            thread.clientHeight / 2;
+        });
+        // ActivityGroupBody mounts its messages only after Raw details opens.
+        const activity = page
+          .locator(`${activePane} .chat-activity-group__summary[aria-expanded='false']`)
+          .last();
+        if (await activity.count()) {
+          await activity.click();
+        }
+        const imageOwner = page.locator(`${activePane} [data-message-id*='mixed-tool-24']`);
+        await imageOwner.scrollIntoViewIfNeeded();
+        const toolDisclosure = imageOwner.locator(".chat-tool-msg-summary[aria-expanded='false']");
+        if (await toolDisclosure.count()) {
+          await toolDisclosure.click();
+        }
+        const attachment = page.locator(`${activePane} .chat-message-image`).last();
+        await attachment.waitFor({ state: "visible" });
+        await attachment.scrollIntoViewIfNeeded();
+        await attachment.evaluate(async (image) => {
+          if (!(image instanceof HTMLImageElement)) {
+            throw new Error("Mixed streaming image did not render as a native image");
+          }
+          await image.decode();
+          if (!image.complete || image.naturalWidth !== 64 || image.naturalHeight !== 64) {
+            throw new Error("Mixed streaming image did not decode");
+          }
+        });
       }
       const sum = (key: string) =>
         result.deltas.reduce(
@@ -256,6 +495,7 @@ function streamScenario(options: {
         streamElapsedMs: result.elapsedMs,
         parseCalls: sum("parseCalls"),
         parseMs: sum("parseMs"),
+        fragmentClones: sum("fragmentClones"),
         geometryReads: sum("geometryReads"),
         resizeDeliveries: result.pipeline.rowResizeDeliveries,
         railObservations: result.pipeline.railObservations,
@@ -272,6 +512,37 @@ function streamScenario(options: {
         characters: characters.reduce((a, b) => a + b, 0),
         inputPreserved: true,
         tailFollowed: true,
+        ...(reply.mixed
+          ? {
+              toolResults: reply.mixed.toolCount,
+              reasoningPreserved: true,
+              imageDecoded: true,
+              sidebarResponsive:
+                result.sidebarInputs.length === 1 && result.sidebarInputs[0].commitMs !== undefined,
+              sidebarInputDelayMs: result.sidebarInputs[0].delayMs,
+              sidebarCommitMs: result.sidebarInputs[0].commitMs,
+              sidebarInputToNextFrameMs: result.sidebarInputs[0].nextFrameMs,
+              deliveryTaskMedianMs: result.taskAndMicrotasksMs.median,
+              deliveryTaskP95Ms: result.taskAndMicrotasksMs.p95,
+              deliveryTaskMaxMs: result.taskAndMicrotasksMs.max,
+              eventToNextFrameMedianMs: result.eventToNextFrameMs.median,
+              eventToNextFrameP95Ms: result.eventToNextFrameMs.p95,
+              eventToNextFrameMaxMs: result.eventToNextFrameMs.max,
+              commitToNextFrameMedianMs: result.commitToNextFrameMs.median,
+              commitToNextFrameP95Ms: result.commitToNextFrameMs.p95,
+              commitToNextFrameMaxMs: result.commitToNextFrameMs.max,
+              longTasksSupported: result.longTasks !== null,
+              ...(result.longTasks === null
+                ? {}
+                : {
+                    longTasks: result.longTasks.length,
+                    longestLongTaskMs: Math.max(
+                      0,
+                      ...result.longTasks.map((task: { duration: number }) => task.duration),
+                    ),
+                  }),
+            }
+          : {}),
       };
     },
   };
@@ -350,11 +621,15 @@ export function createEngineStreamingScenarios(): readonly EngineScenario[] {
     },
   };
   return [
+    streamOnsetScenario(2_000, true),
+    streamOnsetScenario(),
+    streamOnsetScenario(400),
     streamScenario({ id: "streaming-645-deltas" }),
     streamScenario({ id: "streaming-645-deltas-slow", rate: 15 }),
     streamScenario({ id: "streaming-large-transcript", messages: 2_000 }),
     streamScenario({ id: "streaming-two-panes", panes: 2 }),
     streamScenario({ id: "streaming-tool-code", content: "tool-code" }),
+    streamScenario({ id: "streaming-mixed-fast", rate: 150, content: "mixed" }),
     longScroll,
     {
       ...longScroll,

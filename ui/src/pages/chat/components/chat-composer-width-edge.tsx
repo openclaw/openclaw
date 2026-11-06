@@ -1,4 +1,4 @@
-import { onSettled } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { createPointerDrag } from "../../../lib/reactive/pointer-drag.ts";
@@ -10,6 +10,17 @@ import { transcriptColumnWidth, type ComposerWidthOptions } from "./chat-compose
  */
 export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
   const options = () => props.options();
+  // Callback replacements and transcript row updates do not change edge geometry.
+  const geometry = createMemo(
+    () => ({
+      width: options().chatMessageMaxWidth ?? undefined,
+      transcript: options().getTranscriptElement?.(),
+    }),
+    {
+      equals: (previous, next) =>
+        previous.width === next.width && previous.transcript === next.transcript,
+    },
+  );
   const drag = createPointerDrag();
   let edge: HTMLDivElement | undefined;
   const shell = () => edge?.parentElement;
@@ -28,7 +39,7 @@ export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
     }
     return parent;
   };
-  const availableWidth = (current: ComposerWidthOptions) => {
+  const availableWidth = (transcript: HTMLElement | null | undefined) => {
     const parent = region();
     const style = getComputedStyle(parent);
     const shellStyle = getComputedStyle(shell()!);
@@ -40,14 +51,13 @@ export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
       Number.parseFloat(style.paddingLeft) -
       Number.parseFloat(style.paddingRight) -
       2 * inset;
-    const transcript = current.getTranscriptElement?.();
     if (transcript?.isConnected) {
       available = Math.min(available, transcriptColumnWidth(transcript));
     }
     return Math.max(0, available);
   };
   const clampWidth = (value: number) => {
-    const available = availableWidth(options());
+    const available = availableWidth(options().getTranscriptElement?.());
     return Math.round(Math.max(Math.min(minimumWidth, available), Math.min(available, value)));
   };
   const writable = () => !retired && edge?.isConnected && Boolean(options().onComposerWidthChange);
@@ -58,13 +68,13 @@ export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
       options().onComposerWidthChange?.(value);
     }
   };
-  const measure = (current: ComposerWidthOptions) => {
+  const measure = (transcript: HTMLElement | null | undefined) => {
     const host = shell();
     const field = input();
     if (retired || !edge?.isConnected || !host || !field) {
       return;
     }
-    const available = availableWidth(current);
+    const available = availableWidth(transcript);
     const inputBox = field.getBoundingClientRect();
     const shellBox = host.getBoundingClientRect();
     edge.style.top = `${inputBox.top - shellBox.top + 18}px`;
@@ -79,27 +89,23 @@ export function ResizeEdge(props: { options: () => ComposerWidthOptions }) {
     edge.setAttribute("aria-valuemax", String(Math.round(available)));
   };
   const schedule = createLayoutMeasurement(
-    () => {
-      // Read each reactive prop here; callers may return a stable props object.
-      const { chatMessageMaxWidth, onComposerWidthChange, getTranscriptElement } = options();
-      return { chatMessageMaxWidth, onComposerWidthChange, getTranscriptElement };
-    },
+    geometry,
     (next) => {
       if (!next) {
         return;
       }
-      const width = next.chatMessageMaxWidth ?? undefined;
+      const width = next.width;
       if (width !== lastWidth) {
         baseline = width;
         refreshMinimum = true;
       }
       lastWidth = width;
-      measure(next);
+      measure(next.transcript);
     },
     {
       targets: (next) =>
-        [shell(), input(), shell() && region(), next?.getTranscriptElement?.()].filter(
-          (node): node is Element => Boolean(node),
+        [shell(), input(), shell() && region(), next?.transcript].filter((node): node is Element =>
+          Boolean(node),
         ),
       changeTiming: "sync",
     },

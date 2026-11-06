@@ -1,3 +1,4 @@
+import { onSettled } from "solid-js";
 import { takeBootComposer } from "../../app/boot-composer.ts";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { getChatComposerState, queueComposerSubmit } from "./components/chat-composer-state.ts";
@@ -35,13 +36,16 @@ export function adoptBootComposer(
     return;
   }
   textarea.focus({ preventScroll: true });
-  // Keep the caret where the operator was editing once the draft renders,
-  // unless a keystroke has already moved past that frame.
+  // Restore the caret and its viewport after the draft and mobile editing layout
+  // commit, before paint. A merged saved draft has a different text layout.
   const offset = draft.length - boot.text.length;
   const [start, end, direction] = boot.selection;
-  requestAnimationFrame(() => {
+  onSettled(() => {
     if (textarea.value === draft && document.activeElement === textarea) {
       textarea.setSelectionRange(start + offset, end + offset, direction);
+      if (!saved) {
+        [textarea.scrollLeft, textarea.scrollTop] = boot.scroll;
+      }
     }
   });
 }

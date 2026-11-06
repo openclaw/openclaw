@@ -3,7 +3,7 @@ import path from "node:path";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { createConfigIO } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
+import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
 import { writePrivateTextFileAtomicSync } from "../infra/private-file-store.js";
 
 const silentConfigIoLogger = {
@@ -39,7 +39,7 @@ export function writeTextFileAtomic(
       filePath: pathname,
       content: value,
       mode,
-      dirMode: readExistingStateRootMode(path.dirname(pathname), stateDir),
+      dirMode: stateRootDirectoryMode(path.dirname(pathname), stateDir),
       tempPrefix: ".openclaw-secrets",
     });
     return;

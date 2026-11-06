@@ -37,9 +37,9 @@ For private dependencies, configure [setup secrets](/gateway/config-cloud-worker
 
 ## Configuration
 
-**Settings → Connections → Cloud environments** groups snapshots, setup results, and prepared workers by repository. Select a repository to inspect it or use **Machine → Change** to choose its default profile. The page updates after the worker plugin activates, including after saving the first suggested profile.
+**Settings → Connections → Cloud environments** groups snapshots, setup results, and prepared workers by repository. Select a repository to inspect it or use **Cloud device → Change** to choose its default profile. The page updates after the worker plugin activates, including after saving the first suggested profile.
 
-Expand **Advanced** to manage **Machines**, inspect the **Pool**, change **Snapshot retention**, or inspect **Machine images** without a repository. See [the page's actions](/gateway/cloud-workers/warm-images#inspect-snapshots-in-the-control-ui), [per-repository defaults](/gateway/cloud-workers/per-project-default-profiles), and the [cloud worker configuration reference](/gateway/config-cloud-workers) for profile fields and examples.
+Expand **Advanced** to manage **Cloud devices**, inspect the **Pool**, change **Snapshot retention**, or inspect **Machine images** without a repository. See [the page's actions](/gateway/cloud-workers/warm-images#inspect-snapshots-in-the-control-ui), [per-repository defaults](/gateway/cloud-workers/per-project-default-profiles), and the [cloud worker configuration reference](/gateway/config-cloud-workers) for profile fields and examples.
 
 Saved settings apply without restarting the Gateway under the default reload policy. With `gateway.reload.mode: "off"`, saving from this page restarts the Gateway; direct config edits require a manual restart. Saving machine settings does not start a build; **Rebuild** prepares an eligible recorded local project.
 

@@ -6,12 +6,7 @@ import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -20,8 +15,9 @@ import type { SessionEntry } from "../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../src/gateway/server-methods/types.js";
 import type { SessionCatalogProvider } from "../../src/plugins/session-catalog.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -35,13 +31,18 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     unchanged: { type: "boolean", default: false },
     adopted: { type: "boolean", default: false },
+    "empty-catalogs": { type: "boolean", default: false },
+    "queue-wait-ms": { type: "string", default: "0" },
   },
 });
-const integer = (name: "operations" | "yield-ms" | "start-at", min: number) =>
+const integer = (name: "operations" | "yield-ms" | "start-at" | "queue-wait-ms", min: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const operations = integer("operations", 1);
 const yieldMs = integer("yield-ms", 0);
 const startAt = integer("start-at", 0);
+const queueWaitMs = integer("queue-wait-ms", 0);
+assert.ok(queueWaitMs < 30_000, "--queue-wait-ms must be below the 30-second queue deadline");
+assert.ok(!values["empty-catalogs"] || !values.adopted, "--empty-catalogs excludes --adopted");
 assert.ok(global.gc, "Run with --expose-gc");
 const stateDir = values["state-dir"]
   ? path.resolve(values["state-dir"])
@@ -64,15 +65,10 @@ process.env = {
   TMPDIR: path.join(stateDir, "tmp"),
 };
 const profilePath = path.join(stateDir, "allocation.heapprofile");
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
 // Identify the main isolate before imports can start database workers.
-marker("identify-start");
+writeGatewayGcTraceMarker("identify-start", profilePath);
 global.gc();
-marker("identify-stop");
+writeGatewayGcTraceMarker("identify-stop", profilePath);
 
 const [
   { setRuntimeConfigSnapshot },
@@ -87,6 +83,7 @@ const [
   { createEmptyPluginRegistry },
   { setActivePluginRegistry },
   { createSubsystemLogger },
+  { scheduleGatewayRequestStart },
 ] = await Promise.all([
   import("../../src/config/runtime-snapshot.js"),
   import("../../src/config/sessions/session-accessor.js"),
@@ -100,12 +97,13 @@ const [
   import("../../src/plugins/registry-empty.js"),
   import("../../src/plugins/runtime.js"),
   import("../../src/logging/subsystem.js"),
+  import("../../src/gateway/server/ws-connection/request-start.js"),
 ]);
 
 const agents = ["main", "work"] as const;
 const sessionsPerAgent = values.adopted ? 5000 : 2500;
 const sessionCount = agents.length * sessionsPerAgent;
-const catalogAgents = values.adopted ? [agents[0]] : agents;
+const catalogAgents = values["empty-catalogs"] ? [] : values.adopted ? [agents[0]] : agents;
 const adoptionPluginId = "synthetic-main";
 const adoptionHostId = "synthetic:main";
 const adoptionsPerAgent = 16;
@@ -286,22 +284,16 @@ for (const agentId of catalogAgents) {
 setActivePluginRegistry(registry);
 setRuntimeConfigSnapshot(cfg, cfg);
 let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+let projectionAcquisitions = 0;
+let selectionPreparations = 0;
 const inspector = new Session();
 let inspectorConnected = false;
 const collections: { kind: number; ms: number }[] = [];
 let measuredStart = Infinity;
 let measuredEnd = Infinity;
-function recordGc(entries: PerformanceEntry[]) {
-  for (const entry of entries) {
-    if (entry.startTime >= measuredStart && entry.startTime < measuredEnd) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-}
-const observer = new PerformanceObserver((list) => recordGc(list.getEntries()));
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, measuredStart, measuredEnd),
+);
 const loop = monitorEventLoopDelay({ resolution: 1 });
 try {
   // Two small sequential transactions; no transcripts or copied databases.
@@ -316,16 +308,21 @@ try {
     );
   }
   projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-  // Finish cold-row hydration before capturing resident order or measuring warm metadata updates.
-  await projection.prepareSelection();
-  await projection.ensureMaterialized();
+  const prepareSelection = projection.prepareSelection;
+  projection.prepareSelection = (...args) => {
+    selectionPreparations++;
+    return prepareSelection(...args);
+  };
   // This fixture supplies only the context fields consumed by sessions.catalog.list.
   const context = bindSessionRowProjection(
     {
       getRuntimeConfig: () => cfg,
       logGateway: createSubsystemLogger("benchmark/catalog"),
     },
-    () => projection,
+    () => {
+      projectionAcquisitions++;
+      return projection;
+    },
   ) as GatewayRequestContext;
   const handler = sessionCatalogHandlers["sessions.catalog.list"]!;
   async function list() {
@@ -365,6 +362,26 @@ try {
     }
     return result;
   }
+  const initialPending = projection.needsSelectionPreparation({ metadataOnly: true });
+  const initialCpu = process.threadCpuUsage();
+  const initialStarted = performance.now();
+  if (values["empty-catalogs"]) {
+    await list();
+  }
+  const initialElapsedMs = performance.now() - initialStarted;
+  const initialUsedCpu = process.threadCpuUsage(initialCpu);
+  const initialList = values["empty-catalogs"]
+    ? {
+        elapsedMs: initialElapsedMs,
+        threadCpuMs: (initialUsedCpu.user + initialUsedCpu.system) / 1000,
+        projectionPending: initialPending,
+        projectionAcquisitions,
+        selectionPreparations,
+      }
+    : undefined;
+  // Keep warm comparisons settled; the empty-catalog initial read above owns its actual wait.
+  await projection.prepareSelection();
+  await projection.ensureMaterialized();
   async function golden() {
     captureGolden = true;
     try {
@@ -378,10 +395,14 @@ try {
   }
   const initialGolden = await golden();
   const warmLatency: number[] = [];
+  const warmCpu: number[] = [];
   for (let index = 0; index < 20; index++) {
+    const cpu = process.threadCpuUsage();
     const started = performance.now();
     await list();
     warmLatency.push(performance.now() - started);
+    const used = process.threadCpuUsage(cpu);
+    warmCpu.push((used.user + used.system) / 1000);
   }
   assert.deepEqual(await golden(), initialGolden);
   global.gc();
@@ -402,8 +423,65 @@ try {
   const revisionsBefore = providerRevisions;
   const adoptedCallsBefore = adoptedCalls;
   const adoptionSourceReadsBefore = adoptionSourceReads;
+  const projectionAcquisitionsBefore = projectionAcquisitions;
+  const selectionPreparationsBefore = selectionPreparations;
   const responseSequence = createHash("sha256");
   const latency: number[] = [];
+  const handlerCpu: number[] = [];
+  const queueLatency: number[] = [];
+  const queueCpu: number[] = [];
+  let queuedStarts = 0;
+  async function admitCatalog() {
+    const held = Promise.withResolvers<void>();
+    const catalogSettled = Promise.withResolvers<void>();
+    const starts: Promise<void>[] = [];
+    let release = Promise.resolve();
+    const enqueue = (
+      request: Parameters<typeof scheduleGatewayRequestStart>[1],
+      connection: string,
+      settled: Promise<void>,
+    ) => {
+      const grant = scheduleGatewayRequestStart(128, request, connection, settled);
+      assert.ok(grant, "Synthetic request exceeded queue capacity");
+      starts.push(grant);
+      queuedStarts++;
+      return grant;
+    };
+    try {
+      for (let index = 0; index < 4; index++) {
+        void enqueue({ method: "models.list" }, `held-${index}`, held.promise);
+      }
+      await Promise.all(starts);
+      void enqueue(
+        { method: "sessions.messages.subscribe", params: { includeApprovals: true } },
+        "catalog-client",
+        Promise.resolve(),
+      );
+      const cpu = process.threadCpuUsage();
+      const started = performance.now();
+      const grant = enqueue(
+        { method: "sessions.catalog.list", params: { agentId: "main" } },
+        "catalog-client",
+        catalogSettled.promise,
+      );
+      release = delay(queueWaitMs).then(() => held.resolve());
+      await grant;
+      queueLatency.push(performance.now() - started);
+      const used = process.threadCpuUsage(cpu);
+      queueCpu.push((used.user + used.system) / 1000);
+      return async () => {
+        catalogSettled.resolve();
+        await release;
+        await Promise.all(starts);
+      };
+    } catch (error) {
+      held.resolve();
+      catalogSettled.resolve();
+      await release;
+      await Promise.allSettled(starts);
+      throw error;
+    }
+  }
   observer.observe({ entryTypes: ["gc"] });
   if (values.allocations) {
     await inspector.post("HeapProfiler.startSampling", {
@@ -415,7 +493,7 @@ try {
   const before = process.memoryUsage();
   const cpu = process.cpuUsage();
   loop.reset();
-  marker("heap-start");
+  writeGatewayGcTraceMarker("heap-start", profilePath);
   measuredStart = performance.now();
   for (let index = 0; index < operations; index++) {
     if (!values.unchanged) {
@@ -426,21 +504,36 @@ try {
         entryFor(agentId, rowIndex, index + 1),
       );
     }
-    await projection.ensureMaterialized();
-    const started = performance.now();
-    const result = await list();
-    latency.push(performance.now() - started);
+    if (!values["empty-catalogs"]) {
+      await projection.ensureMaterialized();
+    }
+    const settleQueue = queueWaitMs ? await admitCatalog() : undefined;
+    let result: Awaited<ReturnType<typeof list>>;
+    try {
+      const handlerCpuBefore = process.threadCpuUsage();
+      const started = performance.now();
+      result = await list();
+      latency.push(performance.now() - started);
+      const handlerCpuUsed = process.threadCpuUsage(handlerCpuBefore);
+      handlerCpu.push((handlerCpuUsed.user + handlerCpuUsed.system) / 1000);
+    } finally {
+      await settleQueue?.();
+    }
+    if (values["empty-catalogs"]) {
+      // Settle the same owner work on both revisions without charging it to an unrelated RPC.
+      await projection.ensureMaterialized();
+    }
     // Preserve every response's byte order; no volatile fields are removed.
     responseSequence.update(JSON.stringify(result)).update("\n");
     await (yieldMs ? delay(yieldMs) : nextTurn());
   }
   measuredEnd = performance.now();
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
   const usedCpu = process.cpuUsage(cpu);
   const after = process.memoryUsage();
   loop.disable();
   await nextTurn();
-  recordGc(observer.takeRecords());
+  recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);
   observer.disconnect();
   const profile = values.allocations
     ? (await inspector.post("HeapProfiler.stopSampling")).profile
@@ -454,11 +547,15 @@ try {
     providerRevisions: providerRevisions - revisionsBefore,
     adoptedCalls: adoptedCalls - adoptedCallsBefore,
     adoptionSourceReads: adoptionSourceReads - adoptionSourceReadsBefore,
+    projectionAcquisitions: projectionAcquisitions - projectionAcquisitionsBefore,
+    selectionPreparations: selectionPreparations - selectionPreparationsBefore,
+    queuedStarts,
   };
   assert.equal(counts.providerCalls, operations * catalogAgents.length);
-  assert.equal(counts.providerRows, operations * sessionCount);
+  assert.equal(counts.providerRows, values["empty-catalogs"] ? 0 : operations * sessionCount);
   assert.equal(counts.providerRevisions, values.unchanged ? 0 : operations * catalogAgents.length);
   assert.equal(counts.adoptedCalls, adoption ? operations : 0);
+  assert.equal(counts.queuedStarts, queueWaitMs ? operations * 6 : 0);
   const finalGolden = await golden();
   if (values.unchanged) {
     assert.deepEqual(finalGolden, initialGolden);
@@ -477,13 +574,16 @@ try {
     scope:
       "in-process real sessions.catalog.list handler with persisted synthetic session rows; no transport or model latency claim",
     workload: values.unchanged ? "unchanged-warm-list" : "metadata-update-and-list",
-    measurementScope:
-      "Handler latency excludes the metadata write and row settling; allocation, GC, CPU and elapsed include the write, settling, response digest and pacing.",
+    measurementScope: values["empty-catalogs"]
+      ? "Handler latency and thread CPU include its projection wait after the metadata write. Remaining row settling follows the handler; allocation, GC, process CPU and elapsed include the write, all settling, response digest and pacing."
+      : "Handler latency and thread CPU exclude the metadata write and row settling; allocation, GC, process CPU and elapsed include the write, settling, response digest and pacing.",
     node: process.version,
     sessionCount,
     agents: agents.length,
     providers: catalogAgents.length,
     adopted: values.adopted,
+    emptyCatalogs: values["empty-catalogs"],
+    queueWaitMs,
     operations,
     yieldMs,
     startAt,
@@ -499,8 +599,13 @@ try {
       omittedFields: [],
     },
     allocation: profile ? allocation(profile) : null,
+    initialList,
     handlerLatency: distribution(latency),
+    handlerThreadCpu: distribution(handlerCpu),
+    queueLatency: distribution(queueLatency),
+    queueThreadCpu: distribution(queueCpu),
     warmUnchangedLatency: distribution(warmLatency),
+    warmUnchangedThreadCpu: distribution(warmCpu),
     elapsedMs: measuredEnd - measuredStart,
     cpuMs: (usedCpu.user + usedCpu.system) / 1000,
     gc: {

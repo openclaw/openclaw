@@ -2,8 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { readSessionEntryCount } from "../config/sessions/session-accessor.sqlite-entry-inventory.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { runSessionStartupMigration } from "../config/sessions/startup-migration-runtime.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
 import type { SqlConnection } from "../infra/sql-connection.js";
@@ -63,7 +66,11 @@ function readBackup(databasePath: string) {
   const directory = path.dirname(databasePath);
   const backups = fs
     .readdirSync(directory)
-    .filter((name) => name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`));
+    .filter(
+      (name) =>
+        name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`) &&
+        name.endsWith(".bak"),
+    );
   expect(backups).toHaveLength(1);
   return new DatabaseSync(path.join(directory, backups[0]!), { readOnly: true });
 }
@@ -149,6 +156,130 @@ function snapshotReplacement(legacy: ReturnType<typeof seedEntry>) {
     .then(() => targetPath);
 }
 
+it("backs up and retires terminal unmatched restart custody only in Doctor", async () => {
+  const custody = {
+    mainRestartRecovery: {
+      cycleId: "old-cycle",
+      revision: 1,
+      chargedAttempts: 3,
+      executionIdentity: { runId: "tombstone-run" },
+      tombstone: { reason: "exhausted" },
+    },
+    restartRecoveryRuns: [{ runId: "different-run", lifecycleGeneration: "old-generation" }],
+    restartRecoveryTerminalRunIds: ["different-terminal-run"],
+    restartRecoveryForceSafeTools: true,
+    activeWriterRunId: "different-writer",
+    lifecycleRunId: "different-lifecycle",
+  };
+  const archived = seedEntry("terminal-unmatched", {
+    ...custody,
+    status: "failed",
+    archivedAt: 1,
+    archiveReason: "restart-recovery",
+    archivedBy: { type: "human", id: "archiver" },
+    pendingFinalDelivery: {
+      kind: "replayable",
+      createdAt: 1,
+      text: "old final",
+      context: { channel: "telegram", to: "synthetic-recipient" },
+    },
+  });
+  const live = seedEntry("live-unmatched", {
+    ...custody,
+    status: "failed",
+    activeWriterRunId: "live-writer",
+  });
+  const nonterminal = seedEntry("nonterminal-unmatched", { ...custody, status: "interrupted" });
+  const notice = {
+    createdAt: 1,
+    context: { channel: "telegram", to: "synthetic-recipient" },
+    intentId: "retained",
+    state: "acknowledged",
+  };
+  const terminal = seedEntry("done-unmatched", {
+    ...custody,
+    status: "done",
+    pendingDeliveryNotice: notice,
+  });
+  const matched = seedEntry("matched", {
+    mainRestartRecovery: {
+      cycleId: "matched-cycle",
+      executionIdentity: { runId: "matched-run" },
+      tombstone: { reason: "exhausted" },
+    },
+    restartRecoveryRuns: [{ runId: "matched-run" }],
+    status: "failed",
+  });
+  const claim = claimAgentRunContext(
+    "live-writer",
+    { sessionKey: live.sessionKey },
+    { trackOwner: true, ownsContext: true },
+  );
+  try {
+    expect(await applyRepair()).toMatchObject({ found: 3, repaired: 3 });
+    expect(live.readRaw()).toBe(live.raw);
+  } finally {
+    releaseAgentRunContext("live-writer", claim);
+  }
+  expect(matched.read()).toMatchObject({
+    status: "interrupted",
+    resumeAfterRestart: { queuedInputIds: [] },
+  });
+  expect(archived.read()).toEqual({
+    sessionId: "session-terminal-unmatched",
+    updatedAt: 42,
+    delivery: { kind: "none" },
+    status: "failed",
+    archivedAt: 1,
+    archiveReason: "restart-recovery",
+    archivedBy: { type: "human", id: "archiver" },
+    activeWriterRunId: "different-writer",
+    lifecycleRunId: "different-lifecycle",
+    lastRunError: expect.stringContaining("unknown outcome"),
+  });
+  expect(terminal.read()).toEqual({
+    sessionId: "session-done-unmatched",
+    updatedAt: 42,
+    delivery: { kind: "none" },
+    status: "done",
+    pendingDeliveryNotice: notice,
+    activeWriterRunId: "different-writer",
+    lifecycleRunId: "different-lifecycle",
+  });
+  expect(nonterminal.readRaw()).toBe(nonterminal.raw);
+  using backup = readBackup(archived.databasePath);
+  expect(archived.readStored(backup)).toBe(archived.raw);
+});
+
+it("aggregates startup guidance for terminal unmatched custody without retiring it", async () => {
+  const fields = {
+    status: "failed",
+    mainRestartRecovery: { cycleId: "old", tombstone: { reason: "exhausted" } },
+    restartRecoveryTerminalRunIds: ["unmatched"],
+  };
+  const first = seedEntry("startup-first", {
+    ...fields,
+    pendingFinalDelivery: true,
+    pendingFinalDeliveryText: "Unsent final",
+  });
+  const second = seedEntry("startup-second", fields);
+  const warnings: string[] = [];
+  await runSessionStartupMigration({
+    cfg: {},
+    env: state.env,
+    log: { info: () => {}, warn: (message) => warnings.push(message) },
+  });
+  expect(warnings).toEqual([expect.stringMatching(/main.*2.*openclaw doctor --fix/)]);
+  expect(first.read()).toEqual({
+    ...fields,
+    sessionId: "session-startup-first",
+    updatedAt: 42,
+    delivery: { kind: "none" },
+    pendingFinalDelivery: { kind: "replayable", text: "Unsent final", createdAt: 42 },
+  });
+  expect(second.readRaw()).toBe(second.raw);
+});
+
 it("closes a captured session inspection reader before removing its private snapshot", async () => {
   const legacy = seedEntry("captured-inspection", { pendingFinalDelivery: true });
   closeOpenClawAgentDatabasesForTest();
@@ -160,18 +291,23 @@ it("closes a captured session inspection reader before removing its private snap
     signal: new AbortController().signal,
     warn: (message) => warnings.push(message),
   })!;
-  let snapshot: ReturnType<typeof snapshotSource.prepareSqliteReadOnlyLocationSync> | undefined;
+  let snapshot:
+    | Awaited<ReturnType<typeof snapshotSource.startSqliteReadOnlyLocationAsync>["result"]>
+    | undefined;
   let reader: DatabaseSync | undefined;
   const openAtCleanup: boolean[] = [];
-  const prepare = snapshotSource.prepareSqliteReadOnlyLocationSync;
-  vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync").mockImplementation((...args) => {
-    snapshot = prepare(...args);
-    const prepared = snapshot;
+  const prepare = snapshotSource.startSqliteReadOnlyLocationAsync;
+  vi.spyOn(snapshotSource, "startSqliteReadOnlyLocationAsync").mockImplementation((...args) => {
+    const preparation = prepare(...args);
     return {
-      ...prepared,
-      cleanup() {
+      ...preparation,
+      result: preparation.result.then((prepared) => {
+        snapshot = prepared;
+        return prepared;
+      }),
+      startClose() {
         openAtCleanup.push(reader?.isOpen ?? true);
-        return prepared.cleanup();
+        return preparation.startClose();
       },
     };
   });
@@ -198,10 +334,10 @@ it("closes a captured session inspection reader before removing its private snap
       await capture.settle();
       expect(capture.receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
       expect(warnings).toEqual([]);
-      expect(fs.readFileSync(legacy.databasePath)).toEqual(originalBytes);
+      expectBytesEqual(fs.readFileSync(legacy.databasePath), originalBytes, "inspected database");
     } finally {
       await scope.close();
-      snapshot?.cleanup();
+      await snapshot?.cleanupAsync();
     }
   });
 });
@@ -532,12 +668,14 @@ it("refuses a database replaced during raw inspection even when its rows are ide
   const legacy = seedEntry("replacement", { pendingFinalDelivery: true });
   const replacementPath = await snapshotReplacement(legacy);
   const scan = entryRepairs.scanDoctorSessionEntryRecords;
-  vi.spyOn(entryRepairs, "scanDoctorSessionEntryRecords").mockImplementationOnce((...args) => {
-    scan(...args);
-    closeOpenClawAgentDatabasesForTest();
-    fs.renameSync(legacy.databasePath, `${legacy.databasePath}.original`);
-    fs.renameSync(replacementPath, legacy.databasePath);
-  });
+  vi.spyOn(entryRepairs, "scanDoctorSessionEntryRecords").mockImplementationOnce(
+    async (...args) => {
+      await scan(...args);
+      closeOpenClawAgentDatabasesForTest();
+      fs.renameSync(legacy.databasePath, `${legacy.databasePath}.original`);
+      fs.renameSync(replacementPath, legacy.databasePath);
+    },
+  );
   await expect(applyRepair()).rejects.toBeInstanceOf(DoctorStateMigrationRefusalError);
   using replacement = new DatabaseSync(legacy.databasePath, { readOnly: true });
   expect(legacy.readStored(replacement)).toBe(legacy.raw);
@@ -591,7 +729,7 @@ it.each(["preparation", "native open"] as const)(
         : /changed during repair admission/,
     );
     expect(replaced).toBe(true);
-    expect(fs.readFileSync(legacy.databasePath)).toEqual(originalBytes);
+    expectBytesEqual(fs.readFileSync(legacy.databasePath), originalBytes, "replacement database");
     if (process.platform !== "win32") {
       expect(fs.statSync(legacy.databasePath).mode & 0o777).toBe(0o644);
     }
@@ -627,7 +765,11 @@ it("stops cold admission when the repair owner retires before native open return
     }),
   ).toThrow("repair owner retired during admission");
   expect(retired).toBe(true);
-  expect(fs.readFileSync(legacy.databasePath)).toEqual(originalBytes);
+  expectBytesEqual(
+    fs.readFileSync(legacy.databasePath),
+    originalBytes,
+    "retired admission database",
+  );
 });
 
 it("reuses inspected raw targets while preserving deferred schema repair", async () => {

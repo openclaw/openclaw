@@ -60,6 +60,7 @@ export type SessionWorkspaceState = {
 // treats its loader as new and requests sessions.diff again.
 export type SessionWorkspaceHost = {
   sessionKey: string;
+  readonly sessionWorkspaceReadDisabledReason?: string | null;
   sessions: SessionCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;

@@ -38,7 +38,7 @@ import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js"
 const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
 
 const nativeQualificationFixtures = vi.hoisted(() => ({
-  first: "packages/markdown-core/src/chunk-text.test.ts",
+  first: "src/utils/string-readers.test.ts",
   second: "src/utils/chunk-items.test.ts",
   helperTest: "src/agents/embedded-agent-runner/run/compaction-timeout.test.ts",
   helper: "src/agents/test-helpers/agent-message-fixtures.ts",
@@ -175,6 +175,68 @@ afterEach(() => {
 });
 
 describe("scripts/ci-run-node-test-shard.mts", () => {
+  it.each([
+    { event: "schedule", runId: "101", observed: true },
+    { event: "pull_request", runId: "100", observed: true },
+    { event: "pull_request", runId: "101", observed: false },
+  ])(
+    "keeps runtime membership with the observation pilot ($event/$runId)",
+    async ({ event, runId, observed }) => {
+      const runChild = vi
+        .fn<NonNullable<RunOptions["runChild"]>>()
+        .mockImplementation(async (_args, env) => {
+          if (env.OPENCLAW_VITEST_OBSERVATION_DIR) {
+            const launch = readList(path.join(env.OPENCLAW_VITEST_OBSERVATION_DIR, "launch.json"));
+            expect(launch).toMatchObject({
+              mode: "shadow",
+              selection: { runtime: env.OPENCLAW_VITEST_RUNTIME },
+              fallbackReasons: expect.arrayContaining(["no-prior-snapshot"]),
+            });
+          }
+          return 1;
+        });
+      const code = await runPlans(
+        groupPlans([
+          {
+            configs: [bunConfig],
+            shard_name: "pilot",
+            includePatterns: [nodeTarget, vitestBunTarget, nativeBunTarget],
+          },
+        ]),
+        {
+          concurrency: 1,
+          runChild,
+          env: {
+            CI: "true",
+            GITHUB_ACTIONS: "true",
+            GITHUB_EVENT_NAME: event,
+            GITHUB_RUN_ID: runId,
+            OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all",
+            OPENCLAW_CI_TEST_OBSERVATIONS_DIR: makeScratchDir(),
+          },
+        },
+      );
+      const calls = runChild.mock.calls;
+      expect(code).toBe(1);
+      expect(calls.map(([, env]) => env.OPENCLAW_VITEST_RUNTIME)).toEqual(["node", "bun", "bun"]);
+      expect(calls[2]?.[0]).toEqual(["--native-bun", `./${nativeBunTarget}`]);
+      expect(calls[2]?.[1].OPENCLAW_VITEST_OBSERVATION_DIR).toBeUndefined();
+      for (const [args, env] of calls.slice(0, 2)) {
+        expect(args.includes("--experimental.recordDependencies")).toBe(observed);
+        expect(Boolean(env.OPENCLAW_VITEST_OBSERVATION_DIR)).toBe(observed);
+        if (observed) {
+          expect(args).toContain("--reporter=verbose");
+          expect(args).toContain("--reporter=github-actions");
+        }
+      }
+      if (observed) {
+        expect(calls[0]?.[1].OPENCLAW_VITEST_OBSERVATION_DIR).not.toBe(
+          calls[1]?.[1].OPENCLAW_VITEST_OBSERVATION_DIR,
+        );
+      }
+    },
+  );
+
   it.each([{ flags: ["--root", "alternate"] }])(
     "preserves the native Gateway invocation for $flags",
     ({ flags }) => {
@@ -527,7 +589,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   it("keeps changed qualification inputs on Vitest without dropping their coverage", () => {
     const cwd = makeScratchDir();
     const { helperTest, helper, setup } = nativeQualificationFixtures;
-    const files = [bunTarget, helperTest, nativeBunTarget];
+    const files = [bunTarget, helperTest, nativeBunTarget].toSorted();
     const copyInput = (file: string) => {
       mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
       writeFileSync(path.join(cwd, file), readFileSync(file));
@@ -543,7 +605,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(resolveCiTestRuntimeSelections(selection, "dual-all", cwd)).toEqual([
       { runtime: "node" },
       { runtime: "bun", includePatterns: [nativeBunTarget] },
-      { runtime: "bun", engine: "bun-test", files: [bunTarget, helperTest] },
+      { runtime: "bun", engine: "bun-test", files: [bunTarget, helperTest].toSorted() },
     ]);
     writeFileSync(path.join(cwd, helper), "// changed fixture helper\n");
     expect(resolveCiTestRuntimeSelections(selection, "dual-all", cwd)).toEqual([

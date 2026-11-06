@@ -1,0 +1,13 @@
+[Unit]
+Description=Hourly OpenClaw Team health and update freshness check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Slice=system.slice
+ExecStart=/usr/bin/python3 -I /usr/local/lib/openclaw-team/disk-maintenance-launcher.py
+TimeoutStartSec=2min
+TimeoutStopSec=90s
+KillMode=control-group
+Nice=10

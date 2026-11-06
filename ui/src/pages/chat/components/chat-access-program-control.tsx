@@ -1,6 +1,6 @@
 import { createMemo, For, Show } from "solid-js";
 import type { CyberAccessProgram } from "../../../api/types.ts";
-import { DETAILS_SECTION_MOTION } from "../../../components/details-section-motion.ts";
+import { DETAILS_SECTION_MOTION } from "../../../components/details-section-motion-options.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { SettingsToggle } from "../../../components/solid/settings-ui.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -52,6 +52,7 @@ export function ChatAccessProgramControl(props: ChatAccessProgramControlProps) {
         <div class="chat-controls__access-head">
           <span class="chat-controls__effort-heading">{t("chat.modelControls.daybreak")}</span>
           <SettingsToggle
+            size="sm"
             ariaLabel={t("chat.modelControls.daybreak")}
             checked={enabled()}
             disabled={disabled()}

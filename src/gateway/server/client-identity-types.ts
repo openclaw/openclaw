@@ -15,6 +15,7 @@ export type GatewayAuthenticatedUserProfile = {
 
 export type RemoteIngressPrincipalSnapshot = Readonly<{
   bindingId: string;
+  recoverySource?: Readonly<{ pluginId: string; audienceId: string; recoveryId: string }>;
   authenticatedUserProfile: GatewayAuthenticatedUserProfile;
   preparedSessionProfile: UserProfileIdentity;
   operatorRoleActor: GatewayOperatorRoleActor;
@@ -44,4 +45,6 @@ export type GatewayWsBrowserOrigin = {
   origin?: string;
   isLocalClient?: boolean;
   remoteControlUiIngress?: RemoteControlUiIngressContext;
+  /** The connection was relayed by the OpenClaw ID tunnel (attested by the private ingress listener). */
+  openclawIdTunnel?: boolean;
 };

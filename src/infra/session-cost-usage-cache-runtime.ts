@@ -251,7 +251,7 @@ async function loadAggregateCostUsageSummary(
  * transcript are refreshed by the refresh owner, then the report runs once more. A
  * refresh that outlasts the wait leaves the second answer partial; it is not retried.
  */
-async function runUsageReportAfterRefresh<
+export async function runUsageReportAfterRefresh<
   T extends { staleSessionFiles: string[]; invalidRows: SessionCostUsageRollupRow[] },
 >(
   prepared: PreparedUsageCostWorker,
@@ -322,7 +322,7 @@ function loadSessionCostResultFromCache(params: SessionCostReadParams) {
   return loadCapturedSessionCostSummariesFromCache(params, prepared);
 }
 
-async function loadCapturedSessionCostSummariesFromCache(
+export async function loadCapturedSessionCostSummariesFromCache(
   params: SessionCostReadParams,
   prepared: PreparedUsageCostWorker,
 ): Promise<Extract<UsageCostWorkerResult, { kind: "sessions" }>> {

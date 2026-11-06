@@ -1,15 +1,18 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as privateWorkspaceRemoval from "../../infra/fs-safe-remove.js";
-import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
+import {
+  createNpmTarget,
+  writePackageRoot,
+} from "../../infra/package-update-steps.test-support.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { resolveGlobalInstallTarget } from "../../infra/update-global.js";
+import { packToArchive } from "../../plugins/test-helpers/archive-fixtures.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
@@ -130,11 +133,10 @@ it.each([
     );
     await fs.chmod(path.join(source, "dist", "index.js"), 0o755);
     await writePackageDistInventory(source);
-    const archive = path.join(base, "candidate.tgz");
-    execFileSync("tar", ["-czf", archive, "-C", base, "package"], {
-      env: { ...process.env, COPYFILE_DISABLE: "1" },
-    });
-    const artifactSpec = action === "directory" ? `file:${source}` : archive;
+    const artifactSpec =
+      action === "directory"
+        ? `file:${source}`
+        : await packToArchive({ pkgDir: source, outDir: base, outName: "candidate.tgz" });
     const params = {
       root,
       installKind: "package" as const,
@@ -392,6 +394,7 @@ it("preserves an artifact refusal when private workspace cleanup also fails", as
         json: true,
         stageParams: () => ({
           root,
+          installTarget: { ...createNpmTarget(path.dirname(root)), packageRoot: root },
           installKind: "package",
           tag: "file:/fixture/candidate.tgz",
           timeoutMs: 1000,

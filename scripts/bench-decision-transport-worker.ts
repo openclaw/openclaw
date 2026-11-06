@@ -7,8 +7,9 @@ import plugin from "../extensions/typesafe/index.js";
 import manifest from "../extensions/typesafe/openclaw.plugin.json" with { type: "json" };
 import { closeProviderTransportDispatcherPool } from "../src/agents/provider-transport-dispatcher-pool.js";
 import type { DecisionProviderContextV2 } from "../src/decisions/provider-context.js";
+import type { ProviderDecisionOutcomeV2 } from "../src/decisions/provider-outcomes.js";
 import type { DecisionProviderV2 } from "../src/decisions/provider-types.js";
-import type { DecisionBatchV2, ProviderDecisionOutcomeV2 } from "../src/decisions/types-v2.js";
+import type { DecisionBatchV2 } from "../src/decisions/types-v2.js";
 import type { OpenClawPluginApi } from "../src/plugins/types.js";
 import { parseBenchmarkInteger, runBenchmarkEntrypoint } from "./lib/benchmark-harness.mts";
 

@@ -25,7 +25,11 @@ import { createRuntimeProcessEntrypoints } from "../../src/infra/runtime-process
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
-import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
+import {
+  copyPrRoutingWrapperSources,
+  copyPrWrapperSources,
+  linkPrWrapperDependencies,
+} from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const itPosix = process.platform === "win32" ? it.skip : it;
@@ -260,7 +264,7 @@ itPosix("refuses an env-only legacy handoff before running its materializer", ()
   const marker = join(root, "caller-materializer-ran");
   mkdirSync(canonical);
   git(root, "init", canonical);
-  copyPrWrapperSources(anchor);
+  copyPrRoutingWrapperSources(anchor);
   writeFileSync(
     join(anchor, "scripts/pr-lib/materialize-dependencies.mjs"),
     `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "ran");`,
@@ -282,7 +286,13 @@ itPosix.each(["empty", "legacy", "outdated"])(
     const anchor = mkdtempSync(join(root, `${ANCHOR_PREFIX}${process.pid}.`));
     mkdirSync(canonical);
     git(root, "init", canonical);
-    copyPrWrapperSources(anchor);
+    copyPrRoutingWrapperSources(anchor);
+    writeFixture(anchor, {
+      "packages/markdown-core/package.json": readFileSync(
+        "packages/markdown-core/package.json",
+        "utf8",
+      ),
+    });
     linkPrWrapperDependencies(canonical);
     const legacyPins = new Map<string, string>();
     if (dependencies === "legacy") {
@@ -322,18 +332,7 @@ itPosix.each(["empty", "legacy", "outdated"])(
               OPENCLAW_PR_ANCHOR_CREATOR_PID: String(process.pid),
               OPENCLAW_PR_ANCHOR_FD: "9",
             },
-            stdio: [
-              "ignore",
-              "pipe",
-              "pipe",
-              "ignore",
-              "ignore",
-              "ignore",
-              "ignore",
-              "ignore",
-              "ignore",
-              descriptor,
-            ],
+            stdio: ["ignore", "pipe", "pipe", ...Array<"ignore">(6).fill("ignore"), descriptor],
           },
         );
       const result = materialize();
@@ -406,7 +405,7 @@ itPosix.each([
     git(canonical, "add", ".");
     git(canonical, "commit", "-m", "test: pre-helper anchor");
     const selected = git(canonical, "rev-parse", "HEAD");
-    copyPrWrapperSources(canonical);
+    copyPrRoutingWrapperSources(canonical);
     if (!bootstrap) {
       rmSync(join(canonical, "scripts/pr-lib/cache-lifetime.mjs"));
     }
@@ -590,7 +589,12 @@ const sessionMemoryOwners: string[] = [
   "src/config/sessions/session-actor-storage-acquisition.ts",
 ];
 
-it.each<[name: string, entrypoints: string[], deferredOwners: string[], dynamic?: boolean]>([
+const deferredOwnerCases: Array<[string, string[], string[], boolean?]> = [
+  [
+    "operator role policy",
+    ["src/gateway/operator-role-policy.ts"],
+    ["packages/gateway-protocol/src/protocol-validator.ts"],
+  ],
   [
     "native session worker transactions",
     [
@@ -650,8 +654,8 @@ it.each<[name: string, entrypoints: string[], deferredOwners: string[], dynamic?
     ["src/infra/state-migrations.cron-run-logs.ts", "src/cron/run-history-detail.ts"],
   ],
   [
-    "shared-state read command handlers",
-    ["src/state/openclaw-state-read-handlers.ts"],
+    "state and session readiness",
+    ["src/state/openclaw-state-read-handlers.ts", "src/config/sessions/startup-migration.ts"],
     ["src/state/openclaw-agent-db.ts"],
   ],
   [
@@ -708,9 +712,16 @@ it.each<[name: string, entrypoints: string[], deferredOwners: string[], dynamic?
       "src/plugins/provider-replay-helpers.ts",
     ],
   ],
-])("keeps %s independent of deferred owners", (_name, entrypoints, deferredOwners, dynamic) => {
-  const closure = collectRuntimeImportClosure(process.cwd(), entrypoints, {
-    includeDynamicImports: dynamic ?? false,
-  });
-  expect(closure.filter((file) => deferredOwners.includes(file))).toEqual([]);
+];
+
+it.each([false, true])("keeps deferred owners out of runtime closures (dynamic=%s)", (dynamic) => {
+  const cases = deferredOwnerCases.filter((row) => (row[3] ?? false) === dynamic);
+  const roots = cases.flatMap(([, entrypoints]) => entrypoints);
+  using graph = createRuntimeImportGraph(process.cwd(), roots, { includeDynamicImports: dynamic });
+  for (const [name, entrypoints, deferredOwners] of cases) {
+    expect(
+      graph.collect(entrypoints).filter((file) => deferredOwners.includes(file)),
+      name,
+    ).toEqual([]);
+  }
 });

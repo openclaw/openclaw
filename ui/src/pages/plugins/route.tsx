@@ -11,6 +11,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { loadPluginCatalog } from "../../lib/plugins/index.ts";
 import {
   canonicalPluginsRouteLocation,
+  pluginSettingsNeedsSchema,
   pluginsRouteLocation,
   type PluginsRouteData,
 } from "./route-data.ts";
@@ -52,17 +53,29 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       if (surface === "settings") {
         const configLoad = context.runtimeConfig.ensureLoaded();
         void configLoad
-          .then(() => context.runtimeConfig.ensureSchemaLoaded())
+          .then(() =>
+            pluginSettingsNeedsSchema(surface, location, context.basePath)
+              ? context.runtimeConfig.ensureSchemaLoaded()
+              : undefined,
+          )
           .catch(() => undefined);
       }
       return loadPluginsRouteData(context, options);
     },
-    component: () =>
-      import("./plugins-page.tsx").then((module) => ({
+    component: async () => {
+      const { PluginsPage } = await import("./plugins-page.tsx");
+      if (surface === "settings") {
+        // Let module evaluation finish its task before replacing the previous page.
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+      }
+      return {
         renderSolid: (props: SolidRouteProps<PluginsRouteData>) => (
-          <module.PluginsPage routeData={props.data} surface={surface} />
+          <PluginsPage routeData={props.data} surface={surface} />
         ),
-      })),
+      };
+    },
   });
 }
 

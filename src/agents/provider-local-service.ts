@@ -16,6 +16,7 @@ import {
   type GuardedFetchResult,
 } from "../infra/net/fetch-guard.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -617,7 +618,7 @@ function installExitHandler() {
     return;
   }
   exitHandlerInstalled = true;
-  process.once("exit", () => {
+  registerProcessExitCleanup(() => {
     for (const [key, managed] of services) {
       forceStopManagedService(key, managed);
     }

@@ -33,6 +33,12 @@ stdout (`ok: false`, `error.type: "cli_error"`) and exit with status 1. Without
 Malformed request timeouts, invalid tab indexes, and Gateway request rejections
 also use this JSON failure envelope, including navigation, resize, and cookie requests.
 
+Ctrl-C or SIGTERM cancels pending reads such as status, tabs, and plain snapshots
+without printing late results. Already-accepted actions, `errors --clear`,
+`requests --clear`, and `snapshot --labels` still wait for their receipt.
+This includes the status readback for `start` and `stop`. Interrupted `doctor`
+reads do not report the browser as unhealthy.
+
 The CLI reserves 10 additional seconds beyond the request timeout for node and
 Gateway transport, allowing browser timeout diagnostics to reach the caller.
 
@@ -296,6 +302,10 @@ openclaw browser snapshot
 openclaw browser snapshot --urls
 ```
 
+Page-text extraction through the browser API counts its character budget in UTF-16
+code units. If a limit falls inside a surrogate pair, extraction omits the whole
+pair rather than returning a broken character; the result remains truncated.
+
 Screenshot:
 
 ```bash
@@ -353,9 +363,16 @@ Managed Chrome profiles save ordinary click-triggered downloads into the OpenCla
 
 For remote browser nodes, OpenClaw stages private copies and normalizes filenames for portability, including Windows device names and trailing dots or spaces. File bytes remain unchanged.
 
+File-chooser uploads measure their completion timeout using elapsed time.
+Adjusting the Gateway host's wall clock does not shorten or extend that budget;
+the existing timeout and cancellation still apply.
+
 Explicit download paths and `trace stop --out` preserve filename whitespace where the filesystem supports it. Quote these paths, for example `openclaw browser download <ref> " report.pdf "`. Output paths must stay inside their managed download or trace directory.
 
 If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.
+
+If a page closes before its next download starts, the pending download wait rejects
+immediately. Accepted downloads keep their existing save and cancellation behavior.
 
 When an action opens a modal dialog, text output reports the block and pending dialog IDs. The JSON response returns `blockedByDialog` with `browserState.dialogs.pending`. Pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 

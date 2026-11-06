@@ -25,6 +25,7 @@ export type ServiceChildRelayParams = ProcessAdapterConstruction & {
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";
   input?: string;
   prepareInput?: () => void | Promise<void>;
+  prepareTargetSpawn?: () => void | Promise<void>;
   secretInput?: SpawnSecretInput;
   stderrDestination?: Writable;
   stdoutConsumption?: "awaited";
@@ -49,6 +50,19 @@ export type ServiceChildRelayAdapter = SpawnProcessAdapter<NodeJS.Signals | null
   openStartGate?: () => Promise<void>;
   closeStartGate?: () => void;
 } & Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
+
+/** Transport and target launches share the caller's current synchronous policy. */
+export function assertServiceChildSpawn(
+  params: ServiceChildRelayParams,
+  onAbort?: () => void,
+): void {
+  if (params.abortSignal?.aborted) {
+    onAbort?.();
+    throw new Error("service child construction aborted");
+  }
+  params.assertCurrent?.();
+  params.beforeSpawn?.();
+}
 
 /** Prepare transport facts; the host revalidates authority immediately before spawning. */
 export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
@@ -115,7 +129,6 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
           ? { parentLineageFds: [lineageFd!, ...parentLineageFds] }
           : { lineageFd, parentLineageFds },
       spawn: {
-        ...(params.ownedWorker ? { gatewayWorker: true as const } : {}),
         workerUrl: useLinuxSubreaper
           ? new URL(nativeProcessOwner!)
           : resolveRuntimeProcessEntrypointUrl(
@@ -149,7 +162,9 @@ export function createServiceChildStart(
   acknowledgeClosing: boolean,
 ): ServiceChildStart {
   return {
-    type: params.initiateSpawn ? "prepare" : "start",
+    type: params.initiateSpawn || params.prepareTargetSpawn ? "prepare" : "start",
+    executionIntent: params.executionIntent,
+    executionScopeKey: params.executionScopeKey,
     generation,
     command: params.command,
     args: params.args,

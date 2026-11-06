@@ -149,7 +149,6 @@ async function copySkillTree(
     return;
   }
   const stat = await fsp.lstat(source);
-  assertCurrent?.();
   const relativePath = path.relative(target.rootDir, destination);
   let destinationStat: fs.Stats | undefined;
   if (reconcile) {
@@ -160,7 +159,6 @@ async function copySkillTree(
         throw error;
       }
     }
-    assertCurrent?.();
   }
   if (
     stat.isFile() &&
@@ -173,7 +171,6 @@ async function copySkillTree(
       sha256File(source, { maxBytes: stat.size }),
       sha256File(destination, { maxBytes: destinationStat.size }),
     ]);
-    assertCurrent?.();
     if (sourceContent.digest === destinationContent.digest) {
       return;
     }
@@ -184,18 +181,16 @@ async function copySkillTree(
   }
   if (stat.isDirectory()) {
     if (!destinationStat) {
+      assertCurrent?.();
       await fsp.mkdir(destination, { mode: stat.mode | 0o700 });
     }
-    assertCurrent?.();
     await ensureWritableSkillDirectories(target, relativePath, assertCurrent, stat.mode);
     const children = await fsp.readdir(source);
-    assertCurrent?.();
     if (destinationStat) {
       const expected = new Set(
         children.filter((name) => shouldSyncSkillPath(path.join(source, name))),
       );
       const existing = await fsp.readdir(destination);
-      assertCurrent?.();
       for (const name of existing) {
         if (!expected.has(name)) {
           await removeSyncedSkillPath(target, path.join(relativePath, name), assertCurrent);
@@ -213,7 +208,6 @@ async function copySkillTree(
     }
   } else if (stat.isSymbolicLink()) {
     const link = await fsp.readlink(source);
-    assertCurrent?.();
     const targetStat =
       process.platform === "win32" ? await fsp.stat(source).catch(() => undefined) : undefined;
     assertCurrent?.();
@@ -223,13 +217,13 @@ async function copySkillTree(
       targetStat?.isDirectory() ? "dir" : "file",
     );
   } else {
-    await target.copyIn(`.${path.sep}${path.relative(target.rootDir, destination)}`, source, {
+    // The pinned root revalidates custody after its awaits, at each mutation.
+    await target.copyIn(`.${path.sep}${relativePath}`, source, {
       preserveSourceMode: true,
       sourceHardlinks: "allow",
       durable: false,
     });
   }
-  assertCurrent?.();
 }
 
 export async function syncWorkspaceSkills(params: {
@@ -304,16 +298,14 @@ export async function syncWorkspaceSkills(params: {
     const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));
     assertCurrent?.();
     phases.mark("attempt.setup.sandbox.layout.skills_sync.reuse");
-    const sourceVersion = getSkillsResourceVersion(sourceWorkspace);
-    const skillsVersion = getSkillsSnapshotVersion(sourceWorkspace);
     const expectedManifestKey =
-      skillsSnapshot?.version === skillsVersion
+      skillsSnapshot?.version === getSkillsSnapshotVersion(sourceWorkspace)
         ? resolveSyncedSkillsManifestKey({
             entryKeys: skillsSnapshot.skills
               .map((skill) => resolveSyncedSkillIdentity(skill.skillKey ?? skill.name, skill.name))
               .toSorted(),
             skillRootsFingerprint,
-            skillsVersion,
+            skillsVersion: skillsSnapshot.version,
           })
         : undefined;
     const cachedUsage = syncedSkillsUsageCache.get(targetSkillsDir);
@@ -322,7 +314,7 @@ export async function syncWorkspaceSkills(params: {
       expectedManifestKey &&
       manifestKey === expectedManifestKey &&
       cachedUsage?.manifestKey === manifestKey &&
-      cachedUsage.sourceVersion === sourceVersion
+      cachedUsage.sourceVersion === getSkillsResourceVersion(sourceWorkspace)
     ) {
       return cachedUsage.skillUsagePaths.map((entry) => ({ ...entry }));
     }
@@ -345,6 +337,8 @@ export async function syncWorkspaceSkills(params: {
       executionWorkspaceFileHost,
     });
     assertCurrent?.();
+    const sourceVersion = getSkillsResourceVersion(sourceWorkspace);
+    const skillsVersion = getSkillsSnapshotVersion(sourceWorkspace);
     if (skillsSnapshot?.librarySelections?.length) {
       const selectedNames = new Set(skillsSnapshot.skills.map((skill) => skill.name));
       phases.mark("attempt.setup.sandbox.layout.skills_sync.library_selection");
@@ -420,19 +414,17 @@ export async function syncWorkspaceSkills(params: {
           : [];
       }),
     );
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.target_scan");
+    const children = new Set(await fsp.readdir(targetSkillsDir));
+    assertCurrent?.();
+    // A restart loses usage records, not copied bytes. Reconcile existing trees
+    // against current content before reuse, independently of the process version.
     const incrementalDestinations = new Set(
       plans.flatMap((plan) => {
         const destination = plan.destinationPath ? path.basename(plan.destinationPath) : null;
-        return destination &&
-          previousUsage?.destinations.get(plan.identity) === destination &&
-          !plan.pin
-          ? [destination]
-          : [];
+        return destination && children.has(destination) && !plan.pin ? [destination] : [];
       }),
     );
-    phases.mark("attempt.setup.sandbox.layout.skills_sync.target_scan");
-    const children = await fsp.readdir(targetSkillsDir);
-    assertCurrent?.();
     phases.mark("attempt.setup.sandbox.layout.skills_sync.remove_stale");
     for (const child of children) {
       if (
@@ -485,6 +477,9 @@ export async function syncWorkspaceSkills(params: {
           assertCurrent?.();
           if (entry.skill.source === "openclaw-library") {
             throw error;
+          }
+          if (incrementalDestinations.has(path.basename(destinationPath))) {
+            await removeSyncedSkillPath(target, path.basename(destinationPath), assertCurrent);
           }
           copyFailed = true;
           const message = error instanceof Error ? error.message : JSON.stringify(error);

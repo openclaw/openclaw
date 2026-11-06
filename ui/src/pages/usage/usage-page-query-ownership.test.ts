@@ -19,7 +19,80 @@ import {
 afterEach(cleanupUsagePageTest);
 
 describe("Usage query failure ownership", () => {
-  it("retains hidden charts and model options while a text query settles", async () => {
+  it.each(["sort", "page"] as const)(
+    "retains the selected analytics without rebuilding while a %s request settles",
+    async (change) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-08-07T12:00:00Z"));
+      focusDocument();
+      const snapshot = cacheSnapshot("fresh");
+      const date = "2026-08-07";
+      const original = {
+        ...snapshot.result,
+        sessions: Array.from({ length: 60 }, (_, index) => ({
+          key: `agent:main:retained-${index}`,
+          label: `Retained session ${index}`,
+          updatedAt: Date.now() - index * 1000,
+          usage: {
+            ...snapshot.result.totals,
+            activityDates: [date],
+            dailyBreakdown: [{ ...snapshot.result.totals, date, tokens: 100, cost: 1 }],
+          },
+        })),
+      };
+      const reply = deferred<typeof original>();
+      let pending = false;
+      const request = vi.fn(async (method: string) =>
+        method === "sessions.usage"
+          ? pending
+            ? reply.promise
+            : structuredClone(original)
+          : { updatedAt: Date.now(), providers: [] },
+      );
+      // SAFETY: The fixture exercises only the mocked request method.
+      const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+      await preloadUsage(page);
+      page.read().callbacks.filters.onSelectDay(date, false, [date]);
+      await vi.advanceTimersByTimeAsync(0);
+      await page.updateComplete;
+      const analytics = page.querySelector(".usage-overview-card")!;
+      expect(analytics).not.toBeNull();
+      const before = analytics.textContent;
+      let retiredAnalytics = 0;
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const removed of record.removedNodes) {
+            if (removed === analytics || removed.contains(analytics)) {
+              retiredAnalytics++;
+            }
+          }
+        }
+      });
+      observer.observe(page.element, { childList: true, subtree: true });
+      pending = true;
+      if (change === "sort") {
+        page.read().callbacks.display.onChange({ sessionSort: "recent" });
+      } else {
+        page.read().callbacks.display.onPageChange(50);
+      }
+      await page.updateComplete;
+      expect(page.usageLoading).toBe(true);
+      expect(page.read().data.totals).toBeNull();
+      expect(page.read().filters.selectedDays).toEqual([date]);
+      expect(page.querySelector(".usage-overview-card")).toBe(analytics);
+      expect(analytics.textContent).toBe(before);
+      reply.resolve(structuredClone(original));
+      await vi.advanceTimersByTimeAsync(0);
+      await page.updateComplete;
+      observer.disconnect();
+      expect(retiredAnalytics).toBe(0);
+      expect(page.querySelector(".usage-overview-card")).toBe(analytics);
+      expect(analytics.textContent).toBe(before);
+      expect(page.read().data.sessions).toHaveLength(change === "page" ? 10 : 50);
+    },
+  );
+
+  it("retains hidden analytics and model options while a text query settles", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-07T12:00:00Z"));
     focusDocument();
@@ -64,7 +137,26 @@ describe("Usage query failure ownership", () => {
     const cells = [...heatmap.querySelectorAll(".usage-heatmap__cell")];
     expect(cells.length).toBeGreaterThan(62);
     expect(cells.at(-1)?.getAttribute("aria-label")).toContain("200");
-    expect(page.querySelector(".cost-breakdown-compact")).not.toBeNull();
+    const breakdown = page.querySelector(".cost-breakdown-compact")!;
+    expect(breakdown).not.toBeNull();
+    const overviewCard = page.querySelector(".usage-overview-card")!;
+    const overviewHost = overviewCard.closest(".settings-section")!.parentElement!;
+    const grid = page.querySelector(".usage-grid")!;
+    const gridHost = grid.parentElement!;
+    const alphaRow = page.querySelector(
+      '.session-bar-selection[aria-label="synthetic-alpha session"]',
+    )!;
+    const expectAnalyticsHidden = (hidden: boolean) => {
+      expect(page.querySelector(".cost-breakdown-compact")).toBe(breakdown);
+      expect(page.querySelector(".usage-overview-card")).toBe(overviewCard);
+      expect(page.querySelector(".usage-grid")).toBe(grid);
+      for (const host of [overviewHost, gridHost]) {
+        expect(host.isConnected).toBe(true);
+        expect(host.hidden).toBe(hidden);
+        expect(host.hasAttribute("inert")).toBe(hidden);
+        expect(host.style.display).toBe(hidden ? "none" : "contents");
+      }
+    };
     const trigger = page.querySelector<HTMLButtonElement>('[id="usage-filter-model:trigger"]')!;
     const menu = trigger.closest<HTMLElement>(".usage-filter-select")!;
     menu.addEventListener(
@@ -93,7 +185,6 @@ describe("Usage query failure ownership", () => {
     expect(page.usageLoading).toBe(true);
     expect(page.read().data.totals).toBeNull();
     expect(page.read().data.overview).toBeUndefined();
-    expect(page.textContent).not.toContain("synthetic-alpha session");
     expect(trend.isConnected).toBe(true);
     expect(trend.hidden).toBe(true);
     expect(trend.hasAttribute("inert")).toBe(true);
@@ -104,9 +195,8 @@ describe("Usage query failure ownership", () => {
     expect(heatmapHost.hidden).toBe(true);
     expect(heatmapHost.hasAttribute("inert")).toBe(true);
     expect(heatmapHost.style.display).toBe("none");
-    expect(page.querySelector(".cost-breakdown-compact")).toBeNull();
-    expect(page.querySelector(".usage-overview-card")).toBeNull();
-    expect(page.querySelector(".usage-grid")).toBeNull();
+    expectAnalyticsHidden(true);
+    expect(alphaRow.isConnected).toBe(true);
     expect(menu.querySelectorAll(".usage-filter-option")[0]).toBe(options[0]);
     expect(menu.querySelectorAll(".usage-filter-option")[1]).toBe(options[1]);
     expect(options[0]!.getAttribute("aria-checked")).toBe("true");
@@ -128,7 +218,10 @@ describe("Usage query failure ownership", () => {
     const currentCells = [...heatmap.querySelectorAll(".usage-heatmap__cell")];
     currentCells.forEach((cell, index) => expect(cell).toBe(cells[index]));
     expect(currentCells.at(-1)?.getAttribute("aria-label")).toContain("100");
-    expect(page.querySelector(".cost-breakdown-compact")).not.toBeNull();
+    expectAnalyticsHidden(false);
+    expect(page.querySelector('.session-bar-selection[aria-label="synthetic-alpha session"]')).toBe(
+      alphaRow,
+    );
 
     reply = deferred<typeof original>();
     page.read().callbacks.filters.onQueryDraftChange("model:synthetic-beta");
@@ -140,7 +233,7 @@ describe("Usage query failure ownership", () => {
     expect(page.textContent).toContain("Synthetic filter failed");
     expect(trend.hidden).toBe(true);
     expect(heatmapHost.hidden).toBe(true);
-    expect(page.querySelector(".usage-grid")).toBeNull();
+    expectAnalyticsHidden(true);
     expect(menu.querySelectorAll(".usage-filter-option")[0]).toBe(options[0]);
     expect(menu.querySelectorAll(".usage-filter-option")[1]).toBe(options[1]);
   });
