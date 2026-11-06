@@ -78,34 +78,43 @@ describe("audio preflight attachment handoff", () => {
     expect(ctx.commandText).toBeUndefined();
   });
 
-  it("forwards the selected workspace through preflight to the provider request", async () => {
-    await withTestDir({ prefix: "openclaw-audio-preflight-workspace-" }, async (dir) => {
-      const media = await audioFiles(dir, ["voice.wav"]);
-      const providers: Record<string, MediaUnderstandingProvider> = {
-        fixture: {
-          id: "fixture",
-          capabilities: ["audio"],
-          defaultModels: { audio: "fixture-audio" },
-          transcribeAudioWithContext: async (request) => {
-            expect(request.workspaceDir).toBe("/workspaces/support");
-            return { ok: true, value: { text: "The meeting starts at nine." } };
+  it.each(["audio/wav", "unknown"])(
+    "forwards the selected workspace and transcribes a voice note with %s MIME",
+    async (contentType) => {
+      await withTestDir({ prefix: "openclaw-audio-preflight-workspace-" }, async (dir) => {
+        const media = (await audioFiles(dir, ["voice.wav"])).map((fact) => ({
+          ...fact,
+          contentType,
+        }));
+        const providers: Record<string, MediaUnderstandingProvider> = {
+          fixture: {
+            id: "fixture",
+            capabilities: ["audio"],
+            defaultModels: { audio: "fixture-audio" },
+            transcribeAudioWithContext: async (request) => {
+              expect(request.workspaceDir).toBe("/workspaces/support");
+              return { ok: true, value: { text: "The meeting starts at nine." } };
+            },
           },
-        },
-      };
-      const cfg: OpenClawConfig = { plugins: { enabled: false }, tools: { media: { audio: {} } } };
-      const ctx: MsgContext = { Body: "<media:audio>", media };
+        };
+        const cfg: OpenClawConfig = {
+          plugins: { enabled: false },
+          tools: { media: { audio: {} } },
+        };
+        const ctx: MsgContext = { Body: "<media:audio>", media };
 
-      const transcript = await transcribeFirstAudio({
-        ctx,
-        cfg,
-        agentDir: "/state/agents/support/agent",
-        workspaceDir: "/workspaces/support",
-        providers,
-        activeModel: { provider: "fixture", model: "chat-model" },
+        const transcript = await transcribeFirstAudio({
+          ctx,
+          cfg,
+          agentDir: "/state/agents/support/agent",
+          workspaceDir: "/workspaces/support",
+          providers,
+          activeModel: { provider: "fixture", model: "chat-model" },
+        });
+        expect(transcript).toBe("The meeting starts at nine.");
       });
-      expect(transcript).toBe("The meeting starts at nine.");
-    });
-  });
+    },
+  );
 
   it.each<[string, AudioConfig["attachments"], boolean, string]>([
     ["default selection", undefined, false, "Body"],
