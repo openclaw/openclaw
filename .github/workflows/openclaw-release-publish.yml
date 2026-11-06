@@ -82,7 +82,7 @@ on:
         required: false
         type: string
       publish_openclaw_npm:
-        description: Publish the OpenClaw npm package under npm_dist_tag after plugin npm succeeds; ClawHub may still run
+        description: Publish OpenClaw under npm_dist_tag after plugins publish or record exact OIDC-auth deferrals; ClawHub may still run
         required: true
         default: true
         type: boolean
@@ -1755,7 +1755,7 @@ jobs:
               echo "- ClawHub: dispatched in parallel"
             fi
             if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-              echo "- OpenClaw npm publish: starts after plugin npm succeeds"
+              echo "- OpenClaw npm publish: starts after plugins publish, already exist, or record exact OIDC-auth deferrals"
             else
               echo "- OpenClaw npm publish: skipped by input"
             fi

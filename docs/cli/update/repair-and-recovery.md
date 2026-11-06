@@ -1153,12 +1153,19 @@ for other SQLite maintenance commands to finish. Stop database readers too,
 including watchers that repeatedly run `openclaw sessions --all-agents --json`,
 and keep them stopped until cleanup exits. Cleanup tolerates timestamp changes
 from read-only WAL/SHM bookkeeping, but still rejects replaced files, size changes,
-and changed database, WAL, or rollback-journal contents. A changed device number
-requires independent content evidence as well as the recorded inode. Cleanup can
-re-verify a closed destination against a producer-verified full original or an
-earlier verified destination fingerprint. A successful check restamps the device
-and records an optional `databaseIdentity.sha256` fingerprint in the existing
-manifest. Older manifests remain readable. Scoped backups and destinations with
+and changed database, WAL, or rollback-journal contents. A reboot can give the
+same volume a new device number. When the recorded device differs, cleanup accepts
+the original stored beside the destination, or its interrupted `.cleanup-*` claim,
+as proof of a remount: it must be on the destination's current device with its
+recorded inode, modification time, and size, and the destination must keep its
+recorded inode. Cleanup then restamps the device in the existing manifest without
+recording a new fingerprint, so destinations written since the migration still
+qualify. A destination with a different inode always keeps its originals. Without
+remount proof, for example when the original is on another device, cleanup needs
+independent content evidence: it can re-verify a closed destination against a
+producer-verified full original or an earlier verified destination fingerprint.
+That check restamps the device and records an optional `databaseIdentity.sha256`
+fingerprint. Older manifests remain readable. Scoped backups and destinations with
 data-bearing WAL or rollback journals cannot supply this full-image proof.
 If the contents differ or proof is unavailable, cleanup retains the originals
 with `destination-verification-failed` and names the device change. Run

@@ -6,6 +6,7 @@ import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
 } from "./lib/ci-ios-smoke-plan.mjs";
+import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -1805,6 +1806,9 @@ const manifest = {
   ),
   run_native_i18n: runNativeI18n,
   run_skills_python_job: runSkillsPython,
+  skills_python_targets_json: resolveSkillsPythonTargets(changedPaths, {
+    full: !ordinaryPullRequest || frozenTarget,
+  }),
   run_checks_windows: runWindows,
   // Current targets balance the complete Windows inventory by measured
   // file cost; historical targets retain their original package commands.
