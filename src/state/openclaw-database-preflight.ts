@@ -339,6 +339,7 @@ export async function preflightOpenClawDatabaseSchemas(
               signal: options.signal,
               // Any failed removal refuses admission; keep its cause for the Bun EBUSY deferral.
               requireCleanup: true,
+              reuse: true,
             });
             stateLocation = stateSnapshot.location;
           }

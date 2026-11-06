@@ -385,6 +385,8 @@ export function createModelProviders(
     synchronizeRoute(inputs.routeData, inputs.loaderPending ?? false);
     return () => {
       mutations.retire();
+      // A coalesced catalog reload must not fire after the page is gone.
+      core.invalidate();
       projection.dispose();
       connected = false;
       for (const cleanup of cleanups) {

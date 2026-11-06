@@ -385,6 +385,7 @@
       /* Static placeholders do not animate or hold compositor layers during boot. */
       :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route) .skeleton::after {
         content: none;
+        animation: none;
       }
 
       :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route) .skeleton-line {

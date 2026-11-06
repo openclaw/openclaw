@@ -649,7 +649,8 @@ export function resolveInitialDoctorHealthContributions(params: {
           }
           maintenance.assertOwnerCurrent();
         });
-        await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
+        const imageWarnings = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
+        recordDoctorHealthWarnings(ctx, [], imageWarnings);
         noteSandboxScopeWarnings(ctx.cfg);
       },
     }),

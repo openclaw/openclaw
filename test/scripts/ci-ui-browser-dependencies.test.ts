@@ -13,6 +13,7 @@ it.each([
   "ui/src/e2e/logs-scroll.e2e.test.ts",
   "ui/src/e2e/chat-composer-picker-layout.e2e.test.ts",
   "ui/src/e2e/chat-history-reading-stability.e2e.test.ts",
+  "ui/src/e2e/chat-loading-animation-retention.e2e.test.ts",
 ])("installs WebKit only for the shard owning %s", (suite) => {
   const root = tempDirs.make("openclaw-ui-browser-dependencies-");
   const local = (file: string) => path.join(root, file);

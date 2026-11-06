@@ -2,17 +2,29 @@
   "name": "@openclaw/deep-research",
   "version": "2026.11.1",
   "private": true,
-  "description": "Bounded, evidence-backed research through portable models",
+  "description": "Bounded, evidence-backed research through portable models and managed services",
   "type": "module",
   "dependencies": {
-    "typebox": "1.4.3"
+    "typebox": "1.4.3",
+    "@solidjs/web": "2.0.0-rc.18",
+    "solid-js": "2.0.0-rc.18"
   },
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*"
+    "@openclaw/plugin-sdk": "workspace:*",
+    "@solidjs/compiler": "2.0.0-rc.18",
+    "esbuild": "0.28.2"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "controlUi": "./browser/index.tsx",
+    "assetScripts": {
+      "build": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/deep-research",
+      "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/deep-research --copy",
+      "buildOutputs": [
+        "dist/openclaw.plugin.json"
+      ]
+    }
   }
 }

@@ -33,6 +33,7 @@ import { getChatOutputsCount, hasChatDesktopOutputs } from "./chat-outputs-data.
 import { isProcessesPresentationReady } from "./chat-processes-presentation.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
+import { preloadChatSubagentActivity } from "./chat-subagent-activity-lazy.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
 
 export { preloadChatDetailsEnvironment } from "./chat-details-environment.tsx";
@@ -651,11 +652,20 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
-  onSettled(() => {
-    props.onReady?.();
-  });
+  // Native section roots commit independently; admit cached activity before any sibling paints.
+  const prepared = createMemo<boolean>(() =>
+    props.presented &&
+    props.props?.cachedDetails?.subagents?.rows.some((row) => row.listed === false)
+      ? preloadChatSubagentActivity().then(
+          () => true,
+          // The activity boundary owns failures; sibling sections still render.
+          () => true,
+        )
+      : true,
+  );
+  onSettled(() => props.onReady?.());
   return (
-    <>
+    <Show when={prepared()}>
       <ChatDetailsSession
         props={props.props}
         presented={props.presented}
@@ -679,6 +689,6 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
       </Show>
       {/* Keep the automation slot after Progress while its inventory revalidates. */}
       <DetailsAutomations props={props.props} presented={props.presented} desktop />
-    </>
+    </Show>
   );
 }

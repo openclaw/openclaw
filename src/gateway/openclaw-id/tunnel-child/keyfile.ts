@@ -1,7 +1,7 @@
 // The tunnel endpoint secret key: 32 raw bytes, mode 0600, created on first
 // start. A group/other-readable or malformed file is refused, never replaced:
 // a new key is a new endpoint id and breaks every pinned client.
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -29,4 +29,10 @@ export function loadOrCreateEndpointKey(file: string): { key: Buffer; created: b
   fs.writeFileSync(tmp, key, { mode: 0o600, flag: "wx" });
   fs.renameSync(tmp, file);
   return { key, created: true };
+}
+
+/** Short non-secret label for logs: `fp:` + 8 hex of SHA-256 over the raw key. */
+export function logFingerprint(hexId: string): string {
+  const raw = /^[0-9a-f]{64}$/.test(hexId) ? Buffer.from(hexId, "hex") : Buffer.from(hexId);
+  return `fp:${createHash("sha256").update(raw).digest("hex").slice(0, 8)}`;
 }

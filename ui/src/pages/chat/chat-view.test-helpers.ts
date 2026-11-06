@@ -10,7 +10,7 @@ import {
   isUiGlobalScopeConfigured,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
-import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { normalizeApplicationContext } from "../../test-helpers/application-context-fixtures.ts";
 import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -27,6 +27,7 @@ import {
   createChatTranscript,
   type ChatTranscript,
 } from "./components/chat-transcript-controller.ts";
+import { settleChatMount } from "./test-helpers/chat-mount-frames.ts";
 
 type ChatModelControlsProps = Parameters<typeof ChatModelControls>[0];
 const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
@@ -153,13 +154,10 @@ export function appendChatBubble(
 }
 
 export function stubAnimationFrames() {
-  const { frames: callbacks, request } = createFrameQueue();
-  vi.stubGlobal("requestAnimationFrame", vi.fn(request));
-  return () => {
-    for (const callback of callbacks.splice(0)) {
-      callback(0);
-    }
-  };
+  const clock = createFrameClock();
+  vi.stubGlobal("requestAnimationFrame", vi.fn(clock.request));
+  vi.stubGlobal("cancelAnimationFrame", vi.fn(clock.cancel));
+  return () => clock.flush(0);
 }
 
 export function stubSettledAnimationFrames() {
@@ -280,21 +278,23 @@ export function renderChatPropsInto(
       document.body.append(container);
     }
     const [current, setCurrent] = createSignal({ props, application });
-    const view = mountSolid(
-      () => {
-        const questions = createComposerQuestions(props.paneId, () => current().props);
-        return createComponent(ChatView, {
-          questions,
-          get props() {
-            return current().props;
-          },
-          get application() {
-            const value = current().application;
-            return value && normalizeApplicationContext(value);
-          },
-        });
-      },
-      { container, wrapper: composerContextWrapper(container) },
+    const view = settleChatMount(() =>
+      mountSolid(
+        () => {
+          const questions = createComposerQuestions(props.paneId, () => current().props);
+          return createComponent(ChatView, {
+            questions,
+            get props() {
+              return current().props;
+            },
+            get application() {
+              const value = current().application;
+              return value && normalizeApplicationContext(value);
+            },
+          });
+        },
+        { container, wrapper: composerContextWrapper(container) },
+      ),
     );
     mountedViews.set(container, {
       update: (nextProps, nextApplication) =>

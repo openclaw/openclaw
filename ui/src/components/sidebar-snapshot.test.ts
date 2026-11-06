@@ -23,6 +23,7 @@ import {
   createApplicationGatewaySnapshot,
 } from "../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
@@ -34,29 +35,11 @@ const scope = {
 };
 const sessionKey = `scope:${JSON.stringify([scope.gatewayScope, scope.recoveryScope])}\u0000agent:main:cedar`;
 const model: SidebarSnapshotModel = {
-  routingDefaults: { mainKey: "main", scope: "per-sender" },
-  roster: null,
-  mode: "roster",
-  navigationView: "sessions",
-  pages: [],
-  pageScopeId: null,
-  pinnedSessions: [],
+  ...sidebarBootSnapshot(null),
   entries: ["route:usage"],
-  sections: [],
-  cards: [],
-  collapsedAgentIds: [],
-  collapsedSections: [],
-  plugins: [],
-  onlineUsers: [],
-  onlineCounts: [],
-  peopleSortMode: "presence",
-  peopleStatusFilter: "all",
-  peoplePresenceFilter: "online",
-  offlineUsers: [],
   ownerId: "profile-a",
   involvingMe: true,
   footer: { id: "profile-a", name: "Juniper" },
-  brand: { name: "Synthetic workspace", avatar: null, icon: "mark", environment: null },
 };
 
 function fixture(initialAgentId = "main", initialPageScopeId: string | null = null) {
@@ -544,6 +527,44 @@ describe("sidebar snapshot lifecycle", () => {
     expect(
       await test.store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot),
     ).toBeNull();
+  });
+
+  it("cancels a scheduled stale capture when another tab deletes a session", async () => {
+    const live: SidebarSnapshotModel = {
+      ...model,
+      roster: bootRosterSchema.parse({
+        agentId: "main",
+        result: sessionsResult(
+          [
+            { key: "agent:main:cedar", kind: "direct", displayName: "Cedar" },
+            { key: "agent:main:birch", kind: "direct", displayName: "Birch" },
+          ],
+          2,
+        ),
+        groups: [],
+        groupSettings: [],
+        sectionOrder: [],
+      }),
+    };
+    const test = fixture();
+    test.snapshotOwner.connect();
+    disposers.push(() => test.snapshotOwner.disconnect());
+    test.publish();
+    const saved = test.settle(live);
+    await capture(test.snapshotOwner);
+    await saved;
+    test.capture.mockClear();
+
+    test.snapshotOwner.capture();
+    await deleteStoredChatSnapshot(sessionKey);
+    // Cross-tab retirement may precede this tab's live roster update.
+    await vi.advanceTimersByTimeAsync(500);
+    const store = new SessionSnapshotStore();
+    store.connect();
+    disposers.push(() => store.disconnect());
+    const retained = await store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot);
+    expect(retained?.roster?.result.sessions.map(({ key }) => key)).toEqual(["agent:main:birch"]);
+    expect(test.capture).not.toHaveBeenCalled();
   });
 
   it("does not report an unchanged model saved while its write is pending", async () => {

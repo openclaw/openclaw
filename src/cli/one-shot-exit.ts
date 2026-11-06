@@ -5,7 +5,7 @@ import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
 import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 
 let requestedExitCode: number | "process" | undefined;
-let settledExitWatchdogMs: number | undefined;
+let settledExitWatchdog: { delayMs: number; terminateFailedExit: boolean } | undefined;
 
 function resolveProcessExitCode(fallback = 0): number {
   const value = process.exitCode;
@@ -75,9 +75,9 @@ export async function runCliWithExitFinalization(params: {
         restoreRuntimeTerminalState("CLI exit", { resumeStdinIfPaused: false });
       }
       // Node drains stdio and V8 compiler work naturally.
-      if (settledExitWatchdogMs !== undefined) {
-        armSettledExitWatchdog(settledExitWatchdogMs);
-        settledExitWatchdogMs = undefined;
+      if (settledExitWatchdog !== undefined) {
+        armSettledExitWatchdog(settledExitWatchdog);
+        settledExitWatchdog = undefined;
       }
     }
   }
@@ -111,10 +111,19 @@ export function requestExitAfterOneShotOutput(
  * a referenced handle nobody closed after every command-owned job, disposer and finalizer ends.
  */
 export function requestSettledExitWatchdog(delayMs: number): void {
-  settledExitWatchdogMs = delayMs;
+  settledExitWatchdog = { delayMs, terminateFailedExit: false };
 }
 
-function armSettledExitWatchdog(delayMs: number): void {
+/**
+ * Finite maintenance commands have no supervisor restart status to preserve, and a shell is
+ * waiting on them, so a referenced handle nobody closed cannot hold a failed outcome open either.
+ */
+export function requestOneShotSettledExitWatchdog(delayMs = 10_000): void {
+  settledExitWatchdog = { delayMs, terminateFailedExit: true };
+}
+
+function armSettledExitWatchdog(params: { delayMs: number; terminateFailedExit: boolean }): void {
+  const { delayMs, terminateFailedExit } = params;
   // Unref'd: a natural exit is never delayed.
   setTimeout(() => {
     const counts = new Map<string, number>();
@@ -122,9 +131,11 @@ function armSettledExitWatchdog(delayMs: number): void {
       counts.set(resource, (counts.get(resource) ?? 0) + 1);
     }
     const resources = [...counts].map(([name, count]) => `${name}x${count}`).join(", ");
-    // Only a clean POSIX outcome is ended here; a non-zero status can be a supervisor's
-    // restart instruction that no signal can carry, so it stays with the supervisor.
-    const terminate = process.platform !== "win32" && resolveProcessExitCode() === 0;
+    // Only a clean POSIX outcome is ended here unless the caller opted out; a non-zero status
+    // can be a supervisor's restart instruction that no signal can carry, so it stays with the
+    // supervisor.
+    const terminate =
+      process.platform !== "win32" && (terminateFailedExit || resolveProcessExitCode() === 0);
     writeSync(
       2,
       `command settled but the process is still alive after ${delayMs}ms; active resources: ${resources || "unreported"}${terminate ? "; terminating" : ""}\n`,

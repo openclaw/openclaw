@@ -23,6 +23,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { parseApprovalResolvedEvent } from "../../app/exec-approval.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -443,14 +444,14 @@ export function ApprovalsPage() {
       <SettingsWorkspace>
         <SettingsPage wide>
           {!view().connected ? (
-            <div class="callout warn" role="status">
+            <InlineAlert tone="warning" role="status">
               {t("approvalHistory.offline")}
-            </div>
+            </InlineAlert>
           ) : null}
           {view().connected && !view().approvalsAccess ? (
-            <div class="callout warn" role="status">
+            <InlineAlert tone="warning" role="status">
               {t("common.disabled")} · <code>{APPROVAL_HISTORY_REQUIRED_SCOPE}</code>
-            </div>
+            </InlineAlert>
           ) : null}
           {view().approvalsAccess ? (
             <ApprovalErrorNotice
