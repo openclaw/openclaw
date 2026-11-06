@@ -384,25 +384,26 @@ describe("chat Details presentation", () => {
         createComponent(ChatDetailsDesktopBody, {
           presented: true,
           get children() {
-            return createComponent(ChatDetailsEnvironment, {
-              details: props({
-                detailsWorkspace: {
-                  root: "/workspace/details",
-                  label: null,
+            return () =>
+              createComponent(ChatDetailsEnvironment, {
+                details: props({
+                  detailsWorkspace: {
+                    root: "/workspace/details",
+                    label: null,
+                    branch: "feature/details",
+                  },
+                }),
+                presented: true,
+                onOpenUncommitted: openChanges,
+                uncommitted: {
+                  sessionKey: card.sessionKey,
                   branch: "feature/details",
+                  baseRef: "HEAD",
+                  files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
+                  additions: 3,
+                  deletions: 1,
                 },
-              }),
-              presented: true,
-              onOpenUncommitted: openChanges,
-              uncommitted: {
-                sessionKey: card.sessionKey,
-                branch: "feature/details",
-                baseRef: "HEAD",
-                files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
-                additions: 3,
-                deletions: 1,
-              },
-            });
+              });
           },
         }),
       { container: panel },

@@ -49,6 +49,7 @@ import {
   isGatewayServerTestFile,
 } from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
+import { markdownTestFiles } from "../test/vitest/vitest.markdown-paths.mjs";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
 import { isSharedVitestExcludedPath } from "../test/vitest/vitest.pattern-file.ts";
 import {
@@ -134,10 +135,10 @@ import {
   resolveLocalFullSuiteProfile,
   type VitestHostInfo,
 } from "./lib/vitest-local-scheduling.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-node-args.mts";
 import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
   resolveDefaultVitestNoOutputTimeoutMs,
-  resolveVitestNodeArgs,
 } from "./lib/vitest-process-env.mts";
 import {
   estimateVitestTestFileSeconds,
@@ -333,6 +334,7 @@ const LOGGING_VITEST_CONFIG = "test/vitest/vitest.logging.config.ts";
 const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk-light.config.ts";
 const PLUGIN_SDK_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk.config.ts";
 const PLUGINS_VITEST_CONFIG = "test/vitest/vitest.plugins.config.ts";
+const MARKDOWN_VITEST_CONFIG = "test/vitest/vitest.markdown.config.ts";
 const UNIT_FAST_VITEST_CONFIG = "test/vitest/vitest.unit-fast.config.ts";
 const UNIT_FAST_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.unit-fast-isolated.config.ts";
 const UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG = "test/vitest/vitest.unit-fast-fake-timers.config.ts";
@@ -527,6 +529,7 @@ const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const FAILED_SHARD_DIGEST_LIMIT = 12;
 const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND: Record<string, string> = {
+  markdown: MARKDOWN_VITEST_CONFIG,
   unitFast: UNIT_FAST_VITEST_CONFIG,
   unitFastIsolated: UNIT_FAST_ISOLATED_VITEST_CONFIG,
   unitFastFakeTimers: UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG,
@@ -2858,7 +2861,9 @@ export function resolveDependencyTestConsumers(
     runtimeOnly = false,
     importerBindings,
     direct = false,
+    changedPaths,
   }: Pick<ImportGraphOptions, "runtimeOnly" | "direct"> & {
+    changedPaths?: string[];
     importerBindings?: Array<{ root: string; dependencies: string[] }>;
   } = {},
 ) {
@@ -2868,6 +2873,12 @@ export function resolveDependencyTestConsumers(
   const options = { tooling: true, resolveAliases: true, runtimeOnly };
   getImportGraph(cwd, options);
   const files = listImportGraphFilesForCwd(cwd, options);
+  const affected = changedPaths
+    ? new Set([...changedPaths, ...resolveImportGraphDependents(changedPaths, cwd, options)])
+    : undefined;
+  const fileSet = affected ? new Set([...files, ...(changedPaths ?? [])]) : undefined;
+  const aliases = affected ? getImportGraphAliases(cwd) : [];
+  const aliasResolutions = new Map<string, string[]>();
   const unresolved = new Map<string, { root: string; dependency: string }>();
   for (const { root, dependencies } of importers) {
     for (const dependency of dependencies) {
@@ -2913,9 +2924,26 @@ export function resolveDependencyTestConsumers(
           // Erased imports prove type ownership; absent usage may be a CLI or
           // generated child script and must remain unresolved for the planner.
           unresolved.delete(`${root}\0${dependency}`);
-          runtimeConsumer ||= specifiers.some(
-            (specifier) => !runtimeOnly || !edges.typeOnlySpecifiers.has(specifier),
-          );
+          runtimeConsumer ||= specifiers.some((specifier) => {
+            if (runtimeOnly && edges.typeOnlySpecifiers.has(specifier)) {
+              return false;
+            }
+            if (!affected || !fileSet) {
+              return true;
+            }
+            const modules = resolveImportSpecifiers(
+              file,
+              specifier,
+              fileSet,
+              TOOLING_IMPORTABLE_FILE_EXTENSIONS,
+              aliases,
+              aliasResolutions,
+              runtimeOnly,
+            );
+            // Unknown package bindings retain coverage; resolved subpaths only
+            // retain consumers of the changed source, including barrel exports.
+            return modules.length === 0 || modules.some((module) => affected.has(module));
+          });
         }
       }
     }
@@ -4708,6 +4736,7 @@ function resolveBoundedChangedTestTargetPlan(
           createTestInputFingerprint(cwd, changedPaths),
           adaptiveMarkdownQualification,
           options.adaptiveMarkdown.isIndependentCompanion,
+          cwd,
         )
       : (owners: string[]) => owners;
   const graphOptions = {
@@ -4869,8 +4898,25 @@ function resolveBoundedChangedTestTargetPlan(
       if (typeof name !== "string") {
         continue;
       }
+      const packagePaths = changedPaths.filter((file) =>
+        file.startsWith(`${path.posix.dirname(manifest)}/`),
+      );
       const consumers = resolveDependencyTestConsumers([{ root: ".", dependencies: [name] }], cwd, {
         runtimeOnly: true,
+        changedPaths:
+          packagePaths.length > 0 &&
+          packagePaths.every(
+            (file) =>
+              file.startsWith(`${path.posix.dirname(manifest)}/src/`) &&
+              TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => file.endsWith(ext)) &&
+              (!isTestOnlyPath(file) || isTestFileTarget(file)) &&
+              !/(?:^|\/)(?:__fixtures__|fixtures|scripts|test-fixtures|test-utils|test-helpers|test-support|testing)\//u.test(
+                file,
+              ) &&
+              !/\.(?:config|setup|d)\.[cm]?[jt]sx?$/u.test(file),
+          )
+            ? packagePaths
+            : undefined,
         // Resolved aliases share the module graph's hub cutoff. Traversing again
         // from package readers would bypass it for mixed import styles.
         direct: true,
@@ -5085,6 +5131,12 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   if (isCliProcessTestFile(relative)) {
     return "cliProcess";
   }
+  if (
+    markdownTestFiles.includes(relative) ||
+    markdownTestFiles.includes(relative.replace(/\.ts$/u, ".test.ts"))
+  ) {
+    return "markdown";
+  }
   if (resolveUnitFastTimerTestIncludePattern(relative)) {
     return "unitFastFakeTimers";
   }
@@ -5238,6 +5290,12 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
 
 function resolveLightLaneIncludePatterns(kind: string, targetArg: string, cwd: string) {
   const relative = toRepoRelativeTarget(targetArg, cwd);
+  if (kind === "markdown") {
+    const test = markdownTestFiles.includes(relative)
+      ? relative
+      : relative.replace(/\.ts$/u, ".test.ts");
+    return markdownTestFiles.includes(test) ? [test] : null;
+  }
   if (kind === "unitFast") {
     const includePattern = resolveUnitFastTestIncludePattern(relative);
     return includePattern ? [includePattern] : null;

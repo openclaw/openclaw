@@ -210,7 +210,6 @@ export type CatalogRowControls = Partial<
 
 export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
-  catalogMenu: CatalogSessionMenuRequest;
   rowRef?: (
     element: HTMLElement,
     controls: CatalogRowControls,

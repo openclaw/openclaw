@@ -11,7 +11,10 @@ import {
   runBoundedCodexAppServerTurn,
   type CodexBoundedTurnOptions,
 } from "./app-server/bounded-turn.js";
-import { projectCodexWebSearchItem } from "./app-server/web-search-item.js";
+import {
+  projectCodexWebSearchItem,
+  readCodexWebSearchResults,
+} from "./app-server/web-search-item.js";
 import { buildCodexNativeWebSearchThreadConfig } from "./app-server/web-search.js";
 
 type WebSearchProviderContext = Parameters<WebSearchProviderPlugin["createTool"]>[0];
@@ -33,21 +36,30 @@ export async function executeCodexWebSearchProviderTool(
     assertCurrent: executionContext?.assertCurrent,
     agentDir: ctx.agentDir,
     options,
-    taskLabel: "hosted search",
+    taskLabel: "native search",
     developerInstructions:
-      "You are OpenClaw's bounded web-search worker. You must use Codex hosted web_search to answer the user's search query. Return a concise grounded answer with source URLs. Do not call other tools, edit files, or ask follow-up questions.",
+      "You are OpenClaw's bounded web-search worker. You must use Codex native web.run search to answer the user's search query. Return a concise grounded answer with source URLs. Do not call other tools, edit files, or ask follow-up questions.",
     input: [{ type: "text", text: query, text_elements: [] }],
     requiredModalities: ["text"],
     isolation: "private-stdio",
-    threadConfig: buildCodexNativeWebSearchThreadConfig(ctx.config),
+    threadConfig: buildCodexNativeWebSearchThreadConfig(ctx.config, true),
   });
   const searches = result.items
     .filter((item) => item.type === "webSearch")
     .map(projectCodexWebSearchItem);
   if (searches.length === 0) {
-    throw new Error("Codex hosted search completed without invoking web search.");
+    throw new Error("Codex native search completed without invoking web search.");
   }
+  const citations = [
+    ...new Map(
+      result.items
+        .filter((item) => item.type === "webSearch")
+        .flatMap(readCodexWebSearchResults)
+        .map((citation) => [citation.url, citation]),
+    ).values(),
+  ];
   return {
+    kind: "answer",
     query,
     provider: "codex",
     model: result.model,
@@ -55,5 +67,6 @@ export async function executeCodexWebSearchProviderTool(
     externalContent: externalContentStamp("codex"),
     content: wrapWebContent(result.text, "web_search"),
     searches,
+    citations,
   };
 }

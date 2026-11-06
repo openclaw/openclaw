@@ -607,13 +607,19 @@ export async function createVerifiedSqliteSnapshot(
             undefined,
             options.onProgress,
           );
-      return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
-        verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+      return withPreparedSqliteSnapshot(
+        prepared,
+        (privateSourcePath) => verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+        { bestEffortCleanup: options.sourceAcquisition.bestEffortCleanup },
       );
     }
     return verifyAndPublishSqliteSnapshot(options);
   };
-  return retained ? withPreparedSqliteSnapshot(retained.prepared, create) : create();
+  return retained
+    ? withPreparedSqliteSnapshot(retained.prepared, create, {
+        bestEffortCleanup: options.sourceAcquisition?.bestEffortCleanup,
+      })
+    : create();
 }
 
 async function verifyAndPublishSqliteSnapshot(

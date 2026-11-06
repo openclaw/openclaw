@@ -414,7 +414,7 @@ export function ApplicationShell(props: {
               "content--new-session": view().activeRoute === "new-session",
               "content--systems": view().activeRoute === "systems",
               "content--custodian": view().activeRoute === "custodian",
-              "content--workboard": view().activeRoute === "workboard",
+              "content--workboard": view().workboardLayout,
             },
           ]}
           ref={(element) => {

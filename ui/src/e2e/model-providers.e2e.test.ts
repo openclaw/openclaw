@@ -569,7 +569,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         models: { providers: { openai: providerConfig("openai:manual-api-key") } },
       };
       await resolveConfigMutation(gateway, keyedConfig, "model-providers-hash-key", "openai");
-      await expect.poll(async () => openaiCard.textContent()).toContain("API key saved.");
+      // The saved key is checked right away with the same probe as Test access.
+      await expect
+        .poll(async () => openaiCard.textContent())
+        .toContain("API key saved and verified.");
+      const probeCount = (await gateway.getRequests("models.probe")).length;
+      expect(probeCount).toBe(1);
 
       await gateway.deferNext("models.probe");
       const testConnection = openaiCard.getByRole("button", {
@@ -578,7 +583,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       });
       await testConnection.focus();
       await page.keyboard.press("Enter");
-      const probe = await gateway.waitForRequest("models.probe");
+      const probe = await gateway.waitForRequest("models.probe", { after: probeCount });
       expect(probe.params).toEqual({ provider: "openai", agentId: "main" });
       const testing = openaiCard.getByRole("button", { name: "Testing…: OpenAI", exact: true });
       await expect.poll(() => testing.isDisabled()).toBe(true);

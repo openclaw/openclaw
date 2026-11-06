@@ -52,3 +52,15 @@ it("resolves exact companion plans through complete canonical shard inventories"
     expect(resolveCompleteCanonicalNodeTestConfig(target, broad)).toBeUndefined();
   }
 });
+
+it("routes pure Markdown tests exactly once through their independent owner", () => {
+  const target = "packages/markdown-core/src/ir.test.ts";
+  const config = "test/vitest/vitest.markdown.config.ts";
+  const plans = buildVitestRunPlans([target]);
+  expect(resolveCompleteCanonicalNodeTestConfig(target, plans)).toBe(config);
+  const shards = createChangedNodeTestShards([target], { dedicatedBuildArtifacts: false });
+  expect(selectedFiles(shards).filter((file) => file === target)).toEqual([target]);
+  expect(buildVitestRunPlans(["packages/markdown-core/src/tables.test.ts"])[0]?.config).toBe(
+    "test/vitest/vitest.unit.config.ts",
+  );
+});

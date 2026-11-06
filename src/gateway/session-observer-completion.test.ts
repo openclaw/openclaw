@@ -37,6 +37,7 @@ beforeEach(() => {
           modelIdNormalization: {
             providers: { openai: { aliases: { "private-manifest-alias": "gpt-test" } } },
           },
+          modelCatalog: { providers: { openai: { defaultUtilityModel: "gpt-test", models: [] } } },
         },
       ],
     }),
@@ -127,6 +128,54 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
       unsubscribe();
       await harness.observer.disposeAsync();
       releaseAgentRunContext("run-1", owner);
+    }
+  },
+);
+
+it.each([
+  { name: "provider default", utilityModel: undefined, agentUtilityModel: undefined, warnings: 0 },
+  {
+    name: "configured fallback",
+    utilityModel: { fallbacks: ["openai/gpt-recovery"] },
+    agentUtilityModel: undefined,
+    warnings: 1,
+  },
+  {
+    name: "per-agent model",
+    utilityModel: undefined,
+    agentUtilityModel: "openai/gpt-test",
+    warnings: 1,
+  },
+])(
+  "only posts a conversation warning for explicit utility settings: $name",
+  async ({ utilityModel, agentUtilityModel, warnings }) => {
+    const notices: AgentEventPayload[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.stream === "notice") {
+        notices.push(evt);
+      }
+    });
+    const prepareModel = vi.fn(async () => {
+      throw new Error("Synthetic utility model failure");
+    });
+    const harness = createHarness({
+      prepareModel,
+      config: {
+        agents: {
+          defaults: { model: "openai/gpt-main", utilityModel },
+          entries: { main: { utilityModel: agentUtilityModel } },
+        },
+      },
+    });
+    try {
+      await startAndAddToolNotes(harness.observer);
+      await advance(24_000);
+      expect(prepareModel).toHaveBeenCalledTimes(2);
+      expect(notices).toHaveLength(warnings);
+      await advance(60_000);
+      expect(prepareModel).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
     }
   },
 );
