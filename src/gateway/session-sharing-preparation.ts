@@ -190,6 +190,18 @@ export async function prepareSessionMutationFacts(
       ) {
         return;
       }
+      if (
+        change.scope === "sessions" &&
+        change.factsInvalidated === undefined &&
+        change.runtimeSession === undefined &&
+        active &&
+        !invalidated &&
+        facts?.target != null
+      ) {
+        // Committed writers install entry and membership before this catalog notification.
+        // The next assertion still checks the retained physical source and current facts.
+        return;
+      }
       invalidate();
       return;
     }
