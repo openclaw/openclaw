@@ -882,7 +882,7 @@ describe("local production-owner proof", () => {
       }
       f.config.gateway!.repositoryIntegration = "publication-local-sink";
       setRuntimeConfigSnapshot(f.config);
-      const builder = createTestPluginRegistry({ config: f.config });
+      const builder = createTestPluginRegistry();
       const record = createPluginRecord({
         id: "publication-local-sink",
         name: "publication-local-sink",
