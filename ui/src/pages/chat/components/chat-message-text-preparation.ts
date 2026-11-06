@@ -25,13 +25,11 @@ export type AssistantMessageDisclosure = {
   onRetryFullMessage?: () => void;
 };
 
-export function prepareMessageMarkdown(
+/** The rendered source and policy also govern lazy inline-image discovery. */
+export function resolveMessageMarkdownRender(
   markdown: string,
-  messageKey: string,
-  opts: MessageTextOptions,
+  opts: Pick<MessageTextOptions, "role" | "assistantMessageDisclosure">,
   markdownRenderOptions: MarkdownRenderOptions,
-  renderStreaming?: typeof toStreamingMarkdownDomParts,
-  mutableStreaming = false,
 ) {
   const disclosure = opts.assistantMessageDisclosure;
   const isAssistant = opts.role === "assistant";
@@ -42,6 +40,23 @@ export function prepareMessageMarkdown(
   const options: MarkdownRenderOptions = recovered
     ? { ...markdownRenderOptions, mode: "document" }
     : markdownRenderOptions;
+  return { source, options, recoverFullMessage, recovered };
+}
+
+export function prepareMessageMarkdown(
+  markdown: string,
+  messageKey: string,
+  opts: MessageTextOptions,
+  markdownRenderOptions: MarkdownRenderOptions,
+  renderStreaming?: typeof toStreamingMarkdownDomParts,
+  mutableStreaming = false,
+) {
+  const { source, options, recoverFullMessage, recovered } = resolveMessageMarkdownRender(
+    markdown,
+    opts,
+    markdownRenderOptions,
+  );
+  const isAssistant = opts.role === "assistant";
   const streaming = opts.isStreaming;
   const prepare = () => {
     let parts: [MarkdownContent, MarkdownContent];

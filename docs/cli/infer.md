@@ -227,6 +227,9 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 
 `--model` must be `<provider/model>`.
 
+An accepted interrupt cancels the pending transcription request and suppresses
+late transcript output.
+
 For audio transcription and video description on POSIX systems, `--file` follows
 directory symlinks before resolving `..`, matching filesystem path resolution.
 Final-file symlinks remain subject to the existing media-directory checks.

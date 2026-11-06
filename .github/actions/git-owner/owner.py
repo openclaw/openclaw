@@ -476,6 +476,7 @@ def checkout_harness(sha):
         "scripts/ci-build-manifest.mjs",
         "scripts/ci-adaptive-priors.mjs",
         "scripts/lib/actions-artifact-archive.mjs",
+        "scripts/lib/changed-path-facts.mjs",
         "scripts/lib/ci-test-observations.mjs",
         "scripts/lib/ci-ios-smoke-plan.mjs",
         "scripts/lib/ci-skills-python-plan.mjs",
