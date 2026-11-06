@@ -656,7 +656,11 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
   const prepared = createMemo<boolean>(() =>
     props.presented &&
     props.props?.cachedDetails?.subagents?.rows.some((row) => row.listed === false)
-      ? preloadChatSubagentActivity().then(() => true)
+      ? preloadChatSubagentActivity().then(
+          () => true,
+          // The activity boundary owns failures; sibling sections still render.
+          () => true,
+        )
       : true,
   );
   onSettled(() => props.onReady?.());
