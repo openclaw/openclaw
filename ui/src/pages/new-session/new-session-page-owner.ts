@@ -192,6 +192,8 @@ export class NewSessionPageOwner {
     this.dictation = new DirectDictationControl({
       textarea: this.submission.composerTextarea,
       getClient: () => this.gateway.client,
+      prepareSession: () => this.submission.sessionStartup.prepareDictationSession(),
+      getSessionKey: () => this.submission.sessionStartup.dictationSessionKey(),
       isConnected: () => this.gateway.connected,
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
       onMessage: (message) => this.setMessageFromUser(message),

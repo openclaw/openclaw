@@ -210,6 +210,17 @@ function archiveSession(
   );
 }
 
+function expectArchiveHidden(
+  result: Awaited<ReturnType<typeof invokeArchiveHandler>>,
+  sessionKey: string,
+) {
+  expect(result.ok).toBe(false);
+  expect(result.error).toEqual({
+    code: "INVALID_REQUEST",
+    message: `Session "${sessionKey}" was not found.`,
+  });
+}
+
 function expectArchiveUnavailable(
   result: Awaited<ReturnType<typeof archiveSession>>,
   storePath: string,
@@ -386,7 +397,7 @@ archiveTest(
     expect(await sharing).toMatchObject({ ok: true });
     expect(loadSessionEntry({ storePath, sessionKey })?.visibility).toBe("draft");
 
-    expect(await archive).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+    expectArchiveHidden(await archive, sessionKey);
     expect(interrupted).toBe(false);
     expect(active.controller.signal.aborted).toBe(false);
     expectNoSessionQueueCleanup();
@@ -427,7 +438,7 @@ test.for(["creator", "changed identity"] as const)(
 
       persistence.resolve();
       if (archiveRole === "changed identity") {
-        expect(await archive).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+        expectArchiveHidden(await archive, sessionKey);
         expect(reclaim).not.toHaveBeenCalled();
         expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
         return;

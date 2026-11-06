@@ -4,6 +4,8 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { addSession } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
@@ -15,6 +17,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   captureSessionQueuedInputsForRestart,
   listSessionPendingInputs,
@@ -26,9 +29,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
+import {
+  readAgentDatabaseAdmissionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
 import { createAgentDatabaseStartupObservation } from "../state/agent-database-startup-observation.js";
-import type { PendingAgentDatabaseRecovery } from "../state/agent-database-startup.types.js";
+import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
@@ -44,18 +50,38 @@ import {
 } from "./session-restart-resume.js";
 import * as systemTurnAuthority from "./session-system-turn-authority.js";
 
+function seedRestartSession(sessionId: string, entry: Partial<SessionEntry> = {}) {
+  const target = { agentId: "main", sessionKey: `agent:main:${sessionId}`, sessionId };
+  replaceSessionEntrySync(target, { sessionId, updatedAt: 1, ...entry });
+  return target;
+}
+
+function addRestartProcess(id: string, target: { agentId: string; sessionKey: string }) {
+  const process = createProcessSessionFixture({ id, backgrounded: true });
+  process.agentId = target.agentId;
+  process.sessionKey = target.sessionKey;
+  addSession(process);
+}
+
+function restartEventReceipt(id: string, accepted = Promise.resolve({ ok: true as const })) {
+  return {
+    accepted,
+    id,
+    settled: Promise.resolve({
+      status: "completed" as const,
+      executionStarted: true,
+      delivered: false,
+    }),
+    cancel: () => false,
+  };
+}
+
 it("requests original recorded custody only at the actual marked restart admission", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const person = ensureProfileForEmail("restart-source-intent@example.test");
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:restart-source-intent",
-      sessionId: "restart-source-intent",
-    };
-    replaceSessionEntrySync(target, {
-      sessionId: target.sessionId,
+    const target = seedRestartSession("restart-source-intent", {
       updatedAt: Date.now(),
       createdActor: { type: "human", source: "profile", id: person.id },
     });
@@ -68,13 +94,7 @@ it("requests original recorded custody only at the actual marked restart admissi
         data: { phase: "start", startedAt: Date.now() },
       },
     });
-    const background = createProcessSessionFixture({
-      id: "restart-source-background",
-      backgrounded: true,
-    });
-    background.agentId = target.agentId;
-    background.sessionKey = target.sessionKey;
-    addSession(background);
+    addRestartProcess("restart-source-background", target);
     await persistRunningSessionsForRestart({ cfg });
     resetProcessRegistryForTests();
     expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
@@ -100,116 +120,220 @@ it("requests original recorded custody only at the actual marked restart admissi
     }
   }));
 
-it.each([false, true])(
-  "reuses a prepared restart snapshot and joins its queue admission (native pending: %s)",
-  (nativePending) =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { entries: { main: {} } } };
-      setRuntimeConfigSnapshot(cfg);
-      const target = { agentId: "main", sessionKey: "agent:main:prepared" };
-      replaceSessionEntrySync(target, { sessionId: "prepared", updatedAt: 1 });
-      replaceSessionEntrySync(target, {
-        ...loadExactSessionEntry(target)!.entry,
-        resumeAfterRestart: { queuedInputIds: [] },
-      });
+type RestartPreparationMode = "prepared" | "managed" | "crash" | "slow-crash" | "failed";
+
+async function checkRestartPreparation(
+  mode: RestartPreparationMode,
+  test: { signal: AbortSignal },
+  nativePending?: boolean,
+) {
+  return withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const crash = mode === "crash" || mode === "slow-crash" || mode === "failed";
+    const waitFor = <T>(promise: Promise<T>) => withinTest(promise, test.signal);
+    const target = { agentId: "main", sessionKey: "agent:main:prepared" };
+    replaceSessionEntrySync(target, {
+      sessionId: "prepared",
+      updatedAt: nativePending === undefined ? 110 : 1,
+    });
+    replaceSessionEntrySync(target, {
+      ...loadExactSessionEntry(target)!.entry,
+      ...(crash
+        ? { lifecycleRunId: "predecessor", startedAt: 110 }
+        : { resumeAfterRestart: { queuedInputIds: [] } }),
+    });
+    if (nativePending !== undefined) {
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
         queuedInputIds: [],
       });
-      const signal = new AbortController().signal;
-      const pending = new Map<string, PendingAgentDatabaseRecovery>();
-      const context = createContext([], () => cfg);
-      context.agentDatabaseStartup = createAgentDatabaseStartupObservation(pending, signal);
-      context.resolveGatewayContext = () => context;
-      const nativeReady = createDeferredCore();
-      const waitingForNative = createDeferredCore();
-      const waitForPreparation = context.agentDatabaseStartup.waitForAgentPreparation.bind(
-        context.agentDatabaseStartup,
-      );
-      const preparation = vi
-        .spyOn(context.agentDatabaseStartup, "waitForAgentPreparation")
-        .mockImplementation((agentId, options) => {
-          if (nativePending && options?.forWrite) {
-            waitingForNative.resolve();
-            return nativeReady.promise.then(() => waitForPreparation(agentId, options));
-          }
-          return waitForPreparation(agentId, options);
-        });
-      const accepted = createDeferredCore<{ ok: true }>();
-      const enqueued = createDeferredCore();
-      const resume = vi
-        .spyOn(sessionEvents, "enqueueSessionEventForHost")
-        .mockImplementation(() => {
-          enqueued.resolve();
-          return {
-            accepted: accepted.promise,
-            id: "prepared-resume",
-            settled: Promise.resolve({
-              status: "completed",
-              executionStarted: true,
-              delivered: false,
-            }),
-            cancel: () => false,
-          };
-        });
-      const discover = vi.spyOn(pendingInputWithdrawal, "listOrphanedSessionPendingInputTargets");
-      const params = { context, signal, log: { warn: vi.fn() } };
-      let recovering: Promise<void> | undefined;
-      let startup: Promise<void> | undefined;
-      try {
-        const prepared = await prepareAgentRestartRecovery({
-          ...params,
-          agentId: "main",
-          env: process.env,
-          assertCurrent() {},
-        });
-        expect(params.log.warn.mock.calls).toEqual([]);
-        assert(prepared, "Expected the persisted marker to prepare a continuation");
-        recovering = prepared().finally(() => pending.delete("main"));
-        // The database is writable; its prepared input still owns the admission fence.
-        pending.set("main", {
-          refusal: {
-            agentId: "main",
-            paths: [],
-            code: "agent-database-inspection-pending",
-            reason: "Prepared fixture",
-            repairHint: "Wait for input recovery",
-          },
-          completion: Promise.resolve(),
-          inputReady: recovering,
-          startedAt: 0,
-          phase: "input-recovery",
-          phaseStartedAt: 0,
-          phaseDurationsMs: {},
-        });
-        expect(resume).not.toHaveBeenCalled();
-        let unlocked = false;
-        startup = resumeMarkedSessions(params).then(() => {
-          unlocked = true;
-        });
-        if (nativePending) {
-          await Promise.race([waitingForNative.promise, enqueued.promise, recovering]);
-          expect(resume).not.toHaveBeenCalled();
-          expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
-          nativeReady.resolve();
+    }
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const open = createDeferredCore();
+    const opened = createDeferredCore();
+    const nativeClosing = createDeferredCore();
+    const waiting = createDeferredCore();
+    const accepted = createDeferredCore<{ ok: true }>();
+    const enqueued = createDeferredCore();
+    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation(() => {
+      enqueued.resolve();
+      return restartEventReceipt("prepared-resume", accepted.promise);
+    });
+    const discover = vi.spyOn(pendingInputWithdrawal, "listOrphanedSessionPendingInputTargets");
+    let startup: Promise<void> | undefined;
+    let preparedSnapshot: (() => Promise<void>) | undefined;
+    let preparedWork: Promise<void> | undefined;
+    try {
+      await withAgentDatabaseStartupAdmission(async (admission) => {
+        const context = createContext([], () => cfg);
+        context.agentDatabaseStartup = admission.observation;
+        context.resolveGatewayContext = () => context;
+        if (crash) {
+          context.restartResumeWindow = { startedAt: 100, endedAt: 200 };
         }
-        await Promise.race([enqueued.promise, recovering]);
-        expect(resume, JSON.stringify(params.log.warn.mock.calls)).toHaveBeenCalledOnce();
-        expect(unlocked).toBe(false);
-        expect(discover).toHaveBeenCalledOnce();
-        accepted.resolve({ ok: true });
-        await Promise.all([startup, recovering]);
-        await resumeMarkedSessions(params);
-        expect(resume).toHaveBeenCalledOnce();
-        expect(discover).toHaveBeenCalledOnce();
-      } finally {
-        nativeReady.resolve();
-        accepted.resolve({ ok: true });
-        await Promise.allSettled([startup, recovering].flatMap((work) => work ?? []));
-        resume.mockRestore();
-        discover.mockRestore();
-        preparation.mockRestore();
-      }
-    }),
+        const params = { context, signal: admission.signal, log: { warn: vi.fn() } };
+        const wait = admission.observation.waitForAgentPreparation.bind(admission.observation);
+        const preparationWait = vi
+          .spyOn(admission.observation, "waitForAgentPreparation")
+          .mockImplementation((id, options) => {
+            if (options?.forWrite !== false) {
+              waiting.resolve();
+            }
+            return wait(id, options);
+          });
+        const refusals = admission.defer({
+          env: process.env,
+          reason: "Controlled write preparation",
+          inspections: [
+            {
+              target: { agentId: "main", path: database.path },
+              result: Promise.resolve({
+                incompatible: [],
+                indeterminate: [],
+                readReadyAgentPaths: [database.path],
+              }),
+            },
+          ],
+        });
+        recordAgentDatabaseAdmissions(refusals, { source: "startup" });
+        const owner = admission.adopt();
+        admission.activate({
+          isCurrent: () => true,
+          preparationReady: Promise.resolve(),
+          captureReadAdmission: ({ assertCurrent }) => assertCurrent,
+          publishAgent: async () => {},
+          openAgent: async () => {
+            opened.resolve();
+            if (nativePending === true) {
+              return {
+                async [Symbol.asyncDispose]() {
+                  nativeClosing.resolve();
+                  await open.promise;
+                },
+              };
+            }
+            await open.promise;
+            if (mode === "failed") {
+              throw new Error("Controlled preparation failure");
+            }
+            return undefined;
+          },
+          migrateAgent: async ({ assertCurrent }) => {
+            const recoverInputs = await prepareAgentRestartRecovery({
+              ...params,
+              agentId: "main",
+              env: process.env,
+              assertCurrent,
+            });
+            preparedSnapshot = recoverInputs;
+            return { recoverInputs };
+          },
+        });
+        try {
+          await waitFor(opened.promise);
+          if (nativePending === true) {
+            await waitFor(nativeClosing.promise);
+          }
+          expect(await readSessionEntryReadOnlyInWorker(target)).toMatchObject(
+            crash
+              ? { lifecycleRunId: "predecessor" }
+              : { resumeAfterRestart: { queuedInputIds: [] } },
+          );
+          expect(admission.observation.isAgentInputRecoveryPending("main")).toBe(
+            nativePending === true,
+          );
+          if (mode === "prepared" && nativePending !== true) {
+            open.resolve();
+            await waitFor(Promise.resolve(admission.waitForAgentPreparation("main")));
+            expect(admission.observation.isAgentInputRecoveryPending("main")).toBe(true);
+          }
+          if (nativePending !== undefined) {
+            expect(params.log.warn.mock.calls).toEqual([]);
+            assert(preparedSnapshot, "Expected the persisted marker to prepare a continuation");
+            preparedWork = preparedSnapshot();
+            expect(resume).not.toHaveBeenCalled();
+          }
+          if (mode === "slow-crash") {
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          }
+          let startupFinished = false;
+          startup = resumeMarkedSessions(params).then(() => {
+            startupFinished = true;
+          });
+          // Managed discovery may return after excluding the store; crash discovery joins it.
+          await waitFor(Promise.race([waiting.promise, startup]));
+          expect(resume).not.toHaveBeenCalled();
+          if (mode === "slow-crash") {
+            await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS + 60_001);
+            vi.useRealTimers();
+          }
+          if (nativePending === true) {
+            expect(
+              (await readSessionEntryReadOnlyInWorker(target))?.resumeAfterRestart,
+            ).toBeDefined();
+          }
+          const recovering = admission.pendingPreparation!;
+          let recovered = false;
+          void recovering.then(() => {
+            recovered = true;
+          });
+          open.resolve();
+          if (mode !== "failed") {
+            await waitFor(Promise.race([enqueued.promise, recovering]));
+            expect(
+              resume,
+              JSON.stringify({
+                warnings: params.log.warn.mock.calls,
+                entry: loadExactSessionEntry(target)?.entry,
+              }),
+            ).toHaveBeenCalledOnce();
+            expect(recovered).toBe(false);
+            if (mode === "prepared") {
+              expect(startupFinished).toBe(false);
+            }
+            if (nativePending !== undefined) {
+              expect(discover).toHaveBeenCalledOnce();
+            }
+            accepted.resolve({ ok: true });
+          }
+          await waitFor(Promise.all([startup, recovering, preparedWork]));
+          await resumeMarkedSessions(params);
+          expect(resume).toHaveBeenCalledTimes(mode === "failed" ? 0 : 1);
+          if (mode === "failed") {
+            expect(readAgentDatabaseAdmissionRefusal("main")).toMatchObject({
+              code: "agent-database-inspection-failed",
+              reason: "Controlled preparation failure",
+            });
+          } else {
+            expect(params.log.warn).not.toHaveBeenCalled();
+            expect(discover).toHaveBeenCalledOnce();
+            expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+            expect(loadExactSessionEntry(target)?.entry.lifecycleRunId).toBeUndefined();
+          }
+        } finally {
+          vi.useRealTimers();
+          open.resolve();
+          accepted.resolve({ ok: true });
+          await owner.stop();
+          await Promise.allSettled([startup, preparedWork]);
+          preparationWait.mockRestore();
+        }
+      });
+    } finally {
+      resume.mockRestore();
+      discover.mockRestore();
+    }
+  });
+}
+
+it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
+  "retains restart work across readable but write-pending preparation (%s)",
+  (mode, test) => checkRestartPreparation(mode, test),
+);
+
+it.for([false, true])(
+  "reuses a prepared restart snapshot and joins its queue admission (native pending: %s)",
+  (nativePending, test) => checkRestartPreparation("prepared", test, nativePending),
 );
 
 it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)(
@@ -281,12 +405,9 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         { agentId: "main", sessionKey: "agent:main:live", sessionId: "live" },
         { trackOwner: true, ownsContext: true },
       );
-      const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
-        accepted: Promise.resolve({ ok: true }),
-        id: "restart-input",
-        settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
-        cancel: () => false,
-      });
+      const resume = vi
+        .spyOn(sessionEvents, "enqueueSessionEventForHost")
+        .mockReturnValue(restartEventReceipt("restart-input"));
       try {
         for (let boot = 0; boot < 2; boot++) {
           await resumeMarkedSessions({
@@ -339,12 +460,7 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
 it("marks completed reply settlement only when accepted inputs remain queued", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:completed-before-restart",
-      sessionId: "completed-before-restart",
-    };
-    replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const target = seedRestartSession("completed-before-restart");
     const runId = "completed-worker-reply";
     const { operation, releaseExecution } = await withSessionTurn(target, async (active) => {
       assert(active, "Expected a real reply operation");
@@ -424,10 +540,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
             }),
           );
         }
-        const process = createProcessSessionFixture({ id: sessionKey, backgrounded: true });
-        process.agentId = agentId;
-        process.sessionKey = sessionKey;
-        addSession(process);
+        addRestartProcess(sessionKey, { agentId, sessionKey });
       }
       await persistRunningSessionsForRestart({ cfg: {} });
       for (const { sessionKey, resumable } of cases) {
@@ -465,14 +578,7 @@ it("settles captured queued sends as failed when the recorded owner's authority 
     };
     setRuntimeConfigSnapshot(cfg);
     const profile = ensureProfileForEmail("queued-before-revocation@example.test");
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:revoked-queued-owner",
-      sessionId: "revoked-queued-owner",
-    };
-    replaceSessionEntrySync(target, {
-      sessionId: target.sessionId,
-      updatedAt: 1,
+    const target = seedRestartSession("revoked-queued-owner", {
       createdActor: { type: "human", source: "profile", id: profile.id },
     });
     const receipt = await stageSessionPendingInput(target, {
@@ -487,10 +593,7 @@ it("settles captured queued sends as failed when the recorded owner's authority 
       assertCurrent() {},
     });
     assert(receipt, "Queued fixture input was not admitted");
-    const process = createProcessSessionFixture({ id: "revoked-owner-work", backgrounded: true });
-    process.agentId = target.agentId;
-    process.sessionKey = target.sessionKey;
-    addSession(process);
+    addRestartProcess("revoked-owner-work", target);
     try {
       await persistRunningSessionsForRestart({ cfg });
       receipt.finish("interrupted");
@@ -577,8 +680,7 @@ it("fails a captured browser-copilot send instead of running without its live bi
 it("resumes recent interrupted legacy cycles once and settles crash inputs", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const target = { agentId: "main", sessionKey: "agent:main:crashed", sessionId: "crashed" };
-    replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const target = seedRestartSession("crashed");
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     for (const [name, hoursAgo, status, abortedLastRun, tombstone] of [
       ["legacy", 1, "interrupted", true, undefined],
@@ -602,12 +704,9 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
         )
         .run(`agent:main:${name}`, name, JSON.stringify(entry), entry.updatedAt);
     }
-    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
-      accepted: Promise.resolve({ ok: true }),
-      id: "upgrade-resume",
-      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
-      cancel: () => false,
-    });
+    const resume = vi
+      .spyOn(sessionEvents, "enqueueSessionEventForHost")
+      .mockReturnValue(restartEventReceipt("upgrade-resume"));
     const discover = vi.spyOn(pendingInputWithdrawal, "listOrphanedSessionPendingInputTargets");
     const receipts = [];
     for (const runId of ["crashed", "live"]) {

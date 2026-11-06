@@ -321,7 +321,7 @@ function bindPersonPolicyRevocation(
   };
 }
 
-export function revokeAfterNextPrincipalRestore(revoke: () => void | Promise<void>) {
+function revokeAfterNextPrincipalRestore(revoke: () => void | Promise<void>) {
   const restore = cronSourceRuntime.restoreCronOperatorSource;
   vi.spyOn(cronSourceRuntime, "restoreCronOperatorSource").mockImplementationOnce(
     async (params) => {

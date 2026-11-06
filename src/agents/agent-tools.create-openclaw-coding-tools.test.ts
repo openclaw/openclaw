@@ -481,6 +481,20 @@ describe("createOpenClawCodingTools", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["fixture_allowed"]);
   });
 
+  it("preserves ordinary explicit automations inheritance outside a self-scoped run", () => {
+    const inheritedToolAllowlistRef: string[] = [];
+    const tools = createOpenClawCodingTools({
+      config: testConfig,
+      runtimeToolAllowlist: ["automations"],
+      inheritRuntimeToolAllowlist: true,
+      inheritedToolAllowlistRef,
+      senderIsOwner: true,
+    });
+    expectToolNames(tools, ["automations"]);
+    expect(inheritedToolAllowlistRef).toEqual(["automations"]);
+    expect(lastCoreOptions().inheritedToolDenylist).not.toContain("automations");
+  });
+
   it("lets direct callers inherit overlapping globs into subagent spawns", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

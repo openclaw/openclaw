@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Agent } from "../../../../packages/agent-core/src/agent.js";
 import { createMessageInjectionAuthority } from "../../../auto-reply/reply/message-injection-authority.js";
 import type { Context } from "../../../llm/types.js";
 import { createReplyOperation } from "../../../sessions/session-controller.js";
@@ -636,7 +637,7 @@ describe("prepareEmbeddedAttemptStream", () => {
           beforeAgentFinalizeRevisionAttempts: 0,
         },
         activeSession: {
-          agent: { hasQueuedMessages: () => false },
+          agent: new Agent({ streamFn: streamMocks.streamSimple }),
           isStreaming: false,
           messages,
           pendingMessageCount: 0,
@@ -688,7 +689,7 @@ describe("prepareEmbeddedAttemptStream", () => {
   it("keeps already-started steering authoritative over finalization", async () => {
     let resolveSteer: (() => void) | undefined;
     const activeSession = {
-      agent: { hasQueuedMessages: () => false },
+      agent: new Agent({ streamFn: streamMocks.streamSimple }),
       isStreaming: false,
       messages: [],
       pendingMessageCount: 0,

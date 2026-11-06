@@ -34,7 +34,7 @@ import {
   projectAgentToolsExecPolicy,
 } from "./agent-tools.execution-policy.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
-import { captureChildToolAllowlist } from "./agent-tools.inheritance.js";
+import { captureChildToolAllowlist, childToolDenylist } from "./agent-tools.inheritance.js";
 import {
   assertMemoryFlushPersistenceToolAvailable,
   projectMemoryFlushTools,
@@ -122,8 +122,7 @@ function* assembleOpenClawCodingTools(
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const { isMemoryFlushRun, memoryFlush, memoryFlushWritePath } =
     resolveMemoryFlushToolSetup(options);
-  const automationsScope = resolveAutomationsRunScope(options);
-  const cronSelfRemoveOnlyJobId = automationsScope.selfJobId;
+  const { selfJobId: cronSelfRemoveOnlyJobId, denied } = resolveAutomationsRunScope(options);
   // Prefer the already-resolved sandbox context policy. Recomputing from
   // sessionKey/config can lose the real sandbox agent when callers pass a
   // legacy alias like `main` instead of an agent session key.
@@ -333,7 +332,7 @@ function* assembleOpenClawCodingTools(
   });
   const { sessionPortalTarget, cronCreatorAuthorityResolver } = sessionToolAccess;
   // An ingress turn without a self scope gets no automations tool.
-  const ownerOnlyCoreToolDenylist = automationsScope.denied
+  const ownerOnlyCoreToolDenylist = denied
     ? [...sessionToolAccess.ownerOnlyCoreToolDenylist, AUTOMATIONS_TOOL_NAME]
     : sessionToolAccess.ownerOnlyCoreToolDenylist;
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
@@ -346,8 +345,10 @@ function* assembleOpenClawCodingTools(
     capabilityProfile.policy.inheritedToolPolicy?.deny ?? [],
     ownerOnlyCoreToolDenylist,
   );
-  const inheritedToolDenylist = requesterToolDenylist.concat(
-    capabilityProfile.policy.inheritedToolPolicyForSpawn?.deny ?? [],
+  const inheritedToolDenylist = childToolDenylist(
+    options,
+    requesterToolDenylist,
+    capabilityProfile,
   );
   const delegatedToolDenyFloor = prepareDelegatedToolDenyFloor(
     capabilityProfile,

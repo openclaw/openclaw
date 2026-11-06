@@ -3,13 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
-import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import * as sessionEventDelivery from "../auto-reply/reply/session-event-delivery.js";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import * as deliveryPreview from "../cron/delivery-preview.js";
 import type * as CronDelivery from "../cron/delivery.js";
 import { readCronRunRecordsForTests } from "../cron/run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
@@ -20,12 +21,12 @@ import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-bi
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { trackAsyncWork } from "../shared/async-work-scope.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import type { GatewayCronState } from "./server-cron-contract.js";
 import {
   cleanupCronTestRun,
@@ -41,6 +42,9 @@ import {
   expectCronJobIdFromResponse,
   expectCronRows as rows,
 } from "./server.cron.assertions.test-support.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
+import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 import {
   connectOk,
   cronIsolatedRun,
@@ -103,6 +107,7 @@ async function rmTempDir(dir: string) {
 
 let activeCronRun: Parameters<typeof cleanupCronTestRun>[0] | undefined;
 let disposeCronEventConsumer: (() => void) | undefined;
+let disposeSessionProjection: (() => void) | undefined;
 
 async function startCronClient() {
   const { server, ws } = await startServerWithClient();
@@ -136,29 +141,26 @@ async function setupCronTestRun() {
 }
 
 type DirectCronState = GatewayCronState & {
-  getRuntimeConfig: () => import("../config/types.openclaw.js").OpenClawConfig;
+  context: ReturnType<typeof createDirectChatContext>;
+  prepareSessionReads: (...agentIds: string[]) => Promise<void>;
   request: (method: string, params: Record<string, unknown>) => Promise<DirectCronResponse>;
   addJob: (name: string, overrides?: Partial<CronJobCreate>) => Promise<DirectCronResponse>;
 };
 
 type CronBroadcast = (event: string, payload: unknown) => void;
 
-type DirectCronResponse = {
-  ok: boolean;
-  payload?: unknown;
-  error?: { code?: string; message?: string; details?: unknown };
-};
+type DirectCronError = { code?: string; message?: string; details?: unknown };
+type DirectCronResponse = { ok: boolean; payload?: unknown; error?: DirectCronError };
 
-async function createDirectCronState(params?: {
-  broadcast?: CronBroadcast;
-}): Promise<DirectCronState> {
+async function createDirectCronState(params?: { broadcast?: CronBroadcast }) {
   resetConfigRuntimeState();
-  const [{ getRuntimeConfig }, { buildGatewayCronService }] = await Promise.all([
+  const [{ getRuntimeConfig: getConfig }, { buildGatewayCronService }] = await Promise.all([
     import("../config/config.js"),
     import("./server-cron.js"),
   ]);
-  const cfg = getRuntimeConfig();
+  const cfg = getConfig();
   const storePath = await resolveCronJobsStorePathFromConfigAsync(cfg);
+  const context = createDirectChatContext({ getRuntimeConfig: getConfig });
   const cronState: DirectCronState = {
     ...buildGatewayCronService({
       scheduler: createTestGatewayScheduler({
@@ -170,10 +172,22 @@ async function createDirectCronState(params?: {
       deps: {} as never,
       broadcast: params?.broadcast ?? vi.fn(),
     }),
-    getRuntimeConfig,
+    context,
+    prepareSessionReads: async (...agentIds) => {
+      for (const agentId of agentIds.length ? agentIds : ["main"]) {
+        await upsertSessionEntryCore(
+          { agentId, sessionKey: `agent:${agentId}:main` },
+          { sessionId: `cron-${agentId}-main`, updatedAt: 1, visibility: "shared" },
+        );
+      }
+      const projection = await createSessionRowProjection({ cfg, getConfig, context });
+      bindSessionRowProjection(context, () => projection);
+      disposeSessionProjection = projection.dispose;
+    },
     request: (method, requestParams) => directCronReq(cronState, method, requestParams),
     addJob: (name, overrides) => directCronReq(cronState, "cron.add", makeCronJob(name, overrides)),
   };
+  Object.assign(context, { cron: cronState.cron, cronStorePath: storePath });
   expectDefined(activeCronRun, "cron setup").cronState = cronState;
   return cronState;
 }
@@ -183,10 +197,10 @@ function createCronEventCollector(signal: AbortSignal) {
   const waiters = new Set<(payload: Record<string, unknown>) => void>();
   return {
     broadcast: (event: string, payload: unknown) => {
-      if (event !== "cron" || !payload || typeof payload !== "object" || Array.isArray(payload)) {
+      const record = asOptionalRecord(payload);
+      if (event !== "cron" || !record) {
         return;
       }
-      const record = payload as Record<string, unknown>;
       events.push(record);
       for (const notify of waiters) {
         notify(record);
@@ -198,12 +212,8 @@ function createCronEventCollector(signal: AbortSignal) {
         return existing;
       }
       const result = createDeferred<Record<string, unknown>>();
-      const notify = (payload: Record<string, unknown>) => {
-        if (check(payload)) {
-          waiters.delete(notify);
-          result.resolve(payload);
-        }
-      };
+      const notify = (payload: Record<string, unknown>) =>
+        check(payload) ? result.resolve(payload) : undefined;
       waiters.add(notify);
       try {
         return await withinTest(result.promise, signal);
@@ -218,6 +228,7 @@ async function directCronReq(
   cronState: DirectCronState,
   method: string,
   params: Record<string, unknown>,
+  client: ReturnType<typeof sharingPolicyClient> | null = null,
 ): Promise<DirectCronResponse> {
   const { cronHandlers } = await import("./server-methods/cron.js");
   let result: DirectCronResponse | undefined;
@@ -225,27 +236,18 @@ async function directCronReq(
     result = { ok, payload, error };
   };
   try {
-    await expectDefined(
-      cronHandlers[method],
-      "cronHandlers[method] test invariant",
-    )({
+    const handler = expectDefined(cronHandlers[method], "cronHandlers[method] test invariant");
+    await handler({
       req: {} as never,
       params,
       respond,
-      context: {
-        cron: cronState.cron,
-        cronStorePath: cronState.storePath,
-        logGateway: createInfoWarnErrorLogger(),
-        getRuntimeConfig: cronState.getRuntimeConfig,
-      } as never,
-      client: null,
+      context: cronState.context,
+      client,
       isWebchatConnect: () => false,
     });
   } catch (err) {
-    respond(false, undefined, {
-      code: "unavailable",
-      message: err instanceof Error ? err.message : String(err),
-    });
+    const message = err instanceof Error ? err.message : String(err);
+    respond(false, undefined, { code: "unavailable", message });
   }
   return expectDefined(result, `${method} did not respond`);
 }
@@ -282,10 +284,9 @@ function expectWebhook(index: number, url: string, jobId: string, summary: strin
 }
 
 async function writeCronConfig(config: unknown) {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  expect(typeof configPath).toBe("string");
-  await fs.mkdir(path.dirname(configPath as string), { recursive: true });
-  await fs.writeFile(configPath as string, JSON.stringify(config, null, 2), "utf-8");
+  const configPath = expectDefined(process.env.OPENCLAW_CONFIG_PATH, "cron config path");
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
   resetConfigRuntimeState();
 }
 
@@ -295,12 +296,11 @@ function getWebhookCall(index: number) {
   if (typeof rawBody !== "string") {
     throw new Error("expected a JSON webhook body");
   }
-  const body = JSON.parse(rawBody) as Record<string, unknown>;
   return {
     url: request.url,
     method: request.init?.method,
     headers: new Headers(request.init?.headers),
-    body,
+    body: JSON.parse(rawBody) as Record<string, unknown>,
   };
 }
 
@@ -320,16 +320,10 @@ function holdIsolatedRun() {
 describe("gateway server cron", () => {
   beforeAll(async () => {
     cronSuiteTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-cron-suite-"));
-    await Promise.all([
-      import("../config/config.js"),
-      import("./server-cron.js"),
-      import("./server-methods/cron.js"),
-    ]);
+    await Promise.all([import("./server-cron.js"), import("./server-methods/cron.js")]);
   });
 
-  afterAll(async () => {
-    await rmTempDir(cronSuiteTempRoot);
-  });
+  afterAll(() => rmTempDir(cronSuiteTempRoot));
 
   afterEach(async () => {
     const run = activeCronRun;
@@ -341,6 +335,8 @@ describe("gateway server cron", () => {
     } finally {
       disposeCronEventConsumer?.();
       disposeCronEventConsumer = undefined;
+      disposeSessionProjection?.();
+      disposeSessionProjection = undefined;
     }
     testState.sessionStorePath = undefined;
     testState.sessionConfig = undefined;
@@ -408,6 +404,7 @@ describe("gateway server cron", () => {
     testState.sessionStorePath = path.join(caseDir, "invalid.sqlite");
     await fs.writeFile(testState.sessionStorePath, "not a SQLite database");
     const cronState = await createDirectCronState();
+    using preview = vi.spyOn(deliveryPreview, "resolveCronDeliveryPreview");
 
     const response = await cronState.request("cron.add", {
       name: "preview failure",
@@ -416,11 +413,18 @@ describe("gateway server cron", () => {
     });
 
     expect(response.ok).toBe(false);
+    await expect(preview.mock.results[0]?.value).rejects.toThrow("not a database");
     expect(await cronState.cron.list({ includeDisabled: true })).toHaveLength(0);
   });
 
   test("atomically rejects stale config revisions without conflicting on runtime state", async () => {
     const cronState = await createDirectCronState();
+    const unprepared = await cronState.request("cron.list", {});
+    expect(unprepared.ok).toBe(false);
+    expect(unprepared.error?.message).toBe(
+      "Session projection is unavailable before Gateway startup completes",
+    );
+    await cronState.prepareSessionReads();
 
     const added = await cronState.addJob("revision protected", {
       payload: { kind: "systemEvent", text: "original" },
@@ -481,6 +485,7 @@ describe("gateway server cron", () => {
     });
 
     const cronState = await createDirectCronState();
+    await cronState.prepareSessionReads("ops");
 
     const addRes = await cronState.addJob("main default agent drift", { agentId: "ops" });
     const jobId = expectCronJobIdFromResponse(addRes);
@@ -491,7 +496,8 @@ describe("gateway server cron", () => {
       channels: { telegram: { botToken: "telegram-token" } },
     });
 
-    const agentIds = Object.keys(cronState.getRuntimeConfig().agents?.entries ?? {});
+    const { agents } = cronState.context.getRuntimeConfig();
+    const agentIds = Object.keys(agents?.entries ?? {});
     expect(agentIds).toContain("main");
     expect(agentIds).toContain("ops");
     expect(cronState.cron.getDefaultAgentId()).toBe("main");
@@ -542,6 +548,7 @@ describe("gateway server cron", () => {
     });
     const events = createCronEventCollector(signal);
     const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
+    await cronState.prepareSessionReads("main", "writer");
 
     disposeCronEventConsumer = await installCronSystemEventConsumer();
 
@@ -599,15 +606,17 @@ describe("gateway server cron", () => {
     expect(rows(mainRuns)).not.toContainEqual(expect.objectContaining({ jobId: writerJobId }));
     expect(rows(writerRuns)).toContainEqual(expect.objectContaining({ jobId: writerJobId }));
 
+    // Deleted jobs cannot establish an anonymous run audience; retained inventory needs admin.
     const removeWriter = await cronState.request("cron.remove", { id: writerJobId });
     expect(removeWriter.ok).toBe(true);
-    expect(readCronRunRecordsForTests(writerJobId)).toEqual([
-      expect.objectContaining({ jobId: writerJobId, agentId: "writer" }),
-    ]);
-    const retainedWriterRuns = await cronState.request("cron.runs", {
-      scope: "all",
-      agentId: "writer",
-    });
+    const stored = readCronRunRecordsForTests(writerJobId);
+    expect(stored).toEqual([expect.objectContaining({ jobId: writerJobId, agentId: "writer" })]);
+    expect(stored[0]?.sessionKey).toBeUndefined();
+    const history = { scope: "all", agentId: "writer" };
+    const hidden = await cronState.request("cron.runs", history);
+    expect(hidden.payload).toMatchObject({ entries: [], total: 0 });
+    const admin = sharingPolicyClient({ scopes: ["operator.admin"] });
+    const retainedWriterRuns = await directCronReq(cronState, "cron.runs", history, admin);
     expect(retainedWriterRuns.payload).toMatchObject({
       entries: [expect.objectContaining({ jobId: writerJobId })],
       total: 1,
@@ -642,6 +651,7 @@ describe("gateway server cron", () => {
     testState.cronEnabled = true;
     const events = createCronEventCollector(signal);
     const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
+    await cronState.prepareSessionReads();
     disposeCronEventConsumer = await installCronSystemEventConsumer();
 
     const addRes = await cronState.addJob("plugin runtime nudge", {
@@ -653,18 +663,10 @@ describe("gateway server cron", () => {
       (payload) => payload.jobId === jobId && payload.action === "finished",
     );
     const runtime = createPluginRuntime();
-    const context = {
-      trackExecution: trackAsyncWork,
-      cron: cronState.cron,
-      cronStorePath: cronState.storePath,
-      logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      getRuntimeConfig: cronState.getRuntimeConfig,
-    } as never;
-
     const runThroughPlugin = async (id: string) =>
       await withPluginRuntimeGatewayRequestScope(
         {
-          context,
+          context: cronState.context,
           client: {
             connect: { scopes: ["operator.read"] },
             internal: {

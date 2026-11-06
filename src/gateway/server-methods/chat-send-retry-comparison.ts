@@ -61,7 +61,7 @@ export function readChatSendRetryComparison(session: ComparisonSession) {
 export function compareChatSendSubmittedInput(
   request: Pick<
     NormalizedChatSendRequest,
-    "requestIdentity" | "rawMessage" | "mentions" | "workContext"
+    "requestIdentity" | "rawMessage" | "mentions" | "workContext" | "appContext"
   >,
   session: ComparisonSession,
   comparison?: ChatSendRetryComparison,
@@ -83,7 +83,9 @@ export function compareChatSendSubmittedInput(
   }
   const submitted = comparison?.submitted;
   if (!submitted) {
-    return request.mentions?.length || request.workContext ? "unverifiable" : false;
+    return request.mentions?.length || request.workContext || request.appContext
+      ? "unverifiable"
+      : false;
   }
   const storedIdentity = submitted["__openclaw"]?.chatRequestIdentity;
   if (typeof storedIdentity === "string") {
@@ -106,13 +108,16 @@ export function compareChatSendSubmittedInput(
     !request.mentions?.length &&
     !storedMentions?.length &&
     !request.workContext &&
-    !storedContext
+    !storedContext &&
+    !request.appContext &&
+    !submitted["__openclaw"]?.appContext
   ) {
     return false;
   }
   return (
     storedText !== request.rawMessage ||
     !isDeepStrictEqual(storedMentions ?? [], request.mentions ?? []) ||
-    !isDeepStrictEqual(storedContext, request.workContext)
+    !isDeepStrictEqual(storedContext, request.workContext) ||
+    !isDeepStrictEqual(submitted["__openclaw"]?.appContext, request.appContext)
   );
 }

@@ -645,6 +645,7 @@ export function presentSessionRow(
     now: number;
     childActivity?: SessionChildActivity;
     backgroundProcessCount?: number;
+    preparedRunState?: ReturnType<typeof projectGatewaySessionRunState>;
   },
 ): GatewaySessionRow {
   const row = { ...materialized.row };
@@ -662,17 +663,19 @@ export function presentSessionRow(
   }
   const subagentRuns =
     options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
-  const { subagentRun, fields } = projectGatewaySessionRunState({
-    key: row.key,
-    parsedKey: source.parsedKey,
-    entry,
-    now,
-    rowContext: {
-      subagentRuns,
-      projectedAgentRuns: options.projectedAgentRuns,
-      projectedSubagentActivity: options.projectedSubagentActivity,
-    },
-  });
+  const { subagentRun, fields } =
+    options.preparedRunState ??
+    projectGatewaySessionRunState({
+      key: row.key,
+      parsedKey: source.parsedKey,
+      entry,
+      now,
+      rowContext: {
+        subagentRuns,
+        projectedAgentRuns: options.projectedAgentRuns,
+        projectedSubagentActivity: options.projectedSubagentActivity,
+      },
+    });
   Object.assign(row, fields);
   const usage = source.usageByFallbackModel?.get(subagentRun?.model);
   row.usageReport ??= usage?.usageReport;

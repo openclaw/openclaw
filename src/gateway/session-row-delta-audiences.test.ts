@@ -334,9 +334,9 @@ it.each(["direct", "lifecycle", "agent"])("shares %s envelopes", async (producer
         }
         if (
           Array.isArray(value) &&
-          value.length === 11 &&
           isRecord(value[0]) &&
-          value[0].kind === "operator"
+          value[0].kind === "operator" &&
+          typeof value.at(-1) === "boolean"
         ) {
           sharingKeyEncodings++;
         }
@@ -423,7 +423,7 @@ it.each(["direct", "lifecycle", "agent"])("shares %s envelopes", async (producer
       expect(fieldNameInsertions).toBe(0);
       // Index construction must not stage a tuple for every field before inserting it.
       expect(stagedFieldIndexTuples).toBe(0);
-      // Row changes retain connection keys; only four unprimed legacy sockets need encoding.
+      // Authority keys end in ownerEquivalent; only four unprimed legacy sockets encode them.
       expect(sharingKeyEncodings).toBe(4);
       // Four authority/baseline groups share row planning across both delta capabilities.
       expect(rowEncodings).toBeLessThanOrEqual(16);

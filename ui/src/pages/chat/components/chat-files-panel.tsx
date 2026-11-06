@@ -9,6 +9,7 @@ import {
   onSettled,
   refresh,
 } from "solid-js";
+import { McpAppIcon } from "../../../components/mcp-app-icon.tsx";
 import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
@@ -149,7 +150,7 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
         title: content.kind === "file" ? content.path : label,
         get icon() {
           return content.kind === "mcp-app" ? (
-            <Icon name="puzzle" />
+            <McpAppIcon icons={content.launch.entrypoint.icons ?? []} />
           ) : (
             <AttachmentFileIcon filename={label} mode="preview-with-favicon" />
           );

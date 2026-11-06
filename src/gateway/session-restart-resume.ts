@@ -287,7 +287,7 @@ const restartRecovery = new WeakMap<
   {
     ready: Deferred;
     allowUnmarked: boolean;
-    stores: Map<string, Promise<void>>;
+    stores: Map<string, { target: RestartStoreTarget; work?: Promise<void> }>;
   }
 >();
 function getRestartRecovery(context: GatewayRequestContext) {
@@ -367,9 +367,13 @@ function resumePreparedRestartStore(
   prepared: PreparedRestartStore,
 ): Promise<void> {
   const recovery = getRestartRecovery(params.context);
-  let work = recovery.stores.get(prepared.target.storePath);
-  if (!work) {
-    work = Promise.resolve().then(async () => {
+  let store = recovery.stores.get(prepared.target.storePath);
+  if (!store) {
+    store = { target: prepared.target };
+    recovery.stores.set(prepared.target.storePath, store);
+  }
+  if (!store.work) {
+    store.work = Promise.resolve().then(async () => {
       // Native writes must be ready; the recovery owns its separate input-admission fence.
       await params.context.agentDatabaseStartup?.waitForAgentPreparation(
         prepared.target.physicalAgentId,
@@ -381,9 +385,8 @@ function resumePreparedRestartStore(
         () => resumeRestartStore(params, prepared),
       );
     });
-    recovery.stores.set(prepared.target.storePath, work);
   }
-  return work;
+  return store.work;
 }
 
 /** Capture data during preparation; admit it only after the native borrow and startup prerequisites. */
@@ -395,6 +398,7 @@ export async function prepareAgentRestartRecovery(
   },
 ): Promise<(() => Promise<void>) | undefined> {
   const prepared: PreparedRestartStore[] = [];
+  const recovery = getRestartRecovery(params.context);
   for (const target of await discoverRestartSessionStores(params, params.env)) {
     if (target.physicalAgentId !== params.agentId) {
       continue;
@@ -404,6 +408,11 @@ export async function prepareAgentRestartRecovery(
     params.assertCurrent();
     if (store && (store.entries.length || store.orphaned.length)) {
       prepared.push(store);
+      // Read discovery can exclude this store until native preparation finishes.
+      // Retain its physical owner now so startup still joins captured input custody.
+      if (!recovery.stores.has(target.storePath)) {
+        recovery.stores.set(target.storePath, { target });
+      }
     }
   }
   if (!prepared.length) {
@@ -411,7 +420,7 @@ export async function prepareAgentRestartRecovery(
   }
   // Do not retain assertCurrent: it belongs to the temporary preparation borrow.
   const { context, signal, log } = params;
-  const ready = getRestartRecovery(context).ready.promise;
+  const ready = recovery.ready.promise;
   return async () => {
     await racePromiseWithAbortSignal(ready, signal);
     await runWithGatewayIndependentRootWorkAdmission(
@@ -455,8 +464,7 @@ export async function resumeMarkedSessions(params: RestartResumeParams): Promise
       const agentIds = listConfiguredSessionStoreAgentIds(context.getRuntimeConfig());
       const prepared = await Promise.allSettled(
         agentIds.flatMap(
-          (agentId) =>
-            preparation.waitForAgentPreparation(agentId, { signal, forWrite: true }) ?? [],
+          (agentId) => preparation.waitForAgentPreparation(agentId, { signal }) ?? [],
         ),
       );
       if (
@@ -477,13 +485,17 @@ export async function resumeMarkedSessions(params: RestartResumeParams): Promise
     await resumePreparedRestartStore(params, store);
   }
   // Prepared closures must own their FIFO slots before startup unlocks reconnecting sends.
-  for (const target of targets) {
+  const inputTargets = new Map(targets.map((target) => [target.storePath, target]));
+  for (const [storePath, { target }] of recovery.stores) {
+    inputTargets.set(storePath, target);
+  }
+  for (const target of inputTargets.values()) {
     await params.context.agentDatabaseStartup?.waitForAgentPreparation(target.physicalAgentId, {
       signal: params.signal,
       forInput: true,
     });
   }
-  for (const work of recovery.stores.values()) {
+  for (const { work } of recovery.stores.values()) {
     await work;
   }
 }

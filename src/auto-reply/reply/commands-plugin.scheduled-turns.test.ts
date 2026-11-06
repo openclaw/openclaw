@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { listSwarmRunReservationIds } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   listSessionChildEntriesReadOnly,
   loadSessionEntry,
@@ -24,6 +25,7 @@ import {
   declaredCommand,
   pluginId,
   scheduleRequest,
+  scheduledTurns,
   withCommandPlugin,
 } from "./commands-plugin.scheduled-turns.test-support.js";
 
@@ -94,10 +96,7 @@ describe("requester-admitted scheduled commands", () => {
         const native = expectDefined(ctx.runtimeContext?.subagents, "native helpers");
         expect(Object.keys(native).toSorted()).toEqual(["collect", "list", "spawn"]);
         await expect(expectDefined(native.list, "native child list")()).resolves.toEqual([]);
-        const schedules = expectDefined(
-          ctx.runtimeContext?.scheduledTurns,
-          "live schedule capability",
-        );
+        const schedules = scheduledTurns(ctx, "live schedule capability");
         retained = schedules;
         const definition = scheduleRequest();
         const [first, duplicate] = await Promise.all([
@@ -140,7 +139,7 @@ describe("requester-admitted scheduled commands", () => {
     await withCommandPlugin(async (fixture) => {
       const original = { ...scheduleRequest(), args: "original arguments" };
       fixture.handler.mockImplementation(async (ctx) => {
-        const native = expectDefined(ctx.runtimeContext?.scheduledTurns, "schedule capability");
+        const native = scheduledTurns(ctx);
         const input = { ...original, schedule: { ...original.schedule } };
         const pending = native.schedule(input);
         input.requestId = "mutated-id";
@@ -193,11 +192,9 @@ describe("requester-admitted scheduled commands", () => {
       });
       initializeGlobalHookRunner(fixture.registry);
       fixture.handler.mockImplementation(async (ctx) => {
-        await expect(
-          expectDefined(ctx.runtimeContext?.scheduledTurns, "schedule capability").schedule(
-            scheduleRequest(),
-          ),
-        ).rejects.toThrow(/denied|not accepted|blocked/i);
+        await expect(scheduledTurns(ctx).schedule(scheduleRequest())).rejects.toThrow(
+          /denied|not accepted|blocked/i,
+        );
         return { text: "refused" };
       });
       expect((await commandInvocation(fixture).run())?.reply?.text).toBe("refused");
@@ -218,7 +215,7 @@ describe("requester-admitted scheduled commands", () => {
       });
       initializeGlobalHookRunner(fixture.registry);
       fixture.handler.mockImplementation(async (ctx) => {
-        const schedules = expectDefined(ctx.runtimeContext?.scheduledTurns, "schedule capability");
+        const schedules = scheduledTurns(ctx);
         const request = scheduleRequest();
         await expect(schedules.schedule(request)).rejects.toThrow(/not accepted|denied|blocked/i);
         // The failed request is not pinned to its rejection; the retry reaches the scheduler.
@@ -243,10 +240,7 @@ describe("native scheduled command execution", () => {
     await withCommandPlugin(async (fixture) => {
       let accepted: { jobId: string } | undefined;
       fixture.handler.mockImplementation(async (ctx) => {
-        accepted = await expectDefined(
-          ctx.runtimeContext?.scheduledTurns,
-          "schedule capability",
-        ).schedule(scheduleRequest({ maxRuns: 1 }));
+        accepted = await scheduledTurns(ctx).schedule(scheduleRequest({ maxRuns: 1 }));
         return { text: "scheduled" };
       });
       await commandInvocation(fixture).run();
@@ -272,6 +266,12 @@ describe("native scheduled command execution", () => {
       let childRunId: string | undefined;
       let childSessionKey: string | undefined;
       fixture.handler.mockImplementation(async (ctx) => {
+        const authority = expectDefined(
+          getGatewayToolCallerIdentity()?.operatorAuthority,
+          "retained admin authority",
+        );
+        authority.assertCurrent();
+        expect(authority.scopes).toContain("operator.admin");
         const native = expectDefined(ctx.runtimeContext?.subagents, "scheduled native runtime");
         const child = await native.spawn({
           requestId: "scheduled-positive",
@@ -302,12 +302,14 @@ describe("native scheduled command execution", () => {
         storePath: parent.storePath,
       });
       expect(child?.spawnedBy).toBe(parent.sessionKey);
-      // The child inherits the stored ceiling minus scheduling: no recursive schedules.
-      expect(child?.inheritedToolAllow).toEqual(["read", "sessions_spawn", "agents_wait"]);
+      // The parent retains admin authority, but its occurrence self-only grant is not delegable.
       expect(subagentRuns.get(expectDefined(childRunId, "accepted child run"))).toMatchObject({
         requesterSessionKey: parent.sessionKey,
         requesterTurnRunId: expectDefined(capacity.occurrenceRunId(), "scheduled occurrence run"),
       });
+      // Self-only automations cannot be delegated, including through an empty allowlist.
+      expect(child?.inheritedToolDeny).toContain("automations");
+      expect(child?.inheritedToolAllow).toEqual(["read", "sessions_spawn", "agents_wait"]);
     });
   });
   /**

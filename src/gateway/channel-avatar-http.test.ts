@@ -42,7 +42,7 @@ vi.mock("../media/store.js", () => ({
   readMediaBuffer: (...args: unknown[]) => mocks.readMedia(...args),
 }));
 
-// Image-format unit cases isolate storage; confidential policy is covered by the real-policy suite.
+// mock-isolation: image-format cases isolate DB workers; real-policy suite covers confidential ACL.
 vi.mock("./session-sharing-preparation.js", () => ({
   prepareSessionMutationFacts: async () => ({ readCurrent: mocks.readSharing, release() {} }),
 }));

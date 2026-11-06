@@ -21,10 +21,12 @@ import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { finishFailedGatewayHttpResponse } from "./http-common.js";
 
 const media = vi.hoisted(() => ({ read: vi.fn() }));
-vi.mock("../media/media-reference.js", () => ({
+vi.mock("../media/media-reference.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../media/media-reference.js")>()),
   resolveInboundMediaReference: async () => ({ id: "confidential-avatar.png" }),
 }));
-vi.mock("../media/store.js", () => ({
+vi.mock("../media/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../media/store.js")>()),
   readMediaBuffer: (...args: unknown[]) => media.read(...args),
 }));
 const { handleChannelAvatarHttpRequest } = await import("./channel-avatar-http.js");
