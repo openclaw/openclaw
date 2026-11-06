@@ -2657,7 +2657,8 @@ jobs:
           api-key: ${{ secrets.BOAT_API_KEY }}
           boat-org: ${{ vars.BOAT_ORG }}
           runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
       - name: Provision drain runner
         id: drain
         uses: ./.github/actions/boat-release-runner
@@ -2667,7 +2668,8 @@ jobs:
           api-key: ${{ secrets.BOAT_API_KEY }}
           boat-org: ${{ vars.BOAT_ORG }}
           runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
 
   release_decision:
     name: Release Decision
@@ -3041,7 +3043,8 @@ jobs:
           api-key: ${{ secrets.BOAT_API_KEY }}
           boat-org: ${{ vars.BOAT_ORG }}
           runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
           vm: ${{ needs.boat_release_runners.outputs.decision_vm }}
           runner: ${{ needs.boat_release_runners.outputs.decision_runner }}
       - name: Cleanup drain runner
@@ -3054,6 +3057,7 @@ jobs:
           api-key: ${{ secrets.BOAT_API_KEY }}
           boat-org: ${{ vars.BOAT_ORG }}
           runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
           vm: ${{ needs.boat_release_runners.outputs.drain_vm }}
           runner: ${{ needs.boat_release_runners.outputs.drain_runner }}
