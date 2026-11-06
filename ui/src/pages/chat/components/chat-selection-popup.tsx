@@ -177,7 +177,7 @@ export function handleChatSelectionPointerUp(
             showChatSelectionToolbar(threadRoot, range, text, actions);
           }
         })
-        .catch((error) => {
+        .catch((error: unknown) => {
           if (selectionPopupTimer === pending) {
             selectionPopupTimer = null;
             reportError(error);

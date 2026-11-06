@@ -110,8 +110,8 @@ describe("chat selection popup", () => {
     const thread = selection("replacement selection", 11);
     const firstAskSideChat = vi.fn();
     const secondAskSideChat = vi.fn();
-    pointerUp(thread, { onAskSideChat: firstAskSideChat }, false);
-    pointerUp(thread, { onAskSideChat: secondAskSideChat }, false);
+    void pointerUp(thread, { onAskSideChat: firstAskSideChat }, false);
+    void pointerUp(thread, { onAskSideChat: secondAskSideChat }, false);
     vi.advanceTimersToNextTimer();
     await vi.dynamicImportSettled();
     expect(popup()?.getAttribute("aria-label")).toBe("Selection actions");
@@ -144,7 +144,7 @@ describe("chat selection popup", () => {
     ["mounted", "pane-b", true],
   ] as const)("retiring %s selection owner %s leaves popup=%s", async (phase, pane, retained) => {
     const thread = selection("Keep this selection", 4);
-    pointerUp(thread, { onAskSideChat: onAskSideChatSpy }, false);
+    void pointerUp(thread, { onAskSideChat: onAskSideChatSpy }, false);
     if (phase === "mounted") {
       vi.runAllTimers();
       await vi.dynamicImportSettled();
