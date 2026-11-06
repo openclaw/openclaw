@@ -8,6 +8,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { deferGatewayRestartUntilIdle as deferPreparedRestartUntilIdle } from "./restart-runtime.js";
 import {
   consumeGatewayRestartIntent,
   deferGatewayRestartUntilIdle,
@@ -177,7 +178,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     async (preparationPhase) => {
       const { promise: preparation, resolve: releasePreparation } = createDeferred();
       const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
-      const handle = deferGatewayRestartUntilIdle({
+      const handle = deferPreparedRestartUntilIdle({
         getPendingCount: () => 0,
         ...(preparationPhase === "prepareEmission"
           ? { prepareEmission: async () => await preparation }

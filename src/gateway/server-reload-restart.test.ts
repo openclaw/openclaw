@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
+import * as restartRuntime from "../infra/restart-runtime.js";
 import * as restartModule from "../infra/restart.js";
 import {
   resetGatewayWorkAdmission,
@@ -295,10 +296,10 @@ describe("gateway restart readiness preflight", () => {
 
   it("keeps the timed-out deferral cancellable so a later request can supersede it", async () => {
     const cancel = vi.fn();
-    const deferSpy = vi.spyOn(restartModule, "deferGatewayRestartUntilIdle");
-    let capturedHooks: Parameters<typeof restartModule.deferGatewayRestartUntilIdle>[0]["hooks"];
+    const deferSpy = vi.spyOn(restartRuntime, "deferGatewayRestartUntilIdle");
+    let capturedHooks: Parameters<typeof restartRuntime.deferGatewayRestartUntilIdle>[0]["hooks"];
     deferSpy.mockImplementation(
-      (opts: Parameters<typeof restartModule.deferGatewayRestartUntilIdle>[0]) => {
+      (opts: Parameters<typeof restartRuntime.deferGatewayRestartUntilIdle>[0]) => {
         capturedHooks = opts.hooks;
         return { cancel };
       },

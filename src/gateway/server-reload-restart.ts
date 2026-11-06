@@ -6,11 +6,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../infra/restart-intent.js";
-import {
-  deferGatewayRestartUntilIdle,
-  type RestartDeferralHandle,
-  setGatewayRestartPolicy,
-} from "../infra/restart.js";
+import { deferGatewayRestartUntilIdle } from "../infra/restart-runtime.js";
+import { type RestartDeferralHandle, setGatewayRestartPolicy } from "../infra/restart.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createAppliedConfigHashPublisher } from "./applied-config-hash-publisher.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
