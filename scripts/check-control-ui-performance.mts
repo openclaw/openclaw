@@ -54,10 +54,10 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Preserve both merge legs: common 1,288,198 B + bounded-history allocation 9,306 B,
-  // plus the incoming sidebar adjustment (-85 B) and approved provider causes (+1,024 B).
-  chatBootJsGzipBytes: 1_298_443,
-  newBootJsGzipBytes: 797_620,
+  // Incoming main 1,287,916 B plus the accepted bounded-history allocation 9,306 B.
+  // Preserve main's measured paydown; this merge adds no new headroom.
+  chatBootJsGzipBytes: 1_297_222,
+  newBootJsGzipBytes: 796_969,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -71,10 +71,9 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Header-local notice matching adds 13 B and lowers 400-message 4x scroll CPU 5–7%.
-  totalCssGzipBytes: 324_685,
-  // Ranked selector splits: measured raw CSS plus 64 B headroom.
-  totalCssRawBytes: 1_678_428,
+  // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
+  totalCssGzipBytes: 324_684,
+  totalCssRawBytes: 1_675_382,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

@@ -1,5 +1,7 @@
 import type { Page } from "playwright";
+import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { createTeamScaleHistoryFixture } from "../../ui/src/test-helpers/control-ui-team-scale-history-fixture.ts";
 import {
   createEngineTranscript,
   engineProbeInitScript,
@@ -13,6 +15,132 @@ const sessionKey = "agent:main:interaction-a";
 const secondSessionKey = "agent:main:interaction-b";
 const activePane = ".chat-pane-cache__pane--active";
 const inputSelector = ".agent-chat__composer-combobox textarea";
+
+function streamOnsetScenario(messages = 2_000, preparation = false): EngineScenario {
+  const text = "First streamed token.";
+  const runId = "engine-streaming-boundary";
+  return {
+    id: preparation
+      ? "streaming-working-preparation"
+      : `streaming-onset${messages === 400 ? "-short" : ""}`,
+    explicitOnly: true,
+    route: controlUiSessionPath(sessionKey),
+    expected: preparation
+      ? "An empty first delta prepares the working indicator over retained history."
+      : "The first answer delta commits without replacing retained history.",
+    initScript: engineProbeInitScript(),
+    fixtureOverrides: (_sandbox, base) => ({
+      sessions: base.sessions.map((row) =>
+        row.key === sessionKey
+          ? {
+              ...row,
+              hasActiveRun: !preparation,
+              status: preparation ? "done" : "running",
+              activeRunIds: preparation ? [] : [runId],
+            }
+          : row,
+      ),
+      sessionTranscripts: {
+        [sessionKey]: {
+          messages: createTeamScaleHistoryFixture({
+            messageCount: messages,
+            inlineWidgets: 0,
+            now: 1_800_000_000_000,
+            richTranscript: true,
+            sessionInfo: base.sessions[0]!,
+            assets: new Map(),
+            models: [],
+          }).historyMessages,
+          ...(!preparation
+            ? { inFlightRun: { runId, text: "", startedAt: 1_800_005_000_000 } }
+            : {}),
+        },
+      },
+    }),
+    prepare: async (page) => {
+      await page.waitForFunction(() => Reflect.get(window, "__engineBootReadiness")?.readyMs > 0);
+      if (preparation) {
+        await page.locator(`${activePane} .chat-working-indicator`).waitFor({ state: "hidden" });
+      }
+      await frames(page);
+    },
+    run: async (page) =>
+      page.evaluate(
+        async ({
+          selector,
+          text: expectedText,
+          runId: activeRunId,
+          sessionKey: activeSessionKey,
+          preparation: prepareWorking,
+        }) => {
+          const pane = document.querySelector<HTMLElement>(selector)!;
+          const thread = pane.querySelector<HTMLElement>(".chat-thread")!;
+          const retained = Array.from(thread.querySelectorAll(".chat-virtual-row"));
+          // SAFETY: The benchmark installs the typed mock before this production page loads.
+          const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+          return new Promise<Record<string, number | boolean>>((resolve, reject) => {
+            let committedAt: number | undefined;
+            const timeout = setTimeout(() => {
+              observer.disconnect();
+              reject(
+                new Error(
+                  `Streaming boundary did not commit: ${JSON.stringify({
+                    workingIndicator: Boolean(thread.querySelector(".chat-working-indicator")),
+                    entries: Array.from(thread.querySelectorAll("[data-entry-id]")).map((row) =>
+                      row.getAttribute("data-entry-id"),
+                    ),
+                  })}`,
+                ),
+              );
+            }, 10_000);
+            const observer = new MutationObserver(() => {
+              const committed = prepareWorking
+                ? thread.querySelector(".chat-working-indicator")
+                : thread.querySelector(".chat-bubble.streaming .chat-text");
+              if (
+                !committed ||
+                (!prepareWorking && !committed.textContent?.includes(expectedText))
+              ) {
+                return;
+              }
+              committedAt = performance.now();
+              observer.disconnect();
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => {
+                  clearTimeout(timeout);
+                  resolve({
+                    applicationMs: committedAt! - startedAt,
+                    eventToFrameMs: performance.now() - startedAt,
+                    retainedRows: retained.length,
+                    survivingRows: retained.filter((row) => row.isConnected).length,
+                    committed: true,
+                  });
+                }),
+              );
+            });
+            observer.observe(thread, { childList: true, subtree: true, characterData: true });
+            const startedAt = performance.now();
+            performance.mark(
+              prepareWorking
+                ? "engine:working-preparation:start"
+                : "engine:streaming-boundary:start",
+            );
+            gateway.emit("chat", {
+              sessionKey: activeSessionKey,
+              runId: activeRunId,
+              seq: 1,
+              state: "delta",
+              message: {
+                role: "assistant",
+                content: prepareWorking ? [] : [{ type: "text", text: expectedText }],
+              },
+            });
+          });
+        },
+        { selector: activePane, text, runId, sessionKey, preparation },
+      ),
+  };
+}
 
 function installStreamingWorkCounters() {
   const work = { disclosureChecks: 0, nativeScrollToCalls: 0 };
@@ -493,6 +621,9 @@ export function createEngineStreamingScenarios(): readonly EngineScenario[] {
     },
   };
   return [
+    streamOnsetScenario(2_000, true),
+    streamOnsetScenario(),
+    streamOnsetScenario(400),
     streamScenario({ id: "streaming-645-deltas" }),
     streamScenario({ id: "streaming-645-deltas-slow", rate: 15 }),
     streamScenario({ id: "streaming-large-transcript", messages: 2_000 }),

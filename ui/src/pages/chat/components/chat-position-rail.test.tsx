@@ -511,6 +511,7 @@ describe("conversation position rail", () => {
   });
 
   it("keeps focused previews after pointer exit and resets interaction when the session changes", async () => {
+    const flushFrame = stubSettledAnimationFrames();
     const messages = Array.from({ length: 40 }, (_, index) =>
       message(
         `message-${index}`,
@@ -530,6 +531,10 @@ describe("conversation position rail", () => {
     transcript.start();
     // The stable DOM ref attaches native input observers in its queued microtask.
     await Promise.resolve();
+    const marks = part(container, "marks")!;
+    measure(marks, { clientHeight: 600 });
+    emitTranscriptResize(marks, 44, 600);
+    flushFrame();
     expect(markers()).toHaveLength(40);
     // Rail wheel input belongs to its scrollport, never transcript history.
     for (const type of ["wheel", "touchstart", "touchmove"]) {

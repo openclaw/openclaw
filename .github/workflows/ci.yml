@@ -4436,7 +4436,7 @@ jobs:
     permissions:
       contents: read
     name: check-lint-core-${{ matrix.stripe }}
-    needs: [preflight, check-plan]
+    needs: [preflight, check-plan, check-extension-package-boundary]
     if: ${{ !cancelled() && (needs.preflight.outputs.run_check_plan != 'true' || needs.check-plan.outputs.check_matrix != '') && (needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.run_lint_core || needs.preflight.outputs.run_lint_core) == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true')) }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) || (contains(fromJSON('["","blacksmith"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.event_name != 'workflow_dispatch')) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && needs.preflight.outputs.frozen_target != 'true' && (((needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'runson' || (needs.preflight.outputs.runner_profile == 'hybrid' && matrix.stripe == 1)) && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04'))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) || (contains(fromJSON('["","blacksmith"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.event_name != 'workflow_dispatch')) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && needs.preflight.outputs.frozen_target != 'true' && (((needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'runson' || (needs.preflight.outputs.runner_profile == 'hybrid' && matrix.stripe == 1)) && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 15
@@ -4453,9 +4453,16 @@ jobs:
 
       - name: Cache extension package boundary artifacts for hosted core lint
         id: sdk-boundary-cache
-        if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
+        if: (needs.preflight.outputs.shared_sdk_declarations != 'true' || matrix.requires_sdk_declarations != true) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
         uses: ./.ci-harness/.github/actions/sdk-declarations
         with: *sdk_main_restore_inputs
+
+      - name: Restore this run's prepared SDK for selected extension lint
+        if: needs.preflight.outputs.shared_sdk_declarations == 'true' && matrix.requires_sdk_declarations == true
+        uses: ./.ci-harness/.github/actions/sdk-declarations
+        with:
+          mode: restore-run
+          artifact-id: ${{ needs.check-extension-package-boundary.outputs.artifact_id }}
 
       - &changed_lint_step
         name: Run changed lint
@@ -4771,7 +4778,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.shared_sdk_declarations == 'true'
     runs-on: ${{ github.run_attempt == 1 && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ needs.preflight.outputs.runner_profile == 'github' && 40 || 30 }}
     outputs:
       artifact_id: ${{ steps.publish-sdk.outputs.artifact-id }}
     steps:

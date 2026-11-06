@@ -650,7 +650,7 @@ suite.define(() => {
       await page.getByRole("menuitem", { name: "Move session…", exact: true }).click();
       const profile = page.locator('[data-value="cloud:aws"]');
       await profile.click();
-      await expect.poll(() => profile.getAttribute("aria-pressed")).toBe("true");
+      await expect.poll(() => profile.getAttribute("aria-checked")).toBe("true");
       if (machineId) {
         await page.getByRole("button", { name: "Device size", exact: true }).click();
         await page

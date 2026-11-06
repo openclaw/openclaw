@@ -1,4 +1,5 @@
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
+import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
 import type { BuildChatItemsProps } from "./chat-thread-contract.ts";
@@ -13,6 +14,8 @@ import {
  * only while the new page cannot change them (see chat-thread-prepend.ts).
  */
 export type ChatItemsFacts = ReplyAttributionFacts & {
+  /** Prepared beside the working indicator, before first text changes row membership. */
+  streamOnset?: Extract<ChatItem, { kind: "stream" }>;
   /** Display history after heartbeat/commentary filtering and composition. */
   history?: readonly unknown[];
   /** First history message owning each persisted canvas identity or inline view key. */
