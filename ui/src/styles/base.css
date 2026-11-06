@@ -380,16 +380,17 @@
   --spinner-trace-stroke: 1.75px;
   --spinner-trace-dash: 26 74;
 
-  /* One profile for every scroll surface: 12px hit target, 6px visible thumb
-     (transparent border + content-box clip). Derived from --muted so every
-     theme family and both modes follow with no override. scrollbar-color is a
-     real property, not a token, but it lives here (not a second :root block)
-     to satisfy no-duplicate-selectors; it also inherits into shadow roots. */
+  /* One profile for every scroll surface, thumb only: faint at rest, a step
+     stronger while the pointer is over the scroller, clearly visible on the
+     thumb itself or while dragging. 12px hit target, 6px visible thumb
+     (transparent border + content-box clip); compact surfaces (menus,
+     popovers, phone widths) swap in the 8px/4px pair. Derived from --muted so
+     every theme family and both modes follow with no override. */
   --scrollbar-size: 12px;
-  --scrollbar-thumb-inset: 3px;
-  --scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
+  --scrollbar-size-compact: 8px;
+  --scrollbar-thumb: color-mix(in srgb, var(--muted) 10%, transparent);
+  --scrollbar-thumb-near: color-mix(in srgb, var(--muted) 16%, transparent);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 64%, transparent);
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 
   /* Corner-scale signal: whatever the @supports block below sets this to,
      tests and other introspection can read it to learn the active multiplier
@@ -475,7 +476,7 @@
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
-  --shell-viewport-base: 100vh;
+  --shell-viewport-base: 100dvh;
   --shell-safe-area-bottom: var(--safe-area-bottom);
   --shell-canvas-height: min(
     var(--shell-viewport-base),
@@ -920,9 +921,6 @@
 
 * {
   box-sizing: border-box;
-  /* scrollbar-width doesn't inherit (unlike scrollbar-color above), so every
-     element needs its own declaration to stay off the wider UA default. */
-  scrollbar-width: thin;
 }
 
 .sr-only,
@@ -1037,12 +1035,6 @@ openclaw-app {
 /* Empty contribution hosts must not add layout boxes before the plugin runtime loads. */
 openclaw-plugin-contributions {
   display: contents;
-}
-
-@supports (height: 100dvh) {
-  :root {
-    --shell-viewport-base: 100dvh;
-  }
 }
 
 @media (display-mode: standalone) {
@@ -1164,7 +1156,31 @@ textarea,
   color: var(--selection-fg);
 }
 
-/* Canonical scrollbar for every light-DOM scroll surface, including owned overlays. */
+/* Canonical scrollbar for every light-DOM scroll surface, including owned overlays.
+   Phone widths and touch pointers use the compact pair everywhere. */
+@media (max-width: 640px), (pointer: coarse) {
+  :root {
+    --scrollbar-size: var(--scrollbar-size-compact);
+  }
+}
+
+/* Engines with ::-webkit-scrollbar get all three levels from the pseudo
+   elements below. Chromium ignores those pseudo elements on any element whose
+   scrollbar-width or scrollbar-color is not auto, so the standard properties
+   are only set where the pseudo elements don't exist (Firefox). There the
+   container-hover level is the closest stand-in: Firefox can't target the
+   thumb, but it darkens a hovered or dragged thumb on its own. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+    scrollbar-width: thin;
+  }
+
+  *:hover {
+    scrollbar-color: var(--scrollbar-thumb-near) transparent;
+  }
+}
+
 ::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);
@@ -1178,17 +1194,35 @@ textarea,
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   background-clip: content-box;
-  border: var(--scrollbar-thumb-inset) solid transparent;
+  /* One size controls the 2:1 hit-area/thumb ratio; explicit inset overrides still win. */
+  border: var(--scrollbar-thumb-inset, calc(var(--scrollbar-size) / 4)) solid transparent;
   border-radius: var(--radius-full);
+}
+
+@property --scrollbar-hover {
+  syntax: "<integer>";
+  inherits: false;
+  initial-value: 0;
+}
+
+/* Chromium re-resolves scrollbar parts only when the scroller's own style
+   changes, and a pseudo-element-only :hover rule doesn't count. This
+   non-inherited flag changes the hovered element alone, so the container
+   level below repaints without restyling descendants. */
+:hover {
+  --scrollbar-hover: 1;
 }
 
 /* :hover::-webkit-scrollbar-thumb (container hover) is safe here because html,
    body set overflow: clip above, so the document itself never scrolls and the
    always-true html:hover/body:hover can't hover a document scrollbar. */
-::-webkit-scrollbar-thumb:hover,
 :hover::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb-hover);
-  background-clip: content-box;
+  background-color: var(--scrollbar-thumb-near);
+}
+
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 @keyframes rise {

@@ -1870,12 +1870,6 @@ button.chat-reply-attribution__target:disabled {
   user-select: none;
 }
 
-.chat-confirm-popover__check {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--accent);
-}
-
 .chat-confirm-popover__actions {
   display: flex;
   gap: 6px;

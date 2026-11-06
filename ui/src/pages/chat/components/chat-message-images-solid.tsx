@@ -289,12 +289,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
     }
     // Admit network work before resolving metadata, artifact tickets, or blobs.
     // Local bytes and a mounted decoded handoff never wait for the observer.
-    if (
-      !admitted &&
-      !isInlineImageSource(image.url) &&
-      !retainedImage &&
-      typeof IntersectionObserver === "function"
-    ) {
+    if (!admitted && !isInlineImageSource(image.url) && !retainedImage) {
       return {};
     }
     admitted = true;

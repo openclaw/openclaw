@@ -1,4 +1,5 @@
 @import "../components/solid/connect-command.css";
+@import "../components/solid/icon-button.css";
 
 /* These providers wrap the live shell and panes, before hovercard content loads. */
 openclaw-link-reader-hovercard-provider,
@@ -11,7 +12,6 @@ openclaw-session-progress-hovercard-provider {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100vh;
   height: 100dvh;
   max-height: 100%;
   background: var(--bg);
@@ -1292,14 +1292,6 @@ select.settings-select:not([multiple]) {
   column-gap: 10px;
 }
 
-.config-form .field.checkbox input[type="checkbox"],
-.exec-approval-skip input[type="checkbox"],
-.data-table-checkbox-col input[type="checkbox"] {
-  margin: 0;
-  width: 16px;
-  height: 16px;
-}
-
 .field input[aria-invalid="true"],
 .field textarea[aria-invalid="true"],
 .field select[aria-invalid="true"] {
@@ -1350,63 +1342,42 @@ select.settings-select:not([multiple]) {
   border-color: transparent;
 }
 
-.btn.refresh-button {
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  min-height: 32px;
-  padding: 0;
-}
-
-.btn.refresh-button svg {
-  width: 16px;
-  height: 16px;
-}
-
-.btn.refresh-button[aria-busy="true"]:disabled {
-  opacity: 1;
-  cursor: progress;
-}
-
 .refresh-button[aria-busy="true"] svg {
   animation: btn-spinner-spin 0.9s linear infinite;
 }
 
 /* At the end of a row, the glyph's ink lines up with the edge of the card below. */
-openclaw-tooltip:last-child > .btn.refresh-button {
+openclaw-tooltip:last-child > .refresh-button {
   margin-inline-end: -10px;
 }
 
 /* The box must not grow a section header past its compact height. */
 @media not all and (max-width: 640px) {
-  .settings-section__actions .btn.refresh-button {
+  .settings-section__actions .refresh-button {
     margin-block: -2px;
   }
 }
 
 @media (pointer: coarse), (max-width: 640px) {
-  .btn.refresh-button {
-    width: 36px;
-    min-width: 36px;
-    height: 36px;
-    min-height: 36px;
+  .oc-icon-button.refresh-button {
+    --oc-icon-button-size: 36px;
   }
 
   /* Touch paints no hover box, so the glyph moves inside it and nothing overflows the gutter. */
-  openclaw-tooltip:last-child > .btn.refresh-button {
-    justify-content: flex-end;
+  openclaw-tooltip:last-child > .refresh-button {
+    justify-items: end;
     margin-inline-end: 0;
   }
 
   /* Beside a neighbor the box starts at that neighbor and reaches into the gutter, so the large
      touch box keeps the glyph at its desktop distance. */
-  * + openclaw-tooltip:last-child > .btn.refresh-button {
-    justify-content: flex-start;
+  * + openclaw-tooltip:last-child > .refresh-button {
+    justify-items: start;
     margin-inline: -8px -4px;
     padding-inline-start: 15px;
   }
 
-  .settings-section__actions > * + openclaw-tooltip:last-child > .btn.refresh-button {
+  .settings-section__actions > * + openclaw-tooltip:last-child > .refresh-button {
     margin-inline-end: -12px;
   }
 }
@@ -1443,9 +1414,45 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   gap: 10px;
 }
 
+.callout__body {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .callout__content {
   min-width: 0;
   flex: 1;
+}
+
+.callout__body > .callout__content {
+  /* Reserve a readable text measure before wrapping the action below it. */
+  flex-basis: 24ch;
+}
+
+.callout__title {
+  display: block;
+  font-weight: 600;
+}
+
+.callout__action {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.callout__action > .btn {
+  white-space: normal;
+}
+
+.callout__action:empty {
+  display: none;
 }
 
 .callout__dismiss {
@@ -1456,6 +1463,8 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   justify-content: center;
   flex: 0 0 auto;
   border: 0;
+  margin-block: -4px;
+  margin-inline-end: -6px;
   border-radius: var(--radius-sm);
   background: transparent;
   color: currentColor;
@@ -1470,6 +1479,14 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   width: 16px;
   height: 16px;
   stroke-width: 1.8;
+}
+
+/* Filled tones are fill and text only; untoned notes keep the neutral border. */
+.callout.danger,
+.callout.warn,
+.callout.info,
+.callout.success {
+  border-color: transparent;
 }
 
 .callout.danger,
@@ -1506,6 +1523,16 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 
 .callout.success {
   --callout-tone: var(--ok);
+}
+
+/* Popovers and menus: a row message. Tone colours the text; no box. */
+.callout.callout--compact {
+  padding: 4px var(--oc-menu-item-padding-inline, 8px);
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font-size: inherit;
+  line-height: 1.4;
 }
 
 /* Pending routes reserve the content layout without exposing transient panel text. */
@@ -2313,10 +2340,6 @@ td.data-table-key-col {
   background: var(--data-table-row-bg);
 }
 
-.data-table-checkbox-col input[type="checkbox"] {
-  vertical-align: middle;
-}
-
 .data-table .data-table-key-col {
   position: sticky;
   left: var(--data-table-checkbox-col-width);
@@ -2535,15 +2558,6 @@ select.data-table-pagination__size {
   width: 100%;
 }
 
-.agent-select__menu-title {
-  padding: 4px 8px 2px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: var(--control-ui-font-weight-semibold);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
 .agent-select__menu.oc-menu {
   width: min(320px, calc(100vw - 24px));
   max-height: 320px;
@@ -2753,7 +2767,10 @@ select.data-table-pagination__size {
   overflow: hidden;
 }
 
+/* The palette uses the compact, always-visible overlay scrollbar. */
 .cmd-palette__input {
+  --scrollbar-size: var(--scrollbar-size-compact);
+
   display: block;
   width: 100%;
   min-width: 0;
@@ -2764,7 +2781,6 @@ select.data-table-pagination__size {
   padding: 0 calc(var(--cmd-palette-actions-width) + 20px) 0 0;
   resize: none;
   overflow-y: hidden;
-  scrollbar-width: thin;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
   font-family: inherit;
@@ -2780,27 +2796,6 @@ select.data-table-pagination__size {
 
 .cmd-palette__input::placeholder {
   color: var(--muted);
-}
-
-/* Keep the overflow indicator visible instead of using an auto-hidden overlay. */
-@supports selector(::-webkit-scrollbar) {
-  .cmd-palette__input {
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .cmd-palette__input::-webkit-scrollbar {
-    width: 8px;
-  }
-
-  .cmd-palette__input::-webkit-scrollbar-thumb {
-    border-radius: var(--radius-sm);
-    background: var(--scrollbar-thumb);
-  }
-
-  .cmd-palette__input::-webkit-scrollbar-thumb:hover {
-    background: var(--scrollbar-thumb-hover);
-  }
 }
 
 /* Fades cover only text, never the native far-right scrollbar or actions. */

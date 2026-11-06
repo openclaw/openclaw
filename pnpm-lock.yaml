@@ -1089,6 +1089,28 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/deep-research:
+    dependencies:
+      '@solidjs/web':
+        specifier: 2.0.0-rc.18
+        version: 2.0.0-rc.18(patch_hash=6d6b2e52e607edf3c9cfcc1a26f331d013537d051f43bbb4f3e7877ed08fa5cf)(solid-js@2.0.0-rc.18)
+      solid-js:
+        specifier: 2.0.0-rc.18
+        version: 2.0.0-rc.18
+      typebox:
+        specifier: 1.4.3
+        version: 1.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      '@solidjs/compiler':
+        specifier: 2.0.0-rc.18
+        version: 2.0.0-rc.18
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+
   extensions/deepgram:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1595,16 +1617,6 @@ importers:
       '@openclaw/fs-safe':
         specifier: 0.27.1
         version: 0.27.1
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
-  extensions/deep-research:
-    dependencies:
-      typebox:
-        specifier: 1.4.3
-        version: 1.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

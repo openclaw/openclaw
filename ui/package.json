@@ -6,7 +6,7 @@
     "build": "node ../scripts/run-node-package-bin.mts vite build",
     "dev": "node ../scripts/run-node-package-bin.mts vite",
     "preview": "node ../scripts/run-node-package-bin.mts vite preview",
-    "test": "node ../scripts/run-node-package-bin.mts vitest run --config vitest.config.ts"
+    "test": "node ../scripts/ui.js test"
   },
   "dependencies": {
     "@codemirror/commands": "6.11.1",

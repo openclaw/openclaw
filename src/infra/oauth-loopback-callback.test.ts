@@ -321,6 +321,29 @@ describe("OAuth loopback callback server", () => {
     await expect(callback.waitForCallback()).resolves.toMatchObject({ code: "right" });
   });
 
+  it("serves every localhost address on one free port when asked for port 0", async () => {
+    const addresses = [
+      ...new Set(
+        (await dnsPromises.lookup("localhost", { all: true, verbatim: true })).map(
+          (entry) => entry.address,
+        ),
+      ),
+    ];
+    const callback = await openCallback({ redirectUrl: "http://localhost:0/oauth/callback" });
+    const redirect = new URL(callback.redirectUrl);
+    const port = Number(redirect.port);
+    expect(port).toBeGreaterThan(0);
+    expect(redirect.hostname).toBe("localhost");
+    for (const address of addresses) {
+      await expectResponse(fetch(callbackUrl(address, port, "?code=bad&state=wrong")), 400);
+    }
+    await expectResponse(
+      fetch(callbackUrl(addresses[0]!, port, `?code=right&state=${state}`)),
+      200,
+    );
+    await expect(callback.waitForCallback()).resolves.toMatchObject({ code: "right" });
+  });
+
   it.each([undefined, "localhost"])(
     "uses HTTP port 80 and the exact bind host %s",
     async (bindOnlyHostname) => {
@@ -348,7 +371,6 @@ describe("OAuth loopback callback server", () => {
   );
 
   it.each([
-    { options: { redirectUrl: "http://127.0.0.1:0/oauth/callback" }, error: "valid TCP port" },
     {
       options: { redirectUrl: "http://localhost:8080/oauth/callback", bindOnlyHostname: "0.0.0.0" },
       error: "OAuth callback bind must use",
