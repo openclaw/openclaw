@@ -359,8 +359,12 @@ it("records native handoff and remote failures for selected and dropped images",
       3: { kind: "not-selected" },
       4: { kind: "failed", reason: "remote-url image is not natively deliverable" },
     });
-    expect(ctx.Body).toContain("[Image attachment could not be analyzed]");
-    expect(ctx.BodyForAgent).toContain("[Image attachment could not be analyzed]");
+    expect(ctx.Body).toContain(
+      "[Image attachment could not be analyzed: remote-url image is not natively deliverable]",
+    );
+    expect(ctx.BodyForAgent).toContain(
+      "[Image attachment could not be analyzed: remote-url image is not natively deliverable]",
+    );
     expect(ctx.Body).not.toContain("not processed");
   });
 });
