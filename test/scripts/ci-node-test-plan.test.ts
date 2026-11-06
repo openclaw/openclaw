@@ -2895,6 +2895,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
+  it.each([undefined, "blacksmith", "hybrid"])(
+    "prices fully measured tooling selections without discarded siblings on %s",
+    (runnerBackend) => {
+      const target = "test/scripts/update-restart-module-outcome.test.ts";
+      const timings = vi
+        .spyOn(testTimings, "readToolingFileTimings")
+        .mockReturnValue({ [target]: 1 });
+      const measured = required(selectTests([target], { runnerBackend }));
+      expectPlanFiles(measured, [target]);
+      expect(sumSeconds(measured)).toBe(25);
+      expectEvery(measured, (job) => job.planConcurrency === 1);
+      expectEvery(measured.flatMap(jobGroups), (group) => workers(group) === "2");
+
+      timings.mockReturnValue({});
+      const unknown = required(selectTests([target], { runnerBackend }));
+      expectPlanFiles(unknown, [target]);
+      expect(sumSeconds(unknown)).toBeGreaterThan(25);
+    },
+  );
+
   it("keeps precise tooling selection through hosted overflow refusal", () => {
     const tooling = defaultShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
     // Full-suite rows include release proofs; precise PR plans always exclude them.

@@ -1,5 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import {
+  captureAgent,
+  makeCall,
+  makeTool,
+} from "../../packages/agent-core/src/agent-loop.test-support.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
@@ -8,8 +14,10 @@ import {
   environmentSandbox,
   sandboxExecSpec,
 } from "./bash-tools.exec-env.test-support.js";
+import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { ExtensionContext } from "./sessions/index.js";
+import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 declare module "../plugins/hook-types.js" {
@@ -318,9 +326,10 @@ it.each([undefined, "/remote/node/workspace"])(
   "reroutes exec and recomputes plugin env for node workdir %s",
   async (workdir) => {
     const hooks = installWrappedHooks(
-      vi.fn(async (event: { params: Record<string, unknown> }) => ({
-        params: { ...event.params, host: "node" },
-      })),
+      vi.fn(async (event: { params: Record<string, unknown> }) => {
+        preparing();
+        return { params: { ...event.params, host: "node" } };
+      }),
       vi.fn(async (event: { host: "gateway" | "sandbox" | "node" }) =>
         event.host === "node" ? { NODE_PLUGIN_SAFE: "node" } : { GATEWAY_PLUGIN_SAFE: "gateway" },
       ),
@@ -331,10 +340,46 @@ it.each([undefined, "/remote/node/workspace"])(
         ? { host: "auto", sessionKey }
         : { host: "auto", agentId: "policy-agent", sessionKey: "global" },
     );
-    await executeWrapped(tool, {
-      env: { REQUEST_SAFE: "request" },
-      ...(workdir ? { workdir } : {}),
+    const release = createDeferred();
+    const sibling = {
+      ...makeTool("safe"),
+      interruptible: true as const,
+      execute: vi.fn(async (_id: string, _args: unknown, _signal?: AbortSignal) => {
+        await release.promise;
+        return { content: [], details: {} };
+      }),
+    };
+    const definition = expectDefined(
+      toToolDefinitions([tool], { agentId: "main", sessionKey })[0],
+      "exec",
+    );
+    const { agent } = captureAgent([sibling, wrapToolDefinition(definition)], {}, [
+      [
+        makeCall("safe"),
+        {
+          ...makeCall("exec"),
+          arguments: {
+            command: "echo ok",
+            env: { REQUEST_SAFE: "request" },
+            ...(workdir ? { workdir } : {}),
+          },
+        },
+      ],
+      [{ type: "text", text: "done" }],
+    ]);
+    const preparing = vi.fn(() => agent.getToolInterruptionStatus().blocked);
+    const sendNow = vi.fn(() => agent.interruptTools());
+    const runNode = vi.mocked(executeNodeHostCommand).getMockImplementation();
+    vi.mocked(executeNodeHostCommand).mockImplementationOnce(async (params) => {
+      sendNow();
+      release.resolve();
+      return expectDefined(runNode, "node fixture")(params);
     });
+    await agent.prompt("run");
+    const nodeCall = { toolCallId: "exec", toolName: "exec" };
+    expect(preparing).toHaveReturnedWith(expect.arrayContaining([nodeCall]));
+    expect(sendNow).toHaveReturnedWith({ status: "blocked", tools: [nodeCall] });
+    expect(sibling.execute.mock.calls[0]?.[2]?.aborted).toBe(false);
 
     expect(hooks.runBeforeToolCall).toHaveBeenCalledOnce();
     const hosts = workdir ? ["node"] : ["gateway", "node"];

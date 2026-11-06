@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import "../../../styles/settings-native-controls.css";
 
 export function menuDivider(id: string): Extract<MenuEntry, { kind: "content" }> {
@@ -65,15 +66,8 @@ export function renderBackRow(title: string, details?: JSX.Element): MenuItem {
 }
 export function MenuSwitch(props: { checked: boolean }): JSX.Element {
   return (
-    <span
-      class={[
-        "agent-chat__capability-menu-switch",
-        "settings-toggle",
-        { "agent-chat__capability-menu-switch--active": props.checked },
-      ]}
-      aria-hidden="true"
-    >
-      <span class="settings-toggle__control" />
+    <span class="agent-chat__capability-menu-switch">
+      <SwitchIndicator checked={props.checked} size="sm" />
     </span>
   );
 }

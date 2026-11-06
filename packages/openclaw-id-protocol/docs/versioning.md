@@ -62,9 +62,43 @@ able to read it while the claw supports both an old and a new protocol. Rules:
   replacing v1. Both views come from one authority state; each signed part in them is signed by
   its own signer (R for the binding, K_gw for snapshots). Discovery stores and serves them and
   cannot create or convert signed data.
-- Choosing a protocol version after bootstrap uses a Gateway-signed list of supported versions
-  and a minimum version. That negotiation is specified separately; until it exists, every party
-  speaks v1.
+- After bootstrap, a client chooses versions as described next.
+
+## Choosing a version
+
+The Gateway lists the versions it accepts for new input in its MembershipSnapshot:
+
+```json
+"protocols": { "statement": [1], "descriptor": [1] }
+```
+
+Each list is non-empty, ascending and contains only versions the Gateway implements
+(`SUPPORTED_*_VERSIONS`). A retired version is simply absent; there is no separate minimum.
+
+Negotiation is for compatibility, not security. **The Gateway enforces its own list**: it parses
+input with its own version table and refuses an unlisted version with `unsupported_version`.
+Every listed version is one the Gateway accepts as safe; a version with a security problem is
+removed from the list (see "Support window"), and from then on no client can use it, whatever list
+it was shown. So the worst Discovery can do by tampering with negotiation is make a client pick
+an older version the Gateway still accepts, or one it no longer accepts and refuses.
+
+- **Where the list comes from.** A client takes `protocols` only from a snapshot that passed
+  `assessFreshness` (statements.md, "Pins and rollback"): signed by the verified binding's K_gw,
+  recent, and not older than a snapshot the client has already seen. Discovery cannot edit a list
+  (the signature breaks). It can replay an older signed list the client has not yet seen, for up
+  to `SNAPSHOT_MAX_AGE_SECONDS`, or withhold snapshots; both are covered by the Gateway's own
+  enforcement above. A list from anywhere else, including an unsigned Discovery field, is never
+  used.
+- **Choosing.** `selectVersion(advertised, local)` returns the highest version both sides
+  implement. With nothing in common it returns `update_required` (the Gateway only accepts newer
+  versions than this client implements) or `gateway_outdated` (only older ones). Only these two
+  results, from a fresh list, mean the user must update something.
+- **Without fresh evidence** (report policy, or before the first snapshot) a client has no list
+  and may use any version it implements; a reasonable default is the oldest. The Gateway may
+  refuse it with `unsupported_version` even when the client implements another version the
+  Gateway accepts. That refusal means "get fresh evidence and choose again", not "update".
+- **The tunnel is not listed.** Its version is the QUIC ALPN (`openclaw/tunnel/<n>`), chosen
+  inside the TLS handshake that K_srv authenticates, so the relay cannot change it.
 
 ## Support window
 
@@ -83,6 +117,17 @@ A protocol version is not an owner-root change. Adding a statement version, a de
 a tunnel version never needs a new root key, a new recovery kit or a root epoch. `root_epoch`
 stays the constant 1 so existing signatures verify (enrollment.md). Replacing a claw's root is
 owner reset (OCF-319), a separate, machine-local operation.
+
+### Owner reset (added to v1-draft in place)
+
+Owner reset added the `RootReset` statement type to envelope version 1 and the optional
+`reset` field to descriptor version 1. Under "Unknown fields" above, both would normally need a
+new version. They were added in place because v1-draft has not shipped: no released reader
+exists. Readers built before the change refuse a descriptor carrying `reset` (unknown field)
+and a `RootReset` (unknown statement type) as `malformed`; nothing is half-accepted. Discovery
+and the loader must update their vendored protocol before a Gateway publishes a reset. A
+descriptor without `reset` and every other statement are byte-for-byte what they were, so the
+existing v1 vectors are unchanged. After v1 ships, a change like this needs a new version.
 
 A new envelope version must not change how an existing recovery kit derives its root key:
 the kit format has its own version (`OCK1`).

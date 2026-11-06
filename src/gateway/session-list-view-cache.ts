@@ -34,10 +34,13 @@ function scheduleRetentionReport() {
   }).unref();
 }
 
+function selectionEntryRefs(value: SessionEntrySelection | SessionListFilteredEntries) {
+  return value.entries.length + ("ownerEntries" in value ? value.ownerEntries.length : 0);
+}
+
 function selectionRefs(value: SessionEntrySelection | SessionListFilteredEntries) {
   return (
-    value.entries.length +
-    ("ownerEntries" in value ? value.ownerEntries.length : 0) +
+    selectionEntryRefs(value) +
     value.ownerFacet.length +
     (value.ownerSessionCounts?.length ?? 0) +
     (value.ownerSessionProfiles?.size ?? 0) +
@@ -47,10 +50,12 @@ function selectionRefs(value: SessionEntrySelection | SessionListFilteredEntries
 
 class SelectionPartitions extends Map<object, SessionListFilteredEntries> {
   refs = 0;
+  entryRefs = 0;
 
   override set(key: object, value: SessionListFilteredEntries) {
     const previous = this.get(key);
     this.refs += selectionRefs(value) - (previous ? selectionRefs(previous) : 0);
+    this.entryRefs += selectionEntryRefs(value) - (previous ? selectionEntryRefs(previous) : 0);
     return super.set(key, value);
   }
 
@@ -58,6 +63,7 @@ class SelectionPartitions extends Map<object, SessionListFilteredEntries> {
     const previous = this.get(key);
     if (previous) {
       this.refs -= selectionRefs(previous);
+      this.entryRefs -= selectionEntryRefs(previous);
     }
     return super.delete(key);
   }
@@ -242,15 +248,18 @@ export class SessionListViewCache {
     const rowRefs = (view.rows?.length ?? 0) + view.historyRefs;
     const entryRefs =
       (view.selection ? selectionRefs(view.selection) : 0) + (view.partitions?.refs ?? 0);
+    const pairRefs =
+      (view.selection ? selectionEntryRefs(view.selection) : 0) + (view.partitions?.entryRefs ?? 0);
     const refs = rowRefs + entryRefs;
-    // Eight-byte current row references/history IDs; conservative selection entries,
-    // vector/revision overhead and UTF-16 query keys. Duplicate current row strings
-    // are discounted separately while any view retains them.
+    // Selection vectors reference pairs owned by the selection index; charge their
+    // slots, not another pair per view. Facet/map records retain the larger estimate.
+    // Shared current row strings are discounted separately.
     const bytes =
       1024 +
       view.key.length * 2 +
       rowRefs * 8 +
-      entryRefs * 48 +
+      pairRefs * 8 +
+      (entryRefs - pairRefs) * 48 +
       (view.partitions?.size ?? 0) * 64 +
       (view.rowHistory?.length ?? 0) * 160 +
       (view.encodedBytes ?? 0);
