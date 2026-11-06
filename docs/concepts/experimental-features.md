@@ -295,10 +295,12 @@ Behavior and limits:
 
 ## OpenClaw ID remote access
 
-OpenClaw ID remote access is off by default. While it is off the Gateway starts
-no tunnel child, opens no tunnel sockets and makes no calls to OpenClaw ID,
-Discovery or relays. Turn it on in **Settings → Labs → OpenClaw ID remote
-access**, or in config:
+OpenClaw ID remote access is off by default (`gateway.openclawId.enabled`).
+While it is off the Gateway starts no tunnel child, opens no tunnel sockets and
+makes no calls to OpenClaw ID, Discovery or relays, and the `openclawId.*`
+methods refuse every request. Turning it off also stops any Discovery request
+that was still being prepared. Turn it on in **Settings → Labs → OpenClaw ID
+remote access**, or in config:
 
 ```json5
 {
@@ -318,7 +320,8 @@ access**, or in config:
 ```
 
 No service URL has a production default yet; the Gateway reports
-`unconfigured` until `relayUrl` is set. Changes apply without a restart.
+`unconfigured` until `relayUrl` is set. Changes apply without a restart. See the
+[`openclawId` configuration keys](/gateway/config-gateway) for the full list.
 
 Labs only switches the feature on or off. Everything else lives outside Labs:
 
@@ -415,20 +418,6 @@ restrictions, config examples, and recovery guidance.
 - <a id="when-to-turn-it-on" />[When to turn it on](/gateway/local-models#when-to-turn-it-on)
 - <a id="when-to-leave-it-off" />[When to leave it off](/gateway/local-models#when-to-leave-it-off)
 - <a id="enable" />[Enable](/gateway/local-models#enable)
-
-## OpenClaw ID remote access
-
-`gateway.openclawId.enabled` is the Labs switch for OpenClaw ID remote access. It
-defaults to `false`. When it is on, the Gateway keeps its own record of who may
-reach this claw: the owner's devices and the members the owner approved. Owners
-manage that list through the `openclawId.*` Gateway methods. When a person or device
-is removed, the Gateway closes their connections, cancels their runs and revokes
-their device tokens before it tells Discovery.
-
-When the switch is off, nothing runs: no calls go to OpenClaw ID, Discovery or a
-relay, and the `openclawId.*` methods refuse every request. Turning the switch off
-also stops any Discovery request that was still being prepared. See the
-[`openclawId` configuration keys](/gateway/config-gateway) for the full list.
 
 ## Experimental does not mean hidden
 
