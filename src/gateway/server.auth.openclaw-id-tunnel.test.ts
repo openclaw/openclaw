@@ -18,6 +18,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
 import * as profileWrites from "../state/user-profile-writes.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
 import {
@@ -36,6 +37,10 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+
+// Records SSH verification probes instead of running them; a tunnel address names no host.
+const sshProbe = vi.hoisted(() => vi.fn(async () => ({ status: "timeout" as const })));
+vi.mock("./node-pairing-ssh-verify.runtime.js", () => ({ runNodeIdentityProbe: sshProbe }));
 
 const makeIdentityPath = useAuthIdentityFixture();
 const TOKEN = "tunnel-suite-secret";
@@ -304,6 +309,43 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
       expect(missing.res.ok).toBe(false);
     } finally {
       missing.ws.close();
+    }
+  });
+
+  // The synthetic tunnel address is in fd00::/8 and in SSH verification's private default scope.
+  test.each([
+    { path: "trusted CIDR", pairing: { autoApproveCidrs: ["fd00::/8"], sshVerify: false } },
+    { path: "SSH verification", pairing: {} },
+  ])("a node over the tunnel is never auto-approved by $path", async ({ pairing }) => {
+    const gateway = {
+      auth: { mode: "token" as const, token: TOKEN },
+      controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+    };
+    await writeConfigFile({ gateway: { ...gateway, nodes: { pairing } } });
+    sshProbe.mockClear();
+    const ws: WebSocket = await openWs(started!.port, { [TEST_PEER_HEADER]: OWNER_KEY });
+    try {
+      const res = await connectReq(ws, {
+        role: "node",
+        scopes: [],
+        skipDefaultAuth: true,
+        client: {
+          id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          version: "1.0.0",
+          platform: "ios",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
+        deviceIdentityPath: makeIdentityPath(`openclaw-tunnel-node-${randomUUID()}.sqlite`),
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.details).toMatchObject({ reason: "not-paired" });
+      expect((await listDevicePairing()).pending).toEqual([
+        expect.objectContaining({ role: "node", silent: false }),
+      ]);
+      expect(sshProbe).not.toHaveBeenCalled();
+    } finally {
+      ws.close();
+      await writeConfigFile({ gateway });
     }
   });
 });
