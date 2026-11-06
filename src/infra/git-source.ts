@@ -25,11 +25,13 @@ export async function acquireGitSource(params: {
   recordCommit?: boolean;
   formatFailure?: (failure: GitSourceFailure) => string;
   cleanupOnFailure?: () => Promise<void>;
+  signal?: AbortSignal;
 }): Promise<{ ok: true; commit?: string } | { ok: false; error: string }> {
   const run = (argv: string[], cwd?: string, work = false) =>
     runCommandWithTimeout(argv, {
       ...params.commandEnv?.(),
       ...(cwd ? { cwd } : {}),
+      signal: params.signal,
       timeoutMs: work
         ? resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs ?? 120_000)
         : (params.timeoutMs ?? 120_000),

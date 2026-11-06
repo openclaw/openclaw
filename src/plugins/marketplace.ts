@@ -421,6 +421,7 @@ async function cloneMarketplaceRepo(params: {
   source: string;
   timeoutMs?: number;
   logger?: MarketplaceLogger;
+  signal?: AbortSignal;
 }): Promise<
   | { ok: true; rootDir: string; cleanup: () => Promise<void>; label: string; ref?: string }
   | { ok: false; error: string }
@@ -439,6 +440,7 @@ async function cloneMarketplaceRepo(params: {
     repoDir,
     refMode: isImmutableGitCommitRef(normalized.ref) ? "detached" : "shallow-branch",
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
     cloneSeparator: false,
     recordCommit: false,
     cleanupOnFailure: cleanup,
@@ -464,6 +466,7 @@ async function loadMarketplace(params: {
   source: string;
   logger?: MarketplaceLogger;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> {
   const loadMarketplaceFromManifestFile = async (paramsLocal: {
     manifestPath: string;
@@ -576,6 +579,7 @@ async function loadMarketplace(params: {
     source,
     timeoutMs: params.timeoutMs,
     logger: params.logger,
+    signal: params.signal,
   });
   if (!cloned.ok) {
     return cloned;
@@ -889,11 +893,13 @@ export async function listMarketplacePlugins(params: {
   marketplace: string;
   logger?: MarketplaceLogger;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }) {
   const loaded = await loadMarketplace({
     source: params.marketplace,
     logger: params.logger,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
   if (!loaded.ok) {
     return loaded;

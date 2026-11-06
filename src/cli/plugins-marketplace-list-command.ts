@@ -1,5 +1,6 @@
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { defaultRuntime } from "../runtime.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
 import type { PluginMarketplaceListOptions } from "./plugins-cli.js";
@@ -10,12 +11,20 @@ export async function runPluginMarketplaceListCommand(
   source: string,
   opts: PluginMarketplaceListOptions,
 ): Promise<void> {
+  const signal = getAsyncWorkSignal();
+  if (signal?.aborted) {
+    return;
+  }
   const { listMarketplacePlugins } = await import("../plugins/marketplace.js");
   const { createPluginInstallLogger } = await import("./plugins-command-helpers.js");
   const result = await listMarketplacePlugins({
     marketplace: source,
     logger: opts.json ? quietPluginJsonLogger : createPluginInstallLogger(),
+    signal,
   });
+  if (signal?.aborted) {
+    return;
+  }
   if (!result.ok) {
     const message = result.error;
     throw new ExpectedCliError({
