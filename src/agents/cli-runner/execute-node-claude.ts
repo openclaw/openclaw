@@ -188,8 +188,14 @@ export async function executeNodeClaudeRun(params: {
           assertCurrent,
           assertReadable: async () => {
             await params.context.cliHistoryWriter?.assertReadable();
-            await prepareRuntimeAuthProfileExecution(contextParams, assertCurrent);
-            params.context.preparedBackend.assertCredentialUseCurrent?.();
+            const { savedCredentialUse } = params.context.preparedBackend;
+            const preparePin = () =>
+              prepareRuntimeAuthProfileExecution(contextParams, assertCurrent);
+            if (savedCredentialUse) {
+              await savedCredentialUse.prepareAfter(preparePin, nodeRunAbortSignal);
+            } else {
+              await preparePin();
+            }
             assertCurrent();
           },
           nodeId: params.nodePlacement.nodeId,

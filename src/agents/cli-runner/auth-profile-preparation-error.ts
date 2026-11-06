@@ -1,10 +1,13 @@
+import { isDeepStrictEqual } from "node:util";
+import { parseSecretRef } from "../../config/types.secrets.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { AuthProfileCredentialPublicationPendingError } from "../../state/user-model-account-authority.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-refresh-failure.js";
 import { withPersonalAuthProfileStore } from "../auth-profiles/personal-store.js";
 import { createEmptyAuthProfileStore } from "../auth-profiles/runtime-snapshot-owner.js";
 import { prepareAuthProfileCredentialRead } from "../auth-profiles/store-runtime.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import { FailoverError } from "../failover-error.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 
@@ -14,26 +17,85 @@ function stopCredentialUse(error: unknown): never {
   throw refusal;
 }
 
+function hasInlineCredential(credential: AuthProfileCredential | undefined): boolean {
+  if (credential?.type === "api_key") {
+    return Boolean(credential.key && !credential.keyRef && !parseSecretRef(credential.key));
+  }
+  return (
+    credential?.type === "token" &&
+    Boolean(credential.token && !credential.tokenRef && !parseSecretRef(credential.token))
+  );
+}
+
 export async function prepareCliCredentialUseCheck(
   profileId: string,
   agentDir: string,
-  store: AuthProfileStore = createEmptyAuthProfileStore(),
+  {
+    store = createEmptyAuthProfileStore(),
+    signal,
+    expectedCredential,
+  }: {
+    store?: AuthProfileStore;
+    signal?: AbortSignal;
+    expectedCredential?: AuthProfileCredential;
+  } = {},
 ) {
   try {
-    const readCurrentCredential = isUserModelAuthProfileId(profileId)
+    const personal = isUserModelAuthProfileId(profileId);
+    // OAuth and SecretRefs obtain the bearer from a separate owner.
+    const expectedInlineCredential =
+      !personal && hasInlineCredential(expectedCredential) ? expectedCredential : undefined;
+    const mayWaitForPublication = expectedInlineCredential !== undefined;
+    const readCurrentCredential = personal
       ? await withPersonalAuthProfileStore(profileId, async (owner) => {
           await owner.read();
           return owner.readCurrentCredential;
         })
-      : await prepareAuthProfileCredentialRead({ profileId, agentDir, store });
-    return () => {
-      try {
-        if (!readCurrentCredential?.()) {
-          throw new CliCredentialRemovedError(profileId);
-        }
-      } catch (error) {
-        stopCredentialUse(error);
+      : await prepareAuthProfileCredentialRead(
+          { profileId, agentDir, store },
+          mayWaitForPublication ? { signal } : undefined,
+        );
+    const assertSaved = () => {
+      const currentCredential = readCurrentCredential?.();
+      if (!currentCredential) {
+        throw new CliCredentialRemovedError(profileId);
       }
+      if (
+        expectedInlineCredential &&
+        !isDeepStrictEqual(currentCredential, expectedInlineCredential)
+      ) {
+        throw new Error(
+          "The saved CLI account changed during preparation. Retry with the current account. OpenClaw did not submit this turn.",
+        );
+      }
+    };
+    return {
+      mayWaitForPublication,
+      assertCurrent: () => {
+        try {
+          assertSaved();
+        } catch (error) {
+          stopCredentialUse(error);
+        }
+      },
+      async prepareAfter(preparePin: () => Promise<void>, effectSignal?: AbortSignal) {
+        for (;;) {
+          await preparePin();
+          try {
+            assertSaved();
+            return;
+          } catch (error) {
+            if (
+              !mayWaitForPublication ||
+              !(error instanceof AuthProfileCredentialPublicationPendingError)
+            ) {
+              stopCredentialUse(error);
+            }
+            // Publication can yield to a new session pin. Re-admit it before retrying.
+            await error.waitUntilCurrent(effectSignal).catch(stopCredentialUse);
+          }
+        }
+      },
     };
   } catch (error) {
     return stopCredentialUse(error);

@@ -69,9 +69,17 @@ describe("native login history owner at execution", () => {
     async (boundary) => {
       const { context, writer, calls } = nativeRun();
       const refusal = new Error("saved account removed");
-      context.preparedBackend.assertCredentialUseCurrent = () => {
+      const assertSaved = () => {
         calls.push("credential");
         throw refusal;
+      };
+      context.preparedBackend.savedCredentialUse = {
+        mayWaitForPublication: false,
+        assertCurrent: assertSaved,
+        async prepareAfter(preparePin) {
+          await preparePin();
+          assertSaved();
+        },
       };
       writer.assertReadable = async () => void calls.push("history");
       const invokeNode = vi

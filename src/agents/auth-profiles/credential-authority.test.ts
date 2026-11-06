@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { constants, type DatabaseSync } from "node:sqlite";
 import { MessageChannel } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createSqlPublicationTestConnection } from "../../../test/helpers/sql-publication-connection.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -35,6 +36,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   authProfileCredentialPublication,
+  AuthProfileCredentialPublicationPendingError,
   beginAuthProfileCredentialBatch,
   captureAuthProfileCredentialAuthority,
   withAuthProfileCredentialWrite,
@@ -366,7 +368,7 @@ describe("credential authority captured before local database creation", () => {
 
   it.each(["ordinary", "catalog"] as const)(
     "installs %s worker facts on the absent source before releasing denial",
-    (writer) => {
+    async (writer) => {
       const current = absentAgentFixture();
       const receipt = {
         ...createSqliteCommitReceipt({
@@ -387,11 +389,16 @@ describe("credential authority captured before local database creation", () => {
           : undefined;
       const catalog = ordinary ? undefined : beginAuthProfileCredentialBatch(current.context);
       expect(current.read).toThrow();
+      const controller = new AbortController();
+      const stopped = current.authority.waitUntilCurrent(controller.signal);
+      controller.abort();
+      const stoppedCheck = expect(stopped).rejects.toBe(controller.signal.reason);
       ordinary?.committed(structuredClone(receipt));
       catalog?.committed([structuredClone(receipt)]);
       expect(current.read).toThrow();
       ordinary?.finish(true);
       catalog?.finish(true);
+      await stoppedCheck;
       expect(current.read()).toEqual(credential("worker"));
     },
   );
@@ -707,7 +714,10 @@ describe("prepared persisted credential readers", () => {
       useReaderEnvironment(environment);
       const prepare = async () => {
         const retained = await shared.prepareRead(agentDir, store("snapshot-must-not-win"));
-        const assertCliCredentialUse = await prepareCliCredentialUseCheck(profileId, agentDir);
+        const { assertCurrent: assertCliCredentialUse } = await prepareCliCredentialUseCheck(
+          profileId,
+          agentDir,
+        );
         expect(retained?.()).toEqual(
           await nativeRuntime.findPersistedAuthProfileCredentialAsync({ agentDir, profileId }),
         );
@@ -771,6 +781,60 @@ describe("prepared persisted credential readers", () => {
       expect(() => read?.()).toThrow("authority is unavailable");
     },
   );
+});
+
+it("refuses a saved credential replaced while CLI admission waits", async () => {
+  const current = fixture("agent");
+  useReaderEnvironment(current);
+  const agentDir = expectDefined(current.agentDir, "credential fixture agent");
+  const guard = await prepareCliCredentialUseCheck(profileId, agentDir, {
+    expectedCredential: credential("original"),
+  });
+  const publication = beginAuthProfileCredentialBatch(current.context);
+  const admission = guard.prepareAfter(async () => {});
+  const refused = expect(admission).rejects.toThrow("saved CLI account changed during preparation");
+  try {
+    await Promise.resolve();
+    current.write("replacement");
+  } finally {
+    publication.finish(true);
+  }
+  await refused;
+  expect(current.read()).toEqual(credential("replacement"));
+});
+
+it.for([
+  {
+    kind: "structured ref",
+    secret: { keyRef: { source: "env", provider: "default", id: "OPENCLAW_TEST_REF" } },
+  },
+  { kind: "env shorthand", secret: { key: "${OPENCLAW_TEST_REF}" } },
+] as const)("refuses a pending publication for a saved $kind", async ({ secret }) => {
+  const current = fixture("agent");
+  useReaderEnvironment(current);
+  const agentDir = expectDefined(current.agentDir, "credential fixture agent");
+  const stored = {
+    type: "api_key",
+    provider: "fixture",
+    ...secret,
+  } satisfies AuthProfileCredential;
+  current.transact(({ db }) =>
+    writeAuthProfileJsonCell(db, "store", "agent", {
+      version: 1,
+      profiles: { [profileId]: stored },
+    }),
+  );
+  const guard = await prepareCliCredentialUseCheck(profileId, agentDir, {
+    expectedCredential: stored,
+  });
+  const publication = beginAuthProfileCredentialBatch(current.context);
+  const admission = guard.prepareAfter(async () => {});
+  const refused = expect(admission).rejects.toBeInstanceOf(
+    AuthProfileCredentialPublicationPendingError,
+  );
+  await Promise.resolve();
+  publication.finish(true);
+  await refused;
 });
 
 it.each(["commit", "rollback"])(

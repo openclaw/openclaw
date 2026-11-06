@@ -473,13 +473,17 @@ export async function executePluginOwnedProcess(params: {
       params.mcpCapture?.beginCapture(params.mcpCapture.captureKey, assertCaptureCurrent);
     }
     const historyWriter = params.context.cliHistoryWriter;
-    const { assertCredentialUseCurrent } = params.context.preparedBackend;
-    const prepareExecutionAdmission = async () => {
+    const { savedCredentialUse } = params.context.preparedBackend;
+    const prepareSessionAdmission = async () => {
       assertCurrent();
       await historyWriter?.assertReadable();
       await prepareRuntimeAuthProfileExecution(run, assertCurrent);
       assertCurrent();
     };
+    const prepareExecutionAdmission = () =>
+      savedCredentialUse?.mayWaitForPublication
+        ? savedCredentialUse.prepareAfter(prepareSessionAdmission, signal)
+        : prepareSessionAdmission();
     const started = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
       await prepareExecutionAdmission();
       const execution = params.execute({
@@ -500,7 +504,9 @@ export async function executePluginOwnedProcess(params: {
         abortSignal: signal,
         assertCurrent,
         prepareExecutionAdmission,
-        ...(assertCredentialUseCurrent ? { assertCredentialUseCurrent } : {}),
+        ...(savedCredentialUse
+          ? { assertCredentialUseCurrent: savedCredentialUse.assertCurrent }
+          : {}),
         // Host-internal: native login can change after preparation, so the
         // bundled runtime checks again where saved context leaves the host.
         ...(historyWriter?.bindsNativeLogin

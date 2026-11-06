@@ -297,9 +297,10 @@ export async function executeCliProcess(params: {
         assertCurrent: params.assertCurrent,
       })
     : undefined;
+  const { savedCredentialUse } = context.preparedBackend;
   try {
     if (params.nodePlacement) {
-      context.preparedBackend.assertCredentialUseCurrent?.();
+      savedCredentialUse?.assertCurrent();
       const nodeRun = await executeNodeClaudeRun({
         context,
         nodePlacement: params.nodePlacement,
@@ -401,15 +402,15 @@ export async function executeCliProcess(params: {
       }
       // Startup can wait behind another scoped run. Reserve cancellation under
       // the caller's run id before awaiting the child or replacement fence.
-      let processCancelled = false;
+      const processCancellation = new AbortController();
       const assertProcessCurrent = () => {
         params.assertCurrent();
-        if (processCancelled) {
+        if (processCancellation.signal.aborted) {
           throw new Error("CLI process authority is no longer active");
         }
       };
       const abortManagedRun = () => {
-        processCancelled = true;
+        processCancellation.abort();
         supervisor.cancel(runParams.runId, "manual-cancel");
       };
       runParams.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
@@ -418,12 +419,14 @@ export async function executeCliProcess(params: {
           params.initialGatewayCaptureKey,
           assertProcessCurrent,
         );
-        const { assertCredentialUseCurrent } = context.preparedBackend;
-        const prepareProcessAdmission = async () => {
+        const prepareProcessPin = async () => {
           await prepareRuntimeAuthProfileExecution(runParams, assertProcessCurrent);
-          assertCredentialUseCurrent?.();
           assertProcessCurrent();
         };
+        const prepareProcessAdmission = () =>
+          savedCredentialUse
+            ? savedCredentialUse.prepareAfter(prepareProcessPin, processCancellation.signal)
+            : prepareProcessPin();
         const managedRun = await runWithAgentToolSourceExecutionScope(params.assertCurrent, () =>
           withChildProcessOperation("agent.cli", () =>
             supervisor.spawn({
@@ -435,7 +438,7 @@ export async function executeCliProcess(params: {
                 await prepareRuntimeAuthProfileExecution(runParams, assertProcessCurrent);
                 assertProcessCurrent();
               },
-              prepareTargetSpawn: assertCredentialUseCurrent ? prepareProcessAdmission : undefined,
+              prepareTargetSpawn: savedCredentialUse ? prepareProcessAdmission : undefined,
               prepareInput: params.stdin
                 ? async () => {
                     await context.cliHistoryWriter?.assertReadable();
@@ -452,7 +455,7 @@ export async function executeCliProcess(params: {
               timeoutMs: runParams.timeoutMs,
               noOutputTimeoutMs: params.noOutputTimeoutMs,
               onCancel: () => {
-                processCancelled = true;
+                processCancellation.abort();
               },
               cwd: context.cwd ?? context.workspaceDir,
               env: params.env,
@@ -468,7 +471,7 @@ export async function executeCliProcess(params: {
         );
         managedRunPid = managedRun.pid;
         stopForParserRefusal = () => {
-          processCancelled = true;
+          processCancellation.abort();
           managedRun.cancel("manual-cancel");
         };
         // Output can arrive before the managed run handle is available.
@@ -478,7 +481,9 @@ export async function executeCliProcess(params: {
         const detachReplyBackend = attachCliReplyBackend(runParams, stopForParserRefusal);
         try {
           result = await managedRun.wait();
-          processCancelled ||= result.reason !== "exit";
+          if (result.reason !== "exit") {
+            processCancellation.abort();
+          }
         } finally {
           detachReplyBackend?.();
         }
