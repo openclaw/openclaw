@@ -207,6 +207,57 @@ suite.define(() => {
         expect(
           await details.locator(".chat-details-desktop-body").evaluate((body) => body.style.height),
         ).toBe("");
+        if (cpuRate === 4) {
+          expect(
+            await details.locator(".chat-details-desktop-body").evaluate(async (body) => {
+              const content = body.querySelector<HTMLElement>(
+                ".chat-details-desktop-body__content",
+              )!;
+              const bodyRect = body.getBoundingClientRect.bind(body);
+              const contentRect = content.getBoundingClientRect.bind(content);
+              const offsetWidth = Object.getOwnPropertyDescriptor(
+                HTMLElement.prototype,
+                "offsetWidth",
+              )!;
+              const clientWidth = Object.getOwnPropertyDescriptor(
+                Element.prototype,
+                "clientWidth",
+              )!;
+              let reads = 0;
+              const read = <T>(value: () => T) => {
+                reads++;
+                return value();
+              };
+              Object.defineProperties(body, {
+                getBoundingClientRect: { configurable: true, value: () => read(bodyRect) },
+                offsetWidth: {
+                  configurable: true,
+                  get: () => read(() => offsetWidth.get!.call(body)),
+                },
+                clientWidth: {
+                  configurable: true,
+                  get: () => read(() => clientWidth.get!.call(body)),
+                },
+              });
+              Object.defineProperty(content, "getBoundingClientRect", {
+                configurable: true,
+                value: () => read(contentRect),
+              });
+              try {
+                body.dispatchEvent(new Event("scroll"));
+                await new Promise<void>((resolve) =>
+                  requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+                );
+                return reads;
+              } finally {
+                for (const key of ["getBoundingClientRect", "offsetWidth", "clientWidth"]) {
+                  Reflect.deleteProperty(body, key);
+                }
+                Reflect.deleteProperty(content, "getBoundingClientRect");
+              }
+            }),
+          ).toBe(0);
+        }
       });
     },
   );

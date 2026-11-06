@@ -5,32 +5,30 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
-function mount(cachedReady = true) {
+function mount() {
   const container = document.body.appendChild(document.createElement("div"));
   const chat: ChatDetailsProps = {
     sessionKey: "agent:main:cached-details-scroll",
     currentAgentId: "main",
     selectedSession: undefined,
     messages: [],
-    cachedDetails: cachedReady
-      ? { locale: "en", environment: { branch: "feature/cached", worktree: false } }
-      : undefined,
-    sessionFactsReady: !cachedReady,
+    cachedDetails: { locale: "en", environment: { branch: "feature/cached", worktree: false } },
+    sessionFactsReady: false,
     detailsWorkspace: { root: "/workspace/details", label: "details", branch: "feature/cached" },
   };
-  function Content(props: { chat: ChatDetailsProps; cachedReady: boolean }) {
+  function Content(props: { chat: ChatDetailsProps }) {
     return (
       <ChatDetailsDesktopContent
         chat={props.chat}
         presented
         dismissed={false}
-        cachedReady={props.cachedReady}
+        cachedReady
         progressMenuRef={() => {}}
         onHideProgress={() => {}}
       />
     );
   }
-  const view = mountSolid(Content, { chat, cachedReady }, container);
+  const view = mountSolid(Content, { chat }, container);
   onTestFinished(() => {
     view.dispose();
     container.remove();
@@ -64,8 +62,8 @@ async function nextFrame() {
 it("adds no handoff measurements or animations to cached and settled scrolling", async () => {
   const animations = vi.spyOn(Element.prototype, "animate");
   onTestFinished(() => animations.mockRestore());
-  const prepared = mount(false);
-  expect(prepared.container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
+  // The shared browser graph may already have loaded these modules in another file.
+  const prepared = mount();
   await waitForSolid(() =>
     expect(prepared.container.querySelector(".chat-environment__branch-name")?.textContent).toBe(
       "feature/cached",
@@ -74,32 +72,6 @@ it("adds no handoff measurements or animations to cached and settled scrolling",
   await document.fonts.ready;
   await nextFrame();
   await nextFrame();
-  // Retargeting cancels the previous animation; wait for the real handoff to finish.
-  for (
-    let pending = prepared.body.getAnimations();
-    pending.length;
-    pending = prepared.body.getAnimations()
-  ) {
-    await Promise.all(
-      pending.map((animation) =>
-        animation.finished.catch((error: unknown) => {
-          if (!(error instanceof DOMException && error.name === "AbortError")) {
-            throw error;
-          }
-        }),
-      ),
-    );
-    await nextFrame();
-  }
-  expect(
-    animations.mock.contexts.filter((element) => element === prepared.body).length,
-  ).toBeGreaterThan(0);
-  const settledReads = trackHandoffReads(prepared.body);
-  prepared.body.dispatchEvent(new Event("scroll"));
-  await nextFrame();
-  for (const read of settledReads) {
-    expect(read).not.toHaveBeenCalled();
-  }
   prepared.dispose();
   const view = mount();
   expect(view.container.querySelector(".chat-environment__branch-name")?.textContent).toBe(
@@ -110,7 +82,6 @@ it("adds no handoff measurements or animations to cached and settled scrolling",
   view.body.dispatchEvent(new Event("scroll"));
   await nextFrame();
   view.update({
-    cachedReady: true,
     chat: {
       ...view.chat,
       sessionFactsReady: true,
