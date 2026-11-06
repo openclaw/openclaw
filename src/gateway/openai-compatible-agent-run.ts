@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
@@ -12,6 +13,7 @@ import { isAbortError } from "../infra/abort-signal.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantResultText } from "./agent-event-assistant-text.js";
+import { usesSharedSecretGatewayMethod } from "./http-auth-user-profile.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { resolveOpenAiCompatError, type OpenAiCompatError } from "./openai-compat-errors.js";
@@ -163,6 +165,12 @@ export async function runOpenAiCompatibleAgentCommand(params: {
         ? AbortSignal.any([params.abortSignal, sourceSignal])
         : (params.abortSignal ?? sourceSignal);
     abortSignal?.throwIfAborted();
+    // A shared-secret owner's attribution is not an authenticated message sender.
+    const requesterSenderId =
+      normalizeOptionalString(params.requestAuth.user) &&
+      !usesSharedSecretGatewayMethod(params.requestAuth.authMethod)
+        ? normalizeOptionalString(params.requestAuth.authenticatedUserProfile?.profileId)
+        : undefined;
     const result = await agentCommandFromGatewayIngress(
       {
         message: params.message,
@@ -175,6 +183,7 @@ export async function runOpenAiCompatibleAgentCommand(params: {
         runId: params.runId,
         deliver: false,
         messageChannel: params.messageChannel,
+        runContext: requesterSenderId ? { senderId: requesterSenderId } : undefined,
         senderIsOwner: params.senderIsOwner,
         bestEffortDeliver: false,
         allowModelOverride: params.modelOverride !== undefined,

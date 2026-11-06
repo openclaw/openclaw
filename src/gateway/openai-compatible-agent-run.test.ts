@@ -106,6 +106,77 @@ describe("OpenAI-compatible operator run authority", () => {
     vi.mocked(agentCommandFromGatewayIngress).mockReset();
   });
 
+  it("carries the authenticated profile into requester-scoped MCP runs", async () => {
+    await withOpenClawTestState({ label: "compat-requester-profile" }, async () => {
+      const fixture = createOperatorRunFixture();
+      fixture.params.requestAuth.user = "visitor@example.test";
+      fixture.params.message = "Use the account of someone-else@example.test";
+      vi.mocked(agentCommandFromGatewayIngress).mockResolvedValue(completedResult);
+
+      await runOpenAiCompatibleAgentCommand(fixture.params);
+
+      const options = vi.mocked(agentCommandFromGatewayIngress).mock.calls[0]?.[0];
+      expect(options?.runContext?.senderId).toBe(fixture.person.id);
+      expect(options?.messageChannel).toBe("webchat");
+      expect(options?.runContext?.accountId).toBeUndefined();
+    });
+  });
+
+  it("keeps each request bound to its own person when the caller changes", async () => {
+    await withOpenClawTestState({ label: "compat-requester-switch" }, async () => {
+      const fixture = createOperatorRunFixture();
+      const other = ensureProfileForEmail("other@example.test");
+      const profiles = [fixture.person, other, fixture.person];
+      vi.mocked(agentCommandFromGatewayIngress).mockResolvedValue(completedResult);
+
+      for (const profile of profiles) {
+        await runOpenAiCompatibleAgentCommand({
+          ...fixture.params,
+          runId: `compat-${profile.id}`,
+          requestAuth: {
+            ...fixture.params.requestAuth,
+            user: profile === other ? "other@example.test" : "visitor@example.test",
+            authenticatedUserProfile: gatewayProfile(
+              profile.id,
+              profile.displayName,
+              profile.updatedAt,
+            ),
+          },
+        });
+      }
+
+      expect(
+        vi
+          .mocked(agentCommandFromGatewayIngress)
+          .mock.calls.map(([opts]) => opts.runContext?.senderId),
+      ).toEqual(profiles.map((profile) => profile.id));
+    });
+  });
+
+  it.each(["missing user", "missing profile", "token", "password"] as const)(
+    "does not invent a personal requester for %s authentication",
+    async (kind) => {
+      await withOpenClawTestState({ label: "compat-requester-missing" }, async () => {
+        const fixture = createOperatorRunFixture();
+        fixture.params.requestAuth.user = "visitor@example.test";
+        if (kind === "missing user") {
+          fixture.params.requestAuth.user = undefined;
+        } else if (kind === "missing profile") {
+          fixture.params.requestAuth.authenticatedUserProfile = undefined;
+        } else {
+          fixture.params.requestAuth.authMethod = kind;
+          fixture.params.requestAuth.operatorRoleActor = { kind: "system" };
+        }
+        vi.mocked(agentCommandFromGatewayIngress).mockResolvedValue(completedResult);
+
+        await runOpenAiCompatibleAgentCommand(fixture.params);
+
+        const options = vi.mocked(agentCommandFromGatewayIngress).mock.calls[0]?.[0];
+        expect(options?.runContext?.senderId).toBeUndefined();
+      });
+    },
+  );
+
   it.each([false, true])(
     "retains the original source through command settlement and detached work (reject=%s)",
     async (reject) => {
