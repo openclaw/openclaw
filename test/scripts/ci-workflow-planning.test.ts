@@ -1696,6 +1696,10 @@ describe("ci workflow guards", () => {
                     group !== "dependencies"
                       ? "blacksmith-4vcpu-ubuntu-2404"
                       : "blacksmith-16vcpu-ubuntu-2404",
+                  runner_label:
+                    group === "dependencies"
+                      ? "blacksmith-4vcpu-ubuntu-2404"
+                      : "blacksmith-2vcpu-ubuntu-2404",
                 })),
         );
         expect(manifest.outputs.split_pr_guards).toBe(
@@ -2116,6 +2120,7 @@ describe("ci workflow guards", () => {
                 check_name: "check-dependencies",
                 task: "dependencies",
                 runner: "blacksmith-16vcpu-ubuntu-2404",
+                runner_label: "blacksmith-4vcpu-ubuntu-2404",
               },
             ],
       );
@@ -2125,6 +2130,7 @@ describe("ci workflow guards", () => {
             check_name: "check-npm-lock",
             task: "npm-lock",
             runner: "blacksmith-4vcpu-ubuntu-2404",
+            runner_label: "blacksmith-2vcpu-ubuntu-2404",
           },
         ]),
       );
@@ -3522,10 +3528,14 @@ describe("ci workflow guards", () => {
               ref,
               runnerBackend: "hybrid",
               preflightOutputs: manifest.outputs,
-              matrix: { task, runner: "blacksmith-16vcpu-ubuntu-2404" },
+              matrix: {
+                task,
+                runner: "blacksmith-16vcpu-ubuntu-2404",
+                runner_label: "blacksmith-4vcpu-ubuntu-2404",
+              },
             }),
           ).toBe(
-            admitted && eventName === "push" ? "ubuntu-24.04" : "blacksmith-16vcpu-ubuntu-2404",
+            admitted && eventName === "push" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404",
           );
         }
         expect(
@@ -3535,7 +3545,7 @@ describe("ci workflow guards", () => {
             runnerBackend: "hybrid",
             preflightOutputs: manifest.outputs,
           }),
-        ).toBe("blacksmith-16vcpu-ubuntu-2404");
+        ).toBe("blacksmith-4vcpu-ubuntu-2404");
         const step = readCiWorkflow().jobs.preflight.steps.find(
           (candidate: WorkflowStep) => candidate.id === "hosted_health",
         );
@@ -3618,12 +3628,13 @@ describe("ci workflow guards", () => {
               matrix: {
                 group: "extension-package-boundary",
                 runner: "blacksmith-32vcpu-ubuntu-2404",
+                runner_label: "blacksmith-8vcpu-ubuntu-2404",
               },
             }),
           ).toBe(
             runnerBackend === "github" || runAttempt > 1
               ? "ubuntu-24.04"
-              : "blacksmith-32vcpu-ubuntu-2404",
+              : "blacksmith-8vcpu-ubuntu-2404",
           );
         }
       }
@@ -3776,7 +3787,7 @@ describe("ci workflow guards", () => {
       };
       expect(evaluateWorkflowExpression(job.if, context)).toBe(true);
       expect(evaluateWorkflowExpression(job["runs-on"], context)).toBe(
-        "blacksmith-4vcpu-ubuntu-2404",
+        "blacksmith-2vcpu-ubuntu-2404",
       );
       expect(evaluateWorkflowExpression(job.if, { ...context, cancelled: true })).toBe(false);
     });
@@ -6022,7 +6033,7 @@ describe("ci workflow guards", () => {
           );
           const row = { ...qualified, matrix };
           expect(evaluateWorkflowExpression(workflow.jobs["check-shard"]["runs-on"], row)).toBe(
-            hosted === "true" ? "ubuntu-24.04" : "blacksmith-16vcpu-ubuntu-2404",
+            hosted === "true" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404",
           );
         }
       }
@@ -6213,6 +6224,7 @@ describe("ci workflow guards", () => {
           check_name: "report-plugin-sdk-api-diff",
           group: "plugin-sdk-api-diff",
           runner: "blacksmith-32vcpu-ubuntu-2404",
+          runner_label: "blacksmith-8vcpu-ubuntu-2404",
         },
       ]);
       expect(
@@ -6300,6 +6312,7 @@ describe("ci workflow guards", () => {
         ...cron,
         check_name: `checks-node-runson-cron-${provider}-control`,
         runner,
+        ...(provider === "blacksmith" ? { runner_label: "blacksmith-8vcpu-ubuntu-2404" } : {}),
       });
       expect(control).not.toHaveProperty("shard_name");
     }
@@ -6343,7 +6356,7 @@ describe("ci workflow guards", () => {
     };
     for (const eventName of ["pull_request", "push", "schedule"] as const) {
       expect(evaluateWorkflowExpression(plannerRunner, { ...plannerContext, eventName })).toBe(
-        eventName === "pull_request" ? "ubuntu-24.04" : "blacksmith-16vcpu-ubuntu-2404",
+        eventName === "pull_request" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404",
       );
     }
     const typeRunner = workflow.jobs["check-test-types-hosted-core-shard"]["runs-on"];
@@ -6358,7 +6371,7 @@ describe("ci workflow guards", () => {
           authorAssociation,
         };
         for (const runner of [plannerRunner, typeRunner, lintRunner]) {
-          expect(evaluateWorkflowExpression(runner, fork)).toBe("blacksmith-16vcpu-ubuntu-2404");
+          expect(evaluateWorkflowExpression(runner, fork)).toBe("blacksmith-4vcpu-ubuntu-2404");
           for (const override of [
             { runnerBackend: "github" },
             { runAttempt: 2 },
@@ -6381,7 +6394,7 @@ describe("ci workflow guards", () => {
         );
         for (const stripe of [1, 2, 3, 4, 5]) {
           expect(evaluateWorkflowExpression(lintRunner, { ...fork, matrix: { stripe } })).toBe(
-            "blacksmith-16vcpu-ubuntu-2404",
+            "blacksmith-4vcpu-ubuntu-2404",
           );
         }
       }
@@ -6392,7 +6405,7 @@ describe("ci workflow guards", () => {
       preflightOutputs: { ci_qualification: "true", qualification_runner_backend: "hybrid" },
     };
     expect(evaluateWorkflowExpression(plannerRunner, qualification)).toBe(
-      "blacksmith-16vcpu-ubuntu-2404",
+      "blacksmith-4vcpu-ubuntu-2404",
     );
     expect(
       evaluateWorkflowExpression(plannerRunner, {
@@ -6400,7 +6413,7 @@ describe("ci workflow guards", () => {
         dispatchId: "full-release-validation-test",
         releaseRunnerGroup: "test-group",
       }),
-    ).toEqual({ group: "test-group", labels: "blacksmith-16vcpu-ubuntu-2404" });
+    ).toEqual({ group: "test-group", labels: "blacksmith-4vcpu-ubuntu-2404" });
     for (const override of [
       { runnerBackend: "github" },
       { runnerBackend: "runson" },
@@ -6421,9 +6434,9 @@ describe("ci workflow guards", () => {
     );
     const artifactRunner = workflow.jobs["build-artifacts"]["runs-on"];
     for (const [frozenTarget, expected] of [
-      ["false", "blacksmith-16vcpu-ubuntu-2404"],
-      ["true", "blacksmith-16vcpu-ubuntu-2404"],
-      ["", "blacksmith-16vcpu-ubuntu-2404"],
+      ["false", "blacksmith-4vcpu-ubuntu-2404"],
+      ["true", "blacksmith-4vcpu-ubuntu-2404"],
+      ["", "blacksmith-4vcpu-ubuntu-2404"],
     ] as const) {
       const context = {
         eventName: "push",
@@ -6506,6 +6519,7 @@ describe("ci workflow guards", () => {
         check_name: `check-${task}`,
         task,
         runner: "blacksmith-16vcpu-ubuntu-2404",
+        runner_label: "blacksmith-4vcpu-ubuntu-2404",
       });
     }
     expect(workflow.jobs["check-additional-shard"]["runs-on"]).toContain("matrix.runner");
@@ -6513,21 +6527,25 @@ describe("ci workflow guards", () => {
       check_name: "check-additional-runtime-topology-architecture",
       group: "runtime-topology-architecture",
       runner: "blacksmith-16vcpu-ubuntu-2404",
+      runner_label: "blacksmith-4vcpu-ubuntu-2404",
     });
     expect(readFrozenAdditionalCheckRows()).toContainEqual({
       check_name: "check-session-accessor-boundary",
       group: "session-accessor-boundary",
       runner: "blacksmith-4vcpu-ubuntu-2404",
+      runner_label: "blacksmith-2vcpu-ubuntu-2404",
     });
     expect(readFrozenAdditionalCheckRows()).toContainEqual({
       check_name: "check-export-name-collisions",
       group: "export-name-collisions",
       runner: "blacksmith-4vcpu-ubuntu-2404",
+      runner_label: "blacksmith-2vcpu-ubuntu-2404",
     });
     expect(readFrozenAdditionalCheckRows()).toContainEqual({
       check_name: "check-sqlite-session-schema-baseline",
       group: "sqlite-session-schema-baseline",
       runner: "blacksmith-4vcpu-ubuntu-2404",
+      runner_label: "blacksmith-2vcpu-ubuntu-2404",
     });
   });
 
@@ -6600,6 +6618,7 @@ describe("ci workflow guards", () => {
       check_name: "check-additional-extension-package-boundary",
       group: "extension-package-boundary",
       runner: "blacksmith-16vcpu-ubuntu-2404",
+      runner_label: "blacksmith-4vcpu-ubuntu-2404",
     });
     expect(sharedRows).toEqual(
       previousRows.filter((row: { group: string }) => row.group !== "extension-package-boundary"),
@@ -6658,7 +6677,7 @@ describe("ci workflow guards", () => {
             runnerBackend: "hybrid",
             runAttempt,
           }),
-        ).toBe(runAttempt === 1 ? "blacksmith-16vcpu-ubuntu-2404" : "ubuntu-24.04");
+        ).toBe(runAttempt === 1 ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04");
       }
     }
     for (const [profile, timeout] of [
@@ -6769,6 +6788,7 @@ describe("ci workflow guards", () => {
       check_name: "check-additional-extension-package-boundary",
       group: "extension-package-boundary",
       runner: "blacksmith-32vcpu-ubuntu-2404",
+      runner_label: "blacksmith-8vcpu-ubuntu-2404",
     });
     const runStep = requiredWorkflowStep(additionalJob.steps, "Run additional check shard");
     expect(runStep.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY).toBe(16);
@@ -7068,18 +7088,21 @@ describe("ci workflow guards", () => {
             check_name: "check-source-contracts",
             group: "source-contracts",
             runner: "blacksmith-4vcpu-ubuntu-2404",
+            runner_label: "blacksmith-2vcpu-ubuntu-2404",
           });
         } else if (row.group === "plugin-sdk-api-diff") {
           expect(row).toEqual({
             check_name: "report-plugin-sdk-api-diff",
             group: "plugin-sdk-api-diff",
             runner: "blacksmith-32vcpu-ubuntu-2404",
+            runner_label: "blacksmith-8vcpu-ubuntu-2404",
           });
         } else if (row.group === "extension-package-boundary") {
           expect(row).toEqual({
             check_name: "check-additional-extension-package-boundary",
             group: "extension-package-boundary",
             runner: frozen ? "blacksmith-32vcpu-ubuntu-2404" : "blacksmith-16vcpu-ubuntu-2404",
+            runner_label: frozen ? "blacksmith-8vcpu-ubuntu-2404" : "blacksmith-4vcpu-ubuntu-2404",
           });
         } else {
           expect(readFrozenAdditionalCheckRows()).toContainEqual(row);
@@ -11275,7 +11298,7 @@ describe("ci workflow guards", () => {
           : `checks-ui-e2e-real-gateway (${matrix.shard}/${matrix.shard_count})`,
       setup: realGatewaySetup,
       matrix,
-      blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
+      blacksmithRunner: "blacksmith-4vcpu-ubuntu-2404",
     }));
     const routedUiE2eJobs = [
       ...expectedUiE2eMatrices
@@ -11287,8 +11310,8 @@ describe("ci workflow guards", () => {
           matrix,
           blacksmithRunner:
             matrix.task === "control-ui"
-              ? "blacksmith-16vcpu-ubuntu-2404"
-              : "blacksmith-8vcpu-ubuntu-2404",
+              ? "blacksmith-4vcpu-ubuntu-2404"
+              : "blacksmith-2vcpu-ubuntu-2404",
         })),
       ...routedRealGatewayJobs,
     ] as const;
@@ -13729,7 +13752,7 @@ describe("ci workflow guards", () => {
           ...smokeRunnerContext,
           eventName,
         }),
-      ).toBe("blacksmith-8vcpu-ubuntu-2404");
+      ).toBe("blacksmith-2vcpu-ubuntu-2404");
     }
     const smokeRunnerFallbacks: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>[] = [
       { ref: "refs/heads/extended-stable/2026.9.33" },
@@ -13753,7 +13776,7 @@ describe("ci workflow guards", () => {
           ...override,
         }),
         JSON.stringify(override),
-      ).toBe("blacksmith-16vcpu-ubuntu-2404");
+      ).toBe("blacksmith-4vcpu-ubuntu-2404");
     }
     for (const override of [
       { runnerBackend: "github" },
@@ -13781,7 +13804,7 @@ describe("ci workflow guards", () => {
           compatibility_target: "false",
         },
       }),
-    ).toEqual({ group: "test-group", labels: "blacksmith-16vcpu-ubuntu-2404" });
+    ).toEqual({ group: "test-group", labels: "blacksmith-4vcpu-ubuntu-2404" });
     expect(smokeDockerCacheStep).toBeUndefined();
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart(partId, partCount)");
