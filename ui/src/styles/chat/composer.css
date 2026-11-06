@@ -768,8 +768,7 @@
   color: var(--text);
 }
 
-.chat-talk-input-picker__settings svg,
-.chat-attachment-remove svg {
+.chat-talk-input-picker__settings svg {
   width: 13px;
   height: 13px;
 }
@@ -1686,26 +1685,21 @@
   white-space: nowrap;
 }
 
+/* A corner badge over the thumbnail: the 32px hit area holds a 20px disc
+   and a 12px glyph so the X remains legible over an image. */
 .chat-attachment-remove {
+  --oc-icon-button-glyph: 12px;
   position: absolute;
   z-index: 1;
-  display: grid;
-  place-items: center;
-  border: none;
-  border-radius: var(--radius-full);
-  corner-shape: round;
   opacity: 0;
   transition: opacity var(--duration-fast) ease;
-
   top: -13px;
   right: -13px;
-  width: 32px;
-  height: 32px;
-  padding: 6px;
-  background: none;
-  color: var(--muted);
-  transform: none;
   isolation: isolate;
+}
+
+.chat-attachment-remove.oc-icon-button:hover:where(:not(:disabled)) {
+  background: transparent;
 }
 
 .chat-attachment-thumb:is(:hover, :focus-within) .chat-attachment-remove {
@@ -1864,14 +1858,13 @@
   z-index: -1;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
+  corner-shape: round;
   background: var(--chat-composer-surface, var(--popover));
   box-shadow: var(--shadow-sm);
 }
 
-.chat-attachment-remove svg {
-  width: 12px;
-  height: 12px;
-  stroke-width: 2px;
+.chat-attachment-remove:hover:not(:disabled)::before {
+  background: color-mix(in srgb, var(--text) 6%, var(--chat-composer-surface, var(--popover)));
 }
 
 .chat-attachment-remove:disabled {

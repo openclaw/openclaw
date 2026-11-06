@@ -1,4 +1,5 @@
 @import "../components/solid/connect-command.css";
+@import "../components/solid/icon-button.css";
 
 /* These providers wrap the live shell and panes, before hovercard content loads. */
 openclaw-link-reader-hovercard-provider,
@@ -1341,63 +1342,42 @@ select.settings-select:not([multiple]) {
   border-color: transparent;
 }
 
-.btn.refresh-button {
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  min-height: 32px;
-  padding: 0;
-}
-
-.btn.refresh-button svg {
-  width: 16px;
-  height: 16px;
-}
-
-.btn.refresh-button[aria-busy="true"]:disabled {
-  opacity: 1;
-  cursor: progress;
-}
-
 .refresh-button[aria-busy="true"] svg {
   animation: btn-spinner-spin 0.9s linear infinite;
 }
 
 /* At the end of a row, the glyph's ink lines up with the edge of the card below. */
-openclaw-tooltip:last-child > .btn.refresh-button {
+openclaw-tooltip:last-child > .refresh-button {
   margin-inline-end: -10px;
 }
 
 /* The box must not grow a section header past its compact height. */
 @media not all and (max-width: 640px) {
-  .settings-section__actions .btn.refresh-button {
+  .settings-section__actions .refresh-button {
     margin-block: -2px;
   }
 }
 
 @media (pointer: coarse), (max-width: 640px) {
-  .btn.refresh-button {
-    width: 36px;
-    min-width: 36px;
-    height: 36px;
-    min-height: 36px;
+  .oc-icon-button.refresh-button {
+    --oc-icon-button-size: 36px;
   }
 
   /* Touch paints no hover box, so the glyph moves inside it and nothing overflows the gutter. */
-  openclaw-tooltip:last-child > .btn.refresh-button {
-    justify-content: flex-end;
+  openclaw-tooltip:last-child > .refresh-button {
+    justify-items: end;
     margin-inline-end: 0;
   }
 
   /* Beside a neighbor the box starts at that neighbor and reaches into the gutter, so the large
      touch box keeps the glyph at its desktop distance. */
-  * + openclaw-tooltip:last-child > .btn.refresh-button {
-    justify-content: flex-start;
+  * + openclaw-tooltip:last-child > .refresh-button {
+    justify-items: start;
     margin-inline: -8px -4px;
     padding-inline-start: 15px;
   }
 
-  .settings-section__actions > * + openclaw-tooltip:last-child > .btn.refresh-button {
+  .settings-section__actions > * + openclaw-tooltip:last-child > .refresh-button {
     margin-inline-end: -12px;
   }
 }
