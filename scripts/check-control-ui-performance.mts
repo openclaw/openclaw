@@ -49,12 +49,12 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Sharing Markdown's parked-block helper removes 441–449 KB gzip from non-Chat routes.
-  // Chat pays 429 B in changed compression; measured 1,294,543 B + 192 B headroom.
-  // Patrick approved +239 B for inline Template references (2026-11-05).
-  chatBootJsGzipBytes: 1_294_974,
-  // New Session retains its measured 801,486 B + 192 B headroom.
-  newBootJsGzipBytes: 801_678,
+  // CPU-backed theme readback cuts Appearance latency 7–20% across both engines.
+  // Preserve its approved growth and this branch's 75 B tighter Chat ceiling.
+  // Inline Template references retain Patrick's approved +239 B allowance (2026-11-05).
+  chatBootJsGzipBytes: 1_295_979,
+  // Theme readback also affects New Session's shared bundle; retain main's ceiling.
+  newBootJsGzipBytes: 802_543,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).

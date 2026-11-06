@@ -203,7 +203,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/i18n/locales/en-permission-errors.ts":
     case "ui/src/components/mcp-app-launch.ts":
     case "ui/src/lib/sessions/session-create-params.ts":
-    case "packages/gateway-protocol/src/question-media.ts":
       // Shared catalogs, labels, and formatters must not pull Chat into other routes.
       return "deferred-ui-support";
     case "ui/src/lib/page-request.ts":
