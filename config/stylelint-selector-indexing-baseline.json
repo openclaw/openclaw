@@ -1,0 +1,198 @@
+{
+  "ui/src/components/dock-panel.css": {
+    "1f19f63d9d9ff847eb53153f1920f43e5c3c89a21191e8b0d1915416b08a4a19": 1,
+    "2f07c7cf033865379bc4d70ef8602df3c397ff708bcd91ee5243bc050735fc20": 1,
+    "38cb656d0e3723f9e945ba46faac140c52d46e1ebc57d1ef5dfd15a4d3bdaf41": 1,
+    "4c36c55e863b328ba985e3e244d44a8fa26e9fd8cb6311ccf6d5da65bc566a77": 1
+  },
+  "ui/src/components/markdown-mermaid.css": {
+    "d40af26b97609f57104f7136409d0b47debc364a239ebc955faa7c05426ec222": 2,
+    "f4a24cdfe361695c4bce3777b341ac663e46c55db3d3289393884e39606be2df": 1,
+    "f6f2d3e34256a4774dabc1cd53bfed8a900c5b6842e4e28f944b87354e4d1d3b": 1
+  },
+  "ui/src/components/panel-tab-strip.css": {
+    "0b260a3393e2041d16adffaf0ca3bcc347b9c725bb30060218c853a62fe5a71b": 1,
+    "35a20743ee492a2fea8465cabc1f9cb28fcc2162a4c00fd22cddbfe7ec8ab32c": 1
+  },
+  "ui/src/components/solid/overlay.css": {
+    "2e9adc561aebee51f1c72279e11e6588f8c9becaaf5b807d5d2a614c085a90da": 1,
+    "b1d2407980ecd001b1aff2a5cc6e77db5dcbca6ebc3970036deb7c36eb6f3394": 1,
+    "b592d447ae428407648839344168fb9e088d009c964c94b4aade6141d7878c47": 1,
+    "ba55ae5a7159d7266bf6e106ce38524bcfdb4b1a48b79b5e8ca7b62c5e7d1c3f": 1,
+    "e6ce6d18b97c7bad2cfb10f4a447f150f925181bfa72ad53f60c7fe923f09cfd": 1
+  },
+  "ui/src/pages/chat/components/chat-activity-pills.css": {
+    "a2180f54e58f0c031d24f007335e01522eb66c78fd565c27af9c12e1fdc7dd0d": 1,
+    "d1cca2fff14f32171b05e658eccc34534fbe986022baf3d135896a9b2806b27a": 1
+  },
+  "ui/src/pages/chat/components/chat-pane-mobile-header.css": {
+    "23f5e66e77fe6494e3bc7eb283f472fc9377569c12189b12b78fd94a690d1097": 1,
+    "2d8bba181063104ed3bb4b58b3aad81f61cb6a0412604f14269e2217c6d63c09": 1
+  },
+  "ui/src/pages/chat/components/chat-pull-request-presenters.css": {
+    "2948d03683ab6bc67b0d03788278b907e3d8c5b6ffadb6e5820911130400aa60": 1,
+    "52767343d56ff0ea2a7c9a6beced79c0b38c4c8ff92509f9b5a875fd891a0513": 1,
+    "bddedb7114221fe916e6d46f1879e19ee18149e4b1b95440e1d72e10bf731de8": 1
+  },
+  "ui/src/pages/chat/components/chat-subagents-panel-desktop.css": {
+    "b1facc9c424345ff0d24e984a746d26d491060e0296d6d34fb7924d13572523a": 1
+  },
+  "ui/src/styles/chat/composer-mobile.css": {
+    "2d31880116178149981934d5c3e8997debe33640e3027865eec760281537eaa2": 1
+  },
+  "ui/src/styles/chat/composer-progress.css": {
+    "02b7b20f7546ba54774cfa7ed05dd14ee641562215307b4b59efdee2d6b19ef6": 1,
+    "0f1e7634b7632c1363a5ac6c2cb86dd3a2c3f076a5f728853d5489b3faf6f607": 1,
+    "2193772fe0a324606a3cd0b3f3b84ee86ef0d8e0b0108e760656d71eec946fba": 1,
+    "e2312a5e195a2462144cbe728cbd9e7b554a308c05a825137732c7c91ffd9ddb": 1
+  },
+  "ui/src/styles/chat/composer-surface.css": {
+    "57c38ff92dd1040b5bb84658a88cf302e9dae47a39f01f7d4f886e0466219ca8": 1
+  },
+  "ui/src/styles/chat/composer.css": {
+    "0da9b78dce1349a675f646450040d0803c156cd13146ecc44a45c60e9bac147f": 1,
+    "133a83c356b0e52efbe923a7f512bb044b2aa090247eb7552af0a9e3ebfc1458": 1,
+    "2783b82e270e5b43ce22e968e9a23769e5331cc19ccb57448c1c24133871af01": 1,
+    "4c1fa6edf8d6c23417f5a3fbfbdbf48c1aee56a20693d734f8126e0771de70d7": 1,
+    "716452d7f3cda6ead9e408187910e90c420d21a39ab03d9518670b9862f81a5a": 1,
+    "8300ad3d0a7399f6907fd75485bb1c0394c21131cedb0ef6f46e1269494eb2d9": 1,
+    "8460d367a609173bcab70d96c5728b72cf3132281253d030f92a7e6bf3b7e679": 1,
+    "b5f3c07a86b82f7fb6bec558cde3d0f382b44f899cb193a5b0fcc1fdb4c3901c": 1,
+    "c55b818c5e632a925ea874847e0ba7a2b75b247a7da9fdfb822ebaf39e089995": 1,
+    "c5e0f1fab7ed521af781b3ff14d5007937ea5e7b02aa1996f4461836e11c6984": 1,
+    "faa750e3d25312a7431c276f0266bd6e6bdb24daab2045892c611693e023d528": 1
+  },
+  "ui/src/styles/chat/details-desktop.css": {
+    "26d5bcaa5e6ceb78d52bef519b194de650643f46f929177011f16c2458d930cb": 1,
+    "6e007ffd99a24b44f51aaaa8035d74e0fc8311cb556dbe5ce0a03d4c6432cb48": 1,
+    "88eccb85882723f4bbc2c4c4633f84eb8473ecf9c280d536990c13cba07b6c9e": 1,
+    "982c2dcae5df68b3abf945196c743e1625c0b8333fd322bf223f320399990989": 1,
+    "9fa18c9485df55b8e6b1424f616afc1277baf2dec6f5a649b83d72a2b97e1c98": 1,
+    "b16396dbea0d83ff720a3e6463315b7a04b5b4de61c87e6aba33acd53fb2bd3b": 1
+  },
+  "ui/src/styles/chat/details-mobile-root.css": {
+    "84bdab8a5d725819fc392ef415a18dba760f9eac8497019b75525bda494b5c87": 1,
+    "d2d35d6a76f1df96bf9887fab0db3d5dc734421bb3c7a8fe3b3bf34a212fe96d": 1
+  },
+  "ui/src/styles/chat/grouped.css": {
+    "1a2b0a9e9ae474e5e79122b587b51dc9293f3080a98209a620caa6c2af644292": 1,
+    "40b2cfa24ccd3c62c0d6d7b79a83c34832d850f9364873d69e9f56144be08a8e": 1,
+    "4b7cb7638b7c203d21226f7f124e6b67fb9a77ee9c8d75a4cc67b537175d5354": 1,
+    "5e8c354258dda7e62a1290189d6207107b8d4c313d47d69b830a6c4bcea00bb2": 1,
+    "658d80bd6d68b833b24dde5715386adc9aad6a1aad94fd5e7f663f88958e5092": 1,
+    "724ba3ca39e8e1edf2d90ee6216a5cca2b0141013ad2e9e4d6f6c76b578808c7": 1,
+    "779538321c50456b300cff9acb97848ce8c9a6b7febd6aebaef121e82009f102": 1,
+    "93ebdc64a83e3d21088c8f3ba719f1664120788033ca8b65dd9d08072cbfb4f5": 1,
+    "94e27858f6d6b769a31ede1e8176e4e7d0dba80408a2ff297d34e582c5841a43": 1,
+    "959f59d65dc758ccda611c7874af815dc8133555130e22613eaf2a96f824b5b6": 1,
+    "9c963c5668baee99be37145d50d8abb31552ad5e817bf4c14068f606991166e0": 1,
+    "9cbc7945b37a8f52fb791049997dcb3c509ee9826b40fa01b663803865593cbb": 1,
+    "a9a5505052195765cf32a952e97059a4303a5e98e6f5a5393a5445b8d2de7ab9": 1,
+    "b0c8b6ccaedc2bfc133b2a678ad9029b25ce5250dbb31c94513c2ab878ded9e9": 1,
+    "c76a185b69655cb862bfc7b8ed9bf59c27b6004a38cd017b76fa091425da577c": 1,
+    "d675288df9f2fd17ee16280a271ad003f22d1adac10b5ad180171fe1df7b7f00": 1,
+    "da6420c03e1290476dabea8a43ec76a535155aa749e0f75cd7a316981757f2f5": 1,
+    "e245a090970de3850d4b85a2585dc75bd5d4bde705d36d4013b53095db875142": 1
+  },
+  "ui/src/styles/chat/layout.css": {
+    "0b73519a97b755a76262903d42cd7210c05f49a26c27d87618bd4a5d9757209f": 1
+  },
+  "ui/src/styles/chat/message-layout.css": {
+    "9fefb32819da4acb6a8c010bac440530e0641c5b054356542a968b260db0a200": 1,
+    "bf378bb0bf4f71867c140ec885e5633d4c7726ba3c445aa09d8bb29a26d481c9": 1
+  },
+  "ui/src/styles/chat/mobile-host.css": {
+    "b0249c76807d7ff88a55f9888cf18471af34ee36700f8cc8fca85f319c05f52f": 1
+  },
+  "ui/src/styles/chat/session-diff-mobile.css": {
+    "09b60f81af5022be2510e3883f0cf337549e8dffc07da294b18a1cc39938b4ad": 1,
+    "38633362d7975b0396184f982d35c92921ac6b40392b1eb06154b44a62e7bbe8": 1,
+    "76f93833ba988eb1b2661933b23bbd6dd46ea34a260e9ee31d6f6a58d080813f": 1,
+    "deb479879b63fd4b9184a3ef202b507d4caa572743bedebf7af124340b8f717e": 1
+  },
+  "ui/src/styles/chat/session-diff-sync-mobile.css": {
+    "0324fb8ec3644bbf3cd05714544e4d731b8b20332f25e62b9216723d1358714f": 1,
+    "04ce1f417282182edf74dce5e598a2a4e9ea1c2edc920dc5f64122b9a4cbf922": 1
+  },
+  "ui/src/styles/chat/side-panel.css": {
+    "aa6e5e9244db56f4c5f8b4727f59d65b4b5fcc1b9acb178b07287821e019cb2f": 1
+  },
+  "ui/src/styles/chat/sidebar-panels.css": {
+    "3b53f16430d776bd70e6040fa1b02e9b3d9836194cbc5ed66aa28f6fc4190b5a": 1,
+    "4531385cc266561d505c192cb00cf50300a6577bd7573812f6e7f36fd4fa5f46": 1,
+    "73989266b81356d12396c45a75795fee48808425c2cfc1ef27460edca8b68b3c": 1
+  },
+  "ui/src/styles/chat/sidebar.css": {
+    "93fbbc92f8eab81e62303a0716d98a767188f7591ad6ba9c18cd3c1c63aa5933": 1
+  },
+  "ui/src/styles/chat/startup-layout.css": {
+    "08cf2d9d97a52e41aa9bbb762ba4bc5f4483a8a19b062ac26ab186c2506d2f8a": 1,
+    "0d5bf8c78ab59e44b8832b439bc0b5a293a3eb1ad8de201c57df7419b2e62407": 1,
+    "0ebfb65fb679e03e8a3a4bfbbfd8900ac0e70996176b6ecedf5a4603b73d409b": 1,
+    "588b37d2d49a68f86c0ef9483add642056a2f8009d2c213e0dd1fe84fbc52a30": 1,
+    "e23d2345573bcf2ab95eced5f94bfdd6cd0c3826860c1f3ba8a5a8dd183ff078": 1,
+    "e3503bcf1a5663b12968ddafc74a50f032f2c65aa5306dc5a6122e9cbdc25902": 1,
+    "e7d667a006c6f827ff5861ca55478036c8b91ad05d79b2630720fa2acc79f7c3": 1
+  },
+  "ui/src/styles/chat/text.css": {
+    "62272c00e368e96dbe07c0fbd647e5e6a4f0e9fdd1f6cc236a94a813a7db0f54": 1,
+    "82c924128eb911fb5200029d169a3b3d724126eb85704b429ac5c2e7839617d1": 1,
+    "c10bd53e6fc0f205274b72dea97f21e0af4f11d3308be78b6bef5d54bdac5632": 1,
+    "edde65458de81ca82b5146b9e20e9deef8ca667ec1106968478b71fd3dfa2d2a": 1
+  },
+  "ui/src/styles/components.css": {
+    "4b7412d7f02aa7f4e08b53b5dfcacabd654553400854abdba16469b69ce15210": 1,
+    "8611465bcc9982692558690f9f8989128ef53258c5a5df4983ac2abdfac327f6": 1,
+    "eb2e2302e2d225c3a8f2c2877046bff7d40dd60bf5f5c6e72ea19c0455cb6480": 1
+  },
+  "ui/src/styles/connection.css": {
+    "8c2a7865ee13ade6b645c5cbeac910aa54d66402cecbb70174fc8accbcc6e96c": 1
+  },
+  "ui/src/styles/cron.css": {
+    "64eb29a32035f0c1c59c07fa5554eeabc5ffb56a7d107d338dcefc60e15d3694": 1
+  },
+  "ui/src/styles/layout.css": {
+    "2c4dc8e39b4c4a6ac0de8105eb04aa50aa035f58e91fd6fd633909ded6b7d123": 1
+  },
+  "ui/src/styles/model-providers.css": {
+    "6795515297fbc5325b38294a98d57d1ccbbd974f6fc75ab9956d432ccb6afd39": 1
+  },
+  "ui/src/styles/native-embed.css": {
+    "1cd144e9420169306eb9ac790e43547f448f37eaf351e7a928d638ab0d34132b": 1
+  },
+  "ui/src/styles/new-session.css": {
+    "3c3592ee558bae386c1be95c3962e9b8cea92e449f700519343c459b7b9d7d35": 1,
+    "5cecdfb996f353c0cdfefdca9bc9587f0c8503d287b72095217c57d179923bdc": 1,
+    "887bdfa96123abf0b88332f50c4065b2fcfe7f6dbe49a05847617e35fbeeaf06": 1,
+    "b96e05c7afae831db14a9522dd4e4659fed86e16d26f6f2353141878cd0ffd16": 1,
+    "f02de147bf7caf0750094efb7a08c8570f386f22902274963deb1c5477670053": 1
+  },
+  "ui/src/styles/plugins.css": {
+    "702afc98d12fccae694429f1cb8a84b78206cdceaf6dfc0cb20236371e9ec950": 1
+  },
+  "ui/src/styles/select-picker.css": {
+    "9c2ac4081cb2d7b57faa4badc399d728c751cb60d75aaf37a05f749078352744": 1,
+    "9f91155f27fdc2f55615487bc2a95d8a961279b0e415d88be014f46c389b5efb": 1,
+    "a12eaa03868b4325fd85f975f4f710d72ad92fd6a9d1f9eba9397983f2fc465a": 1
+  },
+  "ui/src/styles/sessions.css": {
+    "cf4e3d6343720534394e95005e6d02bea72d1a40736123a964928f7c7c7bd1c8": 1
+  },
+  "ui/src/styles/settings.css": {
+    "ee82554c8ebb30b5144a9e9aee306f2435033dc322e302ef8a538ae9c76d374c": 1
+  },
+  "ui/src/styles/sidebar-menus.css": {
+    "4febd7a6f593008f89f3f49c351a2687b6a2a60427891de20af43910070ac3a6": 1,
+    "5fb31643e88ae277cc219f1fc32c16f5f343f08a14f921b050302e567cf17880": 1,
+    "6ecdb4761e3c69ef1f724c1dc54b10b0ec7cb818d8b1212940b48c48073e515a": 1,
+    "ac87ea4f822c78f49230fd2cd6361aa05ba8178ac92b17de340f7b9645bbf62e": 1
+  },
+  "ui/src/styles/sidebar-rail.css": {
+    "51f3b8fedc6a2ab322a8d65a4026b1859d88406ec3e1fe90b7f9a795192b718b": 1
+  },
+  "ui/src/styles/usage.css": {
+    "374f2beaceee7d14a4d13ae089f6732d1efa40c19d04b349556fd386f98a3b3d": 1,
+    "c4dac0ea7ca793017a6ae3896b559782b295b8fa4d25c26ab9c481cbed5f66ed": 1,
+    "e193339127997890343d0156364ab69033839283362cf4d2f446dbffee0f0c65": 1
+  }
+}

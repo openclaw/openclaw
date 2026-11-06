@@ -431,8 +431,8 @@ describe("dreaming view", () => {
     openReviewPanel("insights");
     const container = renderInto(buildProps());
     expect(textItems(container, ".dreams-review__cluster-heading")).toEqual([
-      "Travel · 1 chat · 1 signal",
-      "Health · 1 chat · 1 sensitive",
+      "Travel · 1 conversation · 1 signal",
+      "Health · 1 conversation · 1 sensitive",
     ]);
     const items = container.querySelectorAll("[data-import-page]");
     expect(items[0]?.querySelector(".settings-row__title")?.textContent).toBe(

@@ -540,7 +540,7 @@ describe("transcript projection", () => {
     const build = vi.spyOn(chatThreadBuild, "buildChatItems");
     const project = () => {
       projectSession(props, transcript);
-      return state.transcriptRenderContext.turnMediaMessages
+      return state.transcriptRenderContext.threadMediaMessages
         ?.values()
         .next()
         .value?.map(({ message }) => message);

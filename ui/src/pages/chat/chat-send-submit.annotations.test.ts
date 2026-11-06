@@ -64,6 +64,7 @@ describe("handleSendChat browser annotation context", () => {
       await handleSendChat(host);
 
       expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+        userInitiated: true,
         key: "agent:main",
         clearQueued: true,
       });

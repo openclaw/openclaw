@@ -237,6 +237,32 @@ describe("chat account selection", () => {
 });
 
 describe("chat pane composer controls", () => {
+  it("offers default-model recovery only for a connected, live session with accepted history", () => {
+    const selectedSession: GatewaySessionRow = {
+      key: "main",
+      sessionId: "session-ready",
+      kind: "direct",
+    };
+    const state = createRenderTestChatPane().initialize(createInitializationContext());
+    state.sessionKey = selectedSession.key;
+    state.sessionsResult = { ...createSessionsListResult(), sessions: [selectedSession] };
+    state.connected = true;
+    expect(renderControls(state).defaultModelRecovery).toBeTypeOf("function");
+    expect(
+      renderControls(state, { cachedSessionStatePending: true }).defaultModelRecovery,
+    ).toBeUndefined();
+    expect(
+      renderControls(state, { selectedSession: undefined }).defaultModelRecovery,
+    ).toBeUndefined();
+    state.connected = false;
+    expect(
+      renderControls(state, { cachedSessionStatePending: false }).defaultModelRecovery,
+    ).toBeUndefined();
+    state.connected = true;
+    state.chatLoading = true;
+    expect(renderControls(state).defaultModelRecovery).toBeUndefined();
+  });
+
   it("renders the selected Gateway model while keeping its model picker locked", async () => {
     const selectedSession: GatewaySessionRow = {
       key: "main",
@@ -314,12 +340,17 @@ describe("chat pane composer controls", () => {
           : [],
         chatModelSwitchPromises: {},
         sessionKey: "main",
+        agentsList: {
+          agents: [{ id: "main", defaultPermissionMode: "guarded" }],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+        },
       }) as unknown as ChatPageHost;
       state.chatModelCatalogError = error;
       const onModelSetup = vi.fn();
 
       const controls = renderControls(state, {
-        agentDefaultPermissionMode: "guarded",
         onModelSetup,
       });
       controls.composerControls.model.modelPickerOpen = true;
@@ -381,8 +412,13 @@ describe("chat pane composer controls", () => {
       entry: { sessionId: "permission-test-session" },
     } satisfies SessionPatchResult);
 
+    state.agentsList = {
+      agents: [{ id: "main", defaultPermissionMode: "guarded" }],
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+    };
     const controls = renderControls(state, {
-      agentDefaultPermissionMode: "guarded",
       canSelectFull: false,
     });
     const view = mountSolid(

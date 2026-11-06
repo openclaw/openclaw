@@ -100,6 +100,7 @@ export type GoogleInteractionsRequestBody = {
   };
   store: boolean;
   stream: boolean;
+  service_tier?: "standard" | "flex" | "priority";
 };
 
 function convertMessages<T extends GoogleApiType>(

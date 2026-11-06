@@ -221,7 +221,6 @@ function MermaidContent(props: MermaidProps, host: MermaidElement) {
                 }
                 aria-describedby={imageDescription() ? descriptionId : undefined}
                 aria-haspopup="dialog"
-                title={t("chat.mermaid.expand")}
                 onClick={() => setExpanded(true)}
               >
                 <img
