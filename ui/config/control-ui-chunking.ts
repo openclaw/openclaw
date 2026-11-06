@@ -507,6 +507,18 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
   }
   if (normalized.startsWith(resolvedLocaleNamespaceModulePrefix)) {
+    const [locale, namespace] = normalized
+      .slice(resolvedLocaleNamespaceModulePrefix.length)
+      .split("/");
+    // The local-error registrar prepares these together. Share their request without
+    // pulling them into the locale entry or changing when their copy is installed.
+    if (
+      namespace === "runtimeErrors" ||
+      namespace === "notificationErrors" ||
+      namespace === "nativeDeviceEditError"
+    ) {
+      return `locale-errors-${locale}`;
+    }
     return `locale-namespace-${normalized.slice(resolvedLocaleNamespaceModulePrefix.length).replace("/", "-")}`;
   }
 

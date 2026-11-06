@@ -224,6 +224,43 @@ it("fetches deep composer code with the root import without evaluating or route-
   expect(html).not.toContain(frameChunk.fileName);
 });
 
+it("fetches a locale's co-registered error catalogs in one lazy request", async () => {
+  const config = createConfig();
+  const prefix = "\0virtual:openclaw-control-ui-locale-namespace/";
+  const errors = ["runtimeErrors", "notificationErrors", "nativeDeviceEditError"];
+  const ids = errors.map((namespace) => `${prefix}de/${namespace}`);
+  const otherLocale = `${prefix}ar/runtimeErrors`;
+  const otherNamespace = `${prefix}de/profilePage`;
+  const modules = new Map(
+    [...ids, otherLocale, otherNamespace].map((id) => [
+      id,
+      `export default ${JSON.stringify({ [id.split("/").at(-1)!]: id })};`,
+    ]),
+  );
+  addModules(
+    config,
+    modules,
+    Object.fromEntries([...modules.keys()].map((id) => [id.slice(1), id])),
+  );
+  await writeRoot(
+    "main.js",
+    [...modules.keys()]
+      .map((id, index) => `globalThis.load${index} = () => import(${JSON.stringify(id.slice(1))});`)
+      .join("\n"),
+  );
+  setOutput(config, { codeSplitting: controlUiCodeSplitting });
+  const { output, html } = await buildOutput(config);
+  const chunks = output.filter((chunk) => chunk.type === "chunk");
+  const errorsChunk = chunks.find((chunk) => ids[0]! in chunk.modules)!;
+  expect(ids.every((id) => id in errorsChunk.modules)).toBe(true);
+  expect(otherLocale in errorsChunk.modules).toBe(false);
+  expect(otherNamespace in errorsChunk.modules).toBe(false);
+  const entry = chunks.find((chunk) => chunk.isEntry)!;
+  expect(entry.dynamicImports.filter((file) => file === errorsChunk.fileName)).toHaveLength(1);
+  expect(entry.imports).not.toContain(errorsChunk.fileName);
+  expect(html).not.toContain(errorsChunk.fileName);
+});
+
 it("keeps page styles separate from measured JavaScript boot groups", async () => {
   const config = createConfig();
   const pages = fileURLToPath(new URL("../pages/", import.meta.url));
