@@ -8,6 +8,9 @@ import { scanParenAwareBreakpoints } from "./text-breakpoints.js";
 export { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 
 function normalizeChunkLimit(limit: number): number {
+  if (Number.isNaN(limit)) {
+    return 0;
+  }
   // String slicing truncates fractional indexes, so positive limits need an integer progress step.
   return Number.isFinite(limit) && limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
 }
@@ -76,7 +79,7 @@ export function chunkTextRanges(text: string, options: ChunkTextRangesOptions): 
 /**
  * Splits plain text into size-bounded chunks at readable boundaries.
  *
- * Returns the original text as one chunk when the limit is non-positive.
+ * Returns the original text as one chunk when the limit is non-positive or NaN.
  */
 export function chunkText(text: string, limit: number): string[] {
   const normalizedLimit = normalizeChunkLimit(limit);

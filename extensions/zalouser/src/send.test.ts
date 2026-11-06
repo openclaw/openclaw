@@ -35,6 +35,22 @@ describe("zalouser send helpers", () => {
     mockSendText.mockReset();
   });
 
+  it("preserves Markdown text and style offsets with an explicit NaN chunk limit", async () => {
+    mockSendText.mockResolvedValueOnce(sendResult("mid-nan"));
+    const options = { textMode: "markdown" as const, textChunkLimit: Number.NaN };
+
+    await sendMessageZalouser("thread", "**😀Hi** _é_", options);
+
+    expect(mockSendText).toHaveBeenCalledTimes(1);
+    expectTextCall(0, "😀Hi é", {
+      ...options,
+      textStyles: [
+        { start: 0, len: 4, st: TextStyle.Bold },
+        { start: 5, len: 2, st: TextStyle.Italic },
+      ],
+    });
+  });
+
   it.each([
     ["_cap_", "cap", [{ start: 0, len: 3, st: TextStyle.Italic }]],
     ["```\n```", "", undefined],
