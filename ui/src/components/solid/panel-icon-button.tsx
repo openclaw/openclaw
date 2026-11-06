@@ -1,10 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { IconButton } from "./icon-button.tsx";
+import { IconButton, type IconButtonProps } from "./icon-button.tsx";
 
 /** A panel header action: an IconButton at the rail's 28px box. */
 export function PanelIconButton(props: {
   label: string;
-  icon: JSX.Element;
+  icon: IconButtonProps["icon"];
   onClick: () => void;
   class: JSX.ClassValue;
   title?: string;

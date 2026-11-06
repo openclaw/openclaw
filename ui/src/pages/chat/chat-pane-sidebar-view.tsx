@@ -5,8 +5,8 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { registryFor } from "../../components/overlay-registry.ts";
-import { Icon } from "../../components/solid/icon.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import "../../styles/chat/mobile-host.css";

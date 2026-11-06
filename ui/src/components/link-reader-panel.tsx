@@ -42,7 +42,10 @@ function NewReaderTabAction(props: { view: () => LinkReaderPanelOwner; internal?
   return (
     <button
       ref={nativeListener("click", () => props.view().createTab())}
-      class={["oc-icon-button oc-icon-button--28 rail-header__action bp-icon", { "session-panel-rail__button": props.internal }]}
+      class={[
+        "oc-icon-button oc-icon-button--28 rail-header__action bp-icon",
+        { "session-panel-rail__button": props.internal },
+      ]}
       type="button"
       aria-label={label()}
       title={label()}

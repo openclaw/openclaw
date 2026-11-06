@@ -6,8 +6,8 @@ import type { BoardWidgetPageMenu } from "../../../components/board/board-widget
 import type { SessionMenuData } from "../../../components/session-menu-actions.ts";
 import type { CompactSessionMenuView } from "../../../components/session-menu-compact.ts";
 import { EMPTY_SESSION_MENU_DATA } from "../../../components/session-menu-data.ts";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { iconButtonClass } from "../../../components/solid/icon-button.tsx";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import {
   createMenuControls,
