@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -430,8 +431,9 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
   // confirms that this exact source input reached the active run. Notification
   // failure must not replay accepted input or prevent rejected input fallback.
   try {
+    // Read, never advance, the run sequence: a rejected steer falls back to a
+    // run under this ID, and a consumed slot would trip its first-event gap check.
     const seq = (context.agentRunSeq.get(clientRunId) ?? 0) + 1;
-    context.agentRunSeq.set(clientRunId, seq);
     const payload: ChatInputDeliveryEvent = {
       runId: clientRunId,
       sessionKey,
@@ -455,8 +457,10 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     };
     context.broadcast("chat", payload, opts);
     sendGlobalAwareNodeChatPayload({ context, sessionKey, agentId, event: "chat", payload, opts });
-  } catch {
-    context.logGateway.warn("failed to broadcast steering input delivery outcome");
+  } catch (error) {
+    context.logGateway.warn(
+      `failed to broadcast steering input delivery outcome: ${formatErrorMessage(error)}`,
+    );
   }
   if (finalization.status === "rejected") {
     // Rejection also covers withdrawing a canceled queued steer. Fallback

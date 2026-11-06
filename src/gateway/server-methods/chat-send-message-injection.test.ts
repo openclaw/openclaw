@@ -305,7 +305,7 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
         status === "accepted",
       );
       expect(params.context.logGateway.warn).toHaveBeenCalledExactlyOnceWith(
-        "failed to broadcast steering input delivery outcome",
+        "failed to broadcast steering input delivery outcome: listener failed",
       );
     },
   );

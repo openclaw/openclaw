@@ -3,5 +3,7 @@
 # projection lifecycle/work counts, exact-source grouping, and responsive metadata.
 # The real Gateway/model boundary cannot be replaced by ACK or helper-only tests;
 # layout/hover coverage guards names, actions, and receipt-arrival geometry.
+# The fallback-sequence regression drives a rejected steer into the real agent
+# event handler; its first run event must not report a sequence gap.
 # Runtime proof and measured durations are recorded in PR #193910.
-910
+970
