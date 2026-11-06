@@ -826,6 +826,8 @@ describe("Control UI build chunking", () => {
         "phone-runtime",
       ],
       ["/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js", "device-signing-runtime"],
+      ["/tmp/openclaw-pnpm-node-modules/ipaddr.js/lib/ipaddr.js", "link-reader-response"],
+      [modulePath("../../../packages/net-policy/src/ip.ts"), "link-reader-response"],
       ["/repo/ui/src/lib/gateway-methods.ts", undefined],
       [modulePath("../components/sidebar-update-card.tsx"), "sidebar-update-runtime"],
       [modulePath("../styles/sidebar-update-card.css"), "sidebar-update-runtime"],

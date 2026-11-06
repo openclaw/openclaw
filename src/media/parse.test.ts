@@ -509,39 +509,46 @@ describe("splitMediaFromOutput", () => {
     );
   });
 
+  // The URL parser canonicalizes legacy IPv4 spellings before the host guard runs,
+  // so each literal form is listed to pin the end-to-end decision.
+  const blockedHosts = [
+    ["127.0.0.1", "127.255.255.254", "0.0.0.0", "10.0.0.1", "172.16.0.1", "192.168.1.1"],
+    ["169.254.169.254", "100.64.0.1", "192.0.0.1", "192.0.2.1", "198.18.0.1", "198.51.100.1"],
+    ["203.0.113.1", "224.0.0.1", "240.0.0.1", "255.255.255.255", "127.0.0.1.", "127.0.0.1.."],
+    ["127.1", "127.0.1", "10.1", "0177.0.0.1", "0x7f.0.0.1", "0x7f.1", "0x7f000001", "0"],
+    ["017700000001", "2130706433", "0x0", "0xa9fea9fe", "2852039166", "0251.0376.0251.0376"],
+    ["[::1]", "[::]", "[0:0:0:0:0:0:0:1]", "[fe80::1]", "[febf::1]", "[fc00::1]", "[fd00::1]"],
+    ["[fd00:ec2::254]", "[ff02::1]", "[2001:db8::1]", "[::ffff:127.0.0.1]", "[::ffff:7f00:1]"],
+    ["[::ffff:10.0.0.1]", "[::ffff:169.254.169.254]", "[::127.0.0.1]", "[64:ff9b::10.0.0.1]"],
+    ["[64:ff9b::169.254.169.254]", "[64:ff9b::a9fe:a9fe]", "[2002:7f00:1::]"],
+    ["[2002:a9fe:a9fe::1]", "localhost", "LOCALHOST", "localhost.", "localhost.."],
+    ["localhost.localdomain", "app.localhost", "printer.local", "media.local"],
+    ["metadata.google.internal", "metadata.google.internal..", "intranet", "printer"],
+    ["a..b.example.com", "example..com", "1.2.3.4.5", "256.0.0.1", "[::1", "[1::2::3]", "0x7g.1"],
+    ["user:synthetic-password@example.com"],
+  ].flat();
   it.each([
+    ...blockedHosts.map((host) => `MEDIA:https://${host}/a.png`),
     "MEDIA:http://example.com/a.png",
     'MEDIA:"http://example.com/a.png)"',
-    "MEDIA:https://intranet/a.png",
-    "MEDIA:https://printer/a.png",
-    "MEDIA:https://localhost/a.png",
-    "MEDIA:https://localhost../a.png",
-    "MEDIA:https://127.0.0.1/a.png",
     'MEDIA:"https://127.0.0.1/a.png)"',
-    "MEDIA:https://127.0.0.1../a.png",
     "MEDIA:https://169.254.169.254/latest/meta-data",
     'MEDIA:"https://169.254.169.254/a.png)"',
-    "MEDIA:https://[::1]/a.png",
-    "MEDIA:https://[fe80::1]/a.png",
-    "MEDIA:https://[fd00::1]/a.png",
-    "MEDIA:https://[fd00:ec2::254]/a.png",
-    "MEDIA:https://[::ffff:127.0.0.1]/a.png",
-    "MEDIA:https://[64:ff9b::169.254.169.254]/a.png",
-    "MEDIA:https://metadata.google.internal/a.png",
-    "MEDIA:https://metadata.google.internal../a.png",
-    "MEDIA:https://example..com/a.png",
-    "MEDIA:https://media.local/a.png",
-    "MEDIA:https://user:synthetic-password@example.com/a.png",
-  ] as const)("rejects unsafe remote media URL: %s", (input) => {
+  ])("rejects unsafe remote media URL: %s", (input) => {
     expectPolicyRejectedMediaUrlCase(input);
   });
 
-  it.each(["https://[2606:4700::1111]/a.png", "https://[2001:4860:4860::8888]/a.png"] as const)(
-    "accepts public IPv6 remote media URL: %s",
-    (url) => {
-      expectParsedMediaOutputCase(`MEDIA:${url}`, { mediaUrls: [url], text: "" });
-    },
-  );
+  const allowedHosts = [
+    ["8.8.8.8", "1.1.1.1", "93.184.216.34", "8.8.8.8.", "0x08080808", "134744072", "8.8.2056"],
+    ["[2606:4700::1111]", "[2001:4860:4860::8888]", "[2606:4700:4700:0:0:0:0:1111]", "example.com"],
+    ["EXAMPLE.com", "example.com.", "cdn.example.co.uk", "xn--bcher-kva.example", "bücher.example"],
+    ["face.cafe", "1.2.3.4.example.com", "127.0.0.1.nip.io", "0x7f.example.com"],
+    ["localhost.example.com", "local.example.com", "internal.example.com", "a-b_c.example.com"],
+  ].flat();
+  it.each(allowedHosts)("accepts public remote media host: %s", (host) => {
+    const url = `https://${host}/a.png`;
+    expectParsedMediaOutputCase(`MEDIA:${url}`, { mediaUrls: [url], text: "" });
+  });
 
   it.each([
     {

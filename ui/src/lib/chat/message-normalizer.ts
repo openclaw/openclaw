@@ -6,6 +6,7 @@ import {
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
+import { createSignal } from "solid-js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripUserEnvelopeForDisplay } from "../../../../src/auto-reply/reply/user-envelope-display.js";
 import {
@@ -20,9 +21,16 @@ import {
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
 import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
-import { splitMediaFromOutput } from "../../../../src/media/parse.js";
+import { splitMediaOutput } from "../../../../src/media/parse-output-core.js";
+import {
+  createRemoteMediaIpHostnameGuard,
+  hasRemoteMediaIpHostnameGuard,
+  installRemoteMediaIpHostnameGuard,
+  readDeferredRemoteMediaIpHostnameRejections,
+} from "../../../../src/media/remote-media-host.js";
 import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
+import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import { getMediaFileExtension, labelForMediaPath } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
@@ -397,6 +405,49 @@ function resolveDeliveryReplyTarget(
 }
 
 const normalizedMessages = new WeakMap<object, NormalizedMessage>();
+const [mediaHostGuardLoaded, setMediaHostGuardLoaded] = createSignal(false);
+
+/**
+ * Reactive. Becomes true once a media host rejected while the IP guard loaded can
+ * be re-checked; caches built from earlier normalizations must rebuild then.
+ */
+export function readMediaHostGuardLoaded(): boolean {
+  return mediaHostGuardLoaded();
+}
+
+let mediaHostGuardLoad: Promise<void> | undefined;
+// Latches after the first delivered notice so retries do not repeat it for this page.
+let mediaHostGuardBlockReported = false;
+
+/** Loads the IP literal MEDIA: host guard once; a failed load is retried on the next call. */
+export function loadMediaHostGuard(): Promise<void> {
+  if (hasRemoteMediaIpHostnameGuard()) {
+    return Promise.resolve();
+  }
+  // The parser module is its own chunk, so the guard costs one request.
+  mediaHostGuardLoad ??= import("@openclaw/net-policy/ip").then(
+    (ip) => installRemoteMediaIpHostnameGuard(createRemoteMediaIpHostnameGuard(ip)),
+    (error: unknown) => {
+      mediaHostGuardLoad = undefined;
+      // Unsaved work blocks automatic stale-chunk recovery; its owner offers Review
+      // and then reloads. Hosts stay rejected until a document loads the guard.
+      if (!mediaHostGuardBlockReported) {
+        mediaHostGuardBlockReported = !canReloadControlUiDocument(true);
+      }
+      throw error;
+    },
+  );
+  return mediaHostGuardLoad;
+}
+
+function trackMediaHostGuardLoad(): void {
+  if (!mediaHostGuardLoaded()) {
+    void loadMediaHostGuard().then(
+      () => setMediaHostGuardLoaded(true),
+      () => undefined,
+    );
+  }
+}
 
 export function normalizeMessage(message: unknown): NormalizedMessage {
   const original = asOptionalRecord(message);
@@ -404,6 +455,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   if (cached) {
     return cached;
   }
+  const deferredMediaHostRejections = readDeferredRemoteMediaIpHostnameRejections();
   const m =
     asOptionalRecord(projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message))) ??
     {};
@@ -433,7 +485,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     }
     audioAsVoice = delivery?.audioAsVoice === true;
     const extracted = extractCanvasShortcodes(text);
-    const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
+    const parsed = splitMediaOutput(extracted.text, { extractAudioDirectives: false });
     const parts: MessageContentItem[] = [];
     const segments = parsed.segments ?? [{ type: "text" as const, text: parsed.text }];
 
@@ -618,9 +670,16 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       : {}),
     ...(replyTarget ? { replyTarget } : {}),
   };
+  // A media host rejected only because the IP guard was still loading is re-checked:
+  // the result is not cached, and the computation that built it re-runs after the load.
+  const awaitsMediaHostGuard =
+    readDeferredRemoteMediaIpHostnameRejections() !== deferredMediaHostRejections;
+  if (awaitsMediaHostGuard) {
+    trackMediaHostGuardLoad();
+  }
   // Retained and live messages are immutable snapshots. Missing timestamps
   // still resolve against the current clock on each call.
-  if (original && asFiniteNumber(m.timestamp) !== undefined) {
+  if (original && asFiniteNumber(m.timestamp) !== undefined && !awaitsMediaHostGuard) {
     normalizedMessages.set(original, normalized);
   }
   return normalized;

@@ -138,6 +138,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-details-environment-desktop.css":
       // Share styles without making Outputs import the Details renderer.
       return "chat-details-styles";
+    case "ui/src/components/link-reader-response.ts":
+    case "ui/src/components/link-reader-error.ts":
+    case "ui/src/i18n/locales/en-link-reader.ts":
+    case "packages/net-policy/src/ip.ts":
+      // Readers and the Chat media host guard share the IP parser; one lazy request serves both.
+      return "link-reader-response";
     case "node_modules/@tanstack/virtual-core/dist/esm/index.js":
     case "node_modules/@tanstack/virtual-core/dist/esm/lazy-measurements.js":
     case "node_modules/@tanstack/virtual-core/dist/esm/utils.js":
@@ -538,6 +544,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "markdown-runtime";
   }
 
+  if (moduleIdIncludesPackage(id, "ipaddr.js")) {
+    return "link-reader-response";
+  }
   if (moduleIdIncludesPackage(id, "zod")) {
     return "config-runtime";
   }

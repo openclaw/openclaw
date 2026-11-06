@@ -102,6 +102,24 @@ suite.define(() => {
     expect(requests.some((url) => url.searchParams.get("source") === "missing.png")).toBe(true);
   });
 
+  it("renders public IP literal media and drops local IP literal media", async () => {
+    const page = await newChatPage(suite);
+    const caption = "Remote media by address.";
+    await page.route("https://93.184.215.14/**", (route) =>
+      route.fulfill({ contentType: "image/png", body: imageBody }),
+    );
+    const media = "MEDIA:https://93.184.215.14/public.png\n\nMEDIA:https://127.0.0.1/local.png";
+    await installMockGateway(page, { historyMessages: assistantHistory(`${caption}\n\n${media}`) });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.getByText(caption, { exact: false }).first().waitFor();
+    const image = page.locator('img.chat-message-image[src="https://93.184.215.14/public.png"]');
+    await expect.poll(() => imageWidths(image)).toEqual([1]);
+    const text = (await page.locator("body").textContent()) ?? "";
+    expect(text).not.toMatch(/MEDIA:|127\.0\.0\.1/u);
+    const local = '[src^="https://127.0.0.1"], [href^="https://127.0.0.1"]';
+    expect(await page.locator(local).count()).toBe(0);
+  });
+
   it("exposes an assistant document download with its Unicode filename and ticketed URL", async () => {
     const page = await newChatPage(suite);
     const source = "/tmp/openclaw/测试 report.pdf";

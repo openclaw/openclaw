@@ -1514,6 +1514,9 @@ src/llm/types.ts
 src/media/inbound-media-uri.ts
 src/media/media-facts.ts
 src/media/parse-output.ts
+src/media/parse-output-core.ts
+src/media/remote-media-host-ip.ts
+src/media/remote-media-host.ts
 src/media/staged-inputs.ts
 src/memory-host-sdk/host/config-utils.ts
 src/memory/root-memory-files.ts
