@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import type { AgentsListResult } from "../../../api/types.ts";
+import { isRestrictedSessionGuest } from "../../../app/operator-access.ts";
 import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import "../../../components/openclaw-mascot.tsx";
@@ -14,6 +15,7 @@ import {
   type WelcomeRecentSession,
   type WelcomeSuggestionAuth,
 } from "./chat-welcome.ts";
+import { GuestQuickStart } from "./guest-quick-start.tsx";
 
 registerChatWelcomeEnglish();
 
@@ -32,6 +34,7 @@ export type ChatWelcomeIdentityProps = {
   onModelSetup?: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
+  onFocusComposer?: () => void;
   onOpenSession?: (sessionKey: string) => void;
 };
 
@@ -105,47 +108,60 @@ export function ChatWelcome(
             inert={props.fadeSecondaryContent}
           >
             <div class="agent-chat__welcome-secondary-inner">
+              <Show when={isRestrictedSessionGuest(props.operatorAuth ?? null)}>
+                <GuestQuickStart
+                  onDraftChange={props.onDraftChange}
+                  onFocusComposer={props.onFocusComposer}
+                />
+              </Show>
               <Show
-                when={props.preparedRecents?.length}
-                fallback={
-                  <div class="agent-chat__suggestions">
-                    <For each={resolveWelcomeSuggestionKeys(props.operatorAuth)}>
-                      {(key) => (
+                when={
+                  !isRestrictedSessionGuest(props.operatorAuth ?? null) ||
+                  Boolean(props.preparedRecents?.length)
+                }
+              >
+                <Show
+                  when={props.preparedRecents?.length}
+                  fallback={
+                    <div class="agent-chat__suggestions">
+                      <For each={resolveWelcomeSuggestionKeys(props.operatorAuth)}>
+                        {(key) => (
+                          <button
+                            type="button"
+                            class="agent-chat__suggestion"
+                            onClick={() => {
+                              props.onDraftChange(t(key));
+                              props.onSend();
+                            }}
+                          >
+                            {t(key)}
+                          </button>
+                        )}
+                      </For>
+                    </div>
+                  }
+                >
+                  <div class="agent-chat__recents">
+                    <div class="agent-chat__recents-title">{t("chat.welcome.recentSessions")}</div>
+                    <For each={props.preparedRecents}>
+                      {(row) => (
                         <button
                           type="button"
-                          class="agent-chat__suggestion"
-                          onClick={() => {
-                            props.onDraftChange(t(key));
-                            props.onSend();
-                          }}
+                          class="agent-chat__recent"
+                          onClick={() => props.onOpenSession?.(row.key)}
                         >
-                          {t(key)}
+                          <span class="agent-chat__recent-name">{row.name}</span>
+                          <Show when={row.subtitle}>
+                            {(subtitle) => <span class="agent-chat__recent-sub">{subtitle()}</span>}
+                          </Show>
+                          <span class="agent-chat__recent-time">
+                            {formatRelativeTimestamp(row.updatedAt, { fallback: "" })}
+                          </span>
                         </button>
                       )}
                     </For>
                   </div>
-                }
-              >
-                <div class="agent-chat__recents">
-                  <div class="agent-chat__recents-title">{t("chat.welcome.recentSessions")}</div>
-                  <For each={props.preparedRecents}>
-                    {(row) => (
-                      <button
-                        type="button"
-                        class="agent-chat__recent"
-                        onClick={() => props.onOpenSession?.(row.key)}
-                      >
-                        <span class="agent-chat__recent-name">{row.name}</span>
-                        <Show when={row.subtitle}>
-                          {(subtitle) => <span class="agent-chat__recent-sub">{subtitle()}</span>}
-                        </Show>
-                        <span class="agent-chat__recent-time">
-                          {formatRelativeTimestamp(row.updatedAt, { fallback: "" })}
-                        </span>
-                      </button>
-                    )}
-                  </For>
-                </div>
+                </Show>
               </Show>
             </div>
           </div>

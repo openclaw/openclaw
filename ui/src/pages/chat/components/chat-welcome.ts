@@ -1,5 +1,5 @@
 import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
-import { hasOperatorWriteAccess } from "../../../app/operator-access.ts";
+import { hasOperatorWriteAccess, isRestrictedSessionGuest } from "../../../app/operator-access.ts";
 import { resolveAgentTextAvatar } from "../../../lib/agents/display.ts";
 import {
   resolveAgentAvatarUrl,
@@ -34,7 +34,9 @@ const SESSION_SCOPED_WELCOME_SUGGESTION_KEYS = [
   "chat.welcome.suggestions.openDraftPullRequest",
 ] as const;
 
-export type WelcomeSuggestionAuth = { role?: string; scopes?: readonly string[] } | null;
+export type WelcomeSuggestionAuth = Parameters<typeof isRestrictedSessionGuest>[0];
+
+export const GUEST_QUICK_START_ACTIONS = ["getStarted", "explore", "startTask"] as const;
 
 /**
  * Starter prompts the connected principal can act on. Session-scoped grants

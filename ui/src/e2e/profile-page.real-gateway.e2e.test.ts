@@ -219,6 +219,16 @@ suite.define(() => {
             await page.goto(new URL("new", suite.server.baseUrl).href);
             await waitForControlUiGatewayReady(page);
             await expect.poll(auth).toEqual(guestAuth);
+            const starter = page.getByRole("button", { name: "Help me get started", exact: true });
+            await starter.click();
+            const quickStartDraft = page.locator(".agent-chat__composer-combobox textarea");
+            await expect
+              .poll(() => quickStartDraft.inputValue())
+              .toContain("using the access I already have");
+            expect(
+              await quickStartDraft.evaluate((input) => input === document.activeElement),
+            ).toBe(true);
+            await quickStartDraft.fill("");
             const inbox = page.locator(".sidebar-issues-button:visible");
             await inbox.click();
             const panel = page.locator("#sidebar-issues-panel");

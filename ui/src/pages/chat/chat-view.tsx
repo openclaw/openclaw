@@ -270,20 +270,15 @@ function ChatComposerView(input: ChatViewInput) {
           : undefined,
     };
   });
+  const inlineProgressVisible = () => !input.props.detailsEnabled && !activities()?.progress;
   return (
     <ChatComposer
       {...input.props}
       questions={input.questions}
       getTranscriptElement={input.getTranscriptElement}
       getScrollToLatestElement={input.getScrollToLatestElement}
-      progressCard={
-        input.props.detailsEnabled || activities()?.progress ? null : input.props.progressCard
-      }
-      progressCardInitialLoading={
-        input.props.detailsEnabled || activities()?.progress
-          ? false
-          : input.props.progressCardInitialLoading
-      }
+      progressCard={inlineProgressVisible() ? input.props.progressCard : null}
+      progressCardInitialLoading={inlineProgressVisible() && input.props.progressCardInitialLoading}
       displayQueue={input.frame.displayQueue}
       footerContent={
         <ChatFooterContent
@@ -325,7 +320,13 @@ function ChatComposerView(input: ChatViewInput) {
           </div>
         </Show>
       }
-      notices={<ChatComposerNoticesView {...input.props} presented={input.presented} />}
+      notices={
+        <ChatComposerNoticesView
+          {...input.props}
+          presented={input.presented}
+          onGuestQuickStartFocus={input.frame.threadProps.onFocusComposer}
+        />
+      }
       onToggleRealtimeTalk={
         input.props.suggestionComposer ? undefined : input.props.onToggleRealtimeTalk
       }

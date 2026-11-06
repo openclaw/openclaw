@@ -6,6 +6,24 @@ const catalog = {
   chat: {
     welcome: {
       recentSessions: "Recent sessions",
+      quickStart: {
+        hint: "Not sure where to begin? Pick a starting point, then edit your message before sending.",
+        getStarted: {
+          label: "Help me get started",
+          prompt:
+            "Help me get started with OpenClaw. Ask what I want to accomplish, then suggest one small next step using the access I already have.",
+        },
+        explore: {
+          label: "Explore OpenClaw",
+          prompt:
+            "Give me a short introduction to OpenClaw and a few useful things I can try with my current access.",
+        },
+        startTask: {
+          label: "Start a task",
+          prompt:
+            "I want help with a task. Ask me what I want to accomplish and help me choose a clear first step.",
+        },
+      },
       suggestions: {
         whatCanYouDo: en.chat.welcome.suggestions.whatCanYouDo,
         summarizeRecentSessions: "Summarize my recent sessions",
