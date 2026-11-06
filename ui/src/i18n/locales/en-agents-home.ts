@@ -8,7 +8,7 @@ const enAgentsHome = {
       resetAgentOrder: "Reset agent order",
       agentMoved: "{agent} moved to position {position} of {total}.",
       agentOrderTooLarge:
-        "This order exceeds the saved preference limit. Your previous order is unchanged.",
+        "This order is too large to save. Your previous order is unchanged. Use Reset agent order in the workspace menu to clear your custom order, then retry.",
     },
   },
   agentsHome: {
