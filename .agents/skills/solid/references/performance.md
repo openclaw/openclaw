@@ -4,7 +4,7 @@ Delete unnecessary work before batching or caching; follow the [performance work
 
 ## Startup bundle
 
-`scripts/check-control-ui-performance.mts` and `config/control-ui-startup-budget-baseline.json` own startup measurement and enforcement: the committed gzip baseline plus growth and build-variance allowances, and one startup CSS request. The baseline itself may not exceed the script's `startupJsGzipBytes` cap. Preserve the lazy graph and compare every changed boot surface against its merge base. A surface already above its cap may not grow beyond the 64-byte build-variance allowance. Lower the startup baseline with the official `--update-baseline --reason` command after a verified reduction, using the measured head value rather than a lower target; raising budgets needs owner approval.
+`scripts/check-control-ui-performance.mts` and `config/control-ui-startup-budget-baseline.json` own startup measurement and enforcement: the committed gzip baseline plus growth and build-variance allowances, and one startup CSS request. Gzip and Brotli budgets normalize generated asset hashes; separate served sizes in the report retain the actual transfer bytes. The baseline itself may not exceed the script's `startupJsGzipBytes` cap. Preserve the lazy graph and compare every changed boot surface against its merge base. A surface already above its cap may not grow beyond the 64-byte build-variance allowance. Lower the startup baseline with the official `--update-baseline --reason` command after a verified reduction, using the measured head value rather than a lower target; raising budgets needs owner approval.
 
 - Keep code out of the startup graph until a startup surface actually needs it. Defer behind the route or interaction that uses it: automation readiness loads on the first read of its hook, and System busyness renders only when opened.
 - The Solid shell now owns startup rendering. Its imports must not eagerly register lazy page custom elements or load route-only libraries, even if every importer uses Solid. An eager Zod import previously added about 36 KB gzip.
@@ -72,6 +72,33 @@ These are results for the cited workloads, not universal speedups.
 
 ### WebKit
 
+- For aged-tab comparisons, put each fresh control in its own browser process
+  and match retained session keys, not just pane counts. Use the aged-tab
+  harness's separate `--in-page` run to distinguish application settlement from
+  compound native-input gaps. Zero-delay typing includes key acknowledgments
+  between edits; cancelling `keydown` does not isolate the driver because the
+  engine can invalidate focus styling before dispatch. Corroborate with paced
+  trusted input and browser-local frame measurements. Synthetic input does not
+  cover native editing defaults or IME, and two animation frames are not CPU or
+  presentation timestamps. Do not attribute a gap from resource counts alone.
+- Keep fixture validation outside CPU and input windows. Returning all recorded
+  requests grows with a soak even when the assertion only needs a count; use a
+  scalar count outside measurement. Chromium `Performance.enable` defaults to
+  elapsed task time: request `timeDomain: "threadTicks"` for thread CPU claims.
+- Match once-loaded route styles when isolating progressive aging. In the aged-tab
+  census, Chromium's remaining typing/sidebar gap disappeared after matching
+  external stylesheet residency (77 sheets versus 20 before matching). Report
+  that bounded first-visit cost separately; do not call it an ever-growing
+  subscription or automation backlog. Keep an unmatched run to show the actual
+  cost a used document pays.
+- Zero `document.getAnimations()` does not rule out native animation growth.
+  WebKit filters disconnected targets out of that API and subtree enumeration.
+  Session churn retained nine running `::after` shimmers per removed loading
+  skeleton in WebKit 27.2. Inspect native animation instances after timing;
+  diagnostic enumeration itself can create retaining wrappers. Capturing handles
+  while connected can flush style and mask a short-lived loading-frame failure.
+  Script cancellation stops ticking but may leave native CSS ownership records;
+  test style retirement at the connected owner boundary as well as running counts.
 - Split disclosure expansion and collapse before diagnosing a slow toggle cycle.
   The chat `*-toggle` benchmarks await ARIA/content assertions between two native
   activations, so their input-to-last-commit span includes the intervening driver

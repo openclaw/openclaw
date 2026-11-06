@@ -1,7 +1,7 @@
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { isStagedInputPath, stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
+import { WorkspaceResultLimitError } from "./workspace-inventory-limits.js";
 import {
-  MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
   type WorkerWorkspaceManifest,
@@ -15,7 +15,7 @@ const OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX = "Cloud workspace result is too lar
 export const OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX =
   "Cloud workspace staged result exceeds its byte limit";
 const RECOVERY_CANDIDATES_PREFIX = "Largest new files: ";
-
+const MAX_WORKSPACE_RESULT_CHANGED_PATHS = 50_000;
 /** Worker errors preserve messages, not custom fields; these paths are advice, never authority. */
 export function workspaceSizeRecoveryPaths(error: Error): string[] {
   if (error.message.startsWith(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX)) {
@@ -184,19 +184,19 @@ export function prepareWorkspaceReconciliation(
 export function parseChangedWorkspaceResult(
   base: WorkerWorkspaceManifest,
   current: WorkerWorkspaceManifest,
-  enforceRecordLimit = true,
+  enforceChangeLimit = true,
   { baseNodes, currentNodes }: ComparisonNodes = {
     baseNodes: manifestNodes(base),
     currentNodes: manifestNodes(current),
   },
 ): { changed: boolean; entries: WorkerWorkspaceManifestEntry[] } {
-  let recordCount = 0;
+  let changedPathCount = 0;
   const entries: WorkerWorkspaceManifestEntry[] = [];
   const newFiles: Array<Extract<WorkerWorkspaceManifestEntry, { type: "file" }>> = [];
   for (const entry of currentNodes.values()) {
     const previous = baseNodes.get(entry.path);
     if (!sameEntry(previous, entry)) {
-      recordCount += previous ? 2 : 1;
+      changedPathCount++;
       if (entry.type !== "directory") {
         entries.push(entry);
         if (!previous && entry.type === "file" && entry.size > 0) {
@@ -207,12 +207,12 @@ export function parseChangedWorkspaceResult(
   }
   for (const entryPath of baseNodes.keys()) {
     if (!currentNodes.has(entryPath)) {
-      recordCount++;
+      changedPathCount++;
     }
   }
-  if (enforceRecordLimit && recordCount > MAX_RECONCILIATION_ENTRIES) {
-    throw new Error(
-      `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
+  if (enforceChangeLimit && changedPathCount > MAX_WORKSPACE_RESULT_CHANGED_PATHS) {
+    throw new WorkspaceResultLimitError(
+      `Workspace result changes ${changedPathCount} files/directories (limit ${MAX_WORKSPACE_RESULT_CHANGED_PATHS}).`,
     );
   }
   let totalBytes = 0;
@@ -224,7 +224,7 @@ export function parseChangedWorkspaceResult(
   }
   if (totalBytes > MAX_RECONCILIATION_TOTAL_BYTES) {
     const candidates = newFiles.toSorted((left, right) => right.size - left.size).slice(0, 5);
-    throw new Error(
+    throw new WorkspaceResultLimitError(
       OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX +
         ": " +
         totalBytes +
@@ -234,8 +234,9 @@ export function parseChangedWorkspaceResult(
         MAX_RECONCILIATION_TOTAL_BYTES +
         " byte limit.\n" +
         RECOVERY_CANDIDATES_PREFIX +
-        JSON.stringify(candidates.map((entry) => entry.path)),
+        JSON.stringify(candidates.map((entry) => entry.path)) +
+        "\n",
     );
   }
-  return { changed: recordCount > 0, entries };
+  return { changed: changedPathCount > 0, entries };
 }

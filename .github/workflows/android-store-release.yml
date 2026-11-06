@@ -114,7 +114,11 @@ jobs:
         with:
           cache-mode: off
           install-bun: "true"
+          install-deps: "false"
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install mobile release dependencies
+        run: node scripts/install-mobile-release-dependencies.mjs
 
       - name: Setup Android toolchain
         uses: ./.github/actions/setup-android-toolchain

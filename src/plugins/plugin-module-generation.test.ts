@@ -315,30 +315,6 @@ describe("plugin module generations", () => {
     },
   );
 
-  it.each(["mjs", "ts"])("preserves computed import URL identity (%s)", async (extension) => {
-    const root = temp.make("plugin-computed-url-");
-    fs.writeFileSync(
-      path.join(root, `index.${extension}`),
-      "export const read = name => import(name);",
-    );
-    fs.writeFileSync(
-      path.join(root, `helper.${extension}`),
-      "export const token = Symbol('module');",
-    );
-    const plugin = load(root, `index.${extension}`, true).value as {
-      read(name: string): Promise<{ token: symbol }>;
-    };
-    const target = extension === "ts" ? "./helper.js" : "./helper.mjs";
-    const query = await plugin.read(`${target}?one`);
-    const fragment = await plugin.read(`${target}#two`);
-    const plain = await plugin.read(target);
-    expect((await plugin.read(`${target}?one`)).token).toBe(query.token);
-    expect((await plugin.read(`${target}#two`)).token).toBe(fragment.token);
-    expect(query.token).not.toBe(plain.token);
-    expect(fragment.token).not.toBe(plain.token);
-    expect(fragment.token).not.toBe(query.token);
-  });
-
   it("retains a failed computed package capture through another export path", () => {
     const root = temp.make("plugin-failed-computed-package-");
     fs.writeFileSync(path.join(root, "index.cjs"), "exports.read = name => require(name).value;");

@@ -860,6 +860,7 @@ src/config/zod-schema.cloud-workers.ts
 src/config/zod-schema.core.ts
 src/config/zod-schema.desktop.ts
 src/config/zod-schema.gateway.ts
+src/config/zod-schema.gateway-openclaw-id.ts
 src/config/zod-schema.hooks.ts
 src/config/zod-schema.implicit-mentions.ts
 src/config/zod-schema.installs.ts
@@ -1218,6 +1219,7 @@ src/infra/sqlite-database-admission-delta.ts
 src/infra/sqlite-database-admission-record.ts
 src/infra/sqlite-database-admission-seal.ts
 src/infra/sqlite-database-admission-turn.ts
+src/infra/sqlite-database-admission-wait.ts
 src/infra/sqlite-database-admission.ts
 src/infra/sqlite-error-diagnostics.ts
 src/infra/sqlite-existing-database.ts

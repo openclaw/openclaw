@@ -6,6 +6,7 @@ import { mountNativeLinkMenu } from "./native-link-menu.runtime.tsx";
 import { controlsForHovercard } from "./portaled-hovercard-focus.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
+import "../styles.css";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -31,7 +32,7 @@ async function modalFixture(shadow = false, variant = "") {
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("native modal transient surfaces", () => {
-  it("keeps native-link menu actions clickable without dismissing the modal", async () => {
+  it("keeps native-link menu actions spaced and clickable without dismissing the modal", async () => {
     const { modal, dialog, trigger, page } = await modalFixture();
     const openInline = vi.fn();
     const rect = trigger.getBoundingClientRect();
@@ -47,6 +48,17 @@ describe.runIf("__vitest_browser__" in globalThis)("native modal transient surfa
     });
     expect(menu).not.toBeNull();
     await menu!.updateComplete;
+    const actions = menu!.querySelectorAll<HTMLElement>(".session-menu__item");
+    expect(actions).toHaveLength(3);
+    for (const action of actions) {
+      await expect
+        .poll(() => {
+          const icon = action.querySelector(".session-menu__icon")!.getBoundingClientRect();
+          const label = action.querySelector(".session-menu__text")!.getBoundingClientRect();
+          return label.left - icon.right;
+        })
+        .toBeCloseTo(6, 1);
+    }
     await page
       .elementLocator(menu!)
       .getByRole("menuitem", { name: "Open in browser panel" })
