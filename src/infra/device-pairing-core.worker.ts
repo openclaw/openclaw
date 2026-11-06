@@ -18,8 +18,7 @@ export const devicePairingOperations = {
       approveOpenClawIdNodeInWorker(database.db, input),
   ),
   "devicePairing.removeOpenClawIdNodes": devicePairingMutation(
-    (input: Parameters<typeof removeOpenClawIdNodePairingsInWorker>[1], { database }) =>
-      removeOpenClawIdNodePairingsInWorker(database.db, input),
+    removeOpenClawIdNodePairingsInWorker,
   ),
   "devicePairing.registerJoinCode": devicePairingMutation(
     (input: Parameters<typeof registerDevicePairingJoinCodeInWorker>[1], { database }) =>

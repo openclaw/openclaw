@@ -2,12 +2,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { Ed25519PublicKey } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { isEd25519PublicKey } from "../../../packages/openclaw-id-protocol/src/index.js";
+import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
 // OpenClaw ID remote access methods. The root ceremony (the link ceremony "Make
 // reachable") runs only for a direct-loopback client;
 // relayed clients can read status and send owner-signed membership changes, which
 // the authority verifies itself. Status is the same small summary for every client;
 // people, devices and activity come only from openclawId.people, for an owner.
-import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
+import { VERSION } from "../../version.js";
 import { createOpenClawIdSignIn, type OpenClawIdSignIn } from "../openclaw-id/account-sign-in.js";
 import {
   resolveOpenClawIdClientChannel,
@@ -312,7 +313,17 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
         refuse(opts, result);
         return;
       }
-      opts.respond(true, { status: result.status, link: await linkAfterWrite(service, opts) });
+      opts.respond(true, {
+        status: result.status,
+        link: await linkAfterWrite(service, opts),
+        ...(params.action === "register_node_invite"
+          ? {
+              discoveryUrl:
+                opts.context.getRuntimeConfig().gateway?.openclawId?.discoveryUrl ?? null,
+              version: VERSION,
+            }
+          : {}),
+      });
       return;
     }
     if (params.action !== "commit") {
