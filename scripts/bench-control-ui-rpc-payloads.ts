@@ -379,7 +379,19 @@ async function ready(page: Page, route?: RouteId) {
     await application.dispose();
   }
   if (route && selectors[route]) {
-    await page.locator(selectors[route]!).first().waitFor({ state: "visible", timeout: 90000 });
+    // Locator waits back off to 500 ms, which turns readiness into polling latency.
+    await page.waitForFunction(
+      (selector) => {
+        const element = document.querySelector(selector);
+        if (!element || getComputedStyle(element).visibility !== "visible") {
+          return false;
+        }
+        const bounds = element.getBoundingClientRect();
+        return bounds.width > 0 && bounds.height > 0;
+      },
+      selectors[route]!,
+      { polling: "raf", timeout: 90000 },
+    );
   } else {
     await page.locator("openclaw-app-shell").waitFor({ state: "visible", timeout: 90000 });
   }

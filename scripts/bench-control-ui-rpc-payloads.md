@@ -37,6 +37,8 @@ Server diagnostics retain handler, queue, and worker measurements. Concurrent
 same-method calls have no server request ID and must remain ambiguous.
 
 `readyMs` ends at a connected application's route-specific ready control;
+the final control is checked each animation frame, avoiding the 500 ms backoff
+of Playwright locator waits. Readiness includes the driver's final return trip.
 `settledMs` also waits for recorded requests and a 350 ms quiet tail. Routes
 without a specialized selector have shell-level readiness only: inspect their
 rendered evidence before making route-readiness claims. A route error is
