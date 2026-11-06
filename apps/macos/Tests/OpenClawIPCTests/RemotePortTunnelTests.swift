@@ -18,23 +18,30 @@ struct RemotePortTunnelTests {
         #expect(options.contains("UpdateHostKeys=yes"))
     }
 
-    @Test func `tunnel forwards the remote widget sandbox port to the same local port`() throws {
-        let sandbox = try Self.bindLoopbackPort()
+    @Test func `widget sandbox forward runs in its own ssh process on the same loopback port`() throws {
+        let sandbox = try Self.bindPort(address: "127.0.0.1")
         Darwin.close(sandbox.fd)
         let remotePort = Int(sandbox.port) - 1
 
-        let forward = RemotePortTunnel.availableSandboxForwardPort(
-            localPort: 28789, remotePort: remotePort, reservedLocalPorts: [])
-        let options = RemotePortTunnel.sshOptions(
-            localPort: 28789, remotePort: remotePort, hostKeyPolicy: .strict, sandboxForwardPort: forward)
+        let forward = try #require(RemotePortTunnel.availableSandboxForwardPort(
+            localPort: 28789, remotePort: remotePort, reservedLocalPorts: []))
+        let gatewayOptions = RemotePortTunnel.sshOptions(
+            localPort: 28789,
+            remotePort: remotePort,
+            hostKeyPolicy: .strict)
+        let sandboxOptions = RemotePortTunnel.sandboxForwardOptions(port: forward, hostKeyPolicy: .strict)
 
         #expect(forward == sandbox.port)
-        #expect(options.contains("28789:127.0.0.1:\(remotePort)"))
-        #expect(options.contains("\(sandbox.port):127.0.0.1:\(sandbox.port)"))
+        #expect(gatewayOptions.count(where: { $0 == "-L" }) == 1)
+        #expect(gatewayOptions.contains("28789:127.0.0.1:\(remotePort)"))
+        // An explicit bind address keeps ssh_config GatewayPorts from moving the listener to 0.0.0.0.
+        #expect(sandboxOptions.count(where: { $0 == "-L" }) == 1)
+        #expect(sandboxOptions.contains("127.0.0.1:\(sandbox.port):127.0.0.1:\(sandbox.port)"))
+        #expect(sandboxOptions.contains("ExitOnForwardFailure=yes"))
     }
 
     @Test func `occupied local sandbox port is unavailable until it is released`() throws {
-        let sandbox = try Self.bindLoopbackPort()
+        let sandbox = try Self.bindPort(address: "127.0.0.1")
         let remotePort = Int(sandbox.port) - 1
 
         let busy = RemotePortTunnel.availableSandboxForwardPort(
@@ -45,13 +52,20 @@ struct RemotePortTunnelTests {
 
         #expect(busy == nil)
         #expect(released == sandbox.port)
-        #expect(RemotePortTunnel.sshOptions(
-            localPort: 28789, remotePort: remotePort, hostKeyPolicy: .strict, sandboxForwardPort: busy)
-            .count(where: { $0 == "-L" }) == 1)
+    }
+
+    @Test func `wildcard listener keeps the sandbox port unavailable`() throws {
+        // ssh's SO_REUSEADDR loopback bind succeeds beside 0.0.0.0 and would take its loopback traffic;
+        // with GatewayPorts=yes ssh binds the wildcard itself and fails.
+        let service = try Self.bindPort(address: "0.0.0.0")
+        defer { Darwin.close(service.fd) }
+
+        #expect(RemotePortTunnel.availableSandboxForwardPort(
+            localPort: 28789, remotePort: Int(service.port) - 1, reservedLocalPorts: []) == nil)
     }
 
     @Test func `hosted local Gateway keeps its ports from the sandbox forward`() throws {
-        let sandbox = try Self.bindLoopbackPort()
+        let sandbox = try Self.bindPort(address: "127.0.0.1")
         Darwin.close(sandbox.fd)
         let remotePort = Int(sandbox.port) - 1
         // Hosting repair moves this Mac's Gateway next to the tunnel port; its listener may not be bound yet.
@@ -94,16 +108,17 @@ struct RemotePortTunnelTests {
         }
     }
 
-    private static func bindLoopbackPort() throws -> (fd: Int32, port: UInt16) {
+    /// A listening socket, as a service holding the port would have.
+    private static func bindPort(address: String) throws -> (fd: Int32, port: UInt16) {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         var addr = sockaddr_in()
         addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        addr.sin_addr = in_addr(s_addr: inet_addr(address))
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
         let bound = withUnsafeMutablePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                Darwin.bind(fd, sa, length) == 0 && getsockname(fd, sa, &length) == 0
+                Darwin.bind(fd, sa, length) == 0 && Darwin.listen(fd, 1) == 0 && getsockname(fd, sa, &length) == 0
             }
         }
         guard fd >= 0, bound, UInt16(bigEndian: addr.sin_port) > 1 else {

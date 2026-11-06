@@ -185,7 +185,7 @@ actor PortGuardian {
         }
     }
 
-    /// Matches only the exact `ssh … -N -L <localPort>:127.0.0.1:<remotePort>` shape spawned by
+    /// Matches only the exact `ssh … -N -L [127.0.0.1:]<localPort>:127.0.0.1:<remotePort>` shape spawned by
     /// RemotePortTunnel. First reap gate; the start-time check in classify handles pid reuse
     /// by a look-alike tunnel on the same port.
     static func isTunnelCommand(_ fullCommand: String, localPort: Int) -> Bool {
@@ -194,12 +194,12 @@ actor PortGuardian {
               executable == "ssh" || executable.hasSuffix("/ssh"),
               tokens.contains("-N")
         else { return false }
-        let forwardPrefix = "\(localPort):127.0.0.1:"
+        // The widget sandbox forward names its 127.0.0.1 bind address explicitly.
+        let forwardPrefixes = ["\(localPort):127.0.0.1:", "127.0.0.1:\(localPort):127.0.0.1:"]
         for (index, token) in tokens.enumerated() {
-            if token == "-L", index + 1 < tokens.count, tokens[index + 1].hasPrefix(forwardPrefix) {
-                return true
-            }
-            if token.hasPrefix("-L"), token.dropFirst(2).hasPrefix(forwardPrefix) {
+            let forward = token == "-L" && index + 1 < tokens.count ? Substring(tokens[index + 1])
+                : token.hasPrefix("-L") ? token.dropFirst(2) : nil
+            if let forward, forwardPrefixes.contains(where: { forward.hasPrefix($0) }) {
                 return true
             }
         }

@@ -19,37 +19,59 @@ struct Logger: Sendable {
 }
 
 nonisolated(unsafe) var sandboxPortAvailable = false
-nonisolated(unsafe) var createdTunnels: [RemotePortTunnel] = []
+nonisolated(unsafe) var sandboxForwardSucceeds = false
+nonisolated(unsafe) var controlTunnels: [RemotePortTunnel] = []
+nonisolated(unsafe) var sandboxForwards: [RemotePortTunnel] = []
+nonisolated(unsafe) var sandboxForwardAttempts = 0
+nonisolated(unsafe) var nextPID: pid_t = 100
 
+/// Stands in for the SSH process. Gateway tunnels and sandbox forwards are separate processes;
+/// `sandboxForwardPort`/`canAddSandboxForward` keep the fixture compiling against the earlier
+/// single-process manager so it can show that manager's failure.
 final class RemotePortTunnel: @unchecked Sendable {
     struct Configuration: Equatable, Sendable {
         let remotePort: Int
+        let reservedLocalPorts: Set<Int>
     }
 
-    let localPort: UInt16 = 18789
+    let localPort: UInt16
     let processIdentifier: pid_t
-    let sandboxForwardPort: UInt16?
+    let sandboxForwardPort: UInt16? = nil
     private(set) var isRunning = true
 
-    private init(processIdentifier: pid_t, sandboxForwardPort: UInt16?) {
-        self.processIdentifier = processIdentifier
-        self.sandboxForwardPort = sandboxForwardPort
+    private init(localPort: UInt16) {
+        nextPID += 1
+        self.processIdentifier = nextPID
+        self.localPort = localPort
     }
 
     static func configuration() throws -> Configuration {
-        Configuration(remotePort: 18789)
+        Configuration(remotePort: 18789, reservedLocalPorts: [])
     }
 
     static func create(configuration _: Configuration) async throws -> RemotePortTunnel {
-        let tunnel = RemotePortTunnel(
-            processIdentifier: pid_t(createdTunnels.count + 1),
-            sandboxForwardPort: sandboxPortAvailable ? 18790 : nil)
-        createdTunnels.append(tunnel)
+        let tunnel = RemotePortTunnel(localPort: 18789)
+        controlTunnels.append(tunnel)
         return tunnel
     }
 
+    static func createSandboxForward(configuration _: Configuration, port: UInt16) async throws -> RemotePortTunnel {
+        sandboxForwardAttempts += 1
+        // ssh exits 255 when its bind fails ("Address already in use").
+        guard sandboxForwardSucceeds else { throw POSIXError(.EADDRINUSE) }
+        let forward = RemotePortTunnel(localPort: port)
+        sandboxForwards.append(forward)
+        return forward
+    }
+
+    static func availableSandboxForwardPort(
+        localPort _: UInt16, remotePort _: Int, reservedLocalPorts _: Set<Int>) -> UInt16?
+    {
+        sandboxPortAvailable ? 18790 : nil
+    }
+
     func canAddSandboxForward(configuration _: Configuration) -> Bool {
-        self.sandboxForwardPort == nil && sandboxPortAvailable
+        sandboxPortAvailable
     }
 
     func terminate() async {
@@ -60,7 +82,7 @@ final class RemotePortTunnel: @unchecked Sendable {
 actor PortGuardian {
     static let shared = PortGuardian()
     func isListening(port _: Int, pid: Int32? = nil) -> Bool {
-        createdTunnels.first { $0.processIdentifier == pid }?.isRunning == true
+        (controlTunnels + sandboxForwards).first { $0.processIdentifier == pid }?.isRunning == true
     }
 }
 
@@ -69,7 +91,8 @@ enum RemoteTunnelManagerFixture {
     private nonisolated(unsafe) static var failures = 0
 
     static func main() async {
-        await self.tunnelWithoutSandboxForwardIsReplacedOnceThePortIsFree()
+        await self.failedSandboxForwardNeverTouchesTheGatewayTunnel()
+        await self.sandboxForwardRunsBesideTheGatewayTunnel()
         if self.failures > 0 { exit(1) }
         print("PASS: RemoteTunnelManager headless reuse regressions")
     }
@@ -81,25 +104,57 @@ enum RemoteTunnelManagerFixture {
         }
     }
 
-    private static func tunnelWithoutSandboxForwardIsReplacedOnceThePortIsFree() async {
-        let manager = RemoteTunnelManager()
-        // A hosted Gateway turning off still holds the sandbox port while the reconnect opens a tunnel.
+    private static func settle() async {
+        for _ in 0..<50 {
+            await Task.yield()
+        }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+
+    private static func reset() {
         sandboxPortAvailable = false
+        sandboxForwardSucceeds = false
+        controlTunnels = []
+        sandboxForwards = []
+        sandboxForwardAttempts = 0
+    }
+
+    private static func failedSandboxForwardNeverTouchesTheGatewayTunnel() async {
+        self.reset()
+        let manager = RemoteTunnelManager()
         let first = try? await manager.ensureControlTunnelRoute()
-        let busyReuse = try? await manager.ensureControlTunnelRoute()
-        self.expect(createdTunnels.count == 1, "tunnel replaced while the sandbox port was still busy")
-        self.expect(first != nil && busyReuse == first, "busy sandbox port changed the control route")
 
-        // Gateway shutdown finishes; the next ensure must not reuse the tunnel without the forward.
+        // The probe passes but ssh cannot bind (a wildcard GatewayPorts listener, a lost race).
         sandboxPortAvailable = true
-        let replaced = try? await manager.ensureControlTunnelRoute()
-        self.expect(createdTunnels.count == 2, "tunnel without the sandbox forward was reused after the port freed")
-        self.expect(createdTunnels.first?.isRunning == false, "replaced SSH tunnel was not terminated")
-        self.expect(createdTunnels.last?.sandboxForwardPort == 18790, "replacement tunnel lacks the sandbox forward")
-        self.expect(replaced != nil && replaced != first, "replacement did not publish a new route")
+        let afterFailure = try? await manager.ensureControlTunnelRoute()
+        await self.settle()
+        let retried = try? await manager.ensureControlTunnelRoute()
+        await self.settle()
 
-        let settled = try? await manager.ensureControlTunnelRoute()
-        self.expect(createdTunnels.count == 2 && settled == replaced, "tunnel with the forward was not reused")
+        self.expect(controlTunnels.count == 1, "Gateway tunnel was replaced for the widget forward")
+        self.expect(controlTunnels.first?.isRunning == true, "Gateway tunnel was terminated for the widget forward")
+        self.expect(first != nil && afterFailure == first && retried == first, "Gateway route changed")
+        self.expect(sandboxForwardAttempts == 1, "failed widget forward retried without backoff")
         await manager.stopAll()
+    }
+
+    private static func sandboxForwardRunsBesideTheGatewayTunnel() async {
+        self.reset()
+        sandboxPortAvailable = true
+        sandboxForwardSucceeds = true
+        let manager = RemoteTunnelManager()
+        let route = try? await manager.ensureControlTunnelRoute()
+        await self.settle()
+        let reused = try? await manager.ensureControlTunnelRoute()
+        await self.settle()
+
+        self.expect(
+            sandboxForwards.count == 1 && sandboxForwards.first?.isRunning == true,
+            "widget forward did not open beside the Gateway tunnel")
+        self.expect(controlTunnels.count == 1 && route != nil && reused == route, "Gateway route changed")
+
+        await manager.stopAll()
+        self.expect(sandboxForwards.first?.isRunning == false, "retirement left the widget forward running")
+        self.expect(controlTunnels.first?.isRunning == false, "retirement left the Gateway tunnel running")
     }
 }

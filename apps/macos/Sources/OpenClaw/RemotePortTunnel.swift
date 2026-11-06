@@ -21,8 +21,6 @@ final class RemotePortTunnel: @unchecked Sendable {
     }
 
     let localPort: UInt16
-    /// The widget sandbox forward this SSH process opened, or nil when its port was unavailable.
-    let sandboxForwardPort: UInt16?
     var isRunning: Bool {
         self.process.isRunning
     }
@@ -37,14 +35,12 @@ final class RemotePortTunnel: @unchecked Sendable {
         process: ManagedProcess,
         processIdentifier: pid_t,
         localPort: UInt16,
-        sandboxForwardPort: UInt16?,
         stderrReader: PipeReadStream,
         guardianReceipt: PortGuardian.Record)
     {
         self.process = process
         self.processIdentifier = processIdentifier
         self.localPort = localPort
-        self.sandboxForwardPort = sandboxForwardPort
         self.stderrReader = stderrReader
         self.guardianReceipt = guardianReceipt
     }
@@ -143,20 +139,29 @@ final class RemotePortTunnel: @unchecked Sendable {
         Self.logger.debug(
             "ssh tunnel route host=\(sshHost, privacy: .public) " +
                 "remotePort=\(configuration.remotePort, privacy: .public)")
-        let sandboxForwardPort = Self.availableSandboxForwardPort(
+        return try await self.spawn(
+            configuration: configuration,
             localPort: localPort,
-            remotePort: configuration.remotePort,
-            reservedLocalPorts: configuration.reservedLocalPorts)
-        if sandboxForwardPort == nil {
-            Self.logger.info(
-                "opening SSH tunnel without the widget sandbox forward; its port is in use or reserved " +
-                    "on this Mac, and the tunnel is replaced once it is free")
-        }
-        let options = Self.sshOptions(
-            localPort: localPort,
-            remotePort: configuration.remotePort,
-            hostKeyPolicy: configuration.hostKeyPolicy,
-            sandboxForwardPort: sandboxForwardPort)
+            options: Self.sshOptions(
+                localPort: localPort,
+                remotePort: configuration.remotePort,
+                hostKeyPolicy: configuration.hostKeyPolicy))
+    }
+
+    /// Opens the widget sandbox forward in its own SSH process. ExitOnForwardFailure then only ends
+    /// this process, so a sandbox port conflict can never take the Gateway route down with it.
+    static func createSandboxForward(configuration: Configuration, port: UInt16) async throws -> RemotePortTunnel {
+        try await self.spawn(
+            configuration: configuration,
+            localPort: port,
+            options: self.sandboxForwardOptions(port: port, hostKeyPolicy: configuration.hostKeyPolicy))
+    }
+
+    private static func spawn(
+        configuration: Configuration,
+        localPort: UInt16,
+        options: [String]) async throws -> RemotePortTunnel
+    {
         let args = CommandResolver.sshArguments(
             target: configuration.target,
             identity: configuration.identity,
@@ -263,7 +268,6 @@ final class RemotePortTunnel: @unchecked Sendable {
             process: process,
             processIdentifier: processIdentifier,
             localPort: localPort,
-            sandboxForwardPort: sandboxForwardPort,
             stderrReader: stderrReader,
             guardianReceipt: receipt)
     }
@@ -329,38 +333,31 @@ final class RemotePortTunnel: @unchecked Sendable {
     static func sshOptions(
         localPort: UInt16,
         remotePort: Int,
-        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy,
-        sandboxForwardPort: UInt16? = nil) -> [String]
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]
     {
-        var options = ["-o", "BatchMode=yes"] + hostKeyPolicy.commandOptions + [
+        self.baseOptions(hostKeyPolicy: hostKeyPolicy) + ["-L", "\(localPort):127.0.0.1:\(remotePort)"]
+    }
+
+    /// The explicit 127.0.0.1 bind address keeps ssh_config GatewayPorts and AddressFamily from moving
+    /// the listener to a wildcard or IPv6 address that availableSandboxForwardPort never probed.
+    static func sandboxForwardOptions(port: UInt16, hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String] {
+        self.baseOptions(hostKeyPolicy: hostKeyPolicy) + ["-L", "127.0.0.1:\(port):127.0.0.1:\(port)"]
+    }
+
+    private static func baseOptions(hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String] {
+        ["-o", "BatchMode=yes"] + hostKeyPolicy.commandOptions + [
             "-o", "ExitOnForwardFailure=yes",
             "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=3",
             "-o", "TCPKeepAlive=yes",
             "-n",
             "-N",
-            "-L", "\(localPort):127.0.0.1:\(remotePort)",
         ]
-        if let sandboxForwardPort {
-            options += ["-L", "\(sandboxForwardPort):127.0.0.1:\(sandboxForwardPort)"]
-        }
-        return options
-    }
-
-    /// A tunnel opened while its sandbox port was busy or reserved stays usable for the Gateway but
-    /// leaves widgets unreachable. Once that port is available, the manager replaces the tunnel.
-    func canAddSandboxForward(configuration: Configuration) -> Bool {
-        self.sandboxForwardPort == nil && Self.availableSandboxForwardPort(
-            localPort: self.localPort,
-            remotePort: configuration.remotePort,
-            reservedLocalPorts: configuration.reservedLocalPorts) != nil
     }
 
     /// Widgets load from the remote Gateway's sandbox listener (Gateway port + 1 unless the
     /// remote sets mcp.apps.sandboxPort). The Control UI addresses it as the tunnel host plus
     /// the advertised port, so it must be forwarded to the same local port number.
-    /// ExitOnForwardFailure would drop the control forward too, so an occupied port is skipped; if
-    /// another process binds it between this check and ssh, the manager's restart skips it next time.
     static func availableSandboxForwardPort(
         localPort: UInt16,
         remotePort: Int,
@@ -369,9 +366,21 @@ final class RemotePortTunnel: @unchecked Sendable {
         guard (1..<65535).contains(remotePort) else { return nil }
         let sandboxPort = UInt16(remotePort + 1)
         guard sandboxPort != localPort, !reservedLocalPorts.contains(Int(sandboxPort)),
-              self.portIsFree(sandboxPort)
+              self.sandboxPortIsFree(sandboxPort)
         else { return nil }
         return sandboxPort
+    }
+
+    /// ssh binds the forward to 127.0.0.1 with SO_REUSEADDR, which succeeds beside a wildcard listener
+    /// and would then take loopback traffic from it. Binding the same address without SO_REUSEADDR
+    /// also fails for a wildcard holder, so success here means ssh can bind without shadowing anyone.
+    static func sandboxPortIsFree(_ port: UInt16) -> Bool {
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = port.bigEndian
+        addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        return self.canBind(&addr, family: AF_INET, reuseAddress: false)
     }
 
     private static func findPort(preferred: UInt16) async throws -> UInt16 {
@@ -418,7 +427,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         addr.sin_port = port.bigEndian
         addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
 
-        return self.canBind(&addr, family: AF_INET)
+        return self.canBind(&addr, family: AF_INET, reuseAddress: true)
     }
 
     private static func canBindIPv6(_ port: UInt16) -> Bool {
@@ -431,16 +440,18 @@ final class RemotePortTunnel: @unchecked Sendable {
             inet_pton(AF_INET6, "::1", ptr)
         }
         addr.sin6_addr = loopback
-        return self.canBind(&addr, family: AF_INET6)
+        return self.canBind(&addr, family: AF_INET6, reuseAddress: true)
     }
 
-    private static func canBind<Address>(_ address: inout Address, family: Int32) -> Bool {
+    private static func canBind<Address>(_ address: inout Address, family: Int32, reuseAddress: Bool) -> Bool {
         let fd = socket(family, SOCK_STREAM, 0)
         guard fd >= 0 else { return false }
         defer { _ = Darwin.close(fd) }
 
-        var one: Int32 = 1
-        _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout.size(ofValue: one)))
+        if reuseAddress {
+            var one: Int32 = 1
+            _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout.size(ofValue: one)))
+        }
 
         return withUnsafePointer(to: &address) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in

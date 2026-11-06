@@ -30,8 +30,19 @@ actor RemoteTunnelManager {
         let task: Task<RemotePortTunnel, Error>
     }
 
+    private struct SandboxForwardAttempt {
+        let token: UUID
+        let route: Route
+        let task: Task<RemotePortTunnel?, Never>
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "remote-tunnel")
     private var controlTunnel: ActiveTunnel?
+    /// Widget sandbox forward for the current control route, in its own SSH process.
+    private var sandboxForward: RemotePortTunnel?
+    private var sandboxForwardAttempt: SandboxForwardAttempt?
+    private var lastSandboxForwardAttemptAt: Date?
+    private let sandboxForwardRetrySeconds: TimeInterval = 30
     private var createInFlight: TunnelCreation?
     private var retirementInFlight: (token: UUID, task: Task<Void, Never>)?
     private var tunnelGeneration: UInt64 = 0
@@ -119,17 +130,9 @@ actor RemoteTunnelManager {
             if (try? RemotePortTunnel.configuration()) != configuration {
                 return .staleConfiguration
             }
-            if isListening, current.tunnel.canAddSandboxForward(configuration: configuration) {
-                // Whatever held the sandbox port at creation (a hosted Gateway shutting down, a stale
-                // tunnel) has let go; a fresh SSH process can forward it, so widgets load again.
-                self.logger.info("widget sandbox port is free; replacing SSH tunnel to forward it")
-                let replacementGeneration = self.beginRetirement()
-                self.lastRestartAt = Date()
-                await self.waitForRetirement()
-                return .retired(replacementGeneration)
-            }
             if isListening {
                 self.logger.info("reusing active SSH tunnel localPort=\(local, privacy: .public)")
+                self.refreshSandboxForward(configuration: configuration, route: current.route)
                 return .route(current.route)
             }
             self.logger.error(
@@ -249,14 +252,70 @@ actor RemoteTunnelManager {
         return try await .route(self.finishCreation(create))
     }
 
+    /// Keeps the widget sandbox forward of the current route open when its port allows. Every outcome
+    /// stays inside the forward's own SSH process: a failure is logged and retried later, never
+    /// propagated to the Gateway route. Attempts start only after the probe passes, at most every 30 s.
+    private func refreshSandboxForward(configuration: RemotePortTunnel.Configuration, route: Route) {
+        guard self.sandboxForwardAttempt == nil else { return }
+        if let forward = self.sandboxForward {
+            if forward.isRunning { return }
+            self.sandboxForward = nil
+            Task { await forward.terminate() }
+        }
+        if let last = self.lastSandboxForwardAttemptAt,
+           Date().timeIntervalSince(last) < self.sandboxForwardRetrySeconds
+        {
+            return
+        }
+        guard let port = RemotePortTunnel.availableSandboxForwardPort(
+            localPort: route.localPort,
+            remotePort: configuration.remotePort,
+            reservedLocalPorts: configuration.reservedLocalPorts)
+        else { return }
+        self.lastSandboxForwardAttemptAt = Date()
+        let token = UUID()
+        let logger = self.logger
+        let task = Task<RemotePortTunnel?, Never> {
+            do {
+                return try await RemotePortTunnel.createSandboxForward(configuration: configuration, port: port)
+            } catch {
+                logger.error(
+                    "widget sandbox forward on port \(port, privacy: .public) failed; " +
+                        "the Gateway tunnel is unaffected: \(error.localizedDescription, privacy: .public)")
+                return nil
+            }
+        }
+        self.sandboxForwardAttempt = SandboxForwardAttempt(token: token, route: route, task: task)
+        Task { await self.finishSandboxForward(token: token) }
+    }
+
+    private func finishSandboxForward(token: UUID) async {
+        guard let attempt = self.sandboxForwardAttempt, attempt.token == token else { return }
+        let forward = await attempt.task.value
+        // Retirement took the attempt during the await and terminates its result itself.
+        guard self.sandboxForwardAttempt?.token == token else { return }
+        self.sandboxForwardAttempt = nil
+        guard let forward else { return }
+        guard self.controlTunnel?.route == attempt.route else {
+            await forward.terminate()
+            return
+        }
+        self.sandboxForward = forward
+    }
+
     @discardableResult
     private func beginRetirement() -> UInt64 {
         self.lifecycleGeneration &+= 1
         let active = self.controlTunnel?.tunnel
         let create = self.createInFlight?.task
-        guard active != nil || create != nil else { return self.lifecycleGeneration }
+        let sandbox = self.sandboxForward
+        let sandboxAttempt = self.sandboxForwardAttempt?.task
+        guard active != nil || create != nil || sandbox != nil || sandboxAttempt != nil
+        else { return self.lifecycleGeneration }
         self.controlTunnel = nil
         self.createInFlight = nil
+        self.sandboxForward = nil
+        self.sandboxForwardAttempt = nil
         self.tunnelGeneration &+= 1
         create?.cancel()
 
@@ -266,6 +325,8 @@ actor RemoteTunnelManager {
         self.retirementInFlight = (UUID(), Task {
             await previous?.value
             if let tunnel = try? await create?.value { await tunnel.terminate() }
+            if let forward = await sandboxAttempt?.value { await forward.terminate() }
+            await sandbox?.terminate()
             await active?.terminate()
         })
         return self.lifecycleGeneration
@@ -325,6 +386,8 @@ actor RemoteTunnelManager {
             tunnel: tunnel,
             configuration: create.configuration,
             route: route)
+        self.lastSandboxForwardAttemptAt = nil
+        self.refreshSandboxForward(configuration: create.configuration, route: route)
         self.logger.info(
             "ssh tunnel ready localPort=\(resolvedPort, privacy: .public) " +
                 "generation=\(route.generation, privacy: .public)")
