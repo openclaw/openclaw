@@ -282,7 +282,7 @@ export function createWorkerProjectPreparation(params: {
         ) {
           throw new Error("Project preparation returned an invalid retained Git base");
         }
-        const workspace = readPreparedWorkspace(retained);
+        const workspace = readPreparedWorkspace(retained, retained.baseCommit);
         verifiedRetained = {
           baseCommit: retained.baseCommit,
           sourceManifestRef: workspace.sourceManifestRef,
