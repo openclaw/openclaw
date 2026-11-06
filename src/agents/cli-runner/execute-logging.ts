@@ -7,6 +7,8 @@ export const CLAUDE_SELECTED_AUTH_ENV_KEYS = new Set([
 export const NODE_CLAUDE_FORWARD_ENV_KEYS = new Set([
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
   "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+  "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING",
+  "MAX_THINKING_TOKENS",
 ]);
 export function resolveNodeClaudeAuthEnv(context: PreparedCliRunContext): Record<string, string> {
   const secretInput = context.preparedBackend.secretInput;

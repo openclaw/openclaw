@@ -35,7 +35,10 @@ export async function invokeNodeClaudeCliRun(params: {
   signal?: AbortSignal;
   skillRuntime?: NodeClaudeSkillRuntime;
 }): Promise<NodeInvokeResult> {
-  const context = getPluginRuntimeGatewayRequestScope()?.context;
+  const scope = getPluginRuntimeGatewayRequestScope();
+  // Detached chat turns keep the live Gateway resolver and drop the captured
+  // request context. Node dispatch reads that current Gateway.
+  const context = scope?.context ?? scope?.resolveGatewayContext?.();
   if (!context) {
     return {
       ok: false,

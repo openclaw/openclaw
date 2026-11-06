@@ -54,6 +54,12 @@ export function captureApprovedCwdSnapshotSync(
   return { ok: true, snapshot: { cwd: cwdReal, stat: cwdStat } };
 }
 
+/** Real path an approval plan stores when the request leaves cwd unset. */
+export function captureOmittedApprovalCwd(): string | undefined {
+  const captured = captureApprovedCwdSnapshotSync(process.cwd());
+  return captured.ok ? captured.snapshot.cwd : undefined;
+}
+
 /** Rechecks the exact directory object immediately before process launch. */
 export function revalidateApprovedCwdSnapshot(snapshot: ApprovedCwdSnapshot): boolean {
   const current = captureApprovedCwdSnapshotSync(snapshot.cwd);
