@@ -1,3 +1,4 @@
 # Dashboard widget frames: sandboxOrigin guidance after the sandbox ready deadline,
-# with and without an authored sandboxOrigin.
-28
+# with and without an authored sandboxOrigin, and a browser layout check that the
+# expanded guidance stays reachable in a compact card.
+92

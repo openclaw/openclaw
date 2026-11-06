@@ -702,13 +702,14 @@ export function BoardWidgetFrame(props: {
               </div>
             </Match>
             <Match when={view().waiting}>
-              {/* Disclosed guidance must stay readable in narrow cards. Inline keeps
-                  this rarely shown state out of the shared Control UI stylesheet. */}
+              {/* Disclosed guidance must stay readable in narrow cards and reachable
+                  in short ones. Inline keeps this rarely shown state out of the
+                  shared Control UI stylesheet. */}
               <div
                 class="board-widget__notice"
                 style={
                   view().sandboxUnreachable
-                    ? { "max-width": "64ch", "white-space": "normal" }
+                    ? { "max-width": "64ch", "white-space": "normal", "overflow-y": "auto" }
                     : undefined
                 }
                 role="status"
