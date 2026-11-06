@@ -123,6 +123,7 @@ import {
   applyClaudeManagedMcpTimeout,
   CLAUDE_MANAGED_MCP_TIMEOUT_MS,
 } from "./bundle-mcp-claude.js";
+import { withBundleMcpEventSourceReach } from "./bundle-mcp-event-source.js";
 import { prepareCliBundleMcpConfig, resolveCliNativeWebSearchEnabled } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { runCliCleanup, sequenceCliCleanups, throwCliPreparationFailure } from "./cleanup.js";
@@ -946,9 +947,14 @@ async function prepareCliRunContextWithinReadFence(
       tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
     ),
   );
-  const sessionEventSourcePolicy = callerToolAuthority.finalizeSessionEventSourcePolicy(
-    params,
-    promptBuildToolsAllow,
+  // Exec completion notifications persist this source policy, and a wake turn
+  // intersects with it before re-admitting runtimes; record the bundled MCP
+  // carrier exactly when this turn materialized its bundle MCP surface so the
+  // wake chain keeps re-admitting the runtime (with its own final full-name
+  // policy grants).
+  const sessionEventSourcePolicy = withBundleMcpEventSourceReach(
+    callerToolAuthority.finalizeSessionEventSourcePolicy(params, promptBuildToolsAllow),
+    mcpLoopbackRuntime !== undefined,
   );
   const { mcpGrant, projectNativeToolAuthority, exclusiveTools } = mcp.prepareCliMcpGrant(params, {
     context: mcpContextBase,
