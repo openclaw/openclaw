@@ -168,30 +168,6 @@ function itemRole(type: MenuItem["type"]): "menuitem" | "menuitemcheckbox" | "me
   return type ? `menuitem${type}` : "menuitem";
 }
 
-function MenuItemPresentation(props: { item: MenuItem; labelOnly?: boolean }) {
-  return (
-    <>
-      <Show when={props.item.icon}>
-        <span class="oc-menu-item__icon">{props.item.icon}</span>
-      </Show>
-      <span
-        class={[
-          "oc-menu-item__label",
-          {
-            "oc-menu-item__label--text": props.labelOnly || props.item.content === undefined,
-          },
-          props.item.labelClass,
-        ]}
-      >
-        {props.labelOnly ? props.item.label : (props.item.content ?? props.item.label)}
-      </span>
-      <Show when={props.item.details}>
-        <span class="oc-menu-item__details">{props.item.details}</span>
-      </Show>
-    </>
-  );
-}
-
 /** Menus share native visibility authority; Zag owns navigation and pointer intent. */
 export function Menu(props: BranchProps): JSX.Element {
   let trigger!: HTMLButtonElement;
@@ -569,7 +545,22 @@ export function Menu(props: BranchProps): JSX.Element {
                           </Show>
                         </span>
                       </Show>
-                      <MenuItemPresentation item={item()} />
+                      <Show when={item().icon}>
+                        <span class="oc-menu-item__icon">{item().icon}</span>
+                      </Show>
+                      <span
+                        class={[
+                          "oc-menu-item__label",
+                          { "oc-menu-item__label--text": item().content === undefined },
+                          item().labelClass,
+                        ]}
+                      >
+                        {item().content ?? item().label}
+                      </span>
+
+                      <Show when={item().details}>
+                        <span class="oc-menu-item__details">{item().details}</span>
+                      </Show>
                     </Item>
                   );
                 };
@@ -593,7 +584,28 @@ export function Menu(props: BranchProps): JSX.Element {
                         items={childEntries()}
                         controls={props.controls}
                         placement={childPlacement()}
-                        trigger={item().trigger ?? <MenuItemPresentation item={item()} labelOnly />}
+                        trigger={
+                          item().trigger ?? (
+                            <>
+                              <Show when={item().icon}>
+                                <span class="oc-menu-item__icon">{item().icon}</span>
+                              </Show>
+                              <span
+                                class={[
+                                  "oc-menu-item__label",
+                                  "oc-menu-item__label--text",
+                                  item().labelClass,
+                                ]}
+                              >
+                                {item().label}
+                              </span>
+
+                              <Show when={item().details}>
+                                <span class="oc-menu-item__details">{item().details}</span>
+                              </Show>
+                            </>
+                          )
+                        }
                         parent={overlay}
                         root={menuRoot}
                         parentBinding={binding}
