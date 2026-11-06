@@ -99,8 +99,8 @@ extension OpenClawChatViewModel {
             let recoveryID = UUID()
             self.pendingTransportRecoveryID = recoveryID
             return Task {
-                await self.refreshHistoryAfterRun(historyRequest: context)
-                await self.finishTransportRecovery(recoveryID, session: context.session)
+                let history = await self.refreshHistoryAfterRun(historyRequest: context)
+                await self.finishTransportRecovery(recoveryID, session: context.session, history: history)
             }
         }
         return nil
@@ -108,16 +108,24 @@ extension OpenClawChatViewModel {
 
     /// Transcript recovery gets the first round trip. A newer reconnect replaces
     /// this pass, so a flapping route does not stack catalog bursts.
-    private func finishTransportRecovery(_ recoveryID: UUID, session: SessionSnapshot) async {
+    private func finishTransportRecovery(
+        _ recoveryID: UUID,
+        session: SessionSnapshot,
+        history: RunHistoryRefreshResult) async
+    {
         guard self.pendingTransportRecoveryID == recoveryID, !self.isTransportDetached else { return }
         self.pendingTransportRecoveryID = nil
+        // Applied history schedules the progress card itself. A failed read must still
+        // refetch it, since this pass also stands in for health recovery's fetch.
+        if !history.applied { self.scheduleProgressCardFetch(for: session) }
         async let catalogs: Void = self.refreshCatalogsAfterRecovery(session: session)
         await self.pollHealthIfNeeded(force: true, sessionSnapshot: session)
         await catalogs
     }
 
     private func refreshAfterHealthRecovery() {
-        // A pending reconnect pass already refreshes these after its transcript read.
+        // A pending reconnect pass refreshes these and the progress card once its
+        // transcript read settles, whether or not the read succeeds.
         guard self.pendingTransportRecoveryID == nil else { return }
         let session = self.currentSessionSnapshot()
         self.scheduleProgressCardFetch()
