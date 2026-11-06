@@ -267,8 +267,8 @@ describe("channels controller WhatsApp logout", () => {
       expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
       expect(channels.state).toMatchObject({
         whatsappLoginMessage: cleared
-          ? "Logged out."
-          : "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
+          ? "Signed out."
+          : "No saved WhatsApp session was cleared. It may already be gone or need manual cleanup.",
         whatsappLoginQrDataUrl: cleared ? null : "data:image/png;base64,current-qr",
         whatsappLoginConnected: cleared ? null : true,
         whatsappBusy: false,

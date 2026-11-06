@@ -1,18 +1,28 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../fixtures/v1-draft/statements.json" with { type: "json" };
 import { bytesToHex, utf8 } from "../bytes.js";
+import { generateEd25519Signer, randomBytes } from "../crypto.js";
 import { canonicalize, type JsonValue } from "../jcs.js";
 import { displayFingerprint, fingerprint, isIrohEndpointKey } from "../keys.js";
 import { decodeKit, deriveRootSeed } from "../kit.js";
 import { buildStatementVectors, type StatementVectors } from "../testing/vectors.js";
-import { signingInput, statementDomain } from "./envelope.js";
+import { signStatement, signingInput, statementDomain } from "./envelope.js";
 import { verifyBindingForPin } from "./pin.js";
-import type { SignedStatement } from "./types.js";
+import {
+  MAX_MEMBER_PEER_KEYS,
+  MAX_MEMBERS,
+  MAX_OWNER_DEVICE_PEER_KEYS,
+  MAX_OWNER_DEVICES,
+  OWNER_CAPABILITIES,
+  type MembershipSnapshotBody,
+  type SignedStatement,
+} from "./types.js";
 import { parseStatement } from "./validate.js";
 import {
   verifyInviteRedemptionSignature,
   verifyMembershipSnapshot,
   verifyOwnerStatement,
+  verifyRootResetSignature,
   type TrustAnchor,
   type VerifyOptions,
 } from "./verify.js";
@@ -37,11 +47,13 @@ async function verify(
         )
       : verifier === "redemption"
         ? await verifyInviteRedemptionSignature(statement as SignedStatement<"InviteRedemption">)
-        : await verifyOwnerStatement(
-            statement as SignedStatement<"OwnerDeviceCert">,
-            anchor,
-            options,
-          );
+        : verifier === "reset"
+          ? await verifyRootResetSignature(statement as SignedStatement<"RootReset">, binding.body)
+          : await verifyOwnerStatement(
+              statement as SignedStatement<"OwnerDeviceCert">,
+              anchor,
+              options,
+            );
   return result.ok ? "ok" : result.code;
 }
 
@@ -158,5 +170,43 @@ describe("parseStatement", () => {
     expect(isIrohEndpointKey(key)).toBe(true);
     expect(isIrohEndpointKey(key.toUpperCase())).toBe(false);
     expect(isIrohEndpointKey(`iroh:${key.slice(5, 69)}0`)).toBe(false);
+  });
+});
+
+describe("membership snapshot at the caps", () => {
+  // A snapshot listing every owner device, owner peer key, member and member browser allowed.
+  async function snapshotAtCaps(
+    members = MAX_MEMBERS,
+  ): Promise<SignedStatement<"MembershipSnapshot">> {
+    const iroh = () => `iroh:${bytesToHex(randomBytes(32))}` as const;
+    const body: MembershipSnapshotBody = {
+      claw_id: binding.body.claw_id,
+      seq: 1,
+      binding_seq: binding.body.binding_seq,
+      owner_devices: Array.from({ length: MAX_OWNER_DEVICES }, () => ({
+        device_pub: `ed25519:${bytesToHex(randomBytes(32))}` as const,
+        caps: [...OWNER_CAPABILITIES],
+      })),
+      owner_peer_keys: Array.from({ length: MAX_OWNER_DEVICES * MAX_OWNER_DEVICE_PEER_KEYS }, iroh),
+      members: Array.from({ length: members }, (_, index) => ({
+        account_id: `acct-${index}-`.padEnd(256, "x"),
+        role: "operator" as const,
+        peer_keys: Array.from({ length: MAX_MEMBER_PEER_KEYS }, iroh),
+      })),
+      protocols: { statement: [1], descriptor: [1] },
+      issued_at: vectors.now,
+    };
+    return signStatement("MembershipSnapshot", body, await generateEd25519Signer());
+  }
+
+  it("validates with every cap reached", async () => {
+    expect(parseStatement(await snapshotAtCaps(), "MembershipSnapshot")).toMatchObject({
+      ok: true,
+    });
+  });
+
+  it("stops at the list limit one member past the cap", async () => {
+    const parsed = parseStatement(await snapshotAtCaps(MAX_MEMBERS + 1), "MembershipSnapshot");
+    expect(parsed).toMatchObject({ ok: false, code: "malformed" });
   });
 });

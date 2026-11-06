@@ -436,6 +436,7 @@ it.each(["archive", "delete"])(
     expect(h.gateway.snapshot.deferredIntentCount).toBe(0);
     expect(h.sessions.deletionState("agent:main:offline", "main", "incarnation")).toBeUndefined();
     expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      severity: undefined,
       placement: "top-right",
       message: "Offline changes discarded: 1",
     });
@@ -570,7 +571,8 @@ it("reports a preserved worktree after deferred deletion without removing it", a
   h.reconnect();
   await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentDraining).toBe(false));
   expect(showToast).toHaveBeenCalledExactlyOnceWith({
-    message: "Managed Worktrees:\nfeature/offline — live run or cleanup active",
+    severity: undefined,
+    message: "Managed worktrees:\nfeature/offline — live run or cleanup active",
   });
   expect(h.row()).toBeUndefined();
   expect(h.current().request.mock.calls.some(([method]) => method === "worktrees.remove")).toBe(

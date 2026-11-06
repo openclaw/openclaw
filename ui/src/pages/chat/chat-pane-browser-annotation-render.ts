@@ -64,6 +64,7 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
       releaseChatAttachmentPayload(attachment.id);
     };
     const presented = showToast({
+      severity: "success",
       message: labels.removed,
       actionLabel: labels.undo,
       onAction: () => {

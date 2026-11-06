@@ -342,7 +342,7 @@ describe("Models page catalog publication", () => {
 
     const warnings = page.querySelectorAll('.model-providers__catalog-progress[role="alert"]');
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.textContent).toContain("More models could not be discovered.");
+    expect(warnings[0]?.textContent).toContain("Couldn’t load more models. Try again.");
     expect(page.querySelector(".model-providers__provider-list .provider-usage__error")).toBeNull();
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
     expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
@@ -496,7 +496,7 @@ describe("Models page catalog publication", () => {
     await waitForSolid(() =>
       expect(
         page.querySelector('.model-providers__catalog-progress[role="alert"]')?.textContent,
-      ).toContain("More models could not be discovered."),
+      ).toContain("Couldn’t load more models. Try again."),
     );
     expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).not.toBeNull();
     await openModelPicker(page);

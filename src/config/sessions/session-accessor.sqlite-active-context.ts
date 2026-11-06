@@ -8,6 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { currentSqliteOperationTiming } from "../../infra/sqlite-reader-lifecycle.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
   SessionTranscriptBoundedActiveContext,
@@ -382,6 +383,17 @@ export function readSessionTranscriptBoundedActiveContextCore(
         );
     const selection = selectBoundedContextRows(metadata, headerBytes, limits);
     const { selectedRows } = selection;
+    const timing = currentSqliteOperationTiming();
+    if (timing) {
+      timing.hydrationActiveEvents = projection.state.activeEventCount;
+      // Truncation consumed one rejected row; byte stops must not imply SQL exhaustion.
+      timing.hydrationMetadataRows = covered
+        ? undefined
+        : selectedRows.length + Number(selection.truncated);
+      timing.hydrationMetadataLimit = !covered && limits ? limits.maxEvents + 1 : undefined;
+      timing.hydrationExhausted = !covered && limits ? Number(!selection.truncated) : undefined;
+      timing.hydrationDependencyRows = undefined;
+    }
     let { serializedBytes, truncated } = selection;
     const contextSequences = selectedRows.map((row) => row.event_seq);
     let boundary = covered
@@ -547,6 +559,9 @@ export function readSessionTranscriptBoundedActiveContextCore(
       }),
     );
     const selectedSizes = new Map(selectedRows.map((row) => [row.event_seq, row.serialized_bytes]));
+    if (timing) {
+      timing.hydrationDependencyRows = dependencyCandidates.length;
+    }
     if (boundary) {
       selectedSizes.set(boundary.seq, boundary.serialized_bytes);
     }

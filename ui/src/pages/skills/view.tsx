@@ -18,6 +18,7 @@ import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createProgressiveList } from "../../lib/reactive/progressive-list.ts";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
@@ -76,7 +77,11 @@ export function Skills(props: SkillsProps) {
   const emptyMessage = () =>
     !props.state.connected && !props.state.skillsReport
       ? t("skillsPage.disconnected")
-      : t("skillsPage.empty");
+      : props.state.skillsFilter.trim()
+        ? t("skillsPage.noMatches")
+        : skills().length > 0
+          ? t("skillsPage.noFilteredSkills")
+          : t("skillsPage.empty");
   const statusCounts = createMemo(() => {
     const counts: Record<SkillsStatusFilter, number> = {
       all: skills().length,
@@ -139,9 +144,7 @@ export function Skills(props: SkillsProps) {
                   when={acceptedFiltered().length > 0}
                   fallback={<SettingsEmpty message={emptyMessage()} />}
                 >
-                  <For each={groups()} keyed={(group) => group.id}>
-                    {(group) => <SkillGroupView group={group()} view={props} />}
-                  </For>
+                  <SkillsInventory groups={groups()} view={props} />
                 </Show>
               </Show>
             </>
@@ -159,9 +162,48 @@ export function Skills(props: SkillsProps) {
   );
 }
 
-function SkillGroupView(props: { group: SkillGroup; view: SkillsProps }) {
+function SkillsInventory(props: { groups: SkillGroup[]; view: SkillsProps }) {
+  const skills = createMemo(() => props.groups.flatMap((group) => group.skills));
+  const visible = createProgressiveList(skills, { initial: 1, batch: 500 });
+  const groups = createMemo(() => {
+    let remaining = visible.items().length;
+    // Reveal one grouped prefix so adding earlier rows never moves a later heading.
+    return props.groups.flatMap((group) => {
+      const count = Math.min(remaining, group.skills.length);
+      remaining -= count;
+      return count > 0
+        ? [
+            {
+              group,
+              skills: count === group.skills.length ? group.skills : group.skills.slice(0, count),
+            },
+          ]
+        : [];
+    });
+  });
   return (
-    <details class="settings-section skills-group" open>
+    <For each={groups()} keyed={(entry) => entry.group.id}>
+      {(entry) => (
+        <SkillGroupView
+          group={entry().group}
+          skills={entry().skills}
+          busy={visible.pending()}
+          view={props.view}
+        />
+      )}
+    </For>
+  );
+}
+
+function SkillGroupView(props: {
+  group: SkillGroup;
+  skills: SkillStatusEntry[];
+  busy: boolean;
+  view: SkillsProps;
+}) {
+  const skills = createMemo(() => props.skills);
+  return (
+    <details class="settings-section skills-group" aria-busy={props.busy ? "true" : "false"} open>
       <summary class="settings-section__header skills-group__summary">
         <h2 class="settings-section__heading">
           {props.group.label} <span class="settings-count">{props.group.skills.length}</span>
@@ -171,7 +213,7 @@ function SkillGroupView(props: { group: SkillGroup; view: SkillsProps }) {
         </span>
       </summary>
       <div class="settings-group">
-        <For each={props.group.skills} keyed={(skill) => skill.skillKey}>
+        <For each={skills()} keyed={(skill) => skill.skillKey}>
           {(skill) => <SkillRow skill={skill()} view={props.view} />}
         </For>
       </div>
