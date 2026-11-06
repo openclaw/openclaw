@@ -1,3 +1,4 @@
+import { Dynamic } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
@@ -49,75 +50,56 @@ function SubagentActivityRow(props: SubagentActivityProps & { row: DetailsSubage
     });
   const description = () =>
     [props.row.label, status(), props.row.activity, steps()].filter(Boolean).join(". ");
-  const content = () => (
-    <>
-      <span
-        class="chat-details__agent-avatar"
-        data-status={props.row.status}
-        style={`--chat-details-avatar-hue: ${fnv1aUtf16(props.row.key) % 360}`}
-        aria-hidden="true"
-      >
-        <Icon name="bot" />
-      </span>
-      <span
-        ref={createTextOverflow(() => props.row.label)}
-        class="chat-subagent-activity__name"
-        title={props.row.label}
-      >
-        {props.row.label}
-      </span>
-      <span class="chat-subagent-activity__status">{props.row.activity || status()}</span>
-      <span class="chat-subagent-activity__elapsed-compact" aria-hidden="true">
-        <Show when={props.row.status !== "queued" && props.row.session?.startedAt}>
-          {(startedAt) => (
-            <ElapsedTime startMs={startedAt()} endMs={props.row.session?.endedAt ?? null} />
-          )}
-        </Show>
-      </span>
-      <Show when={props.row.progress}>
-        {(progress) => (
-          <span class="chat-subagent-activity__steps" aria-hidden="true">
-            <meter
-              class="chat-details__meter"
-              min={0}
-              max={progress().total}
-              value={Math.min(progress().completed, progress().total)}
-            />
-            {progress().completed}/{progress().total}
-          </span>
-        )}
-      </Show>
-    </>
-  );
   return (
     <div role="listitem" data-subagent-session-key={props.row.key}>
-      <Show
-        when={open()}
-        fallback={
-          <div
-            class={[
-              "chat-subagent-activity__row",
-              { "chat-subagent-activity__row--preview": Boolean(props.row.activity) },
-            ]}
-            title={description()}
-          >
-            {content()}
-          </div>
-        }
+      <Dynamic
+        component={open() ? "button" : "div"}
+        class={[
+          "chat-subagent-activity__row",
+          { "chat-subagent-activity__row--preview": Boolean(props.row.activity) },
+        ]}
+        type={open() ? "button" : undefined}
+        title={description()}
+        aria-label={open() ? description() : undefined}
+        onClick={open() ? () => open()?.(props.row.key) : undefined}
       >
-        <button
-          class={[
-            "chat-subagent-activity__row",
-            { "chat-subagent-activity__row--preview": Boolean(props.row.activity) },
-          ]}
-          type="button"
-          title={description()}
-          aria-label={description()}
-          onClick={() => open()?.(props.row.key)}
+        <span
+          class="chat-details__agent-avatar"
+          data-status={props.row.status}
+          style={`--chat-details-avatar-hue: ${fnv1aUtf16(props.row.key) % 360}`}
+          aria-hidden="true"
         >
-          {content()}
-        </button>
-      </Show>
+          <Icon name="bot" />
+        </span>
+        <span
+          ref={createTextOverflow(() => props.row.label)}
+          class="chat-subagent-activity__name"
+          title={props.row.label}
+        >
+          {props.row.label}
+        </span>
+        <span class="chat-subagent-activity__status">{props.row.activity || status()}</span>
+        <span class="chat-subagent-activity__elapsed-compact" aria-hidden="true">
+          <Show when={props.row.status !== "queued" && props.row.session?.startedAt}>
+            {(startedAt) => (
+              <ElapsedTime startMs={startedAt()} endMs={props.row.session?.endedAt ?? null} />
+            )}
+          </Show>
+        </span>
+        <Show when={props.row.progress}>
+          {(progress) => (
+            <span class="chat-subagent-activity__steps" aria-hidden="true">
+              <meter
+                class="chat-details__meter"
+                min={0}
+                max={progress().total}
+                value={Math.min(progress().completed, progress().total)}
+              />
+              {progress().completed}/{progress().total}
+            </span>
+          )}
+        </Show>
+      </Dynamic>
     </div>
   );
 }

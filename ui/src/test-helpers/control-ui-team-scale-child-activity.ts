@@ -1,6 +1,6 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 
-export function createTeamScaleChildActivity(parent: GatewaySessionRow, count = 0, now: number) {
+export function createTeamScaleChildActivity(parent: GatewaySessionRow, now: number, count = 0) {
   if (!count) {
     return [];
   }

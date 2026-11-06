@@ -133,7 +133,7 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
     directSelectedSession: options.longSessionScenario === "direct-run",
   });
   sessions.push(
-    ...createTeamScaleChildActivity(pinnedRows[0]!, options.detailsSubagentActivity, now),
+    ...createTeamScaleChildActivity(pinnedRows[0]!, now, options.detailsSubagentActivity),
   );
   const { transcriptSender, paneMethodResponses, paneChromeSettings } = prepareTeamScalePaneFixture(
     {

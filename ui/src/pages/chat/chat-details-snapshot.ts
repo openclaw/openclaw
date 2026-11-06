@@ -29,8 +29,11 @@ export function projectDetailsSubagents(rows: readonly DetailsSubagent[], mobile
         ? "done"
         : row.status;
     const count = counts.find((entry) => entry.status === status && entry.listed === listed);
-    if (count) count.count += 1;
-    else counts.push({ status, count: 1, listed });
+    if (count) {
+      count.count += 1;
+    } else {
+      counts.push({ status, count: 1, listed });
+    }
   }
   return {
     total: rows.length,

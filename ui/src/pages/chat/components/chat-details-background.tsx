@@ -211,7 +211,9 @@ export function ChatDetailsBackground(
       : undefined,
   );
   const recordSubagents = (rows: readonly ChatSubagentActivityRow[]) => {
-    if (!props.desktopSubagents || !activityReady()) return;
+    if (!props.desktopSubagents || !activityReady()) {
+      return;
+    }
     const ordinary = rows.filter((row) => !row.listed);
     props.details.onDetailsSnapshot?.({
       subagents: projectDetailsSubagents(
@@ -252,12 +254,16 @@ export function ChatDetailsBackground(
         counts[entry.status === "waiting" ? "running" : entry.status] += entry.count;
       }
     } else {
-      for (const row of subagents()) counts[subagentState(row)] += 1;
+      for (const row of subagents()) {
+        counts[subagentState(row)] += 1;
+      }
     }
     return counts;
   });
   const openSubagents = () => {
-    if (props.presented && !cachedActivity()) props.details.onOpenSubagents?.();
+    if (props.presented && !cachedActivity()) {
+      props.details.onOpenSubagents?.();
+    }
   };
   return (
     <>

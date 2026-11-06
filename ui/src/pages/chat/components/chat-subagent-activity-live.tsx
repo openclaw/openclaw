@@ -119,7 +119,9 @@ function SubagentActivityLive(
       };
     });
     onSettled(() => {
-      if (!props.presentation) props.onPresentation?.(value);
+      if (!props.presentation) {
+        props.onPresentation?.(value);
+      }
     });
     return value;
   });

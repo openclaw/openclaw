@@ -210,7 +210,9 @@ export function warmReloadProbe(
   let stopGateway: (() => void) | undefined;
   const receiveContext = (event: Event) => {
     const provider = event as Event & { context?: unknown; contextTarget?: HTMLElement };
-    if (provider.context !== "openclaw.application" || !provider.contextTarget) return;
+    if (provider.context !== "openclaw.application" || !provider.contextTarget) {
+      return;
+    }
     const consumer = document.createElement("span");
     provider.contextTarget.append(consumer);
     try {
@@ -591,8 +593,9 @@ export function warmReloadProbe(
             `${row.getAttribute("data-virtual-row-key")}:${box.height}:${row.textContent?.length}`,
         )
         .join("|");
-      if (currentRows.length && signature !== previousRows)
+      if (currentRows.length && signature !== previousRows) {
         milestones.finalRowsDom = performance.now();
+      }
       previousRows = signature;
     }
     if (input.avatars && currentRows.length) {
