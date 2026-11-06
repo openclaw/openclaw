@@ -2773,7 +2773,7 @@ openclaw-chat-ci-details {
 .agent-chat__composer-notices
   :is(
     .chat-composer-neighbor-card,
-    .agent-chat__composer-errors,
+    .agent-chat__composer-alert,
     .agent-chat__talk-status.callout,
     .agent-chat__composer-status
   ) {

@@ -1,6 +1,7 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   LearnMoreLink,
@@ -23,9 +24,9 @@ import {
   useProviderDisplayLabel,
 } from "../../lib/reactive/provider-presentation.tsx";
 import type { JSX } from "../../types/solid-elements.js";
-import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
+import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { DefaultModels } from "./default-models-view.tsx";
 import {
@@ -223,9 +224,9 @@ export function ModelProviders(props: ModelProvidersViewProps) {
             {props.installedAgents}
             <ProviderAccess {...props} />
             {props.providerUsageStalled ? (
-              <div class="callout warning" role="status">
+              <InlineAlert tone="warning" role="status">
                 {t("usage.providerUsage.stalled")}
-              </div>
+              </InlineAlert>
             ) : undefined}
           </Show>
         </>

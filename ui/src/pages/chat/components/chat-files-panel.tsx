@@ -18,6 +18,7 @@ import {
 import { PanelTabStrip } from "../../../components/panel-tab-strip-solid.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/resizable-divider.ts";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
@@ -395,9 +396,9 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
                         <Show
                           when={rendered().presentation === "desktop"}
                           fallback={
-                            <div class="callout danger" role="alert">
+                            <InlineAlert tone="danger" role="alert">
                               {formatUiError(error())}
-                            </div>
+                            </InlineAlert>
                           }
                         >
                           <section class="sidebar-file-view sidebar-file-view--desktop">

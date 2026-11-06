@@ -1448,6 +1448,30 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   flex: 1;
 }
 
+.callout__title {
+  display: block;
+  font-weight: 600;
+}
+
+.callout__action {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.callout__action:empty {
+  display: none;
+}
+
+/* Popovers and menus: same tone, denser box on the menu item radius. */
+.callout--compact {
+  padding: 8px 10px;
+  border-radius: var(--radius-menu-item);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .callout__dismiss {
   width: 28px;
   height: 28px;
@@ -1456,6 +1480,8 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   justify-content: center;
   flex: 0 0 auto;
   border: 0;
+  margin-block: -4px;
+  margin-inline-end: -6px;
   border-radius: var(--radius-sm);
   background: transparent;
   color: currentColor;

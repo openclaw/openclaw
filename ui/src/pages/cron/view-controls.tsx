@@ -1,6 +1,7 @@
 import { createMemo, createUniqueId, Errored, Loading } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
@@ -14,17 +15,11 @@ export function ErrorBanner(props: { error: string | null; reads?: CronProps["re
   return (
     <>
       {props.error ? (
-        <div class="cron-error-banner" role="alert">
-          {props.error}
-        </div>
+        <InlineAlert tone="danger">{props.error}</InlineAlert>
       ) : props.reads ? (
         <Loading on={modelRequest()}>
           <Errored
-            fallback={(error) => (
-              <div class="cron-error-banner" role="alert">
-                {formatUiError(error())}
-              </div>
-            )}
+            fallback={(error) => <InlineAlert tone="danger">{formatUiError(error())}</InlineAlert>}
           >
             {props.reads.models()}
           </Errored>

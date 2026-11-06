@@ -21,8 +21,9 @@ import {
 import { sameSidebarPresentation } from "./sidebar-projection-cache.ts";
 import type { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 import "./tooltip.ts";
+import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 
 /** Compose independently owned session state and context indicators. */
 
@@ -385,21 +386,23 @@ export function renderChildSessionLoadError(host: () => SessionListHost, parentK
   const error = createMemo(() => host().sessionData.childSessionErrorsByParent.get(parentKey));
   return (
     <Show when={error()}>
-      <div
-        class="sidebar-session-error callout danger"
+      <InlineAlert
+        tone="danger"
+        class="sidebar-session-error"
         data-child-session-error={parentKey}
-        role="alert"
+        action={
+          <button
+            class="sidebar-session-tree__show-more"
+            type="button"
+            data-retry-child-sessions={parentKey}
+            onClick={() => host().sessionData.retryChildSessions(parentKey)}
+          >
+            {t("common.retry")}
+          </button>
+        }
       >
-        <span>{error()}</span>
-        <button
-          class="sidebar-session-tree__show-more"
-          type="button"
-          data-retry-child-sessions={parentKey}
-          onClick={() => host().sessionData.retryChildSessions(parentKey)}
-        >
-          {t("common.retry")}
-        </button>
-      </div>
+        {error()}
+      </InlineAlert>
     </Show>
   );
 }

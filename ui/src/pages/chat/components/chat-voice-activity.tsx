@@ -1,5 +1,5 @@
 import { createMemo, onSettled, Repeat, Show } from "solid-js";
-import { Icon } from "../../../components/solid/icon.tsx";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
@@ -135,35 +135,25 @@ export function ChatVoiceStatus(props: {
       when={props.status === "connecting"}
       fallback={
         <Show when={props.status === "error" && props.detail}>
-          <div class="agent-chat__composer-errors agent-chat__composer-errors--standalone">
-            <div class="agent-chat__composer-error agent-chat__talk-status" role="alert">
-              <span class="agent-chat__composer-error-icon" aria-hidden="true">
-                <Icon name="alertTriangle" />
-              </span>
-              <div class="callout__content">
-                <div class="agent-chat__talk-status-text">{props.detail}</div>
-                <Show when={props.onUseSystemDefaultMicrophone}>
-                  <button
-                    class="btn btn--sm"
-                    type="button"
-                    onClick={() => void props.onUseSystemDefaultMicrophone?.()}
-                  >
-                    {t("chat.composer.useSystemDefaultMicrophoneForCall")}
-                  </button>
-                </Show>
-              </div>
-              <Show when={props.onDismissError}>
+          <InlineAlert
+            tone="danger"
+            class="agent-chat__composer-alert"
+            onDismiss={props.onDismissError}
+            dismissLabel={t("chat.composer.dismissVoiceInputError")}
+            action={
+              <Show when={props.onUseSystemDefaultMicrophone}>
                 <button
-                  class="callout__dismiss"
+                  class="btn btn--sm"
                   type="button"
-                  onClick={() => props.onDismissError?.()}
-                  aria-label={t("chat.composer.dismissVoiceInputError")}
+                  onClick={() => void props.onUseSystemDefaultMicrophone?.()}
                 >
-                  <Icon name="x" />
+                  {t("chat.composer.useSystemDefaultMicrophoneForCall")}
                 </button>
               </Show>
-            </div>
-          </div>
+            }
+          >
+            {props.detail}
+          </InlineAlert>
         </Show>
       }
     >

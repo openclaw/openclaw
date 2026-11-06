@@ -10,6 +10,7 @@ import {
   type Accessor,
 } from "solid-js";
 import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
@@ -192,9 +193,9 @@ function TemplateReviewDialog(props: {
         </section>
         <Show when={state().error}>
           {(error) => (
-            <p class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               {error()}
-            </p>
+            </InlineAlert>
           )}
         </Show>
         <Show when={!state().reviewCurrent}>

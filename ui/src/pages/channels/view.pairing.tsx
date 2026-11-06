@@ -6,6 +6,7 @@ import { Picker } from "../../components/select-picker.ts";
 import "../../components/modal-dialog.tsx";
 import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import {
   SettingsEmpty,
@@ -174,9 +175,9 @@ function PairingReadFeedback(props: { channels: ChannelsState; prompt?: boolean 
           fallback={(error) => (
             <>
               {props.prompt ? (
-                <div class="callout danger" role="alert">
+                <InlineAlert tone="danger" role="alert">
                   {formatUiError(error())}
-                </div>
+                </InlineAlert>
               ) : (
                 <div class="settings-row channels-pairing-feedback" role="alert">
                   <SettingsStatus kind="danger" label={formatUiError(error())} />
@@ -396,13 +397,13 @@ function PairingPromptContent(params: {
           onClose={() => params.props.onPairingPromptCancel()}
         />
         <div class="oc-dialog__body">
-          <div class={["callout", { info: approving(), warn: !approving() }]}>
+          <InlineAlert tone={approving() ? "info" : "warning"} role="none">
             {t(`channels.pairing.${params.prompt.kind}Explanation`)}
-          </div>
+          </InlineAlert>
           {params.props.channels.pairingError ? (
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               {params.props.channels.pairingError}
-            </div>
+            </InlineAlert>
           ) : undefined}
           <PairingReadFeedback channels={params.props.channels} prompt />
           {approving() && request().notifySupported
@@ -415,7 +416,7 @@ function PairingPromptContent(params: {
             </>
           ) : undefined}
           {approving() && ownerMissing() && !params.props.canAdmin ? (
-            <div class="callout warn">{t("channels.pairing.commandOwnerNeedsAdmin")}</div>
+            <InlineAlert tone="warning">{t("channels.pairing.commandOwnerNeedsAdmin")}</InlineAlert>
           ) : undefined}
         </div>
         <openclaw-modal-actions class="oc-dialog__footer">

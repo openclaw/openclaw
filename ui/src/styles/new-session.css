@@ -992,39 +992,10 @@ span.new-session-page__select {
 }
 
 .new-session-page__alert {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
   width: fit-content;
   max-width: min(48rem, calc(100% - 36px));
   margin: 4px auto 2px;
-  padding: 10px 12px;
   text-align: left;
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--danger) 8%, transparent);
-}
-
-.new-session-page__alert-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--danger) 14%, transparent);
-  color: var(--danger);
-}
-
-.new-session-page__alert-icon svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.8;
-}
-
-.new-session-page__alert-message {
-  min-width: 0;
-  padding-top: 3px;
-  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 

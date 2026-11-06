@@ -4,12 +4,13 @@ import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import "../../styles/model-setup.css";
+import { t } from "../../lib/reactive/i18n.ts";
 import type { JSX } from "../../types/solid-elements.js";
 import {
   renderMutationMessage,
@@ -256,9 +257,9 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
             <span>{t("modelSetup.manual.verifyHint")}</span>
           </div>
           {props.manualError ? (
-            <div id={`${manualId()}-error`} class="callout danger" role="alert">
+            <InlineAlert tone="danger" id={`${manualId()}-error`} role="alert">
               {props.manualError}
-            </div>
+            </InlineAlert>
           ) : undefined}
           <button
             type="button"
@@ -313,9 +314,9 @@ function NativeSessionDiscovery(
 
 function renderSetupAccessWarning(canAdmin: boolean) {
   return (
-    <div class="callout warning" role="note">
+    <InlineAlert tone="warning" role="note">
       {t(canAdmin ? "modelSetup.access.gatewayTooOld" : "modelSetup.access.adminRequired")}
-    </div>
+    </InlineAlert>
   );
 }
 
@@ -367,9 +368,9 @@ function ModelSetupBody(props: ModelSetupViewProps & { detection: () => null }) 
           <Errored
             fallback={(error) => (
               <>
-                <div class="callout danger" role="alert">
+                <InlineAlert tone="danger" role="alert">
                   {formatModelSetupError(error())}
-                </div>
+                </InlineAlert>
                 <button
                   type="button"
                   class="btn"
@@ -472,9 +473,9 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
         ? renderActivationFeedback(props.activation, props.onFeedback)
         : undefined}
       {props.refreshWarning ? (
-        <div class="callout warning" role="alert">
+        <InlineAlert tone="warning" role="alert">
           {props.refreshWarning}
-        </div>
+        </InlineAlert>
       ) : undefined}
       <Show
         when={Boolean(
@@ -507,9 +508,9 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
         <Show keyed when={props.detectionIdentity()}>
           <Errored
             fallback={(error) => (
-              <div class="callout warning" role="alert">
+              <InlineAlert tone="warning" role="alert">
                 {formatModelSetupError(error())}
-              </div>
+              </InlineAlert>
             )}
           >
             <Loading on={props.detectionIdentity()} fallback={<DetectionProgress />}>

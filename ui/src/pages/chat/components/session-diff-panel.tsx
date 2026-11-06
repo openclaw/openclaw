@@ -13,11 +13,12 @@ import {
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { nativeGatewaysCapability } from "../../../app/native-gateways.runtime.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import "../../../styles/chat/session-diff-mobile.css";
 import "../../../styles/session-panel-rail.css";
-import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import "../../../components/tooltip.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import {
   expandSessionDiffGap,
   splitSessionDiffFileText,
@@ -676,7 +677,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
             {(failed) => (
               <Errored
                 fallback={(error, reset) => (
-                  <div class="callout danger">
+                  <InlineAlert tone="danger">
                     {formatUiError(error())}
                     <Show when={mobile()}>
                       <button
@@ -692,7 +693,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
                         {t("common.retry")}
                       </button>
                     </Show>
-                  </div>
+                  </InlineAlert>
                 )}
               >
                 {raiseReadFailure(failed().error)}
