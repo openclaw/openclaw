@@ -10,6 +10,7 @@ import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/inde
 import { runWithSessionMcpToolCallAuthority } from "../agents/agent-bundle-mcp-request-context.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
+import { runWithHookAuthoredMeta } from "../agents/before-tool-call-request-meta.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 import { readEmbeddedMessageDeliveryFact } from "../agents/embedded-agent-message-delivery.js";
 import { createGatewayToolPolicyAssertion } from "../agents/gateway-tool-policy.js";
@@ -607,7 +608,12 @@ async function invokeGatewayToolWithSignal(
         // MCP requests recheck caller authority at server I/O, after reconnection or catalog waits.
         return await runWithSessionMcpToolCallAuthority(
           getPluginToolMeta(tool)?.mcp ? assertInvocationCurrent : undefined,
-          () => tool.execute?.(toolCallId, hookResult.params, params.signal),
+          () =>
+            // Only `_meta` this hook chain changed relative to its own input may
+            // leave `arguments`; model input never does.
+            runWithHookAuthoredMeta(toolArgs, hookResult.params, () =>
+              tool.execute?.(toolCallId, hookResult.params, params.signal),
+            ),
         );
       },
     );

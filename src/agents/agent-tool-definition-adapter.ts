@@ -32,6 +32,7 @@ import {
   createInternalExecutionPreparer,
   readInternalExecutionControl,
 } from "./agent-tools.execution-preparer.js";
+import { runWithHookAuthoredMeta } from "./before-tool-call-request-meta.js";
 import {
   copyCodeModeControlToolIdentity,
   getCodeModeExecBeforeHookMetadata,
@@ -220,6 +221,10 @@ export function toToolDefinitions(
           normalizedToolName: normalizedName,
           signal,
           run: async () => {
+            // Wrapped tools publish their own provenance from inside the
+            // wrapper; a self-comparison here publishes nothing while still
+            // shadowing any outer invocation's metadata.
+            let pipelineInput: unknown = executeParams;
             if (!beforeHookWrapped) {
               const preparedParams = await prepareBeforeToolCallExecutionParams({
                 tool,
@@ -266,6 +271,7 @@ export function toToolDefinitions(
                 adjustedParams: hookOutcome.params,
                 finalizerMode: "adapter",
               });
+              pipelineInput = hookParams;
               const decision = control ? await control.pause(executeParams) : undefined;
               if (decision && !decision.launch) {
                 return { content: [], details: { status: "skipped" } };
@@ -275,7 +281,9 @@ export function toToolDefinitions(
               recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
             }
             assertSourceCurrent();
-            return await tool.execute(toolCallId, executeParams, signal, onUpdate);
+            return await runWithHookAuthoredMeta(pipelineInput, executeParams, () =>
+              tool.execute(toolCallId, executeParams, signal, onUpdate),
+            );
           },
         });
       },

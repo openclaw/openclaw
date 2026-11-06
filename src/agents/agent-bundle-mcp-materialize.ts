@@ -30,25 +30,9 @@ import type {
   McpAppRequesterIdentity,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
-import {
-  createMcpClientElicitationHandler,
-  runWithMcpElicitationHandler,
-} from "./mcp-client-elicitation.js";
-import {
-  projectMcpCallToolResult,
-  projectMcpGetPromptResult,
-  setMcpCodeModeGuestResult,
-  setMcpCodeModeGuestResultFromAgentResult,
-} from "./mcp-content.js";
-import { prepareMcpAppFormUpload } from "./mcp-form-resource-upload.js";
-import { captureMcpFormRequester } from "./mcp-form-tool-approval.js";
+import { projectMcpGetPromptResult, setMcpCodeModeGuestResult } from "./mcp-content.js";
 import { isAppOnlyMcpTool } from "./mcp-metadata.js";
 import { createMcpToolFilter, mcpCatalogToolFilterScope } from "./mcp-tool-filter.js";
-import {
-  buildMcpAppCanvasPayload,
-  fetchMcpAppView,
-  type McpAppFormOrigin,
-} from "./mcp-ui-resource.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { neutralizePromptControlMarkers } from "./sanitize-for-prompt.js";
@@ -419,10 +403,8 @@ export async function materializeBundleMcpToolsForRun(params: {
         catalog,
         agentId: params.agentId,
         appRequester: params.appRequester,
-        mcpAppsEnabled: runtime.mcpAppsEnabled === true,
         readAllowedAppToolsByServer: () => allowedAppToolsByServer,
-        disposal,
-        isRequesterScopedServer: runtime.isRequesterScopedServer,
+        readDisposal: () => disposal,
       }),
       createResourceListExecute: createListExecute("listResources", "resources_list"),
       createResourceReadExecute: runtime.readResource

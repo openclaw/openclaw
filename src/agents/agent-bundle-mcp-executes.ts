@@ -1,8 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { McpCatalogTool, McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
-import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
-import type { McpAppRequesterIdentity } from "./agent-bundle-mcp-types.js";
+import type { McpAppRequesterIdentity, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { getBeforeToolCallRequestMeta } from "./before-tool-call-request-meta.js";
 import {
   createMcpClientElicitationHandler,
   runWithMcpElicitationHandler,
@@ -28,18 +28,17 @@ type ExecuteFactoryParams = {
   catalog: McpToolCatalog;
   agentId?: string;
   appRequester?: McpAppRequesterIdentity;
-  mcpAppsEnabled: boolean;
   /** Live map reader: materialize reassigns allowedAppToolsByServer on policy reload. */
   readAllowedAppToolsByServer: () => Map<string, Set<string>> | undefined;
-  disposal: Promise<void> | undefined;
-  isRequesterScopedServer: SessionMcpRuntime["isRequesterScopedServer"];
+  /** Live reader: materialize assigns disposal only when dispose() begins. */
+  readDisposal: () => Promise<void> | undefined;
 };
 
 /** createExecute is broken out of agent-bundle-mcp-materialize to respect the source line budget. */
 export function createBundleMcpToolExecuteFactory(
   params: ExecuteFactoryParams,
 ): ToolExecuteFactory {
-  const { runtime, catalog, agentId, disposal } = params;
+  const { runtime, catalog, readDisposal } = params;
   const allowedAppToolsByServer = () => params.readAllowedAppToolsByServer();
   return (tool) => async (toolCallId, originalInput, signal) =>
     runWithSessionMcpRequestSignal(signal, async () => {
@@ -52,7 +51,7 @@ export function createBundleMcpToolExecuteFactory(
         }
       }
       runtime.markUsed();
-      let { input, callMeta } = hoistHookMeta(originalInput);
+      const { input, callMeta } = hoistHookMeta(originalInput, getBeforeToolCallRequestMeta());
       const { serverName, toolName } = tool;
       const invoke = () =>
         callMeta
@@ -75,7 +74,7 @@ export function createBundleMcpToolExecuteFactory(
                       const assertCurrent = () => {
                         signal?.throwIfAborted();
                         request.signal.throwIfAborted();
-                        if (disposal) {
+                        if (readDisposal()) {
                           throw new Error("MCP form run has ended");
                         }
                       };
@@ -125,7 +124,7 @@ export function createBundleMcpToolExecuteFactory(
                     },
               assertCurrent: () => {
                 signal?.throwIfAborted();
-                if (disposal) {
+                if (readDisposal()) {
                   throw new Error("MCP run has ended");
                 }
               },
@@ -133,17 +132,17 @@ export function createBundleMcpToolExecuteFactory(
             invoke,
           )
         : invoke());
-      const agentResult = projectMcpCallToolResult(result, {
-        mcpServer: serverName,
-        mcpTool: toolName,
-      });
       const scopedServer = runtime.isRequesterScopedServer?.(serverName) === true;
       const requesterId = appRequester?.profileId;
+      const details: Record<string, unknown> = { mcpServer: serverName, mcpTool: toolName };
       // Transport sender ids are not Gateway profiles. Keep private channel
       // views suppressed until an identity owner supplies a mapped profile.
       if (runtime.mcpAppsEnabled && tool.uiResourceUri && (!scopedServer || requesterId)) {
-        const allowedAppToolNames = allowedAppToolsByServer()?.get(serverName)
-          ? (allowedAppToolsByServer()?.get(serverName) ?? new Set<string>())
+        // Base semantics: an established restriction map grants an explicit empty
+        // set when it lacks this server; only a missing map means "never bound".
+        const appToolMap = allowedAppToolsByServer();
+        const allowedAppToolNames = appToolMap
+          ? (appToolMap.get(serverName) ?? new Set<string>())
           : undefined;
         const view = await fetchMcpAppView({
           runtime,
@@ -171,28 +170,38 @@ export function createBundleMcpToolExecuteFactory(
           ...(allowedAppToolNames ? { allowedAppToolNames } : {}),
         });
         if (view) {
-          (agentResult.details as Record<string, unknown>).mcpAppPreview = buildMcpAppCanvasPayload(
-            {
-              ...view,
-              ...(runtime.sessionKey ? { originSessionKey: runtime.sessionKey } : {}),
-              ...(result["_meta"] !== undefined ? { resultMetaState: "unavailable" as const } : {}),
-            },
-          );
+          details.mcpAppPreview = buildMcpAppCanvasPayload({
+            ...view,
+            ...(runtime.sessionKey ? { originSessionKey: runtime.sessionKey } : {}),
+            ...(result["_meta"] !== undefined ? { resultMetaState: "unavailable" as const } : {}),
+          });
         }
       }
-      return agentResult;
+      return projectMcpCallToolResult(result, details);
     });
 }
 
-/** Hoists a hook-stamped _meta beside arguments so the MCP server can read it at the protocol level. */
-function hoistHookMeta(input: unknown): {
+/**
+ * Moves pipeline-authored `_meta` from `arguments` onto the MCP request level.
+ * Without hook-boundary provenance the value is ordinary tool input and stays
+ * an argument, even when it is an object named `_meta`.
+ */
+function hoistHookMeta(
+  input: unknown,
+  hookMeta: Record<string, unknown> | undefined,
+): {
   input: unknown;
   callMeta: Record<string, unknown> | undefined;
 } {
-  if (!isRecord(input) || !isRecord(input._meta)) {
+  if (hookMeta === undefined) {
     return { input, callMeta: undefined };
   }
-  const callMeta = input._meta as Record<string, unknown>;
-  delete input._meta;
-  return { input, callMeta };
+  if (!isRecord(input) || !isRecord(input._meta)) {
+    return { input, callMeta: hookMeta };
+  }
+  // Copy instead of mutating: the wrapper keeps executeParams for
+  // post-execution loop outcomes and skill matching.
+  const rest = { ...input };
+  delete rest._meta;
+  return { input: rest, callMeta: hookMeta };
 }
