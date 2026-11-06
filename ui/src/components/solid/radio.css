@@ -1,0 +1,71 @@
+/* One radio for every single choice: same size, ring, accent fill and focus.
+   Checked matches the toggle switch: accent fill, light content on top. The
+   circle uses --radius-full, which square-corner themes leave round on purpose
+   (a square mark would read as a checkbox). The element-qualified selector
+   outranks form rules such as `.field input` that would restyle the input. */
+:is(span, input[type="radio"]).oc-radio {
+  --oc-radio-size: 16px;
+
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  box-sizing: border-box;
+  width: var(--oc-radio-size);
+  height: var(--oc-radio-size);
+  border: 1.5px solid color-mix(in srgb, var(--muted) 60%, transparent);
+  border-radius: var(--radius-full);
+  corner-shape: round;
+  background: transparent;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+
+:is(span, input[type="radio"]).oc-radio::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: inherit;
+  background: var(--accent-foreground);
+  transform: scale(0);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+:is(span, input[type="radio"]).oc-radio[data-checked],
+:is(span, input[type="radio"]).oc-radio:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+:is(span, input[type="radio"]).oc-radio[data-checked]::after,
+:is(span, input[type="radio"]).oc-radio:checked::after {
+  transform: scale(1);
+}
+
+:is(span, input[type="radio"]).oc-radio[data-disabled],
+:is(span, input[type="radio"]).oc-radio:disabled {
+  opacity: 0.5;
+}
+
+:is(span, input[type="radio"]).oc-radio:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.oc-radio-field {
+  cursor: var(--cursor-action);
+}
+
+.oc-radio-field:has(.oc-radio:disabled) {
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(span, input[type="radio"]).oc-radio,
+  :is(span, input[type="radio"]).oc-radio::after {
+    transition: none;
+  }
+}

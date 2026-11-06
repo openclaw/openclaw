@@ -2,6 +2,7 @@ import type { Question } from "@openclaw/gateway-protocol";
 import { createEffect, createMemo, createSignal, createUniqueId, For, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Kbd } from "../../../components/solid/kbd.tsx";
+import { RadioMark } from "../../../components/solid/radio.tsx";
 import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import {
@@ -82,9 +83,13 @@ export function QuestionOptions(props: {
                     disabled={props.disabled}
                     onClick={() => props.onSelect(value())}
                   >
-                    <span class="chat-question-panel__option-marker" aria-hidden="true">
-                      {implicit() ? "−" : selected() ? "✓" : ""}
-                    </span>
+                    {implicit() || props.question.multiSelect ? (
+                      <span class="chat-question-panel__option-marker" aria-hidden="true">
+                        {implicit() ? "−" : selected() ? "✓" : ""}
+                      </span>
+                    ) : (
+                      <RadioMark checked={selected()} />
+                    )}
                     {hasThumbnails() && (
                       <span class="chat-question-panel__thumbnail" aria-hidden="true">
                         {option.thumbnail?.startsWith("data:") ? (
@@ -257,7 +262,12 @@ export function QuestionFreeText(props: QuestionFreeTextProps) {
                     : undefined
                 }
               >
-                <span class="chat-question-panel__option-marker" aria-hidden="true" />
+                {/* Own answer is one more choice beside the options, so it takes their mark. */}
+                {props.question.multiSelect ? (
+                  <span class="chat-question-panel__option-marker" aria-hidden="true" />
+                ) : (
+                  <RadioMark checked={props.selected} />
+                )}
                 <FreeTextControl
                   {...props}
                   class="chat-question-panel__other"

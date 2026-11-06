@@ -2,6 +2,7 @@ import { createMemo, For, Loading, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { Radio } from "../../components/solid/radio.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import "../../components/modal-dialog.tsx";
 import {
@@ -326,7 +327,7 @@ function EntryDialog(props: SecretsStoreViewProps) {
           <legend>{t("secretsStore.accessMode")}</legend>
           <For each={["secret", "env"] as const} keyed={false}>
             {(kind) => (
-              <label
+              <Radio
                 class={[
                   "secrets-store-mode",
                   {
@@ -335,18 +336,15 @@ function EntryDialog(props: SecretsStoreViewProps) {
                       props.state.draft.kind === kind() && kind() === "env",
                   },
                 ]}
+                name="access-mode"
+                value={kind()}
+                checked={props.state.draft.kind === kind()}
+                disabled={props.busy}
+                onChange={() => {
+                  const selectedKind = kind();
+                  props.state.act((state) => state.patchDraft({ kind: selectedKind }));
+                }}
               >
-                <input
-                  type="radio"
-                  name="access-mode"
-                  value={kind()}
-                  checked={props.state.draft.kind === kind()}
-                  disabled={props.busy}
-                  onChange={() => {
-                    const selectedKind = kind();
-                    props.state.act((state) => state.patchDraft({ kind: selectedKind }));
-                  }}
-                />
                 <span>
                   <strong>
                     {t(
@@ -363,7 +361,7 @@ function EntryDialog(props: SecretsStoreViewProps) {
                     )}
                   </small>
                 </span>
-              </label>
+              </Radio>
             )}
           </For>
         </fieldset>

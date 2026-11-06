@@ -204,12 +204,12 @@ describe("shared question panel", () => {
     await panelIn(container);
 
     expect(
-      container.querySelector('[role="radio"] .chat-question-panel__option-marker'),
+      container.querySelector('[role="radio"] .oc-radio'),
     ).not.toBeNull();
     expect(container.querySelector('[role="radio"] kbd')).not.toBeNull();
     expect(
       container.querySelector(
-        ".chat-question-panel__option--other .chat-question-panel__option-marker",
+        ".chat-question-panel__option--other :is(.chat-question-panel__option-marker, .oc-radio)",
       ),
     ).not.toBeNull();
     expect(container.querySelector(".chat-question-panel__option--other kbd")).not.toBeNull();
