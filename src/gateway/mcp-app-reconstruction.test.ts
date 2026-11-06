@@ -276,6 +276,44 @@ describe("MCP App transcript reconstruction", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("restores saved App-only content without reading the original tool again", async () => {
+    const savedDisplay = {
+      version: 1,
+      descriptor: descriptor("mcp-app-saved", "call-1"),
+      html: "<!doctype html><main>Saved synthetic diagram</main>",
+      toolInput: { city: "Paris" },
+      toolResult: {
+        content: [{ type: "text", text: "created once" }],
+        _meta: { checkpoint: "synthetic-checkpoint", diagram: ["choose", "add", "chat"] },
+      },
+    };
+    const restored = await restoreFromMessages(
+      [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "call-1", name: "demo__show", args: { city: "Paris" } },
+          ],
+        },
+        // Saved display belongs to the transcript's non-message custom-entry lane,
+        // not capped tool details or model-visible content.
+        { type: "custom", customType: "mcp-app-display", data: savedDisplay },
+        toolResult("mcp-app-saved", "call-1", { resultMetaState: "unavailable" }),
+      ],
+      "mcp-app-saved",
+    );
+    expect(restored).toEqual({ runtime, view });
+    expect(mocks.fetchMcpAppView).toHaveBeenCalledWith(
+      expect.objectContaining({
+        savedDisplay,
+        toolInput: savedDisplay.toolInput,
+        toolResult: savedDisplay.toolResult,
+        viewId: "mcp-app-saved",
+        allowedAppToolNames: new Set(),
+      }),
+    );
+  });
+
   it("rejects a descriptor without its matching tool-call input", async () => {
     await expect(
       restoreFromMessages([toolResult("mcp-app-missing", "call-1")], "mcp-app-missing"),

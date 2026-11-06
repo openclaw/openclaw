@@ -35,6 +35,7 @@ async function reconstructMcpAppView(params: {
   authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly: boolean;
   viewId?: string;
+  requesterId?: string;
 }): Promise<ReconstructionResult | undefined> {
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   const reconstruct = async (
@@ -57,7 +58,11 @@ async function reconstructMcpAppView(params: {
       lookup: params.lookup,
     });
     assertCurrent();
-    if (!data) {
+    if (
+      !data ||
+      (data.savedDisplay?.requesterId !== undefined &&
+        data.savedDisplay.requesterId !== params.requesterId)
+    ) {
       return undefined;
     }
     const acquisition = await acquireSessionMcpRuntime({
@@ -83,6 +88,9 @@ async function reconstructMcpAppView(params: {
         toolCallId: data.descriptor.toolCallId,
         toolInput: data.toolInput,
         toolResult: data.toolResult,
+        ...(data.savedDisplay
+          ? { savedDisplay: data.savedDisplay, requesterId: data.savedDisplay.requesterId }
+          : {}),
         ...(params.viewId ? { viewId: params.viewId } : {}),
         allowedAppToolNames: params.allowedAppToolNames,
         ...(params.authorizeAppInteraction
@@ -153,8 +161,10 @@ export async function restoreMcpAppView(params: {
   agentId?: string;
   sessionKey: string;
   viewId: string;
+  requesterId?: string;
 }): Promise<ReconstructionResult | undefined> {
-  const key = `${params.agentId ?? ""}\0${params.sessionKey}\0${params.viewId}`;
+  const baseKey = `${params.agentId ?? ""}\0${params.sessionKey}\0${params.viewId}`;
+  const key = JSON.stringify([baseKey, params.requesterId]);
   const inFlight = resolveGlobalMap<string, Promise<ReconstructionResult | undefined>>(
     MCP_APP_RESTORE_IN_FLIGHT_KEY,
   );

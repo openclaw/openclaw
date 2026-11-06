@@ -14,6 +14,7 @@ import { getOrCreateSessionMcpRuntime } from "../../../src/agents/agent-bundle-m
 import { materializeBundleMcpToolsForRun } from "../../../src/agents/agent-bundle-mcp-materialize.js";
 import { getMcpAppModelContext } from "../../../src/agents/mcp-app-model-context.js";
 import { getMcpAppViewLease } from "../../../src/agents/mcp-ui-resource.js";
+import { SessionManager } from "../../../src/agents/sessions/session-manager.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../../../src/config/config.js";
 import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
@@ -296,6 +297,42 @@ const suite = createControlUiE2eSuite({
       }
       showFixture = async (callId) => {
         const nextResult = await show.execute(callId, { city: "Paris" });
+        const manager = await SessionManager.openAsync(
+          { agentId: "main", sessionId: runtime.sessionId, sessionKey, env: state!.env },
+          tempRoot,
+        );
+        await manager.appendMessageAsync({
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: callId,
+              name: "conformance__show",
+              arguments: { city: "Paris" },
+            },
+          ],
+          api: "openai-responses",
+          provider: "openai",
+          model: "synthetic",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse",
+          timestamp: Date.now(),
+        });
+        await manager.appendMessageAsync({
+          role: "toolResult",
+          toolCallId: callId,
+          toolName: "conformance__show",
+          ...nextResult,
+          isError: false,
+          timestamp: Date.now(),
+        });
         const nextViewId = (
           nextResult.details as { mcpAppPreview?: { mcpApp?: { viewId?: string } } }
         ).mcpAppPreview?.mcpApp?.viewId;
@@ -377,6 +414,32 @@ async function newProofContext() {
 }
 
 suite.define(() => {
+  it("restores expired inline content on return without replaying the tool", async (context) => {
+    await suite.runScenario(context, {
+      run: async () => {
+        const browser = await newProofContext();
+        const page = await browser.newPage();
+        await mountHost(page);
+        const app = await findAppFrame(page);
+        await waitForTextContaining(app.locator("#result"), "initial-result");
+        await capture(page, "expiry-before-live");
+        // Controlled lease deadline; production keeps its ten-minute TTL.
+        viewLease().expiresAtMs = Date.now() - 1;
+        expect(getMcpAppViewLease(viewId, runtime)).toBeUndefined();
+        await mountHost(page);
+        await expect
+          .poll(() => page.locator("mcp-app-view").textContent())
+          .toContain("Send a message to interact again");
+        await capture(page, "expiry-before-return");
+        const calls = (await fixture.readEvents()).filter(
+          (event) => event.method === "tools/call" && event.tool === "show",
+        );
+        expect(calls).toHaveLength(1);
+        await browser.close();
+        console.log("MCP expiry proof:", proofDir);
+      },
+    });
+  });
   it("drives the authenticated Control UI and ticketed standalone bridges", async (context) => {
     await suite.runScenario(context, {
       run: async (signal) => {

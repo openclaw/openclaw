@@ -103,6 +103,56 @@ export type McpAppViewLease = {
   disposeCallbacks?: Set<() => void>;
 };
 
+/** Durable display only: no callbacks, approvals, host files, or runtime leases. */
+export type McpAppSavedDisplay = {
+  version: 1;
+  descriptor: {
+    viewId: string;
+    serverName: string;
+    toolName: string;
+    uiResourceUri: string;
+    toolCallId: string;
+  };
+  requesterId?: string;
+  html: string;
+  csp?: McpAppCsp;
+  toolInput: unknown;
+  toolResult: CallToolResult;
+};
+
+/** Capture at transcript append while the original bounded view is still live. */
+export function captureMcpAppSavedDisplay(
+  message: unknown,
+  sessionKey: string,
+  agentId: string,
+): McpAppSavedDisplay | undefined {
+  const preview = asRecord(asRecord(asRecord(message)?.details)?.mcpAppPreview);
+  const descriptor = asRecord(preview?.mcpApp);
+  if (typeof descriptor?.viewId !== "string") {
+    return undefined;
+  }
+  const view = getMcpAppViewLeaseForSession(descriptor.viewId, sessionKey, agentId);
+  if (!view?.toolCallId || view.hostFile || asRecord(message)?.toolCallId !== view.toolCallId) {
+    return undefined;
+  }
+  measureViewBytes(view.html, view.toolInput, view.toolResult);
+  return {
+    version: 1,
+    descriptor: {
+      viewId: view.viewId,
+      serverName: view.serverName,
+      toolName: view.toolName,
+      uiResourceUri: view.uiResourceUri,
+      toolCallId: view.toolCallId,
+    },
+    ...(view.requesterId ? { requesterId: view.requesterId } : {}),
+    html: view.html,
+    ...(view.csp ? { csp: view.csp } : {}),
+    toolInput: view.toolInput,
+    toolResult: view.toolResult,
+  };
+}
+
 export type McpAppChannelView = {
   viewId: string;
 };
@@ -289,6 +339,7 @@ export async function fetchMcpAppView(params: {
   deepLink?: { url: string };
   displayMode?: "inline" | "fullscreen";
   viewId?: string;
+  savedDisplay?: McpAppSavedDisplay;
 }): Promise<
   | {
       viewId: string;
@@ -309,13 +360,23 @@ export async function fetchMcpAppView(params: {
     if (!agentId) {
       throw new Error("MCP App view requires a resolved session owner");
     }
-    if (!params.runtime.readResource) {
+    if (!params.savedDisplay && !params.runtime.readResource) {
       return undefined;
     }
     const result = asRecord(
-      await params.runtime.readResource(params.serverName, params.uiResourceUri, {
-        failureBackoff: "ignore",
-      }),
+      params.savedDisplay
+        ? {
+            contents: [
+              {
+                mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+                text: params.savedDisplay.html,
+                _meta: { ui: { csp: params.savedDisplay.csp } },
+              },
+            ],
+          }
+        : await params.runtime.readResource!(params.serverName, params.uiResourceUri, {
+            failureBackoff: "ignore",
+          }),
     );
     const contents = Array.isArray(result?.contents) ? result.contents : [];
     if (contents.length !== 1) {

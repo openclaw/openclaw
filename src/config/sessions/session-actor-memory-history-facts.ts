@@ -518,7 +518,14 @@ export function readSessionActorMemoryHistoryFacts(
     case "session.history.bounded-tail":
       return readSessionActorMemoryBoundedTail(window, navigation, query.input.options);
     case "session.history.visitor-source": {
-      const rows = navigation.visibleMessages;
+      const rows = query.input.mcpAppDisplays
+        ? navigation.active.filter(
+            (row) =>
+              navigation.visibleMessages.includes(row) ||
+              (asOptionalRecord(row.event)?.type === "custom" &&
+                asOptionalRecord(row.event)?.customType === "mcp-app-display"),
+          )
+        : navigation.visibleMessages;
       const start = resolveIntegerOption(query.input.offset, 0, { min: 0, max: rows.length });
       const messages: Array<{ message: unknown; seq: number }> = [];
       let end = start;
@@ -534,9 +541,11 @@ export function readSessionActorMemoryHistoryFacts(
         }
         bytes += row.serializedBytes;
         end++;
-        const message = asOptionalRecord(row.event)?.message;
+        const event = asOptionalRecord(row.event);
+        const message =
+          event?.type === "custom" && query.input.mcpAppDisplays ? event : event?.message;
         if (message !== undefined) {
-          messages.push({ message, seq: row.messagePosition! + 1 });
+          messages.push({ message, seq: (row.messagePosition ?? 0) + 1 });
         }
       }
       return { messages, ...(end < rows.length ? { nextOffset: end } : {}) };

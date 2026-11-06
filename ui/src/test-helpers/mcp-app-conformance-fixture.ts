@@ -313,7 +313,8 @@ export function appHtml(appModuleUrl: string): string {
     border-left: 4px solid var(--app-accent);
   }
 </style>
-<div id="theme-surface">Host-themed surface</div>
+<div id="theme-surface">Synthetic saved diagram: template installation</div>
+<svg width="900" height="180" viewBox="0 0 900 180" role="img" aria-label="Template installation diagram"><g fill="#252a36" stroke="#ff4f4f" stroke-width="2"><rect x="20" y="40" width="230" height="80" rx="10"/><rect x="330" y="40" width="230" height="80" rx="10"/><rect x="640" y="40" width="230" height="80" rx="10"/><path d="M250 80H330M560 80H640"/></g><g fill="#f2f2f5" font-family="sans-serif" font-size="20" text-anchor="middle"><text x="135" y="88">Choose template</text><text x="445" y="88">Add agent</text><text x="755" y="88">Open chat</text></g></svg>
 <button id="arm-refresh">Arm catalog refresh</button>
 <output id="arm-result"></output>
 <button id="call-app">Call app tool</button>
@@ -488,7 +489,7 @@ const server = new McpServer({ name: "mcp-app-conformance", version: "1.0.0" });
 const toolResult = (value, extra = {}) => ({
   content: [{ type: "text", text: value }], structuredContent: { value, ...extra },
 });
-const show = server.registerTool("show", { description: "Show the conformance app" }, async () => toolResult("initial-result"));
+const show = server.registerTool("show", { description: "Show the conformance app" }, async () => ({ ...toolResult("initial-result"), _meta: { checkpoint: "synthetic-checkpoint" } }));
 show.update({ _meta: { ui: { resourceUri: appUri } } });
 const appOnly = server.registerTool("app_companion", { description: "App-only companion" }, async ({ mcpReq }) => {
   const request = requests.get(mcpReq.id);
