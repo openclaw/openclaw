@@ -50,11 +50,11 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // CPU-backed theme readback cuts Appearance latency 7–20% across both engines.
-  // Chat adds 354 B gzip; measured 1,295,190 B + 192 B generated-name headroom.
-  chatBootJsGzipBytes: 1_295_382,
-  // The same theme readback win adds 419 B gzip to New Session in CI.
-  // Measured 801,690 B + 192 B generated-name headroom.
-  newBootJsGzipBytes: 801_882,
+  // After the medium-transcript merge: 1,295,862 B + 192 B generated-name headroom.
+  chatBootJsGzipBytes: 1_296_054,
+  // The same theme readback win also affects New Session's shared bundle.
+  // After the merge: 802,351 B + 192 B generated-name headroom.
+  newBootJsGzipBytes: 802_543,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
