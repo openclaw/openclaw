@@ -33,6 +33,13 @@ without known dimensions keep a 3:2 frame while displayed, with the full image
 fitted inside it. Previously learned dimensions size the next preview without
 moving the surrounding messages when the image decodes.
 
+Opening a transcript image or video shows a shared viewer for supported media in
+the loaded thread, including inline Markdown images, your own attachments, and
+earlier response turns.
+When more than one item is available, use the visible previous/next buttons,
+Left/Right arrow keys, or touch swipes to browse; the counter shows your position.
+Older messages that have not been loaded are not fetched just to fill the viewer.
+
 Optional surfaces follow the permissions granted to the current connection.
 Session-only roles do not load the plugin UI catalog, Side Chat history, observer
 visibility, or remote session-link titles. Side Chat is hidden, and session links
@@ -155,7 +162,10 @@ access to an unavailable conversation.
 
 A saved chat can restore its archived or read-only composer and parent breadcrumb
 while reconnecting. These saved display facts never authorize actions; live session
-state replaces them when the connection returns.
+state replaces them when the connection returns. If a temporary transcript or
+live-message subscription failure exhausted its retries, returning to that chat
+starts a fresh read attempt. Access denials are not retried automatically, and
+returning to a chat does not resend messages.
 
 If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
 
@@ -373,6 +383,16 @@ non-success outcomes remain visible even when collapsed, such as
 
 Still-streaming assistant text stays at the bottom of its run, below saved output, and
 takes its transcript position once saved.
+
+While steering waits for a running tool, the message appears as an ordinary user
+bubble with a small **Send now** link underneath. Session writers can click it to
+interrupt supported running tools and deliver the waiting steer sooner, keeping
+the same agent run alive. The model receives a tool result explaining the user
+interruption. The link disappears when the steer is injected. Tools that cannot
+be interrupted safely, and runtimes without tool interruption, show a quiet
+waiting explanation instead of an action.
+This includes Code Mode aggregate tools and native or remote backends, which
+do not support tool-only interruption.
 
 Accepted steering messages keep their saved transcript positions. Earlier saved
 output stays above the message; later answers and live output appear below it,

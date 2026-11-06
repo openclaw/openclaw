@@ -2304,7 +2304,7 @@
                   },
                   {
                     "group": "Decision models",
-                    "pages": ["providers/liquid-ai"]
+                    "pages": ["providers/liquid-ai", "providers/rerank"]
                   },
                   {
                     "group": "Speech and audio",

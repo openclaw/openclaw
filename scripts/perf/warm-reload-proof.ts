@@ -45,6 +45,7 @@ const { values } = parseArgs({
     "plugin-activation": { type: "boolean", default: false },
     "details-session-facts": { type: "boolean", default: false },
     "active-targets": { type: "boolean", default: false },
+    "composer-controls": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
@@ -284,6 +285,16 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
         }
         return {
           targetSnapshots: targetKeys.length,
+          targetComposerSnapshots: targetRecords.filter(
+            (record) =>
+              record !== null &&
+              typeof record === "object" &&
+              "snapshot" in record &&
+              record.snapshot !== null &&
+              typeof record.snapshot === "object" &&
+              "composer" in record.snapshot &&
+              record.snapshot.composer != null,
+          ).length,
           targetSnapshotBytes: targetRecords.reduce<number>(
             (bytes, value) => bytes + new TextEncoder().encode(JSON.stringify(value)).length,
             0,
@@ -769,6 +780,7 @@ try {
     pluginActivation: values["plugin-activation"],
     detailsSessionFacts: values["details-session-facts"],
     activeTargets: values["active-targets"],
+    composerControls: values["composer-controls"],
     ...(admission
       ? {
           admission: {
@@ -934,7 +946,7 @@ try {
             await page.addInitScript({ content: extraInitScripts.join("\n") });
           }
           await page.addInitScript({
-            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"]});`,
+            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"] || values["composer-controls"]});`,
           });
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");
@@ -1095,6 +1107,25 @@ try {
           ) {
             await details.first().click();
           }
+          if (values["composer-controls"]) {
+            const model = page.locator("[data-chat-model-select]:visible").first();
+            if ((await model.count()) > 0) {
+              // The catalog is demand-loaded: warm the controls through their real picker.
+              await model.click();
+              await page.waitForFunction(() => {
+                const modelText = document.querySelector("[data-chat-model-select]")?.textContent;
+                const effort = document.querySelector("[data-chat-thinking-select]")?.textContent;
+                return (
+                  modelText?.includes("Claude Haiku 5.5") &&
+                  modelText.includes("200K") &&
+                  effort?.includes("High")
+                );
+              });
+              await page.keyboard.press("Escape");
+            } else if (values["active-targets"]) {
+              throw new Error("Active composer fixture has no visible model control");
+            }
+          }
           // Let existing cache owners persist the fully loaded route before warm samples.
           await page.waitForFunction(
             () =>
@@ -1128,6 +1159,15 @@ try {
           if (reloads > 0 && cache.targetSnapshots === 0) {
             throw new Error(
               "No owned transcript snapshot persisted for this route; warm proof would be invalid",
+            );
+          }
+          if (
+            values["composer-controls"] &&
+            values["active-targets"] &&
+            !cache.targetComposerSnapshots
+          ) {
+            throw new Error(
+              "Composer catalog did not persist; warm controls proof would be invalid",
             );
           }
           if (values.base) {

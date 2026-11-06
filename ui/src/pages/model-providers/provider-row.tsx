@@ -1,6 +1,7 @@
 // Provider access keeps account credentials and plan limits together in each row.
 import type { JSX } from "@solidjs/web";
 import { createSignal, For, onSettled, Show } from "solid-js";
+import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -11,8 +12,14 @@ import {
 } from "../../components/solid/provider-usage.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ModelProviderCard, ModelProviderRemovalTarget } from "./data.ts";
+import {
+  modelCatalogRef,
+  type ModelProviderCard,
+  type ModelProviderRemovalTarget,
+} from "./data.ts";
 import { apiKeySource, profileIdentity, ProviderProfiles } from "./profiles-view.tsx";
 import {
   isProviderUsable,
@@ -313,6 +320,26 @@ function KeyEditor(props: ProviderRowProps & { onCancel?: () => void }) {
   );
 }
 
+/** Defaults for all agents served by this provider; removal keeps them selected. */
+function defaultModelsUsing(props: ProviderRowProps): string | undefined {
+  const { primary, fallbacks, utilityModel } = props.defaultModels;
+  const names = [
+    primary,
+    ...fallbacks,
+    modelSettingPrimary(utilityModel),
+    ...modelSettingFallbacks(utilityModel),
+  ].flatMap((ref) => {
+    const model = ref ? splitTrailingAuthProfile(ref).model : "";
+    // Aliases resolve through their catalog entry; other refs name the provider first.
+    const entry = props.configuredModels.find((candidate) => modelCatalogRef(candidate) === model);
+    const provider = entry?.provider ?? (model.includes("/") ? model.split("/", 1)[0] : "");
+    return provider && canonicalModelAuthProviderId(provider) === props.card.id
+      ? [entry?.name ?? model]
+      : [];
+  });
+  return names.length ? [...new Set(names)].join(", ") : undefined;
+}
+
 /** What "Remove provider" can delete, and the credential it has to leave behind. */
 function removalPlan(card: ModelProviderCard): {
   removeTargets: ModelProviderRemovalTarget[];
@@ -353,6 +380,7 @@ function removalPlan(card: ModelProviderCard): {
 
 function ProviderActions(props: ProviderRowProps) {
   const removal = () => removalPlan(props.card);
+  const defaultModels = () => defaultModelsUsing(props);
   const connected = () => isProviderUsable(props.card) || props.card.profiles.length > 0;
   const connectName = () =>
     t(connected() ? "modelProviders.profiles.addAccount" : "modelProviders.login.action");
@@ -380,6 +408,7 @@ function ProviderActions(props: ProviderRowProps) {
               cardId: props.card.id,
               label: providerName(props.card),
               ...removal(),
+              ...(defaultModels() ? { defaultModels: defaultModels() } : {}),
             })
           }
         >
@@ -438,6 +467,9 @@ function ProviderActions(props: ProviderRowProps) {
 
 /** Gateways often echo the raw id as the name; the shared label map reads better. */
 function providerName(card: ModelProviderCard): string {
+  if (card.providerName) {
+    return card.providerName;
+  }
   return card.displayName && card.displayName !== card.id
     ? card.displayName
     : providerDisplayLabel(card.id);
@@ -500,7 +532,11 @@ export function ProviderRow(props: ProviderRowProps) {
         aria-controls={detailId()}
         onClick={() => setExpanded(!open())}
       >
-        <ProviderBrandIcon provider={card().id} class="provider-row__icon model-providers__icon" />
+        <ProviderBrandIcon
+          provider={card().id}
+          presentation={card()}
+          class="provider-row__icon model-providers__icon"
+        />
         <span class="provider-row__identity">
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">
@@ -553,7 +589,11 @@ export function UnconnectedProviderRow(props: ProviderRowProps) {
   return (
     <li class="provider-row provider-row--quiet model-providers__row" data-provider-id={card().id}>
       <div class="provider-row__summary model-providers__head">
-        <ProviderBrandIcon provider={card().id} class="provider-row__icon model-providers__icon" />
+        <ProviderBrandIcon
+          provider={card().id}
+          presentation={card()}
+          class="provider-row__icon model-providers__icon"
+        />
         <span class="provider-row__identity">
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">

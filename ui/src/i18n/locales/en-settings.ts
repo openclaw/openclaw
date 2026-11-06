@@ -816,6 +816,17 @@ const enSettings = {
       devcontainer: "Dev container",
       detected: "Detected",
       phases: {
+        retainedGit: "Verify retained Git identity",
+        retainedManifest: "Verify retained manifest",
+        inspection: "Inspect retained workspace",
+        seedPreparation: "Prepare seed paths",
+        seedTransfer: "Import seed objects",
+        seedVerification: "Verify seed",
+        seedCheckout: "Check out seed",
+        seedManifest: "Read seed manifest",
+        gitUpdate: "Copy or update workspace",
+        toolchainPreparation: "Prepare toolchain",
+        preparedManifest: "Capture prepared manifest",
         onCreate: "onCreateCommand",
         updateContent: "updateContentCommand",
         detectedInstall: "Install dependencies",
@@ -1208,6 +1219,8 @@ const enSettings = {
         "This removes the saved accounts for {provider} available to this agent. Shared accounts are also removed for other agents that use them. Active replies for this provider on the selected agent may stop.",
       keys: "Saved API keys for {key} and its configured aliases will also be deleted. Provider settings and external secrets stay in place.",
       kept: "Kept: {source}. Remove account access at its source to stop using it fully.",
+      defaults:
+        "Defaults for all agents keep using {models}. Choose another model or add an account again so replies keep working.",
       secretReferences: "Secret references in {keys}",
       accessChanged:
         "The connection, agent, or access changed. No further credentials were removed.",
@@ -1223,6 +1236,7 @@ const enSettings = {
       save: "Save provider",
       saved: "Added {provider}",
       verified: "Added {provider}. Access verified.",
+      ready: "Added {provider}. {model} is ready to chat.",
     },
     defaults: {
       title: "Defaults for all agents",

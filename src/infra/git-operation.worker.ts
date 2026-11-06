@@ -40,7 +40,7 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
             case "workspace.manifest.overlay":
             case "workspace.manifest.pair":
             case "workspace.manifest.staged":
-            case "workspace.manifest.entries":
+            case "workspace.manifest.result":
             case "workspace.manifest.file":
             case "workspace.manifest.nodes":
             case "workspace.reconcile.preflight":

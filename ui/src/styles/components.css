@@ -687,7 +687,7 @@ openclaw-toast-host[popover] {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 6px;
   box-sizing: border-box;
   min-width: min(240px, calc(100vw - 24px));
   padding: 12px 16px;
@@ -707,6 +707,10 @@ openclaw-toast-host[popover] {
 .app-toast--action {
   --app-toast-row: 28px;
   padding-right: 10px;
+}
+
+.app-toast--avatar {
+  gap: 10px;
 }
 
 /* Other chat-like pages have no session toolbar to clear. */
@@ -766,7 +770,7 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 10px 14px;
   min-width: 0;
 }
 
@@ -3172,9 +3176,14 @@ select.data-table-pagination__size {
 }
 
 .session-glyph__ring--queued,
-.session-run-indicator--offscreen,
 .session-glyph__trace--queued .session-glyph__trace-run {
   animation-play-state: paused;
+}
+
+/* A paused transform still promotes offscreen rows and their overlapping labels.
+   Restart when the row returns instead of retaining those compositor layers. */
+.session-run-indicator--offscreen {
+  animation: none;
 }
 
 .session-glyph__ring--background,
@@ -3385,7 +3394,7 @@ select.data-table-pagination__size {
   background: var(--card);
 }
 
-.provider-brand-icon:not(.provider-brand-icon--fallback) {
+.provider-brand-icon[data-provider-icon] {
   background: currentColor;
   mask: var(--provider-icon-url) center / contain no-repeat;
 }
@@ -3497,16 +3506,14 @@ select.data-table-pagination__size {
 }
 
 /* Sidebar numbers stay tabular so counts and elapsed times hold their column. */
-:is(
-  .session-row-badge,
-  .session-row-trail,
-  .sidebar-child-session-toggle__count,
-  .sidebar-session-group-count,
-  .sidebar-agent-roster__unread,
-  .sidebar-issues-button__count,
-  .viewer-avatar--overflow,
-  .sidebar-session-tree__show-more
-) {
+.session-row-badge,
+.session-row-trail,
+.sidebar-child-session-toggle__count,
+.sidebar-session-group-count,
+.sidebar-agent-roster__unread,
+.sidebar-issues-button__count,
+.viewer-avatar--overflow,
+.sidebar-session-tree__show-more {
   font-variant-numeric: tabular-nums lining-nums;
 }
 

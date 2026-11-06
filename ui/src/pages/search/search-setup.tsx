@@ -4,8 +4,13 @@ import type { WebSearchStatusResult } from "../../../../packages/gateway-protoco
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
+import {
+  flattenConfigLeafFields,
+  type ConfigLeafField,
+} from "../../components/config-form.leaf-fields.ts";
+import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { ConfigNode } from "../../components/config-form.node.tsx";
-import { resolveConfigFieldMeta } from "../../components/config-form.search.ts";
+import { hintForPath, pathKey } from "../../components/config-form.shared.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { LearnMoreLink, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
@@ -29,45 +34,58 @@ type SearchSettingsProps = {
   commit: (path: Array<string | number>, value: unknown) => Promise<boolean>;
   secretFields: ConfigSecretFields;
 };
-type SearchConfigFieldProps = Pick<
-  SearchSettingsProps,
-  "state" | "canEdit" | "busy" | "secretFields"
->;
-function SearchConfigField(
-  props: SearchConfigFieldProps & {
-    schema: JsonSchema;
+
+/** Leaf rows for one config object; nested objects become labeled rows, never a row control. */
+function searchConfigFields(
+  props: Pick<SearchSettingsProps, "state" | "canEdit" | "busy" | "secretFields">,
+  object: {
+    schema: JsonSchema | null | undefined;
     path: Array<string | number>;
     value: unknown;
     unsupported: Set<string>;
-    nested?: boolean;
     patch: (path: Array<string | number>, value: unknown) => Promise<boolean>;
   },
-) {
-  const hints = () => props.state().configUiHints;
-  const meta = () => resolveConfigFieldMeta(props.path, props.schema, hints());
+): ConfigLeafField[] {
+  if (!object.schema) {
+    return [];
+  }
+  return resolveConfigObjectFields({
+    schema: object.schema,
+    value: object.value,
+    path: object.path,
+    hints: props.state().configUiHints,
+    unsupported: object.unsupported,
+    disabled: !props.canEdit() || props.busy(),
+    compact: true,
+    commitOnBlur: true,
+    rawAvailable: false,
+    maskSensitive: true,
+    secretFields: props.secretFields,
+    onPatch: (path, value) => void object.patch(path, value),
+    onRemove: (path) => void object.patch(path, undefined),
+  }).fields.flatMap((field) => flattenConfigLeafFields(field, String(field.path.at(-1))));
+}
+
+function SearchConfigField(props: { field: ConfigLeafField; nested?: boolean }) {
   return (
     <SettingsRow
-      title={meta().label}
-      description={meta().help}
+      title={props.field.label}
+      description={props.field.help}
       stackedOnNarrow
       nested={props.nested}
       control={
         <ConfigNode
           params={{
-            schema: props.schema,
-            value: props.value,
-            path: props.path,
-            hints: hints(),
-            unsupported: props.unsupported,
-            disabled: !props.canEdit() || props.busy(),
-            compact: true,
-            commitOnBlur: true,
+            ...props.field,
             showLabel: false,
-            rawAvailable: false,
-            maskSensitive: true,
-            secretFields: props.secretFields,
-            onPatch: (path, value) => void props.patch(path, value),
-            onRemove: (path) => void props.patch(path, undefined),
+            // The control's accessible name carries the full nested label, like its row title.
+            hints: {
+              ...props.field.hints,
+              [pathKey(props.field.path)]: {
+                ...hintForPath(props.field.path, props.field.hints),
+                label: props.field.label,
+              },
+            },
           }}
         />
       }
@@ -97,16 +115,18 @@ export function SearchSetup(
       : null;
   const values = () => asNullableRecord(readConfigValue(config(), props.provider.configPath));
   const credential = () => props.provider.credential;
+  const credentialKey = () => {
+    const path = credential()?.path;
+    return path ? JSON.stringify(path) : undefined;
+  };
   const fields = createMemo(() =>
-    Object.entries(schema()?.properties ?? {}).filter(([key]) => {
-      const descriptor = credential();
-      return (
-        !descriptor ||
-        descriptor.path.length !== props.provider.configPath.length + 1 ||
-        !props.provider.configPath.every((segment, index) => segment === descriptor.path[index]) ||
-        descriptor.path.at(-1) !== key
-      );
-    }),
+    searchConfigFields(props, {
+      schema: schema(),
+      path: props.provider.configPath,
+      value: values(),
+      unsupported: unsupported(),
+      patch: props.commit,
+    }).filter((field) => JSON.stringify(field.path) !== credentialKey()),
   );
   return (
     <>
@@ -149,21 +169,8 @@ export function SearchSetup(
           />
         )}
       </Show>
-      <For each={fields()} keyed={(field) => field[0]}>
-        {(field) => (
-          <SearchConfigField
-            schema={field()[1]}
-            path={[...props.provider.configPath, field()[0]]}
-            value={values()?.[field()[0]]}
-            unsupported={unsupported()}
-            nested
-            patch={props.commit}
-            secretFields={props.secretFields}
-            state={props.state}
-            canEdit={props.canEdit}
-            busy={props.busy}
-          />
-        )}
+      <For each={fields()} keyed={(field) => JSON.stringify(field.path)}>
+        {(field) => <SearchConfigField field={field()} nested />}
       </For>
       <SettingsRow
         nested
@@ -259,27 +266,19 @@ export function AdvancedSearchSettings(props: SearchSettingsProps) {
   const config = () => currentConfigObject(props.state());
   const value = () => asNullableRecord(readConfigValue(config(), ["tools", "web", "search"]));
   const fields = createMemo(() =>
-    Object.entries(schema()?.properties ?? {}).filter(
-      ([key]) => key !== "enabled" && key !== "provider",
-    ),
+    searchConfigFields(props, {
+      schema: schema(),
+      path: ["tools", "web", "search"],
+      value: value(),
+      unsupported: unsupported(),
+      patch: props.commit,
+    }).filter((field) => field.property !== "enabled" && field.property !== "provider"),
   );
   return (
     <Show when={fields().length > 0}>
       <SettingsDisclosure class="config-advanced-disclosure" title={t("searchPage.advanced")}>
-        <For each={fields()} keyed={(field) => field[0]}>
-          {(field) => (
-            <SearchConfigField
-              schema={field()[1]}
-              path={["tools", "web", "search", field()[0]]}
-              value={value()?.[field()[0]]}
-              unsupported={unsupported()}
-              patch={props.commit}
-              secretFields={props.secretFields}
-              state={props.state}
-              canEdit={props.canEdit}
-              busy={props.busy}
-            />
-          )}
+        <For each={fields()} keyed={(field) => JSON.stringify(field.path)}>
+          {(field) => <SearchConfigField field={field()} />}
         </For>
       </SettingsDisclosure>
     </Show>

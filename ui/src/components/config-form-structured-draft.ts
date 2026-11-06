@@ -12,7 +12,7 @@ export type ConfigFormStructuredDraftProps = {
 };
 
 export function resolveStructuredDraftInitialValue(
-  params: ConfigNodeRenderParams,
+  params: Pick<ConfigNodeRenderParams, "schema" | "value" | "isRequired" | "structuredDraftOwner">,
 ): Record<string, unknown> | unknown[] | undefined {
   if (
     params.value !== undefined ||
