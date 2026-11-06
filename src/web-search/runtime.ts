@@ -535,12 +535,17 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
         : "web_search is disabled or no provider is available.",
     );
   }
-  const allowFallback = !hasExplicitWebSearchSelection({
-    search,
-    runtimeWebSearch,
-    providerId: params.providerId,
-    providers: candidates,
-  });
+  const allowFallback =
+    !(
+      params.modelSelection?.authProfileId &&
+      candidates[0]?.authProviderId === params.modelSelection.provider
+    ) &&
+    !hasExplicitWebSearchSelection({
+      search,
+      runtimeWebSearch,
+      providerId: params.providerId,
+      providers: candidates,
+    });
   const assertCurrent = params.assertCurrent;
   return await withGuardedFetchRequestAuthority(
     assertCurrent
@@ -570,6 +575,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
           }
           const executed = await definition.execute(params.args, {
             signal: params.signal,
+            ...(params.modelSelection ? { modelSelection: params.modelSelection } : {}),
             ...(assertRequestCurrent ? { assertCurrent: assertRequestCurrent } : {}),
           });
           // Cancellation wins races with provider completion or cleanup failures. Otherwise an

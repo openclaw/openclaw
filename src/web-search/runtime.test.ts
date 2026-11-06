@@ -498,6 +498,69 @@ describe("web search runtime", () => {
       'Unknown web_search provider "missing-id".',
     );
   });
+  it.each([false, true])(
+    "only permits automatic search fallback without a pinned model profile (%s)",
+    async (pinned) => {
+      runtimeProvidersMock.mockReturnValue([
+        searchProvider("google", {
+          authProviderId: "google",
+          createTool: () => ({
+            description: "google",
+            parameters: {},
+            execute: async () => {
+              throw new Error("google aborted");
+            },
+          }),
+        }),
+        createWebSearchTestProvider({
+          pluginId: "backup-search",
+          id: "backup",
+          credentialPath: "tools.web.search.backup.apiKey",
+          autoDetectOrder: 2,
+          getConfiguredCredentialValue: () => "backup-configured",
+          getCredentialValue: () => "backup-configured",
+        }),
+      ]);
+
+      const result = runWebSearch({
+        config: {},
+        args: { query: "fallback" },
+        ...(pinned
+          ? {
+              modelSelection: {
+                provider: "google",
+                model: "gemini-test",
+                authProfileId: "google:research",
+              },
+            }
+          : {}),
+      });
+      if (pinned) {
+        await expect(result).rejects.toThrow("google aborted");
+      } else {
+        await expect(result).resolves.toEqual({
+          provider: "backup",
+          result: { query: "fallback", provider: "backup" },
+        });
+      }
+    },
+  );
+
+  it("carries host model/profile selection independently of model-authored arguments", async () => {
+    const execute = vi.fn(async () => ({ results: [] }));
+    const modelSelection = {
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "openai:research",
+    };
+    useProviders(searchProvider("google", { createTool: () => tool(execute) }));
+    await runWebSearch({
+      config: {},
+      args: { query: "synthetic query", modelSelection: { authProfileId: "wrong" } },
+      modelSelection,
+    });
+    expect(execute).toHaveBeenCalledWith(expect.any(Object), { signal: undefined, modelSelection });
+  });
 
   it("honors preferRuntimeProviders during execution", async () => {
     ownerMock.mockImplementation(({ value }) => (value === "google" ? "google" : undefined));

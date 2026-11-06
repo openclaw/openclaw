@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { WebSearchProviderToolExecutionContext } from "../../plugins/web-provider-types.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -83,6 +84,7 @@ export function createWebSearchTool(options?: {
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   lateBindRuntimeConfig?: boolean;
+  modelSelection?: WebSearchProviderToolExecutionContext["modelSelection"];
 }): AnyAgentTool | null {
   if (options?.enabled === false || isWebSearchDisabled(options?.config)) {
     return null;
@@ -127,6 +129,7 @@ export function createWebSearchTool(options?: {
         runtimeWebSearch,
         preferRuntimeProviders,
         args: toolArgs,
+        modelSelection: options?.modelSelection,
         signal,
       }).catch((error: unknown) => {
         signal?.throwIfAborted();
