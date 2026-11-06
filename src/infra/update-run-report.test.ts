@@ -404,6 +404,15 @@ it.each([
   expect(report.lines).toContain("Phases: staging (300ms)");
 });
 
+it("states the total when work ran outside the recorded phases", () => {
+  const steps = [{ step: "activating", status: "completed", startedAtMs: 61_000, endedAtMs: 121_000 }];
+  const finished = render({ steps, createdAtMs: 1_000, finishedAtMs: 301_000 });
+  expect(finished.lines).toContain("Phases: activating (1m)");
+  expect(finished.lines).toContain("Total: 5m, including work outside these phases.");
+  const covered = render({ steps, createdAtMs: 61_000, finishedAtMs: 121_000 });
+  expect(covered.lines.join("\n")).not.toContain("Total:");
+});
+
 it("bounds chat failures but preserves full CLI guidance", () => {
   const report = render({
     status: "failed",

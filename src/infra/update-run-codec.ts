@@ -146,7 +146,7 @@ function compactConfigWriteRefusal(value: unknown): unknown {
   );
 }
 
-export function isRetainedStep(item: unknown): boolean {
+function isRetainedStep(item: unknown): boolean {
   return (
     isRecord(item) &&
     typeof item.step === "string" &&
@@ -159,6 +159,24 @@ export function isRetainedStep(item: unknown): boolean {
   );
 }
 
+/** The summary counts warning rows and reports failed ones, so plain steps yield first. */
+export function findDisposableStep(steps: readonly unknown[]): number {
+  const failed = (item: unknown) => isRecord(item) && item.status === "failed";
+  const warning = (item: unknown) =>
+    isRecord(item) && typeof item.step === "string" && item.step.startsWith("warning:");
+  for (const tier of [
+    (item: unknown) => !warning(item) && !failed(item),
+    warning,
+    () => true,
+  ]) {
+    const index = steps.findIndex((item) => !isRetainedStep(item) && tier(item));
+    if (index >= 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 /** Phase history, notice custody, and restoration proof survive diagnostic eviction. */
 function boundedJson(
   input: unknown,
@@ -169,7 +187,7 @@ function boundedJson(
   let json = JSON.stringify(value);
   while (Buffer.byteLength(json) > maxBytes) {
     if (Array.isArray(value)) {
-      const disposable = value.findIndex((item) => !isRetainedStep(item));
+      const disposable = findDisposableStep(value);
       if (disposable >= 0) {
         value = value.toSpliced(disposable, 1);
       } else {
