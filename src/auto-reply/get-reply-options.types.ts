@@ -274,6 +274,8 @@ export type GetReplyOptions = {
   suppressTyping?: boolean;
   /** One-shot thinking level override for this run; does not persist to the session. */
   thinkingLevelOverride?: string;
+  /** Normalize a machine-selected thinking preference against the execution model. */
+  normalizeThinkingLevelOverride?: boolean;
   /** One-shot fast-mode override for this run; does not persist to the session. */
   fastModeOverride?: FastMode;
   /** One-shot auto fast-mode cutoff override in seconds; does not persist to the session. */

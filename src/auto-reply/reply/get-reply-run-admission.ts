@@ -308,11 +308,15 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const explicitThink =
       (directives.hasThinkDirective && directives.thinkLevel !== undefined) ||
       explicitThinkingLevelOverride !== undefined;
-    if (explicitThink) {
+    if (explicitThink && !opts?.normalizeThinkingLevelOverride) {
       return finishReplyPreparation(typing, () => ({
         text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`,
       }));
     }
+  }
+
+  if (opts?.normalizeThinkingLevelOverride && explicitThinkingLevelOverride !== undefined) {
+    resolvedThinkLevel = thinkingSelection.level;
   }
 
   const providedReplyOperation = opts?.replyOperation;
