@@ -27,6 +27,12 @@ function describeWebResultFailure(result: Record<string, unknown>): string | und
   );
 }
 
+function readProviderFlag(value: unknown): string | undefined {
+  // Flags are dispatched against lowercase plugin ids, so `--provider Brave` would
+  // miss the provider entirely unless the value is normalised the same way config is.
+  return value === undefined ? undefined : normalizeLowercaseStringOrEmpty(value);
+}
+
 async function runWebCommand(
   capability: "web.search" | "web.fetch",
   json: boolean | undefined,
@@ -66,7 +72,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .action((opts) =>
       runWebCommand("web.search", opts.json, async (signal) => {
         const query = String(opts.query);
-        const provider = opts.provider as string | undefined;
+        const provider = readProviderFlag(opts.provider);
         const limit = parseOptionalPositiveInteger(opts.limit, "--limit");
         const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         const { getCapabilityWebSearchCommandSecretTargets } =
@@ -105,7 +111,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .action((opts) =>
       runWebCommand("web.fetch", opts.json, async (signal) => {
         const url = String(opts.url);
-        const provider = opts.provider as string | undefined;
+        const provider = readProviderFlag(opts.provider);
         const format = opts.format as string | undefined;
         const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         const { getCapabilityWebFetchCommandSecretTargets } =

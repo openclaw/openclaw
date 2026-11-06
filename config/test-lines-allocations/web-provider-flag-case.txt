@@ -1,0 +1,2 @@
+# Net new test lines: new src/cli/capability-cli/web.test.ts covers the --provider flag.
+51

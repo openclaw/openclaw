@@ -1417,7 +1417,7 @@ src/cli/capability-cli/image.ts	8
 src/cli/capability-cli/model.ts	3
 src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	5
-src/cli/capability-cli/web.ts	3
+src/cli/capability-cli/web.ts	1
 src/cli/channel-auth.ts	4
 src/cli/channels-cli.ts	5
 src/cli/command-options.ts	1
