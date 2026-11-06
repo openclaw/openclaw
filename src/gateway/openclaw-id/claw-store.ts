@@ -120,7 +120,7 @@ type ClawRows = {
 type ClawRow = ClawRows[keyof ClawRows] | StoredClaw;
 
 /** The device-token bindings row, kept beside membership authority. */
-export type StoredTokenBindings = { v: 1; bindings: DeviceTokenBinding[] };
+type StoredTokenBindings = { v: 1; bindings: DeviceTokenBinding[] };
 
 // The authority is the sole writer; this existing catalog owner binds every row to one store.
 function openStore() {
