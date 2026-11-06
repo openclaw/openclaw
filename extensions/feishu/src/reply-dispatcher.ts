@@ -367,6 +367,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         ? rest.replace(/^[^\r\n]*(?:\s*[\r\n])?/u, "")
         : rest;
     }
+    // A card cut inside its opening line finishes that line from the new snapshot.
+    const openerStart = Math.max(from.lastIndexOf("\n"), from.lastIndexOf("\r")) + 1;
+    const openerEnd = from.length + text.slice(from.length).search(/[\r\n]|$/u);
+    if (
+      opener &&
+      !openFence(from.slice(0, openerStart)) &&
+      /\S/u.test(text.slice(from.length, openerEnd))
+    ) {
+      const head = text.slice(openerStart, openerEnd);
+      const code = text.slice(openerEnd).replace(/^(?:\r\n?|\n)/u, "");
+      return code ? `${head}\n${code}` : head;
+    }
     return opener ? `${opener}\n${rest}` : rest;
   };
 
