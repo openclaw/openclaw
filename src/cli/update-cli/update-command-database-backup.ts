@@ -12,7 +12,10 @@ import {
   createUpdateDatabaseBackup,
   type UpdateDatabaseBackup,
 } from "../../infra/update-database-backup.js";
-import { restoreUpdateDatabaseBackup } from "../../infra/update-database-restore.js";
+import {
+  restoreUpdateDatabaseBackup,
+  UpdateDatabaseRestoreNotStartedError,
+} from "../../infra/update-database-restore.js";
 import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
@@ -310,6 +313,9 @@ export async function restoreFailedUpdateDatabases(params: {
     assertCurrent();
     return true;
   } catch (cause) {
+    if (cause instanceof UpdateDatabaseRestoreNotStartedError) {
+      return await refuse(`Database rollback could not start: ${cause.message}`);
+    }
     // A partly restored shared ledger must never be reopened by candidate
     // finalization: that would migrate the recovery image again.
     params.result.recovery = {

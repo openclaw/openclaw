@@ -10,6 +10,7 @@ import { drainAgentDatabaseResources } from "../state/openclaw-agent-db-resource
 import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   getPublishFileExclusiveFailureDetails,
   publishFileExclusive,
@@ -116,12 +117,22 @@ async function withDatabaseExclusion<T>(
     throw cleanupError;
   }
   if ("error" in outcome) {
-    throw outcome.error;
+    throw displaced.length === 0 && !retainPreparedCopy
+      ? new UpdateDatabaseRestoreNotStartedError(outcome.error)
+      : outcome.error;
   }
   return outcome.value;
 }
 
 /** The caller owns a settled failed candidate that has never admitted user work. */
+/** The live databases were never touched; the caller keeps them and refuses rollback. */
+export class UpdateDatabaseRestoreNotStartedError extends Error {
+  constructor(cause: unknown) {
+    super(formatErrorMessage(cause), { cause });
+    this.name = "UpdateDatabaseRestoreNotStartedError";
+  }
+}
+
 export async function restoreUpdateDatabaseBackup(params: {
   backup: UpdateDatabaseBackup;
   runId: string;
