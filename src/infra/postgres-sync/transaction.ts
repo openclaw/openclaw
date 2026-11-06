@@ -1,6 +1,9 @@
 import { assertSyncTransactionResult, sqlPublicationAnchor } from "../sql-connection.js";
 import type { PostgresSqlConnection } from "../sql-connection.js";
-import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
+import {
+  prepareSqliteTransactionCommit,
+  withSqlitePostCommitPublications,
+} from "../sqlite-post-commit.js";
 import { beginPostgresReadSnapshotScope } from "../sqlite-schema-facts.js";
 import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
 
@@ -43,6 +46,10 @@ export function runPostgresTransactionSync<T>(
       } else {
         const commit = () => {
           assertPostgresOperationCurrent();
+          if (!readOnly) {
+            // Staged fences and predicates belong to physical COMMIT, never savepoint release.
+            prepareSqliteTransactionCommit(db);
+          }
           // End read snapshots without publishing the connection's COMMIT write receipt.
           db.exec(readOnly ? "ROLLBACK" : "COMMIT");
         };
