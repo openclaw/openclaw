@@ -1387,48 +1387,45 @@
       }
 
       .mount-fallback__stage {
-        box-sizing: border-box;
-        display: grid;
         flex: 1;
-        padding: 48px 32px max(48px, env(safe-area-inset-bottom));
-        place-items: center;
-        place-items: safe center;
+      }
+
+      /* Every status page shares one anatomy: a left-aligned column whose title holds a
+         fixed height a little above centre, so it never jumps between states. */
+      .mount-fallback__main {
+        position: relative;
       }
 
       .mount-fallback__panel {
+        position: absolute;
+        top: 34%;
+        left: 50%;
         box-sizing: border-box;
-        width: min(100%, 480px);
-        padding-bottom: 9vh;
+        width: min(440px, calc(100% - 48px));
+        transform: translateX(-50%);
       }
 
-      /* Same status tile as the Gateway holding screen, shown only while recovery runs. */
+      /* The app session spinner hangs in the title's margin while recovery runs. */
       .mount-fallback__mark {
-        box-sizing: border-box;
-        display: grid;
-        place-items: center;
-        width: 48px;
-        height: 48px;
-        margin-bottom: 28px;
-        border: 1px solid var(--mount-fallback-tile-border);
-        border-radius: var(--radius-lg, 14px);
-        background: var(--mount-fallback-tile);
+        position: absolute;
+        top: 7px;
+        left: -26px;
         color: var(--mount-fallback-accent);
       }
 
       .mount-fallback__spinner {
         display: block;
-        width: 22px;
-        height: 22px;
+        width: 14px;
+        height: 14px;
         border-radius: 9999px;
         background: currentColor;
         mask: var(
           --spinner-mask,
-          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.0px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E")
+          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.75px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E")
         );
-        animation: mount-fallback-spin 1.6s linear infinite;
+        animation: mount-fallback-spin 0.9s linear infinite;
       }
 
-      /* Only a busy screen shows the status tile; a stopped one leads with its title. */
       .mount-fallback[data-recovery="stopped"] .mount-fallback__mark {
         display: none;
       }
@@ -1441,20 +1438,20 @@
 
       .mount-fallback__panel h1 {
         margin: 0;
-        color: var(--mount-fallback-heading);
-        font-size: clamp(24px, 2.5vw, 32px);
+        color: var(--mount-fallback-text);
+        font-size: 22px;
         font-weight: 600;
-        letter-spacing: -0.035em;
-        line-height: 1.2;
+        letter-spacing: -0.01em;
+        line-height: 28px;
         text-wrap: balance;
       }
 
       .mount-fallback__panel p {
-        max-width: 46ch;
-        margin: 16px 0 0;
+        margin: 6px 0 0;
         color: var(--mount-fallback-muted);
-        font-size: 16px;
-        line-height: 1.65;
+        font-size: 14px;
+        line-height: 21px;
+        text-wrap: pretty;
       }
 
       .mount-fallback__panel a {
@@ -1472,28 +1469,50 @@
         display: flex;
         flex-wrap: wrap;
         align-items: center;
-        gap: 12px 16px;
-        margin-top: 28px;
+        gap: 8px;
+        min-height: 32px;
+        margin-top: 20px;
+      }
+
+      .mount-fallback__panel .mount-fallback__help {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 40px;
+        font-size: 13px;
+        line-height: 16px;
+        text-decoration: none;
+      }
+
+      .mount-fallback__help svg {
+        flex: none;
+        width: 14px;
+        height: 14px;
+      }
+
+      .mount-fallback__panel .mount-fallback__help[hidden],
+      .mount-fallback:not([data-recovery="stopped"]) .mount-fallback__panel .mount-fallback__help {
+        display: none;
       }
 
       .mount-fallback__button {
         appearance: none;
-        min-height: 40px;
+        height: 32px;
         border: 0;
-        border-radius: 10px;
-        padding: 9px 16px;
+        border-radius: 12px;
+        padding: 0 14px;
         color: inherit;
-        background: color-mix(in srgb, var(--mount-fallback-text) 8%, var(--mount-fallback-bg));
+        background: color-mix(in srgb, var(--mount-fallback-text) 6%, var(--mount-fallback-bg));
         font: inherit;
-        font-size: 14px;
-        font-weight: 600;
-        line-height: 1.4;
+        font-size: 13px;
+        font-weight: 500;
+        line-height: 1;
         cursor: default;
         transition: background 120ms ease;
       }
 
       .mount-fallback__button:hover {
-        background: color-mix(in srgb, var(--mount-fallback-text) 12%, var(--mount-fallback-bg));
+        background: color-mix(in srgb, var(--mount-fallback-text) 9%, var(--mount-fallback-bg));
       }
 
       .mount-fallback__button:active {
@@ -1571,16 +1590,30 @@
           visibility: visible;
         }
 
-        .mount-fallback__stage {
-          padding: 32px 24px max(32px, env(safe-area-inset-bottom));
-        }
-
         .mount-fallback__panel {
-          padding-bottom: 6vh;
+          top: 30%;
+          right: 24px;
+          left: 24px;
+          width: auto;
+          transform: none;
         }
 
-        .mount-fallback__panel p {
-          font-size: 15px;
+        .mount-fallback__panel h1 {
+          font-size: 20px;
+          line-height: 26px;
+        }
+
+        .mount-fallback__mark {
+          display: none;
+        }
+      }
+
+      @media (max-width: 768px), (pointer: coarse) {
+        .mount-fallback__button {
+          height: 36px;
+          border-radius: 13px;
+          padding: 0 16px;
+          font-size: 14px;
         }
       }
 
@@ -1999,20 +2032,29 @@
                 id="openclaw-mount-retry"
                 class="mount-fallback__button mount-fallback__button--primary"
               >
-                Reload page
+                Reload
               </button>
-              <button type="button" id="openclaw-mount-wait" class="mount-fallback__button">
-                Keep waiting
-              </button>
-              <a
-                id="openclaw-mount-help"
-                class="mount-fallback__help"
-                href="https://docs.openclaw.ai/web/control-ui#blank-control-ui-page"
-                target="_blank"
-                rel="noopener noreferrer"
-                >Troubleshooting</a
-              >
             </div>
+            <a
+              id="openclaw-mount-help"
+              class="mount-fallback__help"
+              href="https://docs.openclaw.ai/web/control-ui#blank-control-ui-page"
+              target="_blank"
+              rel="noopener noreferrer"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.75"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                <path d="M12 17h.01" /></svg
+              >Troubleshooting</a
+            >
           </div>
         </div>
       </div>
@@ -2028,7 +2070,6 @@
         var summary = document.getElementById("openclaw-mount-fallback-summary");
         var failureSummary = summary.textContent;
         var retry = document.getElementById("openclaw-mount-retry");
-        var wait = document.getElementById("openclaw-mount-wait");
         var recoveryActions = fallback.querySelector(".mount-fallback__actions");
         function setManualRecovery(manual) {
           if (recoveryActions) recoveryActions.style.display = manual ? "" : "none";
@@ -2116,7 +2157,7 @@
           var documentUrl = new URL(window.location.href);
           if (recoveryNavigation >= maxRecoveryNavigations) {
             setManualRecovery(true);
-            setSummary("Automatic retries didn’t fix this. Reload the page to try again.");
+            setSummary("The app didn’t load in this tab.");
             return;
           }
           recoveryAttempt += 1;
@@ -2218,7 +2259,6 @@
             title.textContent = "Browser guidance didn’t load";
             setSummary("Check your connection, then reload the page.");
             document.getElementById("openclaw-mount-help").hidden = true;
-            wait.hidden = true;
             fallback.hidden = false;
             document.body.replaceChildren(fallback);
             document.body.classList.add("openclaw-mount-fallback-active");
@@ -2231,12 +2271,6 @@
         retry.addEventListener("click", function () {
           cancelRecovery();
           window.location.reload();
-        });
-        wait.addEventListener("click", function () {
-          hideFallback();
-          cancelRecovery();
-          recoveryAttempt = 0;
-          armFallbackTimer();
         });
       })();
     </script>

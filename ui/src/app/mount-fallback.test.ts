@@ -304,7 +304,7 @@ describe("Control UI mount fallback", () => {
     expect(win.document.getElementById("openclaw-mount-fallback")?.hidden).toBe(true);
   });
 
-  it.each(["Keep waiting", "first render", "unsupported browser"])(
+  it.each(["first render", "unsupported browser"])(
     "retires a pending recovery probe on %s",
     async (action) => {
       const { win, fetch } = pendingProbe();
@@ -313,17 +313,13 @@ describe("Control UI mount fallback", () => {
       expect(fetch).toHaveBeenCalledOnce();
       expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
 
-      if (action === "Keep waiting") {
-        win.document.getElementById("openclaw-mount-wait")?.click();
-      } else {
-        win.dispatchEvent(
-          new win.Event(
-            action === "first render"
-              ? "openclaw-control-ui-rendered"
-              : "openclaw-control-ui-unsupported-browser",
-          ),
-        );
-      }
+      win.dispatchEvent(
+        new win.Event(
+          action === "first render"
+            ? "openclaw-control-ui-rendered"
+            : "openclaw-control-ui-unsupported-browser",
+        ),
+      );
       expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
       await vi.advanceTimersByTimeAsync(10);
       expect(fetch).toHaveBeenCalledOnce();
