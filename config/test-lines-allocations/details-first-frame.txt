@@ -1,4 +1,5 @@
-225
+230
 # First-pane/dock, held Environment, closed-destination loading and independent paint witnesses.
 # Public Details fixtures replace private handoff seams; cancellation shares the cold e2e case.
 # Natural cold-scroll proof uses the fresh e2e document; shared browser modules may already be loaded.
+# Warm priming verifies the selected destination's real docking receipt before reload.

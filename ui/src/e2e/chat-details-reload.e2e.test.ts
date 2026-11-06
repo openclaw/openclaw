@@ -106,16 +106,21 @@ suite.define(() => {
           const details = await openChatDetails(page);
           const progress = details.locator('[data-progress-card-placement="details"]');
           await progress.getByText("Synthetic project verification is in progress.").waitFor();
-          await page.waitForFunction(() => {
-            const pane = document.querySelector(".chat-pane-cache__pane--active");
-            const cache = pane && Reflect.get(pane, "state")?.chatMessagesBySession;
-            return (
-              cache &&
-              [...cache.values()].some(
-                ({ snapshot }) => snapshot.details?.subagents && snapshot.details?.automations,
-              )
-            );
-          });
+          await page.waitForFunction(
+            ({ sessionKey: targetKey, wide }) => {
+              const pane = document.querySelector(".chat-pane-cache__pane--active");
+              const cache = pane && Reflect.get(pane, "state")?.chatMessagesBySession;
+              const snapshot =
+                cache &&
+                [...cache].find(([key]) => key.endsWith(`\u0000${targetKey}`))?.[1].snapshot;
+              return (
+                snapshot?.details?.docking?.wide === wide &&
+                snapshot.details.subagents &&
+                snapshot.details.automations
+              );
+            },
+            { sessionKey, wide: !closedDetails },
+          );
           if (archived) {
             const archivedSession = { ...selectedSession, archived: true };
             await gateway.setSessionsListResponse(
