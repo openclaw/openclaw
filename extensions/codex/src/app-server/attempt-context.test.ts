@@ -196,6 +196,14 @@ describe("Codex app-server attempt context", () => {
     ]);
     expect(native.injectedWorkspaceFiles[0]).not.toHaveProperty("injectionStatus");
 
+    // Base text taken from configuration rather than the loaded thread is marked estimated.
+    const estimated = buildCodexSystemPromptReport({
+      ...reportParams,
+      nativeModelContext: { baseInstructions: "base policy", baseInstructionsEstimated: true },
+    });
+    expect(estimated.systemPrompt.estimatedChars).toBe("base policy".length);
+    expect(native.systemPrompt).not.toHaveProperty("estimatedChars");
+
     // Codex recorded no AGENTS.md: confirmed absent, not unknown.
     const absent = buildCodexSystemPromptReport({
       ...reportParams,

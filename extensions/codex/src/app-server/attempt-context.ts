@@ -201,6 +201,9 @@ export function buildCodexSystemPromptReport(params: {
       chars: nonProjectContextChars + agentsMdChars,
       projectContextChars: agentsMdChars,
       nonProjectContextChars,
+      ...(params.nativeModelContext?.baseInstructionsEstimated && baseInstructionsChars
+        ? { estimatedChars: baseInstructionsChars }
+        : {}),
       hash: sha256Text(params.developerInstructions),
     },
     injectedWorkspaceFiles: buildCodexBootstrapInjectionStats(params),

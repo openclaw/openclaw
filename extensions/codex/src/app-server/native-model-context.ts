@@ -7,11 +7,8 @@ import {
   readCodexWorkspaceModelContext,
   type CodexNativeModelContext,
 } from "./client-workspace-state.js";
-import {
-  readCodexAuthoredConfigValue,
-  readCodexEffectiveConfig,
-  type CodexConfigReadClient,
-} from "./config-layer-policy.js";
+import { readCodexAuthoredConfigValue } from "./config-layer-policy.js";
+import type { CodexConfigReadResponse } from "./protocol-control-plane.js";
 import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 
 /**
@@ -45,19 +42,14 @@ export async function readCodexNativeModelContext(
         signal,
       ),
     );
-    // session_meta keeps the creation-time text, but a loaded thread runs with Codex's
+    // session_meta keeps the creation-time text, while a thread Codex loads runs with its
     // config override when one is set (codex-rs/core/src/session/mod.rs: config
-    // base_instructions before session_meta), and OpenClaw sends none on thread/resume.
-    // A started or forked thread wrote its live text to session_meta this attempt.
-    if (thread.lifecycle.action !== "resumed") {
-      return recorded;
-    }
-    const configured = await readCodexConfiguredBaseInstructions(
-      client,
-      resources.state.codexExecutionCwd,
-      signal,
-    );
-    return configured === undefined ? recorded : { ...recorded, baseInstructions: configured };
+    // base_instructions before session_meta); OpenClaw sends none on thread/resume. A thread
+    // started or forked this attempt recorded its live text, so only resumes can differ.
+    const config = thread.preparedEffectiveConfig;
+    return thread.lifecycle.action === "resumed" && config
+      ? await withConfiguredBaseInstructions(recorded, config, thread.threadId, signal)
+      : recorded;
   } catch (error) {
     if (!signal.aborted) {
       embeddedAgentLog.debug("codex native model context unavailable for the context report", {
@@ -70,21 +62,38 @@ export async function readCodexNativeModelContext(
 }
 
 /**
- * Codex's config override for base instructions: the trimmed `model_instructions_file`,
- * else `instructions` (codex-rs/core/src/config/mod.rs). Accepted gap: a warm thread keeps
- * the text from its last load, so an edit since then shows here until Codex reloads it.
+ * Codex's base-instruction override: the trimmed `model_instructions_file`, else
+ * `instructions` (codex-rs/core/src/config/mod.rs). A resumed thread may be a warm thread
+ * Codex loaded before the file changed, and thread/resume reuses a loaded thread without
+ * reloading config, so the result is an estimate. A failed read keeps the rollout result.
  */
-async function readCodexConfiguredBaseInstructions(
-  client: CodexConfigReadClient,
-  cwd: string,
+async function withConfiguredBaseInstructions(
+  recorded: CodexNativeModelContext,
+  config: CodexConfigReadResponse,
+  threadId: string,
   signal: AbortSignal,
-): Promise<string | undefined> {
-  const snapshot = await readCodexEffectiveConfig(client, cwd, { signal });
+): Promise<CodexNativeModelContext> {
   // Codex resolves the path against its config layer before config/read reports it.
-  const file = readCodexAuthoredConfigValue(snapshot, "model_instructions_file");
-  if (typeof file === "string") {
-    return (await fs.readFile(file, { encoding: "utf8", signal })).trim();
+  const file = readCodexAuthoredConfigValue(config, "model_instructions_file");
+  const instructions = config.config.instructions;
+  if (typeof file !== "string") {
+    return typeof instructions === "string"
+      ? { ...recorded, baseInstructions: instructions, baseInstructionsEstimated: true }
+      : recorded;
   }
-  const instructions = snapshot.config.instructions;
-  return typeof instructions === "string" ? instructions : undefined;
+  let baseInstructions = recorded.baseInstructions;
+  try {
+    baseInstructions = (await fs.readFile(file, { encoding: "utf8", signal })).trim();
+  } catch (error) {
+    if (signal.aborted) {
+      throw error;
+    }
+    embeddedAgentLog.debug("codex configured base instructions unavailable for the report", {
+      threadId,
+      error: formatErrorMessage(error),
+    });
+  }
+  return baseInstructions === undefined
+    ? recorded
+    : { ...recorded, baseInstructions, baseInstructionsEstimated: true };
 }

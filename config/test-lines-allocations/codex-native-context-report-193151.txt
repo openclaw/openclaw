@@ -1,4 +1,4 @@
 # Codex base-instruction and native AGENTS.md reporting: rollout world-state parsing
 # (appends, compaction, rollback, abort), report accounting, non-blocking settlement,
-# and the configured base instructions Codex prefers over session_meta on resume.
-330
+# and the estimated configured base instructions Codex prefers over session_meta on resume.
+351

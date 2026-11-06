@@ -12,6 +12,8 @@ export type CodexAgentsMdSnapshot = { directory: string | null; text: string | n
 /** Model context Codex recorded in its own rollout, which app-server requests do not expose. */
 export type CodexNativeModelContext = {
   baseInstructions?: string;
+  /** The base text comes from current configuration, not what the loaded thread used. */
+  baseInstructionsEstimated?: true;
   /** Absent until Codex has persisted a world-state baseline for the current window. */
   agentsMd?: CodexAgentsMdSnapshot;
 };
