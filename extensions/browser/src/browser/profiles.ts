@@ -1,4 +1,5 @@
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-cdp";
+import { ensurePortAvailable } from "openclaw/plugin-sdk/security-runtime";
 // Ports are allocated at profile creation and persisted. Callers can pass a
 // derived range for Gateways that use a non-default control port.
 const CDP_PORT_RANGE_START = 18800;
@@ -24,6 +25,39 @@ export function allocateCdpPort(
     if (!usedPorts.has(port)) {
       return port;
     }
+  }
+  return null;
+}
+
+async function isLoopbackPortFree(port: number): Promise<boolean> {
+  try {
+    // Managed Chromium binds IPv4 loopback first; launch checks the same host.
+    await ensurePortAvailable(port, "127.0.0.1");
+    return true;
+  } catch (err) {
+    if (err instanceof Error && err.name === "PortInUseError") {
+      return false;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Like allocateCdpPort, but skips ports another process already listens on. Profiles only
+ * reserve ports within this config, so a neighboring Gateway's range can overlap them.
+ */
+export async function allocateAvailableCdpPort(
+  usedPorts: Set<number>,
+  range?: { start: number; end: number },
+  isFree: (port: number) => Promise<boolean> = isLoopbackPortFree,
+): Promise<number | null> {
+  const skipped = new Set(usedPorts);
+  for (let port = allocateCdpPort(skipped, range); port !== null;) {
+    if (await isFree(port)) {
+      return port;
+    }
+    skipped.add(port);
+    port = allocateCdpPort(skipped, range);
   }
   return null;
 }
