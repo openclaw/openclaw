@@ -410,7 +410,7 @@ it("states the total when work ran outside the recorded phases", () => {
   ];
   const finished = render({ steps, createdAtMs: 1_000, finishedAtMs: 301_000 });
   expect(finished.lines).toContain("Phases: activating (60s)");
-  expect(finished.lines).toContain("Total: 5m, including work outside these phases.");
+  expect(finished.lines).toContain("Total: 300s, including work outside these phases.");
   const covered = render({ steps, createdAtMs: 61_000, finishedAtMs: 121_000 });
   expect(covered.lines.join("\n")).not.toContain("Total:");
 });
