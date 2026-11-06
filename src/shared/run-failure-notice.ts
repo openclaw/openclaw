@@ -7,19 +7,15 @@ export type RunFailureCause = { provider: string; failoverReason?: string };
 export type RunFailureNotice = { runId: string; summary: string; cause?: RunFailureCause };
 
 // Provider ids and failover reason codes are short identifiers; anything longer is not one.
-const CAUSE_FIELD_MAX_CHARS = 120;
-
-function readCauseField(value: unknown): string | undefined {
-  const text = typeof value === "string" ? value.trim() : "";
-  return text && text.length <= CAUSE_FIELD_MAX_CHARS ? text : undefined;
-}
+const readCauseField = (value: unknown) =>
+  typeof value === "string" && value.length <= 120 ? value.trim() || undefined : undefined;
 
 /** Keeps only a bounded provider id and failover reason from an error observation. */
 export function readRunFailureCause(value: unknown): RunFailureCause | undefined {
   const source = asOptionalRecord(value);
   const provider = readCauseField(source?.provider);
   const failoverReason = readCauseField(source?.failoverReason);
-  return provider ? { provider, ...(failoverReason ? { failoverReason } : {}) } : undefined;
+  return provider ? { provider, ...(failoverReason && { failoverReason }) } : undefined;
 }
 
 export function readRunFailureNotice(message: unknown): RunFailureNotice | undefined {

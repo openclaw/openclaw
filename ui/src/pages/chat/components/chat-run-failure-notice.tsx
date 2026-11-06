@@ -5,6 +5,7 @@ import { providerDisplayLabel } from "../../../components/provider-icon-data.ts"
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
@@ -15,6 +16,12 @@ import { openChatRewindConfirmation } from "./chat-message-confirmation-view.tsx
 const ChatFailedMessageEditButton = lazy(() => import("./chat-failed-message-edit-button.tsx"));
 
 let nextPanelId = 0;
+// A rejected key or billing problem is fixed under Models, not by another attempt.
+const FIX_TITLES = new Map([
+  ["auth", "credentialsRejected"],
+  ["auth_permanent", "credentialsRejected"],
+  ["billing", "billingProblem"],
+]);
 
 /** Details open away from the conversation's edges, so they never cover the composer. */
 function panelPlacement(line: HTMLElement, panel: HTMLElement): "bottom" | "top" {
@@ -32,7 +39,6 @@ export function ChatRunFailureNotice(props: {
   cause?: RunFailureCause;
   repeatCount?: number;
   onRetry?: () => void;
-  onOpenModels?: (provider: string) => void;
   editSource?: FailedMessageEditSource;
   onFocusComposer?: () => void;
 }) {
@@ -41,22 +47,13 @@ export function ChatRunFailureNotice(props: {
   const [open, setOpen] = createSignal(false);
   const [placement, setPlacement] = createSignal<"bottom" | "top">("bottom");
   let panel: PopoverHandle | undefined;
-  // A rejected key or billing problem is fixed under Models, not by another attempt.
-  const fix = () => {
-    const cause = props.cause;
-    return cause?.provider && ["auth", "auth_permanent", "billing"].includes(cause.failoverReason!)
-      ? { provider: cause.provider, billing: cause.failoverReason === "billing" }
-      : undefined;
-  };
-  const title = () => {
-    const cause = fix();
-    return cause
-      ? t(cause.billing ? "chat.recovery.billingProblem" : "chat.recovery.credentialsRejected", {
-          provider: providerDisplayLabel(cause.provider),
-        })
-      : t("chat.recovery.failedTitle");
-  };
-  const openModels = () => (props.onOpenModels ? fix()?.provider : undefined);
+  const fixTitle = () => props.cause && FIX_TITLES.get(props.cause.failoverReason!);
+  const title = () =>
+    t(`chat.recovery.${fixTitle() ?? "failedTitle"}`, {
+      provider: providerDisplayLabel(props.cause?.provider ?? ""),
+    });
+  const app = useOptionalApplication();
+  const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
   const concise = createMemo(() => {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";
@@ -174,7 +171,11 @@ export function ChatRunFailureNotice(props: {
             <button
               type="button"
               class="btn primary btn--sm chat-run-failure__retry"
-              onClick={() => props.onOpenModels?.(provider())}
+              onClick={() =>
+                app?.navigate("model-providers", {
+                  search: `?provider=${encodeURIComponent(provider())}`,
+                })
+              }
             >
               {t("chat.recovery.openModels")}
             </button>
