@@ -103,6 +103,28 @@ it.each(["loaded", "failed"] as const)(
   },
 );
 
+it("prepares a namespace registered after the active locale was published", async () => {
+  const page = deferred<{ default: TranslationMap }>();
+  const loadPage = vi.fn(() => page.promise);
+  manager.registerTranslation(
+    "de",
+    createLazyLocaleCatalog({ ...german }, { lateRoute: loadPage }),
+  );
+  await manager.setLocale("de");
+  expect(loadPage).not.toHaveBeenCalled();
+  const { en } = await import("../locales/en.ts");
+  en.lateRoute = { title: "Late route" };
+  try {
+    const prepared = manager.prepareLocale();
+    expect(loadPage).toHaveBeenCalledOnce();
+    page.resolve({ default: { lateRoute: { title: "Späte Seite" } } });
+    await prepared;
+    expect(manager.translateActive("lateRoute.title")).toBe("Späte Seite");
+  } finally {
+    delete en.lateRoute;
+  }
+});
+
 it("keeps late namespace results scoped to their locale and retries a failed namespace", async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   const page = deferred<{ default: TranslationMap }>();
@@ -192,11 +214,13 @@ it.each(["failure", "success"] as const)("ignores a stale locale load's %s", asy
     loadTranslation.mockResolvedValueOnce(spanish);
   }
   const setGerman = manager.setLocale("de");
+  const prepared = manager.prepareLocale();
   const setSpanish = manager.setLocale("es");
   spanishLoad.resolve(outcome === "failure" ? spanish : Promise.reject(offline));
   await setSpanish;
   germanLoad.resolve(outcome === "failure" ? Promise.reject(offline) : german);
   await setGerman;
+  await prepared;
   expect(manager.getLocale()).toBe(outcome === "failure" ? "es" : "en");
   await retryPendingLocale();
   expect(state()).toMatchObject({ locale: "es", loads: outcome === "failure" ? 2 : 3 });

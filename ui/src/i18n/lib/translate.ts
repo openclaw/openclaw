@@ -110,13 +110,13 @@ class I18nManager {
   }
 
   public async prepareLocale(): Promise<void> {
+    // A pending selection prepares its target before publishing. Prepare only
+    // the active catalog here; later registrations retain their lazy boundary.
+    const preparation = this.prepareCatalog(this.locale);
     let change;
     do {
       change = this.localeChange;
-      if (change) {
-        await change;
-      }
-      await this.prepareCatalog(this.locale);
+      await Promise.all([preparation, change]);
     } while (change !== this.localeChange);
   }
 

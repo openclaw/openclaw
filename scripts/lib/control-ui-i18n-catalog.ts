@@ -210,30 +210,7 @@ const sourceFiles = [
 ];
 
 export function loadControlUiStartupCatalog(): TranslationMap {
-  // These namespaces already load during Chat boot. Keep their optional copy
-  // available to synchronous readers while removing the separate request wave.
-  const source = loadControlUiSourceCatalog();
-  return mergeControlUiTranslationMaps(
-    en,
-    Object.fromEntries(
-      [
-        "runtimeErrors",
-        "filePreview",
-        "mcpApp",
-        "worktrees",
-        "newSession",
-        "sessionsView",
-        "mcpServers",
-        "mcpPage",
-        "profilePage",
-        "connection",
-        "attention",
-        "chat",
-        "notificationErrors",
-        "nativeDeviceEditError",
-      ].map((namespace) => [namespace, source[namespace]!]),
-    ),
-  );
+  return en;
 }
 
 export function loadControlUiSourceCatalog(): TranslationMap {

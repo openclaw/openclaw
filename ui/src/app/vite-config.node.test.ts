@@ -15,7 +15,6 @@ import {
 } from "../../../scripts/lib/control-ui-i18n-catalog-values.ts";
 import {
   loadControlUiSourceCatalog,
-  loadControlUiStartupCatalog,
   readControlUiSourceCatalog,
 } from "../../../scripts/lib/control-ui-i18n-catalog.ts";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
@@ -31,7 +30,6 @@ import controlUiViteConfig, {
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
-import { getLazyLocaleCatalog } from "../i18n/lib/locale-catalog.ts";
 import type { TranslationMap } from "../i18n/lib/types.ts";
 import { en } from "../i18n/locales/en.ts";
 
@@ -321,13 +319,13 @@ async function executeLocale(
     JSON.stringify(lazyCatalogPath),
     JSON.stringify(lazyCatalogUrl),
   );
-  const namespaces: string[] = [];
+  const promisePath = path.join(repoRoot, "src/shared/lazy-promise.ts");
+  executableSource = executableSource.replace(
+    JSON.stringify(promisePath),
+    JSON.stringify(pathToFileURL(promisePath).href),
+  );
   for (const match of baseSource.matchAll(/import\("(virtual:[^"]+)"\)/g)) {
     const specifier = match[1]!;
-    const namespace = specifier.startsWith("virtual:openclaw-control-ui-locale-config-hints/")
-      ? "configHints"
-      : specifier.split("/").at(-1)!;
-    namespaces.push(namespace);
     const source = await loadLocaleSource(load, `\0${specifier}`);
     executableSource = executableSource.replace(
       JSON.stringify(specifier),
@@ -345,9 +343,7 @@ async function executeLocale(
     await module.getLazyLocaleCatalog(catalog)?.load(namespace);
   };
   const loadAll = async () => {
-    for (const namespace of namespaces) {
-      await loadNamespace(namespace);
-    }
+    await module.getLazyLocaleCatalog(catalog)?.prepare(loadControlUiSourceCatalog());
   };
   if (!deferNamespaces) {
     await loadAll();
@@ -684,53 +680,12 @@ it("keeps specific tsconfig aliases ahead of broad package aliases", () => {
 it("composes the complete source without registering runtime English", () => {
   const before = structuredClone(en);
   const source = loadControlUiSourceCatalog();
-  const startup = loadControlUiStartupCatalog();
   const flat = flattenTranslations(source);
   expect(en).toEqual(before);
   expect(source).not.toBe(en);
-  expect(startup).not.toBe(en);
   expect(source.configView).not.toBe(en.configView);
   expect(flat.get("activity.title")).toBe("Activity");
   expect(flat.get("configView.sections.cron")).toBe("Automations");
-});
-
-it("batches Chat namespaces while retaining first-use copy and deferred pages", async () => {
-  const { load } = await localeHooks();
-  await withoutMemory(async () => {
-    const { catalog } = await executeLocale(load, await loadLocaleSource(load), true);
-    const initial = flattenTranslations(catalog);
-    const bootKeys = [
-      "runtimeErrors.permissionDenied",
-      "notificationErrors.unavailable",
-      "nativeDeviceEditError",
-      "filePreview.emptyTitle",
-      "mcpApp.errors.requestFailed",
-      "worktrees.title",
-      "newSession.placementStartFailed",
-      "mcpServers.add",
-      "mcpPage.noServers",
-      "profilePage.modelAccounts.inventoryFailed",
-      "chat.goals.start",
-      "sessionsView.renameSessionMenu",
-      "chat.composer.menu.webSearch",
-      "chat.sessionDetails.environment",
-    ];
-    for (const key of bootKeys) {
-      expect(initial.get(key), key).toBeTypeOf("string");
-    }
-    await getLazyLocaleCatalog(catalog)?.prepare(loadControlUiStartupCatalog());
-    const prepared = flattenTranslations(catalog);
-    for (const key of ["activity.title", "commandPalette.newSessionSettings"]) {
-      expect(prepared.has(key), key).toBe(false);
-    }
-    expect(catalog.configHints).toBeUndefined();
-    expect(flattenTranslations(catalog).get("newSession.messagePlaceholder")).toBe(
-      "What should this session work on?",
-    );
-    expect(flattenTranslations(catalog).get("newSession.placementStartFailed")).toBe(
-      "Couldn’t start this session. Retry setup. {error}",
-    );
-  });
 });
 
 it("includes every English dependency in the raw source-hash input", async () => {
@@ -775,6 +730,13 @@ it("defers page and config-hint translations until their namespace loads", async
   await loadNamespace("activity");
   expect(flattenTranslations(catalog).get("activity.title")).toBeTypeOf("string");
   expect(catalog.configHints).toBeUndefined();
+  expect(flattenTranslations(catalog).has("runtimeErrors.nativeTimeout")).toBe(false);
+  expect(catalog.notificationErrors).toBeUndefined();
+  expect(catalog.nativeDeviceEditError).toBeUndefined();
+  await loadNamespace("notificationErrors");
+  expect(flattenTranslations(catalog).get("notificationErrors.manageDenied")).toBeTypeOf("string");
+  expect(flattenTranslations(catalog).has("runtimeErrors.nativeTimeout")).toBe(false);
+  expect(catalog.nativeDeviceEditError).toBeUndefined();
   await loadNamespace("configHints");
   expect(catalog.configHints).toBeTypeOf("object");
   expect(addWatchFile).toHaveBeenCalledWith(memoryPath);

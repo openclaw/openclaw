@@ -23,6 +23,11 @@ const localeNamespaceModulePrefix = "virtual:openclaw-control-ui-locale-namespac
 const resolvedLocaleModulePrefix = `\0${localeModulePrefix}`;
 export const resolvedLocaleConfigHintsModulePrefix = `\0${localeConfigHintsModulePrefix}`;
 export const resolvedLocaleNamespaceModulePrefix = `\0${localeNamespaceModulePrefix}`;
+export const controlUiLocaleErrorNamespaces: readonly string[] = [
+  "runtimeErrors",
+  "notificationErrors",
+  "nativeDeviceEditError",
+];
 // Vitest rewrites new URL(relative, import.meta.url) to browser self.location.
 const i18nAssetsDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -233,19 +238,45 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
             return `export default ${JSON.stringify(partition.configHints)};`;
           }
           if (request.namespace) {
-            return `export default ${JSON.stringify(partition.namespaces[request.namespace] ?? {})};`;
+            const siblingErrors =
+              request.namespace === "runtimeErrors"
+                ? controlUiLocaleErrorNamespaces
+                    .filter((namespace) => namespace !== "runtimeErrors")
+                    .map(
+                      (namespace) =>
+                        `export const ${namespace} = ${JSON.stringify(partition.namespaces[namespace] ?? {})};`,
+                    )
+                    .join("\n")
+                : "";
+            return `export default ${JSON.stringify(partition.namespaces[request.namespace] ?? {})};\n${siblingErrors}`;
           }
+          const shareErrorImport =
+            "runtimeErrors" in partition.namespaces &&
+            controlUiLocaleErrorNamespaces.some(
+              (namespace) => namespace !== "runtimeErrors" && namespace in partition.namespaces,
+            );
+          const sharedErrorImport = shareErrorImport
+            ? `import { getOrCreatePromise } from ${JSON.stringify(path.join(repoRoot, "src/shared/lazy-promise.ts"))};
+const pendingErrors = new Map();
+const loadRuntimeErrors = () => getOrCreatePromise(pendingErrors, "errors", () => import(${JSON.stringify(`${localeNamespaceModulePrefix}${request.locale}/runtimeErrors`)}), { evictOnSettled: true });`
+            : "";
           const loaders = [
             ["configHints", `${localeConfigHintsModulePrefix}${request.locale}`],
             ...Object.keys(partition.namespaces).map((namespace) => [
               namespace,
               `${localeNamespaceModulePrefix}${request.locale}/${namespace}`,
             ]),
-          ].map(
-            ([namespace, specifier]) =>
-              `${JSON.stringify(namespace)}: () => import(${JSON.stringify(specifier)})`,
-          );
+          ].map(([namespace, specifier]) => {
+            const load = `import(${JSON.stringify(specifier)})`;
+            if (shareErrorImport && controlUiLocaleErrorNamespaces.includes(namespace!)) {
+              // Share the import itself: extra facade imports can wait behind boot work
+              // even after the browser has finished downloading their shared asset.
+              return `${JSON.stringify(namespace)}: ${namespace === "runtimeErrors" ? "loadRuntimeErrors" : `() => loadRuntimeErrors().then((catalog) => ({ default: catalog.${namespace} }))`}`;
+            }
+            return `${JSON.stringify(namespace)}: () => ${load}`;
+          });
           return `import { createLazyLocaleCatalog } from ${JSON.stringify(path.join(repoRoot, "ui/src/i18n/lib/lazy-catalog.ts"))};
+${sharedErrorImport}
 export default createLazyLocaleCatalog(${JSON.stringify(partition.base)}, {${loaders.join(",")}});`;
         }
       },
