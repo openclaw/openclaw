@@ -1,0 +1,4 @@
+# PR 192948: creator-scoped reads/posts, foreign-principal denial, and pending policy/target revocation.
+# 684-line integration suite plus 18 net fixture-support lines versus bf0d53d5.
+# Includes the 74-line target-sharing regression/control added by the latest repair.
+702

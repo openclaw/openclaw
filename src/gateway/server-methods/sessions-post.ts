@@ -4,6 +4,7 @@ import {
   validateSessionsPostParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { injectGatewayAssistantMessage } from "./chat-inject.js";
@@ -12,7 +13,8 @@ import { assertValidParams } from "./validation.js";
 
 /** Canonical transcript injection, not notification, steering, or turn admission. */
 export const handleSessionPost: GatewayRequestHandler = async (options) => {
-  const { params, respond, context, sessionMutationCommitGuard } = options;
+  const { params, respond, context, sessionMutationCommitGuard, sessionMutationAuthorization } =
+    options;
   if (!assertValidParams(params, validateSessionsPostParams, "sessions.post", respond)) {
     return;
   }
@@ -46,7 +48,10 @@ export const handleSessionPost: GatewayRequestHandler = async (options) => {
           ...(sourceSessionKey ? { sourceSessionKey } : {}),
         },
       },
-      sessionMutationCommitGuard,
+      composeSessionSourceAssertion([
+        sessionMutationCommitGuard,
+        sessionMutationAuthorization?.assertCurrent,
+      ]),
     ),
   );
   if (!result.ok) {

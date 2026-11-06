@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { sessionManagerReadInitialContext } from "../agents/sessions/session-manager-current-turn.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { withGatewayPersonalToolUser } from "../agents/tools/gateway-caller-context.js";
@@ -31,8 +31,14 @@ import {
   withParticipantSessionToolsFixture,
   seedSessionToolsFixtureSession,
   sessionToolsStorePath,
+  sessionToolsContext,
+  withSessionToolsFixture,
   drainSessionToolsFixture,
 } from "./local-request-context.session-tools.test-support.js";
+import { handleGatewayRequest } from "./server-methods.js";
+import * as chatInjection from "./server-methods/chat-inject.js";
+import { roleClient } from "./session-sharing.test-utils.js";
+import * as sessionStoreWorker from "./session-utils-store-worker.js";
 
 let runtimeSetup: Promise<unknown>[] = [];
 beforeAll(() => {
@@ -608,3 +614,71 @@ it("rejects a pending same-agent post when visibility is restricted to self", as
     { visibility: "all" },
   );
 });
+
+it.each([false, true])(
+  "revalidates destination sharing after RPC authorization (revoked: %s)",
+  async (revoke) => {
+    await withSessionToolsFixture(async () => {
+      const key = "agent:main:dashboard:sharing-revoked-post";
+      const sessionId = "sharing-revoked-post-session";
+      const marker = "Post admitted before destination sharing changed";
+      // Isolated setup owns the destination; the subject is a different, non-admin writer.
+      await seedSessionToolsFixtureSession({ sessionKey: key, sessionId });
+      const client = roleClient("write", "passive-post-subject");
+      expect(client.connect.scopes).toEqual(["operator.read", "operator.write"]);
+      const inject = chatInjection.injectGatewayAssistantMessage;
+      const load = sessionStoreWorker.loadGatewaySessionEntryReadOnlyInWorker;
+      let boundaryReached = false;
+      const readSpy = vi.spyOn(sessionStoreWorker, "loadGatewaySessionEntryReadOnlyInWorker");
+      const injectionSpy = vi
+        .spyOn(chatInjection, "injectGatewayAssistantMessage")
+        .mockImplementationOnce(async (...args) => {
+          // The router has already prepared target authorization. Keep the real injection,
+          // but withdraw sharing while its existing destination read is awaited.
+          readSpy.mockImplementationOnce(async (params) => {
+            expect(params.key).toBe(key);
+            const target = await load(params);
+            boundaryReached = true;
+            if (revoke) {
+              await seedSessionToolsFixtureSession({
+                sessionKey: key,
+                sessionId,
+                visibility: "draft",
+              });
+            }
+            return target;
+          });
+          return inject(...args);
+        });
+      const respond = vi.fn();
+      try {
+        await handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "sharing-revoked-post",
+            method: "sessions.post",
+            params: {
+              sessionKey: key,
+              expectedSessionId: sessionId,
+              message: marker,
+              idempotencyKey: "sharing-revoked-post",
+            },
+          },
+          context: sessionToolsContext(),
+          client,
+          isWebchatConnect: () => false,
+          respond,
+        });
+      } finally {
+        injectionSpy.mockRestore();
+        readSpy.mockRestore();
+      }
+      expect(boundaryReached, JSON.stringify(respond.mock.calls)).toBe(true);
+      const messages = await loadTranscriptEvents({ agentId: "main", sessionKey: key, sessionId });
+      expect({
+        success: respond.mock.calls[0]?.[0],
+        durableMarker: JSON.stringify(messages).includes(marker),
+      }).toEqual({ success: !revoke, durableMarker: !revoke });
+    });
+  },
+);
