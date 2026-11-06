@@ -47,10 +47,10 @@ Update instructions at owner; no competing rules here.
 
 ## One owner, complete cutover
 
-1. **Intent:** read complete affected modules, owners, callers, siblings, tests, history, dependency contracts until intended outcome and violated invariant evidenced; a fix that cannot name the line where the bug shows has an unverified premise. Restoring missing path: first check why removed (`git log -p -S <symbol>`); isolation may be intentional, retired alias may mean completed migration.
-2. **Owner:** account for decisions and state writers across creation, updates, reads, recovery, cleanup. Choose existing code, plugin, or maintained solution that absorbs change; new owner needs missing responsibility. Fix invalid or leaked state at producer.
-3. **Cutover:** migrate all affected internal/bundled callers together; remove superseded code, duplicate policy/state, wrappers, registrations, exports, tests, docs. Retained paths need cited contract; workers sharing owner agree on one interface and plan.
-4. **Proof:** exercise user flow and relevant siblings; trace references to confirm retired paths unreachable. Done = one owner serves flow, old paths removed or justified, results or gaps recorded in task/PR evidence. Helper tests or wrappers around competing implementations insufficient.
+1. **Intent:** read affected modules, owners, callers, tests, history, dependency contracts until intended outcome and violated invariant are evidenced; a fix that cannot name the failing line has an unverified premise. Restoring missing path: check why removed (`git log -p -S <symbol>`); isolation may be intentional.
+2. **Owner:** account for decisions and state writers across creation, updates, reads, recovery, cleanup. Choose existing code, plugin, or maintained solution that absorbs change; fix invalid or leaked state at producer.
+3. **Cutover:** migrate all affected internal/bundled callers together; remove superseded code, duplicate policy/state, wrappers, registrations, exports, tests, docs. Retained paths need cited contract.
+4. **Proof:** exercise user flow and relevant siblings; trace references to confirm retired paths unreachable. Done = one owner serves flow, old paths removed or justified, results or gaps recorded in task/PR evidence.
 
 - Prefer smaller, simpler production code; explain necessary growth. Keep coherent nearby repairs together; record unrelated work as follow-ups. Run [pr-simplify](.agents/skills/pr-simplify/SKILL.md) on your own change before opening a PR and before pushing large repairs.
 - Delegate independent lanes when saving time or improving verification; each needs clear responsibility and completion condition. Simple or tightly coupled work stays with lead; lead stays hands-on, verifies consequential conclusions, owns shared-checkout safety.
@@ -58,9 +58,9 @@ Update instructions at owner; no competing rules here.
 
 ## Runtime and code safeguards
 
-- Logs: write raw; redact only at egress (logs.tail, diagnostics/support bundles, remote/OTel export); never log message/tool content.
-- Plugins use documented `openclaw/plugin-sdk/*` contracts, manifest metadata, public/local barrels; never core internals or another plugin's private files. Dependencies follow runtime ownership.
-- Bun: support only latest stable Bun release and pinned OpenClaw fork. Never add workarounds, compatibility paths, or qualification for older Bun releases; upgrade instead.
+- Logs: write raw; redact only at egress; never log message/tool content.
+- Plugins: use documented `openclaw/plugin-sdk/*` contracts, manifest metadata, public/local barrels; never core internals or another plugin's private files. Dependencies follow runtime ownership.
+- Bun: support only latest stable Bun release and pinned OpenClaw fork; upgrade instead of adding workarounds for older releases.
 - Runtime consumes canonical config/state; Doctor/migration owners normalize legacy shapes (plugin repairs stay plugin-owned). Config-invalidating changes ship their migration.
 - State and caches: SQLite, not new JSON/JSONL/sidecar stores. Files: named user artifacts, imports/exports, attachments, logs, backups, external-tool contracts.
 - Database/state code (SQL, workers, transactions, integrity checks, DB-backed caches): read the [rules for code changes](docs/reference/database-schemas/worker-access.md#rules-for-code-changes) first.
@@ -75,16 +75,16 @@ Update instructions at owner; no competing rules here.
 ## Product and validation
 
 - Defaults produce working, understandable result. Prioritize silent failures: every action has visible outcome or recorded intentional non-outcome; errors name next step.
-- **Updates always work:** best effort everywhere. Update/Doctor/lifecycle/migration/plugin-loading changes state update behavior and follow the [update contract](docs/install/updating.md#update-implementation-contract).
+- **Updates always work:** best effort everywhere. Update/Doctor/lifecycle/migration/plugin-loading changes follow the [update contract](docs/install/updating.md#update-implementation-contract).
 - Security = product tradeoff: weigh concrete risk against user effort, lockouts, lost capability. Prefer least restrictive effective safeguard; keep risky paths explicit, operator-controlled within existing trust model and approval boundaries; explain tradeoffs, never invent gates.
-- **Behavior over test count.** Prefer production-path integration proof and independent unit contracts. Before changing provider requests, fallbacks, recovery, defaults, and when writing or reviewing behavioral tests: read [boundary proof](docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary).
-- **Prove it end to end.** Run the reproduction again on the fix through the real product: an isolated Gateway with a real agent and model, the channel's e2e skill ([Telegram](.agents/skills/telegram-e2e-userbot/SKILL.md), [Discord](.agents/skills/discord-e2e/SKILL.md), [Slack](.agents/skills/slack-e2e/SKILL.md)) or [Control UI e2e](.agents/skills/control-ui-e2e/SKILL.md), and an upgrade from the latest stable when update, Doctor, config or state changes. Mocks and helper tests support this proof; they never replace it.
-- **Fixes prove the invariant:** one or two tests of the broken behavior, red on the base, green with the fix, committed with the fix; update and run the tests of every consumer of what changed.
+- **Behavior over test count.** Prefer production-path integration proof and independent unit contracts. Before changing provider requests, fallbacks, recovery, defaults, or behavioral tests: read [boundary proof](docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary).
+- **Prove it end to end.** Run the reproduction through the real product: an isolated Gateway with a real agent and model, a channel e2e skill ([Telegram](.agents/skills/telegram-e2e-userbot/SKILL.md), [Discord](.agents/skills/discord-e2e/SKILL.md), [Slack](.agents/skills/slack-e2e/SKILL.md), [Control UI e2e](.agents/skills/control-ui-e2e/SKILL.md)), and an upgrade from latest stable when update, Doctor, config or state changes. Mocks and helper tests support this proof; they never replace it.
+- **Fixes prove the invariant:** one or two tests of the broken behavior, red on base, green with fix, committed with fix; update and run tests of every consumer of what changed.
 - Test failures = defects: reproduce, fix owner with regression, or record evidence and continue (unresolved alone doesn't block landing). Never mask failures or claim passing replay proves fix ([policy](.agents/skills/openclaw-testing/SKILL.md#test-failure-policy)).
 - **PR CI = broad proof.** Pre-PR: touched tests + targeted typecheck/lint/format. Proof selection, reuse, gaps: [proof policy](.agents/skills/openclaw-testing/SKILL.md#proof-policy); docs-only: docs sanity + `git diff --check`. Test changes obey the [cost budget](docs/help/testing/writing-tests.md#cost-budget).
 - **Visual changes** need inspected, sanitized before/after screenshots in chat and embedded in PR before merge or completion ([gate](.agents/skills/openclaw-pr-maintainer/references/media.md#screenshot-completion-gate)).
 - Before nontrivial code commit/landing: follow [fresh review](.agents/skills/openclaw-pr-maintainer/SKILL.md#review-and-publish).
-- **Choose one review route.** Follow [local review](docs/reference/pull-request-review-flow.md#local-review-before-a-pr) for maintainer requirements, contributor guidance, and the hosted fallback. ClawSweeper is advisory. Address real findings together and request another hosted review only when needed, after branch, body, and proof are current. Reject findings that add restrictions without concrete harm and explain why. A maintainer's explicit land instruction does not wait for a pending or stale review ([review flow](docs/reference/pull-request-review-flow.md#clawsweeper)).
+- **Choose one review route.** Follow [local review](docs/reference/pull-request-review-flow.md#local-review-before-a-pr) for maintainer requirements and the hosted fallback. ClawSweeper is advisory; address real findings together, request another hosted review only when needed. Reject findings that add restrictions without concrete harm and explain why. A maintainer's explicit land instruction does not wait for a pending or stale review ([review flow](docs/reference/pull-request-review-flow.md#clawsweeper)).
 
 ## Authority and safety
 
@@ -104,11 +104,11 @@ Update instructions at owner; no competing rules here.
 ## Read when relevant
 
 - **Plugins/SDK:** [plugins](extensions/AGENTS.md), [loader](src/plugins/AGENTS.md), [SDK](src/plugin-sdk/AGENTS.md) (owns public boundary expansion, including outside callers).
-- **Adding or changing an inference provider, model, picker or usage/cost:** apply [model listing](src/plugins/AGENTS.md#model-listing), [provider plugins](extensions/AGENTS.md#boundary-rules), [usage and cost](src/gateway/AGENTS.md#usage-and-cost) and the [model catalog contract](docs/plugins/sdk-provider-plugins/model-catalogs.md) before the first edit.
+- **Inference provider/model/usage/cost:** apply [model listing](src/plugins/AGENTS.md#model-listing), [provider plugins](extensions/AGENTS.md#boundary-rules), [usage and cost](src/gateway/AGENTS.md#usage-and-cost), and the [model catalog contract](docs/plugins/sdk-provider-plugins/model-catalogs.md) before the first edit.
 - **Channels, message tools/actions, dispatch:** [channel boundary](src/channels/AGENTS.md), [channel responsibilities](docs/plugins/sdk-channel-plugins.md).
 - **Agent tools, prompts, tool results, admission, lifecycle:** [agents](src/agents/AGENTS.md), [Gateway](src/gateway/AGENTS.md).
 - **OpenClaw and OpenClaw Foundation logos:** see the [brand kit](https://github.com/openclaw/carapace/tree/main/brand-kit).
-- **Control UI:** [UI guide](ui/AGENTS.md), including state shared with other Gateway clients. Solid code anywhere (Control UI, plugin views, Canvas hosts): read the [Solid skill](.agents/skills/solid/SKILL.md) first.
+- **Control UI:** [UI guide](ui/AGENTS.md), including state shared with other Gateway clients. Solid code: read the [Solid skill](.agents/skills/solid/SKILL.md) first.
 - **Storage:** [database schemas](docs/reference/database-schemas.md) and subpages; read approval checkpoint before schema, transaction, retention, recovery changes.
 - **Config migration:** [Doctor transforms](docs/gateway/doctor/config-migrations.md), never new runtime compatibility readers.
 - **Audit/identity:** [audit doctrine](docs/gateway/audit.md); provenance = opt-in, never authorization; changes to collection, reader scope, retained fields, bounds, contracts need approval.
@@ -119,3 +119,14 @@ Update instructions at owner; no competing rules here.
 - **Releases, extended-stable:** release workflow and [release contract](docs/reference/RELEASING.md) ([line/retirement policy](docs/reference/RELEASING.md#release-channels)); preserve selected cut and identity through publication and verification.
 - **Secrets/advisories:** [secrets](docs/gateway/secrets.md), [auth](docs/auth-credential-semantics.md), [security reporting](SECURITY.md).
 - **Live channels/native apps:** scoped guide + [evidence policy](.agents/skills/openclaw-testing/SKILL.md#select-the-proof).
+
+## Current PR workflow
+
+**PR #193300** (#191485 cross-workspace prompt cache): Relative headings, directory section below `SYSTEM_PROMPT_CACHE_BOUNDARY`, content hashes in cache key. Proof tests on `fix/191485-workspace-path-cache-v2`. ClawSweeper re-review in progress. See [PR comment workflow](#pr-comment-workflow) below.
+
+## PR comment workflow
+
+- **Update, don't append**: Edit the existing PR body or prior comment instead of adding new comments.
+- **Re-trigger via edit**: `@clawsweeper re-review` on an edited comment re-triggers review without noise.
+- **One proof artifact**: Put all evidence (test output, command results, payloads) in the PR body.
+- **No AI attribution**: Write as the author; no tooling references or "needs push/review" language.

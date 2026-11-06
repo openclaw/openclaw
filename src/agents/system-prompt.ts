@@ -561,12 +561,6 @@ export function buildAgentSystemPrompt(params: {
     }).filter((file) => file.path.trim().length > 0),
     { workspaceDir: sanitizedWorkspaceDir },
   );
-  // Cache keys use heading paths (relative for workspace files) and content hashes for cross-workspace sharing.
-  const stableContextFiles = preparedContextFiles.map(({ file, headingPath }) => ({
-    headingPath,
-    personalUser: file.personalUser,
-    contentHash: sha256Hex(file.content),
-  }));
   const bootstrapSystemPromptSections: string[] = [];
   if (params.bootstrapMode && params.bootstrapMode !== "none") {
     bootstrapSystemPromptSections.push(
@@ -606,7 +600,11 @@ export function buildAgentSystemPrompt(params: {
       workspaceOnlyGuidance,
       workspaceNotes,
       bootstrapSystemPromptSections,
-      stableContextFiles,
+      stableContextFiles: preparedContextFiles.map(({ headingPath, file }) => ({
+        headingPath,
+        personalUser: file.personalUser,
+        contentHash: sha256Hex(file.content),
+      })),
     }),
   );
   const stablePrefix = cacheStablePromptPrefix(stablePrefixCacheKey, () => {

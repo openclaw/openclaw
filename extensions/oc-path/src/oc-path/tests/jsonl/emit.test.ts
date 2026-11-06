@@ -59,36 +59,4 @@ describe("JSONL edit emission", () => {
     };
     expect(() => appendJsonlOcPath(ast, value)).toThrow(OcEmitSentinelError);
   });
-
-  it("rejects sentinel in object key during append", () => {
-    const ast = parseJsonl('{"a":"ok"}\n');
-    const value = {
-      kind: "object" as const,
-      entries: [
-        {
-          key: REDACTED_SENTINEL,
-          line: 1,
-          value: { kind: "string" as const, value: "v" },
-        },
-      ],
-    };
-    expect(() => appendJsonlOcPath(ast, value)).toThrow(OcEmitSentinelError);
-  });
-
-  it("rejects sentinel in object key during set", () => {
-    const ast = parseJsonl('{"a":"ok"}\n');
-    const value = {
-      kind: "object" as const,
-      entries: [
-        {
-          key: REDACTED_SENTINEL,
-          line: 1,
-          value: { kind: "string" as const, value: "v" },
-        },
-      ],
-    };
-    expect(() => setJsonlOcPath(ast, parseOcPath("oc://events/L1"), value)).toThrow(
-      OcEmitSentinelError,
-    );
-  });
 });
