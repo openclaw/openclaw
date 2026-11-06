@@ -887,11 +887,16 @@ function compileDynamicMjsConsumers(source: string, filePath: string): string {
     return compileViteConfigConsumers(source, filePath);
   }
   if (path.resolve(filePath) === path.resolve("scripts/ci-build-manifest.mjs")) {
-    // The trusted manifest resolves this planner from the target checkout by file URL.
-    return source.replace(
-      /(const changedNodeTestPlan = await )importTargetPlan\([\s\S]*?\n\);/u,
-      '$1import("./lib/ci-changed-node-test-plan.mts");',
-    );
+    // The trusted manifest resolves these planners from the target checkout by file URL.
+    return source
+      .replace(
+        /(const changedNodeTestPlan = await )importTargetPlan\([\s\S]*?\n\);/u,
+        '$1import("./lib/ci-changed-node-test-plan.mts");',
+      )
+      .replace(
+        'import(fromTarget("./scripts/lib/postgres-conformance-shards.mts"))',
+        'import("./lib/postgres-conformance-shards.mts")',
+      );
   }
   if (path.resolve(filePath) === path.resolve("scripts/prepare-native-protocol.mjs")) {
     // The temporary esbuild bundle exports this source module's unchanged API.
