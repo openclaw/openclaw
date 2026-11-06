@@ -29,7 +29,7 @@ export function BoardWidgetError(props: {
         <code>{props.action ? String(props.error) : formatUiError(props.error)}</code>
       </details>
       <Show when={props.onRetry}>
-        <button class="btn btn--small" type="button" onClick={() => props.onRetry?.()}>
+        <button class="btn btn--sm" type="button" onClick={() => props.onRetry?.()}>
           {t("board.widget.retry")}
         </button>
       </Show>

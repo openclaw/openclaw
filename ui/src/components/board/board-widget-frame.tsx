@@ -690,7 +690,7 @@ export function BoardWidgetFrame(props: {
             <Match when={view().stalled}>
               <div class="board-widget__notice" role="status">
                 {t("board.widget.resourceUnavailable")}
-                <button class="btn btn--small" onClick={() => props.state().retryContent()}>
+                <button class="btn btn--sm" onClick={() => props.state().retryContent()}>
                   {t("common.retry")}
                 </button>
               </div>

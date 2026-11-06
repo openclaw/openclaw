@@ -105,7 +105,7 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps, CanvasW
           <div class="board-widget__error" role="alert">
             {read().error}
             <Show when={!read().accessDenied}>
-              <button class="btn btn--small" onClick={retry}>
+              <button class="btn btn--sm" onClick={retry}>
                 {t("common.retry")}
               </button>
             </Show>
@@ -155,7 +155,7 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps, CanvasW
             <Show when={read().resourceError}>
               <div class="board-widget__notice" role="status">
                 {t("board.widget.resourceUnavailable")}
-                <button class="btn btn--small" onClick={retry}>
+                <button class="btn btn--sm" onClick={retry}>
                   {t("common.retry")}
                 </button>
               </div>

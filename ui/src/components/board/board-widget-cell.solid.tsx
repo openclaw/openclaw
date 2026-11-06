@@ -324,7 +324,7 @@ function BoardWidgetCellContent(
   const unavailable = () => props.busy || actionPending() || !canMutate();
   const RemoveButton = () => (
     <button
-      class="btn btn--small"
+      class="btn btn--sm"
       type="button"
       disabled={unavailable()}
       onClick={() => runAction(() => props.callbacks!.remove(props.widget!))}

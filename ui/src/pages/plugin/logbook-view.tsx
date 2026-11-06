@@ -55,7 +55,7 @@ function StatusChip(props: { children: JSX.Element; kind?: string; title?: strin
 }
 
 function ActionButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return <button class="btn btn--small" type="button" {...props} />;
+  return <button class="btn btn--sm" type="button" {...props} />;
 }
 
 function StatusChips(props: { status: LogbookStatusPayload }) {
