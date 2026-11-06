@@ -255,4 +255,71 @@ describe.skipIf(process.platform !== "linux")("SQLite page-cache worker", () => 
     expect(result.readBytes).toBeGreaterThanOrEqual(fs.statSync(pathname).size);
     expect(result.readBytes).toBeLessThan(8 * MiB);
   });
+
+  it("completes an agent warm when /proc/self/io is unavailable by counting what it reads", () => {
+    const originalReadFileSync = fs.readFileSync;
+    const procfsSpy = vi.spyOn(fs, "readFileSync").mockImplementation(((
+      filePath: unknown,
+      ...args: unknown[]
+    ) => {
+      if (filePath === "/proc/self/io") {
+        const error = new Error(
+          `ENOENT: no such file or directory, open '${filePath}'`,
+        ) as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      }
+      return (originalReadFileSync as (...args: unknown[]) => unknown)(filePath, ...args);
+    }) as typeof fs.readFileSync);
+    try {
+      const { pathname } = createAgentDatabase();
+      const context = { path: pathname, env: {} };
+      const input = { kind: "agent" as const, maxBytes: 256 * MiB, now };
+      const initial = pageCacheReadOperations["pageCache.begin"](input, context);
+      expect(initial.ioCountersUnavailable).toBe(true);
+      expect(initial.readBytes).toBeGreaterThan(0);
+      const result = finish(pathname, initial).at(-1)!;
+      expect(result).toMatchObject({ complete: true, ioCountersUnavailable: true });
+      expect(result.readBytes).toBeGreaterThan(0);
+      expect(result.limited).toBe(false);
+      expect(observed.readers.every((database) => !database.isOpen)).toBe(true);
+    } finally {
+      procfsSpy.mockRestore();
+    }
+  });
+
+  it("still fails the warm when /proc/self/io is unreadable for a reason other than absence", () => {
+    const originalReadFileSync = fs.readFileSync;
+    const procfsSpy = vi.spyOn(fs, "readFileSync").mockImplementation(((
+      filePath: unknown,
+      ...args: unknown[]
+    ) => {
+      if (filePath === "/proc/self/io") {
+        const error = new Error(
+          `EACCES: permission denied, open '${filePath}'`,
+        ) as NodeJS.ErrnoException;
+        error.code = "EACCES";
+        throw error;
+      }
+      return (originalReadFileSync as (...args: unknown[]) => unknown)(filePath, ...args);
+    }) as typeof fs.readFileSync);
+    try {
+      const pathname = path.join(tempDirs.make("sqlite-state-warm-perm-"), "state.sqlite");
+      const database = openNodeSqliteDatabase(pathname);
+      try {
+        database.exec("CREATE TABLE payload (value BLOB);");
+        database.prepare("INSERT INTO payload VALUES (zeroblob(?))").run(MiB);
+      } finally {
+        database.close();
+      }
+      expect(() =>
+        pageCacheReadOperations["pageCache.begin"](
+          { kind: "state", maxBytes: 2 * MiB, now },
+          { path: pathname, env: {} },
+        ),
+      ).toThrow(/EACCES/);
+    } finally {
+      procfsSpy.mockRestore();
+    }
+  });
 });
