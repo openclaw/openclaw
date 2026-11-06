@@ -131,7 +131,9 @@ it("keeps unrelated work responsive during the real post-ready warmup", async ()
     let heartbeatHandle = setImmediate(heartbeat);
     try {
       await Promise.all([
-        contextModule.prewarmContextWindowCacheAfterReady({ config: warmConfig }),
+        contextModule
+          .prewarmContextWindowCacheAfterReady({ config: warmConfig })
+          .finally(() => clearImmediate(heartbeatHandle)),
         ...(["healthz", "readyz"] as const).map(async (name) => {
           const response = await fetch(`http://127.0.0.1:${port}/${name}`);
           expect(response.status).toBe(200);
