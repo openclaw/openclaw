@@ -41,6 +41,7 @@ export async function replaceTerminalController(
   const previousHost = target.host;
   const previouslyFocused = activeElementFor(previousHost);
   const previousTerminalOwnedFocus = previousHost.contains(previouslyFocused);
+  // SAFETY: cloneNode preserves the element type of the HTMLDivElement host.
   const replacementHost = previousHost.cloneNode() as HTMLDivElement;
   // The host is absolutely inset in the viewport. Keep it measurable while
   // hidden so Ghostty fits the authoritative replay to the real terminal grid.

@@ -130,6 +130,8 @@ function installTerminalOutputProbe() {
     HTMLCanvasElement,
     { tail: string; drawnAtMs: number; visibleAtMs: number }
   >();
+  // The wrapper below forwards each call with its original canvas receiver.
+  // oxlint-disable-next-line typescript/unbound-method
   const fillText = CanvasRenderingContext2D.prototype.fillText;
   CanvasRenderingContext2D.prototype.fillText = function (...args) {
     fillText.apply(this, args);
@@ -2294,67 +2296,71 @@ export function createEnginePageScenarios(
                 ready: "openclaw-terminal-page .tp-composer input",
               },
             },
-          ].map(({ source, attach, target }): EngineScenario => ({
-            ...source,
-            id: attach ? "page-terminal-cold-attach-visit" : "page-terminal-cold-visit",
-            route: target.pathname ?? pathForRoute("terminal"),
-            navigation: "measured",
-            setup: async (page) => {
-              if (attach) {
-                await page.addInitScript(installTerminalOutputProbe);
-              }
-            },
-            expected: attach
-              ? "A fresh document attaches one existing synthetic shell and renders its replay in a visible canvas."
-              : "A fresh document opens Terminal directly and settles its first-shell Sessions picker for two consecutive frames.",
-            initScript: `${createColdLoadProbeInitScript({
-              ownerProbes: false,
-              sidebarCounters: false,
-              latencyMs: gatewayLatencyMs,
-              frameGapMs: 0,
-              events: [],
-            })}
+          ].map(({ source, attach, target }): EngineScenario =>
+            Object.assign({}, source, {
+              id: attach ? "page-terminal-cold-attach-visit" : "page-terminal-cold-visit",
+              route: target.pathname ?? pathForRoute("terminal"),
+              navigation: "measured",
+              setup: async (page) => {
+                if (attach) {
+                  await page.addInitScript(installTerminalOutputProbe);
+                }
+              },
+              expected: attach
+                ? "A fresh document attaches one existing synthetic shell and renders its replay in a visible canvas."
+                : "A fresh document opens Terminal directly and settles its first-shell Sessions picker for two consecutive frames.",
+              initScript: `${createColdLoadProbeInitScript({
+                ownerProbes: false,
+                sidebarCounters: false,
+                latencyMs: gatewayLatencyMs,
+                frameGapMs: 0,
+                events: [],
+              })}
 ;if (window === window.top && location.protocol !== "about:") {
   (() => { const __name = (fn) => fn;
     (${installColdPageReadiness.toString()})(${JSON.stringify({ routeId: id, selector: target.ready })});
   })();
 }`,
-            prepare: async () => {},
-            run: async (page, gateway) => {
-              await page.goto(new URL(target.pathname ?? pathForRoute("terminal"), baseUrl).href, {
-                waitUntil: "domcontentloaded",
-              });
-              await page.waitForFunction(
-                () => Reflect.get(window, "__engineColdPageReadiness")?.readyAtMs > 0,
-              );
-              const timing: { readyAtMs: number } = await page.evaluate(() =>
-                Reflect.get(window, "__engineColdPageReadiness"),
-              );
-              const output = attach ? await waitForTerminalOutput(page) : null;
-              const readyAtMs = Math.max(timing.readyAtMs, output?.visibleAtMs ?? 0);
-              assert.equal((await gateway.getRequests("terminal.open")).length, attach ? 0 : 1);
-              const attaches = await gateway.getRequests("terminal.attach");
-              assert.equal(attaches.length, attach ? 1 : 0);
-              if (attach) {
-                assert.deepEqual(attaches[0]!.params, { sessionId: attachedSession.sessionId });
-              }
-              return {
-                visitStartedAtMs: 0,
-                routeControlsReadyMs: timing.readyAtMs,
-                visitReadyMs: readyAtMs,
-                visitReadyAtMs: readyAtMs,
-                ...(output
-                  ? {
-                      firstOutputDrawMs: output.drawnAtMs,
-                      firstOutputVisibleMs: output.visibleAtMs,
-                    }
-                  : {}),
-                openedSessions: attach ? 0 : 1,
-                attachedSessions: attach ? 1 : 0,
-                syntheticTerminal: true,
-              };
-            },
-          }))
+              prepare: async () => {},
+              run: async (page, gateway) => {
+                await page.goto(
+                  new URL(target.pathname ?? pathForRoute("terminal"), baseUrl).href,
+                  {
+                    waitUntil: "domcontentloaded",
+                  },
+                );
+                await page.waitForFunction(
+                  () => Reflect.get(window, "__engineColdPageReadiness")?.readyAtMs > 0,
+                );
+                const timing: { readyAtMs: number } = await page.evaluate(() =>
+                  Reflect.get(window, "__engineColdPageReadiness"),
+                );
+                const output = attach ? await waitForTerminalOutput(page) : null;
+                const readyAtMs = Math.max(timing.readyAtMs, output?.visibleAtMs ?? 0);
+                assert.equal((await gateway.getRequests("terminal.open")).length, attach ? 0 : 1);
+                const attaches = await gateway.getRequests("terminal.attach");
+                assert.equal(attaches.length, attach ? 1 : 0);
+                if (attach) {
+                  assert.deepEqual(attaches[0]!.params, { sessionId: attachedSession.sessionId });
+                }
+                return {
+                  visitStartedAtMs: 0,
+                  routeControlsReadyMs: timing.readyAtMs,
+                  visitReadyMs: readyAtMs,
+                  visitReadyAtMs: readyAtMs,
+                  ...(output
+                    ? {
+                        firstOutputDrawMs: output.drawnAtMs,
+                        firstOutputVisibleMs: output.visibleAtMs,
+                      }
+                    : {}),
+                  openedSessions: attach ? 0 : 1,
+                  attachedSessions: attach ? 1 : 0,
+                  syntheticTerminal: true,
+                };
+              },
+            } satisfies Partial<EngineScenario>),
+          )
         : [];
       const composerInput: EngineScenario = {
         ...common,
