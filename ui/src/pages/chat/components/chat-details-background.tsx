@@ -199,8 +199,9 @@ export function ChatDetailsBackground(
   const unlisted = createMemo(() => subagents().filter((row) => !row.listed));
   const desktopPresentation = createMemo(() => props.desktopSubagents);
   const collection = createMemo(() => roster().filter((row) => row.listed));
+  const displayRows = createMemo(() => [...collection(), ...unlisted()]);
   const liveSummary = createMemo(() =>
-    desktopPresentation() && activityReady() ? projectDetailsSubagents(subagents()) : undefined,
+    desktopPresentation() && activityReady() ? projectDetailsSubagents(displayRows()) : undefined,
   );
   const summary = () =>
     liveSummary() ?? (desktopPresentation() ? props.details.cachedDetails?.subagents : undefined);
@@ -210,13 +211,14 @@ export function ChatDetailsBackground(
       : undefined,
   );
   const recordSubagents = (rows: readonly ChatSubagentActivityRow[]) => {
-    if (desktopPresentation() && activityReady()) {
-      props.details.onDetailsSnapshot?.({
-        subagents: projectDetailsSubagents(props.details.subagentSessionsUnavailable ? [] : rows),
-      });
-    }
+    if (!desktopPresentation() || !activityReady()) return;
+    const ordinary = rows.filter((row) => !row.listed);
+    props.details.onDetailsSnapshot?.({
+      subagents: projectDetailsSubagents(
+        props.details.subagentSessionsUnavailable ? [] : collection().concat(ordinary),
+      ),
+    });
   };
-  const receipt = createMemo(() => liveSummary() && subagents());
   const desktopSubagents = createMemo<ChatDetailsSubagentsProps | undefined>(() => {
     const presentation = desktopPresentation();
     const snapshot = props.details;
@@ -255,13 +257,11 @@ export function ChatDetailsBackground(
     return counts;
   });
   const openSubagents = () => {
-    if (props.presented) {
-      props.details.onOpenSubagents?.();
-    }
+    if (props.presented && !cachedActivity()) props.details.onOpenSubagents?.();
   };
   return (
     <>
-      <Show when={receipt()} keyed>
+      <Show when={liveSummary() && unlisted()} keyed>
         {(value) => {
           onSettled(() => recordSubagents(value));
           return null;
@@ -322,7 +322,7 @@ export function ChatDetailsBackground(
                 <ChatSubagentActivity
                   rows={unlisted()}
                   presentation={cachedActivity()}
-                  onPresentation={(rows) => recordSubagents([...collection(), ...rows])}
+                  onPresentation={recordSubagents}
                   onOpenSession={props.details.onSessionSelect}
                 />
               </Show>
