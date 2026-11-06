@@ -45,25 +45,8 @@ export function parseNodeHostOpenClawIdTarget(value: unknown): NodeHostOpenClawI
   ) {
     throw new Error("invalid OpenClaw ID relay URL");
   }
-  let discoveryUrl: string | undefined;
-  if (value.discoveryUrl !== undefined) {
-    const discovery = typeof value.discoveryUrl === "string" ? URL.parse(value.discoveryUrl) : null;
-    const localHttp =
-      discovery?.protocol === "http:" &&
-      ["localhost", "127.0.0.1", "[::1]"].includes(discovery.hostname);
-    if (
-      !discovery ||
-      (!localHttp && discovery.protocol !== "https:") ||
-      discovery.username ||
-      discovery.password ||
-      discovery.pathname !== "/" ||
-      discovery.search ||
-      discovery.hash
-    ) {
-      throw new Error("invalid OpenClaw ID Discovery origin");
-    }
-    discoveryUrl = discovery.origin;
-  }
+  const discoveryUrl =
+    value.discoveryUrl === undefined ? undefined : parseNodeDiscoveryOrigin(value.discoveryUrl);
   const binding = parseStatement(value.evidence.binding, "ServerBinding");
   if (!binding.ok) {
     throw new Error("invalid OpenClaw ID ServerBinding");
@@ -79,4 +62,24 @@ export function parseNodeHostOpenClawIdTarget(value: unknown): NodeHostOpenClawI
     relayUrl: relay.href,
     ...(discoveryUrl ? { discoveryUrl } : {}),
   };
+}
+
+/** Discovery routing is deployment configuration, not an authority or a relay hint. */
+export function parseNodeDiscoveryOrigin(value: unknown): string {
+  const discovery = typeof value === "string" ? URL.parse(value) : null;
+  const localHttp =
+    discovery?.protocol === "http:" &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(discovery.hostname);
+  if (
+    !discovery ||
+    (!localHttp && discovery.protocol !== "https:") ||
+    discovery.username ||
+    discovery.password ||
+    discovery.pathname !== "/" ||
+    discovery.search ||
+    discovery.hash
+  ) {
+    throw new Error("invalid OpenClaw ID Discovery origin");
+  }
+  return discovery.origin;
 }
