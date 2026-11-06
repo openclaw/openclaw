@@ -6,7 +6,7 @@ import { createWriteStream } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer, connect } from "node:net";
-import { loadavg, tmpdir } from "node:os";
+import { loadavg } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
@@ -169,7 +169,7 @@ for (let index = 0; index < Number(values.skills); index++) {
 // Keep repository discovery inside the synthetic workspace, even when output is .artifacts/.
 execFileSync("git", ["init", "--quiet", path.join(root, "workspace")]);
 await writeFile(configPath, JSON.stringify(config));
-const cacheRoot = await mkdtemp(path.join(tmpdir(), "openclaw-rpc-cache-"));
+const cacheRoot = await mkdtemp(path.join(output, "cache-"));
 const env = createGatewayBenchEnv(path.join(root, "home"), configPath, {
   startupTrace: false,
   caseEnv: {
