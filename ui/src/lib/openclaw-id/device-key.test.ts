@@ -20,12 +20,13 @@ describe("owner device key storage", () => {
   });
 
   it("fails when the transaction aborts after the write succeeded", async () => {
-    const add = IDBObjectStore.prototype.add;
+    // The real method, captured before the spy replaces it.
+    const add: IDBObjectStore["add"] = Reflect.get(IDBObjectStore.prototype, "add");
     vi.spyOn(IDBObjectStore.prototype, "add").mockImplementation(function (
       this: IDBObjectStore,
       ...args: Parameters<IDBObjectStore["add"]>
     ) {
-      const request = add.apply(this, args);
+      const request: IDBRequest<IDBValidKey> = Reflect.apply(add, this, args);
       // The write itself succeeds; the transaction holding it is then lost.
       request.addEventListener("success", () => this.transaction.abort());
       return request;
