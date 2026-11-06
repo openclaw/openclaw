@@ -14,12 +14,12 @@ import {
 import { runWithSqliteCleanup, SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
-import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
 import type {
   PreparedSqliteReadOnlyLocation,
   PreparedSqliteSnapshotSource,
   SqlitePrivateSnapshotFamily,
 } from "./sqlite-readonly-location.types.js";
+import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
 import {
   assertPublishedFileIdentitySync,
   sameFileStatFingerprint,

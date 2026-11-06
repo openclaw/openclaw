@@ -777,7 +777,7 @@ it("refuses a write that lands during a drained read", () => {
         writer.exec("INSERT INTO receipt VALUES ('raced');");
       }
     }),
-  ).toThrow();
+  ).toThrow(/snapshot hash mismatch/);
   expect(wrote).toBe(true);
   expect(copy).toHaveBeenCalledOnce();
 });
