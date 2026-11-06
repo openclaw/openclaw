@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, type Plugin, type ResolvedConfig } from "vite";
 import {
+  controlUiLocaleErrorNamespaces,
   resolvedLocaleConfigHintsModulePrefix,
   resolvedLocaleNamespaceModulePrefix,
 } from "./control-ui-locales.ts";
@@ -154,6 +155,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "src/shared/dedupe-by-key.ts":
       // Config search shares this helper without loading optional session UI.
       return "control-ui-boot-shared";
+    case "ui/src/lib/text-diff.ts":
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":
@@ -230,6 +232,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/agent-select-registration.ts":
     case "ui/src/lib/sessions/session-placement-recovery.ts":
     case "ui/src/components/solid/connect-command.tsx":
+    case "ui/src/components/cloud-profile-icon-data.ts":
+    case "ui/src/components/solid/cloud-profile-icon.tsx":
       // Creation fetches these together; keep their compression without a whole route.
       return "route-controls-runtime";
     case "ui/src/components/solid/tabs.tsx":
@@ -416,7 +420,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // These shared Cron owners already load together in Cron and Agents.
       return "cron-domain";
     case "ui/src/lib/cron/model-suggestions.ts":
-    case "ui/src/pages/chat/chat-transcript-pages.ts":
     case "packages/model-catalog-core/src/configured-model-refs.ts":
     case "ui/src/styles/cron.css":
     case "ui/src/pages/cron/cron-page.tsx":
@@ -452,6 +455,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/sidebar-update-card.tsx":
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";
+    case "ui/src/components/solid/markdown-html.tsx":
     case "ui/src/components/markdown-parser.ts":
     case "ui/src/components/markdown.ts":
     case "ui/src/components/github-link-target.ts":
@@ -507,6 +511,14 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
   }
   if (normalized.startsWith(resolvedLocaleNamespaceModulePrefix)) {
+    const [locale, namespace] = normalized
+      .slice(resolvedLocaleNamespaceModulePrefix.length)
+      .split("/");
+    // The local-error registrar prepares these together. Share their request without
+    // pulling them into the locale entry or changing when their copy is installed.
+    if (controlUiLocaleErrorNamespaces.includes(namespace!)) {
+      return `locale-errors-${locale}`;
+    }
     return `locale-namespace-${normalized.slice(resolvedLocaleNamespaceModulePrefix.length).replace("/", "-")}`;
   }
 

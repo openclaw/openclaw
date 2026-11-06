@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { Errored, Loading, Show, createMemo } from "solid-js";
+import { flattenConfigLeafFields } from "../../components/config-form.leaf-fields.ts";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -16,8 +17,8 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginReadme } from "./catalog-detail.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
-import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import "./custom-elements.ts";
+import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
@@ -36,7 +37,6 @@ import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 import {
-  flattenPluginSettingsFields,
   pluginSettingsNodeOptions,
   PluginSettingsEditor,
   type PluginSettingsEditorProps,
@@ -146,14 +146,14 @@ function permissionSettings(options: DetailProps): PluginSettingsEditorProps["pe
       loading: true,
     };
   }
-  const fields =
+  const fields: PluginSettingsField[] =
     options.hostControlsSchema && options.configValue
       ? resolveConfigObjectFields({
           schema: options.hostControlsSchema,
           value: pluginEntryValue(options.configValue, options.pluginId),
           path: ["plugins", "entries", options.pluginId],
           ...pluginSettingsNodeOptions(options),
-        }).fields.flatMap((field) => flattenPluginSettingsFields(field, String(field.path.at(-1))))
+        }).fields.flatMap((field) => flattenConfigLeafFields(field, String(field.path.at(-1))))
       : [];
   for (const field of fields) {
     const key = field.path[4];

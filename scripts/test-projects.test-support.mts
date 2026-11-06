@@ -3634,16 +3634,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^scripts\/(?:lib\/tsx-cli-shim|tsx)\.mjs$/u,
     ["direct-run-entrypoints", "lint-status", "local-check-runtime"],
   ],
-  [
-    new RegExp(
-      [
-        "^scripts\\/(?:generate-prompt-snapshots|prompt-snapshot-files|",
-        "sync-codex-model-prompt-fixture)\\.ts$",
-      ].join(""),
-      "u",
-    ),
-    ["prompt-snapshots"],
-  ],
+  [/^scripts\/(?:generate-prompt-snapshots|prompt-snapshot-files)\.ts$/u, ["prompt-snapshots"]],
   [/^scripts\/e2e\/npm-telegram-live-docker\.sh$/u, ["npm-telegram-live"]],
   [
     /^scripts\/package-openclaw-for-docker\.m[jt]s$/u,
@@ -4909,7 +4900,7 @@ function resolveBoundedChangedTestTargetPlan(
             (file) =>
               file.startsWith(`${path.posix.dirname(manifest)}/src/`) &&
               TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => file.endsWith(ext)) &&
-              !isTestOnlyPath(file) &&
+              (!isTestOnlyPath(file) || isTestFileTarget(file)) &&
               !/(?:^|\/)(?:__fixtures__|fixtures|scripts|test-fixtures|test-utils|test-helpers|test-support|testing)\//u.test(
                 file,
               ) &&

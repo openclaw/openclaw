@@ -46,6 +46,7 @@ const repositoryScriptEntries = [
   "test/fixtures/beam-live-handoff-client/beam.mjs",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-android-release-history.mts!",
+  "scripts/bench-ios-release-note-overlap.mjs!",
   "scripts/bench-mobile-release-dependencies.mjs!",
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/bench-plugin-catalog.ts!",
@@ -131,6 +132,8 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   // scripts/README.md invokes this warm-interaction benchmark CLI by path.
   "scripts/bench-control-ui-interactions.ts!",
+  // Its companion guide invokes the isolated RPC payload census by path.
+  "scripts/bench-control-ui-rpc-payloads.ts!",
   // scripts/README.md invokes the real-Gateway Usage benchmark; it spawns this exact child path.
   "scripts/bench-usage-gateway.ts!",
   "scripts/lib/usage-bench-child.ts!",
@@ -139,6 +142,7 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-engines.ts!",
   // Its companion guide invokes the same-document aged-tab census by path.
   "scripts/bench-control-ui-aged-tab.ts!",
+  "scripts/bench-control-ui-aged-tab-compare.ts!",
   // The opt-in projection benchmark builds its browser fixture through this CLI.
   "scripts/build-control-ui-projection-fixture.mts!",
   // The reactive graph guide invokes this isolated diagnostic build by path.
@@ -1199,15 +1203,14 @@ const config = {
     "src/agents/model-auth-runtime.ts": ["nsExports"],
     "src/agents/model-auth-runtime-shared.ts": ["nsExports"],
     "src/agents/prepared-model-runtime.ts": ["nsExports"],
-    // OpenClaw ID focused tests drive retry timers, mailbox handling and connection custody
-    // through these exports; the full-tree scan still audits those tests.
+    // OpenClaw ID focused tests drive retry timers, mailbox handling, connection custody and
+    // tunnel supervision through these exports; the full-tree scan still audits those tests.
     "src/gateway/openclaw-id/mailbox-reader.ts": ["exports"],
     "src/gateway/openclaw-id/publication-retry.ts": ["exports"],
     "src/gateway/openclaw-id/tunnel-connections.ts": ["exports"],
-    // The stacked OpenClaw ID tunnel change is the first production importer of these
-    // exports, which focused tests cover now; drop each entry with that importer.
-    "src/gateway/openclaw-id/device-token-binding.ts": ["exports"],
-    "src/gateway/openclaw-id/tunnel-child/keyfile.ts": ["exports"],
+    "src/gateway/openclaw-id/tunnel-principal.ts": ["types"],
+    "src/gateway/openclaw-id/tunnel-runtime.ts": ["exports"],
+    "src/gateway/openclaw-id/tunnel-supervisor.ts": ["exports", "types"],
   },
   workspaces: {
     ".": {

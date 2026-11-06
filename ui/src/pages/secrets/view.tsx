@@ -1,8 +1,10 @@
 import { createMemo, For, Loading, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
+import { Radio } from "../../components/solid/radio.tsx";
 import "../../components/modal-dialog.tsx";
 import {
   DocsLink,
@@ -16,8 +18,8 @@ import {
 import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { SecretsStoreState } from "../../lib/secrets-store/index.ts";
-import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import "../../styles/secrets-store.css";
+import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import type { SecretsPageState } from "./state.ts";
 
 type SecretsStoreViewProps = {
@@ -326,7 +328,7 @@ function EntryDialog(props: SecretsStoreViewProps) {
           <legend>{t("secretsStore.accessMode")}</legend>
           <For each={["secret", "env"] as const} keyed={false}>
             {(kind) => (
-              <label
+              <Radio
                 class={[
                   "secrets-store-mode",
                   {
@@ -335,18 +337,15 @@ function EntryDialog(props: SecretsStoreViewProps) {
                       props.state.draft.kind === kind() && kind() === "env",
                   },
                 ]}
+                name="access-mode"
+                value={kind()}
+                checked={props.state.draft.kind === kind()}
+                disabled={props.busy}
+                onChange={() => {
+                  const selectedKind = kind();
+                  props.state.act((state) => state.patchDraft({ kind: selectedKind }));
+                }}
               >
-                <input
-                  type="radio"
-                  name="access-mode"
-                  value={kind()}
-                  checked={props.state.draft.kind === kind()}
-                  disabled={props.busy}
-                  onChange={() => {
-                    const selectedKind = kind();
-                    props.state.act((state) => state.patchDraft({ kind: selectedKind }));
-                  }}
-                />
                 <span>
                   <strong>
                     {t(
@@ -363,7 +362,7 @@ function EntryDialog(props: SecretsStoreViewProps) {
                     )}
                   </small>
                 </span>
-              </label>
+              </Radio>
             )}
           </For>
         </fieldset>
@@ -393,8 +392,7 @@ function BulkDialog(props: SecretsStoreViewProps) {
           })}
         </div>
         <label class="secrets-store-checkbox">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={props.state.bulkAutoDetect}
             disabled={props.busy}
             onChange={(event) =>

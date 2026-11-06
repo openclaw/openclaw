@@ -331,6 +331,12 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
 
+Idle scenarios default to a 30-second Node-side measurement window. Use
+`--idle-duration-ms` for a bounded diagnostic or rotated comparison; the manifest
+records the chosen duration. `--idle-warmup-ms` independently controls settlement
+before measurement. Normalize costs using the measured interval when comparing
+window lengths.
+
 Giant completed runs are opt-in: `--steps completed-direct-run-2000-open,completed-direct-run-2000-scroll,completed-single-run-2000-expand,completed-single-run-2000-scroll`.
 Replace `2000` with `400` for the scaling control. These reuse the cold-load
 long-session fixture and desktop 61-frame scroll trajectory in both engines. Open checks
@@ -356,6 +362,12 @@ translation wave cannot disappear behind an early English render. Use
 `--steps cold-boot,warm-boot --network-profiles rtt-100ms` to inspect request waves.
 One-pair screens only identify candidates: confirm deviations over 20% with ten
 rotated pairs plus `control`, and fixes with twenty pairs within the same configuration.
+
+Every run counts `ResizeObserver loop` errors per observation and summary cell,
+including untraced streaming runs. The report shows error totals and affected
+observations; any browser error fails the observation and command even when its
+completed timing interval remains in the summary. Use `--observer-origins` for a
+separate diagnostic run that records recent observer creation stacks and targets.
 
 Native clipboard measurements use `--steps chat-actions-native-paste-text,chat-actions-native-paste-image`.
 They paste a 256 KiB draft or a synthetic 2048×2048 PNG through the browser's

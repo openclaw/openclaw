@@ -5,7 +5,6 @@ import {
   type McpLoopbackToolCallStart,
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
-import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import type { CliBackendTurnInterrupt } from "../../plugins/cli-backend.types.js";
 import {
   normalizeAcceptedSessionSpawnResult,
@@ -54,6 +53,7 @@ import {
   CLI_MESSAGING_EVIDENCE_MAX_CALLS,
   extractCliMessagingContent,
   extractCliMessagingTarget,
+  isPreparedCliInternalSourceReply,
 } from "./execute-messaging.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -83,6 +83,23 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   let didSendViaMessagingTool = false;
   let didDeliverSourceReplyViaMessageTool = false;
   let sourceReplyDelivered: true | undefined;
+  let terminalSourceReplyDelivered = false;
+  let latestStartedTool: CliLoopbackCall | string | undefined;
+  const observeToolResult = (
+    call: CliLoopbackCall | undefined,
+    cliToolCallId?: string,
+    alreadyObserved = false,
+  ) => {
+    const isLatest =
+      (call !== undefined && latestStartedTool === call) ||
+      (cliToolCallId !== undefined && latestStartedTool === cliToolCallId);
+    // A delayed CLI mirror of an observed loopback result is not new work.
+    if (!isLatest && !alreadyObserved) {
+      terminalSourceReplyDelivered = false;
+      latestStartedTool = undefined;
+    }
+    return isLatest;
+  };
   let inFlightUnclassifiedMcpRequests = 0;
   let inFlightMessagingToolCalls = 0;
   const inFlightPreparedMessagingCalls = new Set<McpLoopbackToolCallStart>();
@@ -234,6 +251,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     args: Record<string, unknown>;
     result?: unknown;
     isError: boolean;
+    isLatestToolResult: boolean;
   }) => {
     const deliveryFact = readEmbeddedMessageDeliveryFact(
       readToolResultDetails(params.result)?.messageDelivery,
@@ -279,6 +297,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       deliveredCurrentSourceReply || sourceReplyPayload
         ? resolveMessageToolSourceReplyFinal(toolArgs, context.params.messageToolFinalByDefault)
         : undefined;
+    if (params.isLatestToolResult) {
+      terminalSourceReplyDelivered = deliveredCurrentSourceReply && sourceReplyFinal === true;
+    }
     // WebChat sends every targetless message through the internal sink while the run's
     // own reply mode stays automatic; a final send there is still this turn's answer.
     if (
@@ -330,32 +351,6 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     }
     messagingToolSentTargets.set(evidenceKey, targetWithContent);
   };
-  const isPreparedInternalSourceReply = async (call: McpLoopbackToolCallStart) => {
-    if (
-      context.params.sourceReplyDeliveryMode !== "message_tool_only" ||
-      stripOpenClawMcpToolPrefix(call.toolName) !== "message" ||
-      call.args.action !== "send" ||
-      !context.params.config
-    ) {
-      return false;
-    }
-    return await shouldUseInternalSourceReplySink(
-      {
-        cfg: context.params.config,
-        action: "send",
-        sessionKey: context.params.sessionKey,
-        sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
-        toolContext: {
-          currentChannelProvider: context.params.messageChannel ?? context.params.messageProvider,
-          currentChannelId: context.params.currentChannelId,
-          currentThreadTs: context.params.currentThreadTs,
-          currentMessageId: context.params.currentMessageId,
-          replyToMode: context.params.replyToMode,
-        },
-      },
-      call.args,
-    );
-  };
   const beginGatewayCapture = (captureKey: string | undefined, assertCurrent: () => void) => {
     if (!captureKey || gatewayCaptureKey === captureKey) {
       return;
@@ -383,7 +378,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         inFlightUnclassifiedMcpRequests = Math.max(0, inFlightUnclassifiedMcpRequests - 1);
       },
       onToolCallStart: (call) => {
+        terminalSourceReplyDelivered = false;
         const retained = retainCliLoopbackCall(call);
+        latestStartedTool = retained;
         const candidates = matchingActiveCliTools(call);
         // Parallel same-name calls can reach the loopback out of stream order.
         // Bind only a unique name+arguments match; ambiguity is safer than a wrong outcome.
@@ -476,6 +473,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ) {
           acceptedSessionSpawns.push(acceptedSessionSpawn);
         }
+        const candidate = candidates.length === 1 ? candidates[0] : undefined;
+        const isLatestToolResult = observeToolResult(candidate, candidate?.boundToolCallId);
         if (isMessagingToolDeliveryAction(toolName, call.args)) {
           commitMessagingToolResult({
             toolName,
@@ -483,6 +482,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
             args: call.args,
             result: "result" in call ? call.result : undefined,
             isError: call.outcome !== "completed",
+            isLatestToolResult,
           });
         } else if (call.outcome === "completed") {
           const artifact = extractToolResultMediaArtifact(call.result);
@@ -499,6 +499,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     });
   };
   const handleCliToolUseStart = (event: CliToolUseStartDelta) => {
+    terminalSourceReplyDelivered = false;
+    latestStartedTool = event.toolCallId;
     if (event.kind !== "server_tool_use") {
       const activeTool: ActiveCliTool = {
         toolName: event.name,
@@ -554,6 +556,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   };
   const handleCliToolResult = (event: CliToolResultDelta) => {
     const activeTool = activeCliTools.get(event.toolCallId);
+    const isLatestToolResult = observeToolResult(
+      activeTool?.loopbackCall,
+      event.toolCallId,
+      activeTool?.loopbackCall?.outcome !== undefined,
+    );
     if (
       yielded &&
       !event.isError &&
@@ -575,6 +582,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ...pending,
         result: event.result,
         isError: event.isError,
+        isLatestToolResult,
       });
     }
     return activeTool?.loopbackAmbiguous ? undefined : activeTool?.loopbackCall?.current.args;
@@ -594,7 +602,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     try {
       if (!gatewayCaptureKey && pendingMessagingCalls.size > 0) {
         const calls = Array.from(pendingMessagingCalls.values());
-        const internalStates = await Promise.all(calls.map(isPreparedInternalSourceReply));
+        const internalStates = await Promise.all(
+          calls.map((call) => isPreparedCliInternalSourceReply(context, call)),
+        );
         if (internalStates.some((internal) => !internal)) {
           didSendViaMessagingTool = true;
           params.recordRunError(
@@ -621,7 +631,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         await closeCliLiveSession(context, "mcp-capture-rotation");
       }
       const internalStates = await Promise.all(
-        Array.from(inFlightPreparedMessagingCalls).map(isPreparedInternalSourceReply),
+        Array.from(inFlightPreparedMessagingCalls).map((call) =>
+          isPreparedCliInternalSourceReply(context, call),
+        ),
       );
       const internalCount = internalStates.filter(Boolean).length;
       const hasPotentialVisibleSend = inFlightMessagingToolCalls > internalCount;
@@ -708,6 +720,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ...(yielded ? { yielded: true as const } : {}),
         ...(yieldAcknowledgment ? { yieldAcknowledgment } : {}),
         ...projectCliMessagingDeliveryEvidence(current),
+        ...(terminalSourceReplyDelivered ? { terminalSourceReplyDelivered: true as const } : {}),
         ...(current.toolMediaUrls.length > 0 ? { toolMediaUrls: current.toolMediaUrls } : {}),
         ...(current.toolAudioAsVoice ? { toolAudioAsVoice: true } : {}),
         ...(current.toolTrustedLocalMedia ? { toolTrustedLocalMedia: true } : {}),

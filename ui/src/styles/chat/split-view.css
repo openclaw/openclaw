@@ -539,10 +539,6 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   overscroll-behavior: contain;
 }
 
-.chat-pane__sharing-menu--capped > .oc-menu {
-  height: min(420px, 60vh);
-}
-
 .chat-pane__sharing-title,
 .chat-pane__sharing-status {
   color: var(--muted);
@@ -874,26 +870,10 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
     color: var(--muted);
   }
 
+  /* The row owns switch semantics; the shared indicator draws it. */
   & .chat-pane__sharing-switch {
+    display: inline-flex;
     justify-self: center;
-  }
-
-  /* The row owns switch semantics; the shared native control owns its geometry. */
-  & .chat-pane__sharing-public-toggle[aria-checked="true"] .settings-toggle__control {
-    background: var(--accent);
-    border-color: var(--accent);
-  }
-
-  & .chat-pane__sharing-public-toggle[aria-checked="true"] .settings-toggle__control::before {
-    transform: translateX(var(--settings-toggle-travel));
-    background: var(--bg);
-  }
-
-  &
-    .chat-pane__sharing-public-toggle[aria-checked="true"]
-    .settings-toggle:dir(rtl)
-    .settings-toggle__control::before {
-    transform: translateX(calc(var(--settings-toggle-travel) * -1));
   }
 
   & .chat-pane__sharing-disclosure {
@@ -1006,7 +986,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
     padding-bottom: 8px;
     overflow-y: auto;
     overscroll-behavior: contain;
-    scrollbar-width: thin;
+    --scrollbar-size: var(--scrollbar-size-compact);
   }
 
   & .chat-pane__sharing-person {

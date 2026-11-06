@@ -14,7 +14,10 @@ import { APP_ROUTE_IDS, pathForRoute, type RouteId } from "../../ui/src/app-rout
 import type { ColdLoadRpcRecord } from "../../ui/src/test-helpers/control-ui-cold-load-probe-init.ts";
 import { createColdLoadProbeInitScript } from "../../ui/src/test-helpers/control-ui-cold-load-probes.ts";
 import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
-import { waitForControlUiRoute } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionPath,
+  waitForControlUiRoute,
+} from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import {
   meetingEntry,
   meetingPage,
@@ -23,7 +26,11 @@ import {
 import { parityBaseScenario, parityWorkboardScenario } from "../control-ui-parity/fixtures.ts";
 import { dataActivityScenarios } from "./control-ui-data-activity-scenarios.ts";
 import { dataCatalogScenarios } from "./control-ui-data-catalog-scenarios.ts";
-import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
+import {
+  engineProbeInitScript,
+  waitForEngineTranscript,
+  type EngineScenario,
+} from "./control-ui-engine-boot-scenarios.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
 import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 import type {
@@ -1172,7 +1179,7 @@ export const enginePageCoverage: readonly PageCoverage[] = APP_ROUTE_IDS.map((id
 function createPageFixture(
   definition: PageDefinition,
   id: RouteId,
-): EngineScenario["fixtureOverrides"] {
+): NonNullable<EngineScenario["fixtureOverrides"]> {
   return (sandbox, base) => {
     const catalog = catalogSource.fixtureOverrides?.(sandbox, base);
     const domain = definition.source?.fixtureOverrides?.(sandbox, base);
@@ -1700,7 +1707,12 @@ export async function collectEnginePageStructure(page: Page): Promise<Interactio
 async function measureVisit(page: Page, id: RouteId, definition: PageDefinition) {
   return page.evaluate(
     ({ id: routeId, pathname, search: routeSearch, landed, selector, rows, completion }) =>
-      new Promise<{ readyMs: number; contentReadyMs: number }>((resolve, reject) => {
+      new Promise<{
+        startedAtMs: number;
+        readyMs: number;
+        readyAtMs: number;
+        contentReadyMs: number;
+      }>((resolve, reject) => {
         const started = performance.now();
         let readyFrames = 0;
         let completeFrames = 0;
@@ -1769,7 +1781,12 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
               }));
           completeFrames = contentReady ? completeFrames + 1 : 0;
           if (readyMs !== undefined && completeFrames >= 2) {
-            resolve({ readyMs, contentReadyMs: performance.now() - started });
+            resolve({
+              startedAtMs: started,
+              readyMs,
+              readyAtMs: started + readyMs,
+              contentReadyMs: performance.now() - started,
+            });
           } else if (performance.now() - started > 60_000) {
             reject(new Error(`Page readiness timed out: ${routeId} (${selector})`));
           } else {
@@ -1792,8 +1809,18 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
 }
 
 /** One fresh context per phase preserves first-visit lazy imports and isolates local drafts. */
-export function createEnginePageScenarios(): readonly EngineScenario[] {
-  const boot = (page: Page) => waitForControlUiRoute(page, { routeId: "new-session" });
+export function createEnginePageScenarios(
+  gatewayLatencyMs = 0,
+  pageOrigin: "new-session" | "chat" = "new-session",
+): readonly EngineScenario[] {
+  const originSessionKey = "agent:main:interaction-a";
+  const boot = async (page: Page) => {
+    if (pageOrigin === "chat") {
+      await waitForEngineTranscript(page);
+    } else {
+      await waitForControlUiRoute(page, { routeId: "new-session" });
+    }
+  };
   return enginePageCoverage.flatMap((coverage) => {
     if (coverage.status === "excluded" || coverage.status === "unavailable") {
       return [];
@@ -1801,21 +1828,37 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
     const definition = definitions[coverage.id];
     assert(definition, `Missing census definition for ${coverage.id}`);
     const id = coverage.id;
+    const pageFixture = createPageFixture(definition, id);
     const common = {
       explicitOnly: true,
-      route: "/new",
-      fixtureOverrides: createPageFixture(definition, id),
-      ...(id === "cloud-workers"
-        ? {
-            initScript: createColdLoadProbeInitScript({
-              ownerProbes: false,
-              sidebarCounters: false,
-              latencyMs: 0,
-              frameGapMs: 0,
-              events: [],
-            }),
-          }
-        : {}),
+      route: pageOrigin === "chat" ? controlUiSessionPath(originSessionKey) : "/new",
+      fixtureOverrides: ((sandbox, base) => {
+        const fixture = pageFixture(sandbox, base);
+        if (pageOrigin === "new-session") {
+          return fixture;
+        }
+        // Keep the boot transcript when a route replaces the fixture's other sessions.
+        return {
+          ...fixture,
+          sessionTranscripts: {
+            ...fixture.sessionTranscripts,
+            [originSessionKey]: base.sessionTranscripts![originSessionKey]!,
+          },
+        };
+      }) satisfies NonNullable<EngineScenario["fixtureOverrides"]>,
+      ...(pageOrigin === "chat"
+        ? { initScript: engineProbeInitScript(false, gatewayLatencyMs) }
+        : gatewayLatencyMs || id === "cloud-workers"
+          ? {
+              initScript: createColdLoadProbeInitScript({
+                ownerProbes: false,
+                sidebarCounters: false,
+                latencyMs: gatewayLatencyMs,
+                frameGapMs: 0,
+                events: [],
+              }),
+            }
+          : {}),
       ...(id === "workboard" || id === "plugin" ? { fixture: { workboardResources: true } } : {}),
       ...(definition.source?.createRequestHandlers
         ? { createRequestHandlers: definition.source.createRequestHandlers }
@@ -1884,12 +1927,17 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
     const visit: EngineScenario = {
       ...common,
       id: `page-${id}-visit`,
-      expected: `First visit after boot to ${coverage.path}; ${definition.ready} is visible, the route is settled, and all configured content counts are complete.`,
+      expected: `First visit after ${pageOrigin} boot to ${coverage.path}; ${definition.ready} is visible, the route is settled, and all configured content counts are complete.`,
       prepare: boot,
       run: async (page) => {
         const timing = await measureVisit(page, id, definition);
         await ready(page, id, definition);
-        return { visitReadyMs: timing.readyMs, contentReadyMs: timing.contentReadyMs };
+        return {
+          visitStartedAtMs: timing.startedAtMs,
+          visitReadyMs: timing.readyMs,
+          visitReadyAtMs: timing.readyAtMs,
+          contentReadyMs: timing.contentReadyMs,
+        };
       },
     };
     const revisit: EngineScenario = {

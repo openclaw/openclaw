@@ -2244,7 +2244,6 @@ button.chat-pr__diff {
 }
 
 .chat-pr__checks-pill:focus-visible,
-.chat-ci__automation-checkbox:focus-visible,
 .chat-ci__automation-retry:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -2362,13 +2361,6 @@ button.chat-pr__diff {
   opacity: 0.6;
 }
 
-.chat-ci__automation-checkbox {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-  cursor: var(--cursor-action);
-}
-
 .chat-ci__automation-label,
 .chat-ci__name {
   min-width: 0;
@@ -2453,7 +2445,6 @@ openclaw-chat-ci-details {
   max-height: min(420px, 52dvh);
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
 }
 
 .chat-ci__job {
@@ -3090,7 +3081,7 @@ openclaw-chat-ci-details {
     width: var(--chat-composer-send-size);
     min-width: var(--chat-composer-send-size);
     height: var(--chat-composer-send-size);
-    background: var(--primary);
+    background: var(--chat-send-bg);
     color: var(--chat-send-foreground);
   }
 
@@ -3188,7 +3179,6 @@ openclaw-chat-ci-details {
   padding: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
   border: none;
   border-radius: 0;
   outline: none;

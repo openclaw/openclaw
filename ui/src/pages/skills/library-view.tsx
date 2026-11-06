@@ -3,6 +3,7 @@ import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import "../../components/modal-dialog.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
@@ -403,8 +404,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
       </div>
       <Show when={support() && props.library.canEdit()}>
         <label class="field checkbox">
-          <input
-            type="checkbox"
+          <Checkbox
             name="library-file-executable"
             disabled={disabled()}
             checked={support()!.executable === true}
