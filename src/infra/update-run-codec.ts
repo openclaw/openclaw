@@ -161,9 +161,12 @@ function isRetainedStep(item: unknown): boolean {
 
 /** The summary counts warning rows and reports failed ones, so plain steps yield first. */
 export function findDisposableStep(steps: readonly unknown[]): number {
-  const failed = (item: unknown) => isRecord(item) && item.status === "failed";
-  const warning = (item: unknown) =>
-    isRecord(item) && typeof item.step === "string" && item.step.startsWith("warning:");
+  // Repair history shares this bound; its attempts stay chronological.
+  const stepName = (item: unknown) =>
+    isRecord(item) && typeof item.step === "string" ? item.step : undefined;
+  const failed = (item: unknown) =>
+    stepName(item) !== undefined && isRecord(item) && item.status === "failed";
+  const warning = (item: unknown) => stepName(item)?.startsWith("warning:") === true;
   for (const tier of [(item: unknown) => !warning(item) && !failed(item), warning, () => true]) {
     const index = steps.findIndex((item) => !isRetainedStep(item) && tier(item));
     if (index >= 0) {
