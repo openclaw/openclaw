@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";

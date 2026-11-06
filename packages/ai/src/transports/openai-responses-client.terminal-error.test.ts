@@ -478,7 +478,9 @@ async function collect(stream: AssistantMessageEventStreamLike) {
   return {
     events: await (async () => {
       const events: string[] = [];
-      for await (const event of stream) events.push(event.type);
+      for await (const event of stream) {
+        events.push(event.type);
+      }
       return events;
     })(),
     result: await stream.result(),
