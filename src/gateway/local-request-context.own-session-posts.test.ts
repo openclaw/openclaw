@@ -196,7 +196,7 @@ it("discovers and reads an independent session created by the requesting human",
           sessionKey: REQUESTER,
           sessionTarget: { sessionKey: REQUESTER, sessionId: "requester-turn", agentId: "main" },
           assertCommitAllowed: () => {},
-          withTranscriptWrite: (run) => run(),
+          withTranscriptWrite: async (run) => run(),
         },
         () => post.execute("passive-post", args),
       );

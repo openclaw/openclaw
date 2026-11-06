@@ -1673,11 +1673,15 @@
       },
       {
         "deferLoading": true,
-        "description": "Send a message to a permitted session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. Explicit per-agent send destinations can permit messaging without transcript access. A session identifies model context, not an external address. When a new turn starts, its reply reaches you once: inline when available, otherwise as a later inter-session input. Continue with another sessions_send; post to channels with message. Accepted results report target admission as `targetDisposition: \"queued\"` or `\"steered\"`; `delivery.status` is only later reply delivery state, and neither proves target completion. Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. Ordinary peer sends start a separate turn. A zero-wait send to your own busy child or an eligible run-scoped target may use its active input queue. An idle recipient or a default self-send starts a new turn; timeoutSeconds bounds waiting for the separately admitted turn’s reply. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup always starts a separate turn and preserves its independent reply; it does not resume a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. status \"no_reply\" is terminal, so do not wait for another reply. A timeoutSeconds:0 send that starts a new turn for your existing native child gives this turn a completion to await with sessions_yield, even while queued. watch:true requires status visibility and additionally reports later target-session changes; on a steer it can claim the child's existing pending completion.",
+        "description": "mode:post appends a persistent text-only note to a session created by the authenticated requesting human. It returns a message receipt without starting, steering, interrupting, or waiting for a turn; a busy recipient sees it only in later context. Use an explicit sessionKey and an optional stable idempotencyKey for retries. Send a message to a permitted session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. Explicit per-agent send destinations can permit messaging without transcript access. A session identifies model context, not an external address. When a new turn starts, its reply reaches you once: inline when available, otherwise as a later inter-session input. Continue with another sessions_send; post to channels with message. Accepted results report target admission as `targetDisposition: \"queued\"` or `\"steered\"`; `delivery.status` is only later reply delivery state, and neither proves target completion. Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. Ordinary peer sends start a separate turn. A zero-wait send to your own busy child or an eligible run-scoped target may use its active input queue. An idle recipient or a default self-send starts a new turn; timeoutSeconds bounds waiting for the separately admitted turn’s reply. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup always starts a separate turn and preserves its independent reply; it does not resume a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. status \"no_reply\" is terminal, so do not wait for another reply. A timeoutSeconds:0 send that starts a new turn for your existing native child gives this turn a completion to await with sessions_yield, even while queued. watch:true requires status visibility and additionally reports later target-session changes; on a steer it can claim the child's existing pending completion.",
         "inputSchema": {
           "properties": {
             "agentId": {
               "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "idempotencyKey": {
               "minLength": 1,
               "type": "string"
             },
@@ -1693,6 +1697,10 @@
               "anyOf": [
                 {
                   "const": "notify",
+                  "type": "string"
+                },
+                {
+                  "const": "post",
                   "type": "string"
                 },
                 {

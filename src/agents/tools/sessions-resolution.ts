@@ -22,11 +22,11 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
+import { resolveGatewayToolOperatorSelection } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
-import { hasSessionToolRequesterProfile } from "./sessions-access.js";
 
 const CURRENT_SESSION_CLIENT_ALIAS_IDS = new Set<string>([
   GATEWAY_CLIENT_IDS.TUI,
@@ -259,7 +259,9 @@ export async function resolveSessionReference(params: {
 }): Promise<SessionReferenceResolution> {
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   const restrictToSpawned =
-    params.restrictToSpawned && (params.action === "send" || !hasSessionToolRequesterProfile());
+    params.restrictToSpawned &&
+    (params.action === "send" ||
+      !resolveGatewayToolOperatorSelection().operatorAuthority?.profileId);
   const failedLookup = (failure: SessionOwnershipLookupFailure): SessionReferenceResolution => {
     logSessionOwnershipLookupFailure({
       requesterSessionKey: params.requesterInternalKey ?? "unknown",
