@@ -349,7 +349,7 @@ describe("Control UI mount fallback", () => {
     } else {
       const summary = win.document.getElementById("openclaw-mount-fallback-summary");
       expect(summary).toBeInstanceOf(win.HTMLParagraphElement);
-      expect(summary?.textContent).toContain("will keep retrying");
+      expect(summary?.textContent).toContain("Trying again automatically");
     }
     rendered(win);
     if (stalled) {

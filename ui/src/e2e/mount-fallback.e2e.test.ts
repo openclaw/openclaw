@@ -88,7 +88,7 @@ async function exhaustMountRecovery(page: Page): Promise<void> {
     expect(await counter(page, loadCountKey)).toBe(String(recovery + 1));
   }
   await page.clock.runFor(12_001);
-  await page.getByRole("heading", { name: "Control UI did not start" }).waitFor();
+  await page.getByRole("heading", { name: "Control UI didn’t start" }).waitFor();
   expect(await page.locator("#openclaw-mount-fallback-summary").textContent()).toContain(
     "Automatic retries didn’t fix this",
   );
