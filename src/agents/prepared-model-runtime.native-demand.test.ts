@@ -179,7 +179,7 @@ function createPicker(
   };
 }
 
-it("starts headless provider discovery on picker demand after native-only discovery", async () => {
+it("keeps headless picker discovery scoped and cached before full demand", async () => {
   const config: OpenClawConfig = {
     gateway: { controlUi: { enabled: false } },
     agents: {
@@ -188,9 +188,13 @@ it("starts headless provider discovery on picker demand after native-only discov
     },
   };
   const native = nativeModel("custom", "native-model", "native-test");
+  const otherNative = nativeModel("other", "other-native-model", "native-test");
   const uncredentialed = { provider: "other", id: "hosted-model", name: "Hosted model" };
-  installHarnesses({ id: "native-test", loadModelCatalog: async () => [native] });
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue(snapshot([saved, uncredentialed]));
+  const fullOnly = { provider: "outside", id: "full-model", name: "Full model" };
+  installHarnesses({ id: "native-test", loadModelCatalog: async () => [native, otherNative] });
+  mocks.runPreparedModelCatalogWorker.mockResolvedValue(
+    snapshot([saved, uncredentialed, fullOnly]),
+  );
   await publish(config);
   const owner = readSnapshot(fixture.agentInput("pro", config))!;
   expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
@@ -200,9 +204,17 @@ it("starts headless provider discovery on picker demand after native-only discov
   await createPicker(config, { preparedOnly: true })();
   expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
 
-  await createPicker(config, { provider: "custom" })();
+  const scopedPick = createPicker(config, { provider: "other" });
+  await scopedPick();
   await vi.waitFor(() =>
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledExactlyOnceWith(["custom"]),
+    expect(owner.readFullModelCatalog!()?.entries).toContainEqual(
+      expect.objectContaining(uncredentialed),
+    ),
+  );
+  await scopedPick();
+  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledExactlyOnceWith(["other"]);
+  expect(owner.readFullModelCatalog!()?.entries).not.toContainEqual(
+    expect.objectContaining(fullOnly),
   );
 
   const pick = createPicker(config);
@@ -212,7 +224,7 @@ it("starts headless provider discovery on picker demand after native-only discov
   );
   await vi.waitFor(() =>
     expect(owner.readFullModelCatalog!()?.entries).toContainEqual(
-      expect.objectContaining(uncredentialed),
+      expect.objectContaining(fullOnly),
     ),
   );
   await pick();

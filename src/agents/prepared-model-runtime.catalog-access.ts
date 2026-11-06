@@ -305,6 +305,15 @@ export async function createFullModelCatalogAccess(
       );
       const completedProviders = new Map(
         [...scope].map((provider) => {
+          const source =
+            providerSources.get(provider) ??
+            preparedProviderCatalogSource(
+              params.agentFacts,
+              params.pluginGeneration,
+              provider,
+              normalizeProvider,
+            );
+          providerSources.set(provider, source);
           const expiresAt = providerExpiries.get(provider);
           const failed = workerCatalog.providerOutcomes?.some(
             (outcome) =>
@@ -313,12 +322,7 @@ export async function createFullModelCatalogAccess(
           return [
             provider,
             {
-              source: preparedProviderCatalogSource(
-                params.agentFacts,
-                params.pluginGeneration,
-                provider,
-                normalizeProvider,
-              ),
+              source,
               credentials: preparedProviderCatalogCredentials(auth, provider, normalizeProvider),
               ...retry.discoveryDeadline(failed, expiresAt, retained?.providers.get(provider)),
               ...(legacyProviders.has(provider) ? { legacyAcquired: true } : {}),
