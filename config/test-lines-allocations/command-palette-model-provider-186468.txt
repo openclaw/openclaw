@@ -1,0 +1,3 @@
+# Exact counted growth: provider-filter navigation regressions and the
+# synthetic real-Gateway model-provider browser proof with no-mutation controls.
+176

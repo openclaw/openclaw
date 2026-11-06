@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.ts";
 import type { PreparedNativeControlUiPluginBuild } from "../ui/src/test-helpers/control-ui-e2e-shared-preview.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
+import { uiE2ePrebuiltParallelTestFiles } from "./vitest/vitest.ui-paths.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const tempDirs: string[] = [];
@@ -33,19 +34,19 @@ const qaLabFiles = [
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
-const serialGatewayFiles =
-  `chat-provider-failure-cause chat-steer-deferred-custody chat-steer-send-now deepseek-search desktop-resize plugin-inline-view session-management.new-nested`
-    .split(/\s+/u)
-    .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
-    .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
+const serialGatewayFiles = `chat-daybreak chat-provider-failure-cause chat-session-companion-private
+  chat-steer-deferred-custody chat-steer-send-now deepseek-search desktop-resize plugin-inline-view
+  proof-command-palette-model-provider quiet-automations session-management.new-nested`
+  .split(/\s+/u)
+  .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
+  .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
 const sharedSerialGatewayFiles = [
   "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
 ];
 const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecycle.real-gateway
   background-work.real-gateway chat-collaborator-scroll.real-gateway chat-html-publication.real-gateway
-  chat-completed-assistant.real-gateway chat-daybreak.real-gateway chat-html-csp.real-gateway
-  chat-session-companion-private.real-gateway config-form.real-gateway quiet-automations.real-gateway
+  chat-completed-assistant.real-gateway chat-html-csp.real-gateway config-form.real-gateway
   chat-agent-avatar.real-gateway chat-composer-websearch-kill-switch.real-gateway
   chat-flow.catalog-bootstrap chat-loading-performance.real-gateway chat-project-media.real-gateway
   chat-managed-media-order.real-gateway chat-session-diff-folding.real-gateway
@@ -485,13 +486,15 @@ describe("Control UI E2E resource ownership", () => {
       }
       expect(result.files.filter((entry) => entry.phase === 1)).toEqual(
         [
-          ...serialGatewayFiles.map((file) => ({
-            file,
-            project: "ui-e2e-serial-standalone",
-            phase: 1,
-            workers: 1,
-            fileParallelism: false,
-          })),
+          ...serialGatewayFiles
+            .filter((file) => !uiE2ePrebuiltParallelTestFiles.includes(file))
+            .map((file) => ({
+              file,
+              project: "ui-e2e-serial-standalone",
+              phase: 1,
+              workers: 1,
+              fileParallelism: false,
+            })),
           ...sharedSerialGatewayFiles.map((file) => ({
             file,
             project: "ui-e2e-serial",
