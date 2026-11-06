@@ -201,7 +201,11 @@ suite.define(() => {
         async ({ page }) => {
           acquisitionDiagnostics.observe(page);
           page.on("response", collectAsset);
+          let pendingCatalogRequests = new Set<string>();
           page.on("websocket", (socket) => {
+            // A reload can discard replies; only the current connection gates idle.
+            const pending = new Set<string>();
+            pendingCatalogRequests = pending;
             socket.on("framesent", ({ payload }) => {
               const frame = requireRecord(JSON.parse(payload.toString()));
               if (
@@ -209,6 +213,7 @@ suite.define(() => {
                 frame.method === "models.list" &&
                 typeof frame.id === "string"
               ) {
+                pending.add(frame.id);
                 requests.push({ id: frame.id, params: requireRecord(frame.params) });
                 frames.push({ direction: "sent", frame });
               }
@@ -220,6 +225,7 @@ suite.define(() => {
                 typeof frame.id === "string" &&
                 requests.some(({ id }) => id === frame.id)
               ) {
+                pending.delete(frame.id);
                 replies.set(frame.id, frame);
                 frames.push({ direction: "received", frame });
               }
@@ -269,7 +275,7 @@ suite.define(() => {
           const catalogIdle = async () =>
             (await refreshButton.isEnabled()) &&
             (await catalogProgress.count()) === 0 &&
-            requests.every(({ id }) => replies.has(id));
+            pendingCatalogRequests.size === 0;
           const waitForCatalogIdle = async () => {
             await expect
               .poll(async () => {

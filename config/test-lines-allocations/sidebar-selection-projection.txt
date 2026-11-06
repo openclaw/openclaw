@@ -1,2 +1,2 @@
-# Preserve held row projection and selection; refresh an off-window selected descriptor.
-39
+# Preserve row selection and off-window descriptors; scope catalog idle to the live connection.
+45
