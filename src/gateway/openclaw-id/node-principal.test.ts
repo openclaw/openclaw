@@ -4,6 +4,7 @@ import { linkedClaw, nowSeconds } from "./openclaw-id.test-support.js";
 import { createTunnelPrincipalPublisher } from "./service-tunnel-principals.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
+  isSameOpenClawIdTunnelPrincipal,
   openClawIdRecoveryPrincipalSchema,
   openclawIdTunnelRolePolicy,
   openclawIdTunnelUser,
@@ -76,4 +77,16 @@ it("resolves a node separately, refreshes authenticated activity, and invalidate
   } finally {
     publisher.stop();
   }
+});
+
+it("matches a retained node principal only under the same listing", () => {
+  const authority = { clawId: "claw", rootPub: "root", listedSeq: 4 };
+  const node = { kind: "node" as const, peerKey: `iroh:${"a8".repeat(32)}`, authority };
+  expect(isSameOpenClawIdTunnelPrincipal(node, { ...node, authority: { ...authority } })).toBe(
+    true,
+  );
+  expect(
+    isSameOpenClawIdTunnelPrincipal(node, { ...node, authority: { ...authority, listedSeq: 5 } }),
+  ).toBe(false);
+  expect(isSameOpenClawIdTunnelPrincipal(node, { ...node, kind: "owner" })).toBe(false);
 });
