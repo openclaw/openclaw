@@ -9,7 +9,10 @@ import * as support from "./service.test-support.js";
 describe("prepared worker intent admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  async function fixture(setup = false) {
+  async function fixture(
+    setup = false,
+    resumeProvision?: Parameters<typeof createWorkerProviderIntent>[0]["resumeProvision"],
+  ) {
     const { root: projectPath } = await repository("project", {
       setup,
       disableSigning: true,
@@ -31,7 +34,7 @@ describe("prepared worker intent admission", () => {
       projectNamespace: "gateway-test",
       providerFor: () => provider,
       prepareNodeArtifacts,
-      resumeProvision: async (record) => record,
+      resumeProvision: resumeProvision ?? (async (record) => record),
       isStopping: () => false,
       withLock: async (_environmentId, task) => task(),
     });
@@ -44,6 +47,63 @@ describe("prepared worker intent admission", () => {
     ) => owner.createWithProfile("development", key, { projectPath, ...options }, admitted);
     return { owner, provider, projectPath, prepareNodeArtifacts, prepare, create };
   }
+
+  it.each(["current", "connection", "node", "operation"])(
+    "consumes fresh snapshot custody once (%s)",
+    async (changed) => {
+      let connected = true;
+      const snapshot = {
+        checkpointId: "fresh-snapshot",
+        baseCommit: "a".repeat(40),
+        sourceManifestRef: `sha256:${"b".repeat(64)}`,
+        preparedManifestRef: `sha256:${"c".repeat(64)}`,
+      };
+      const f = await fixture(
+        false,
+        async (record, _provider, _signal, _settlement, _before, _source, _wake, remember) => {
+          await support.testState.store.transition({
+            environmentId: record.environmentId,
+            from: "requested",
+            to: "provisioning",
+          });
+          const ready = await support.testState.store.transition({
+            environmentId: record.environmentId,
+            from: "provisioning",
+            to: "ready",
+            patch: {
+              leaseId: "fresh-lease",
+              nodeDeviceId: "fresh-node",
+              sharedHost: false,
+              ...support.readyPatch(record.environmentId),
+            },
+          });
+          remember?.({
+            environmentId: ready.environmentId,
+            provisionOperationId: ready.provisionOperationId,
+            nodeDeviceId: "fresh-node",
+            snapshot,
+            isNodeCurrent: () => connected,
+          });
+          return ready;
+        },
+      );
+      const intent = await f.prepare();
+      const record = await f.create("fresh-custody", {}, intent);
+      connected = changed !== "connection";
+      const current = {
+        ...record,
+        ...(changed === "node" ? { nodeDeviceId: "replacement" } : {}),
+        ...(changed === "operation" ? { provisionOperationId: "replacement" } : {}),
+      };
+      const custody = f.owner.takeInitialSnapshot(intent, current);
+      if (changed === "current") {
+        expect(custody?.snapshot).toEqual(snapshot);
+      } else {
+        expect(custody).toBeUndefined();
+      }
+      expect(f.owner.takeInitialSnapshot(intent, record)).toBeUndefined();
+    },
+  );
 
   it("honors profile setup opt-out over an explicit preparation request", async () => {
     const f = await fixture(true);

@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
@@ -12,18 +13,23 @@ import {
   type WorkerWorkspaceManifest,
 } from "../gateway/worker-environments/workspace-manifest.js";
 import * as workspaceReconcile from "../gateway/worker-environments/workspace-reconcile-core.js";
+import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../infra/node-commands.js";
 import * as processExec from "../process/exec.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import type {
-  NodeWorkerPreparedWorkspaceBinding,
-  NodeWorkerPreparedWorkspaceInput,
-} from "../worker/node-workspace-prepared-protocol.js";
+import type { NodeWorkerPreparedWorkspaceInput } from "../worker/node-workspace-prepared-protocol.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
 import { NodeWorkerPreparedWorkspaceStore } from "./node-worker-prepared-workspace-store.js";
+import {
+  binding,
+  cacheKey,
+  preparationKey,
+  createPreparedWorkspaceFixture,
+} from "./node-worker-prepared-workspace.test-support.js";
+import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
 import { waitForNodeWorkerTerminal } from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
@@ -43,128 +49,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 afterEach(() => vi.restoreAllMocks());
-const preparationKey = "a".repeat(64);
-const cacheKey = "c".repeat(64);
-const binding: NodeWorkerPreparedWorkspaceBinding = {
-  action: "bind",
-  gatewayNamespace: "gateway-prepared",
-  environmentId: "environment-prepared",
-  preparationKey,
-  cacheKey,
-  sessionId: "session-prepared",
-  sessionKey: "agent:main:prepared",
-  ownerEpoch: 2,
-};
-
-async function fixture(setupWrites = false, setupPath = "source.txt") {
-  const root = fs.realpathSync.native(tempDirs.make("node-prepared-workspace-"));
-  const ownerRoot = path.join(
-    root,
-    ".openclaw-worker",
-    "prepared",
-    binding.gatewayNamespace,
-    cacheKey,
+const fixture = (setupWrites = false, setupPath = "source.txt") =>
+  createPreparedWorkspaceFixture(
+    fs.realpathSync.native(tempDirs.make("node-prepared-workspace-")),
+    setupWrites,
+    setupPath,
   );
-  const workspaceDir = path.join(ownerRoot, "workspace");
-  const homeDir = path.join(ownerRoot, "home");
-  // Match the private owner root created by project preparation, independent of host umask.
-  await fsp.mkdir(ownerRoot, { recursive: true, mode: 0o700 });
-  await Promise.all([
-    fsp.mkdir(workspaceDir, { recursive: true, mode: 0o700 }),
-    fsp.mkdir(homeDir, { recursive: true, mode: 0o700 }),
-  ]);
-  const git = async (...args: string[]) =>
-    (
-      await processExec.runExec("git", ["-C", workspaceDir, ...args], { timeoutMs: 10_000 })
-    ).stdout.trim();
-  await git("init", "--quiet");
-  await fsp.writeFile(path.join(workspaceDir, ".gitignore"), ".venv/\n");
-  await fsp.writeFile(path.join(workspaceDir, "source.txt"), "prepared source\n");
-  await fsp.mkdir(path.join(workspaceDir, "tracked-dir"));
-  await fsp.writeFile(path.join(workspaceDir, "tracked-dir", "input.txt"), "pristine child\n");
-  await git("add", ".");
-  await git(
-    "-c",
-    "user.name=Prepared Test",
-    "-c",
-    "user.email=prepared@example.test",
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "--quiet",
-    "-m",
-    "prepared source",
-  );
-  const baseCommit = await git("rev-parse", "HEAD");
-  const { manifestRef: sourceManifestRef, manifest } = await captureWorkspaceManifest({
-    root: workspaceDir,
-    baseCommit,
-  });
-  const manifests = path.join(homeDir, ".openclaw-worker", "manifests");
-  await fsp.mkdir(manifests, { recursive: true });
-  await fsp.writeFile(
-    path.join(manifests, `${sourceManifestRef.slice(7)}.json`),
-    serializeWorkerWorkspaceManifest(manifest),
-  );
-  // Setup output appears after the pristine source manifest, as in project preparation.
-  await fsp.mkdir(path.join(workspaceDir, ".venv"));
-  await fsp.writeFile(
-    path.join(workspaceDir, ".venv", "absolute-path"),
-    `${workspaceDir}\n${homeDir}`,
-  );
-  if (setupWrites) {
-    await fsp.writeFile(path.join(workspaceDir, setupPath), "setup changed source\n");
-    await fsp.writeFile(path.join(workspaceDir, "setup-output.txt"), "eligible setup output\n");
-  }
-  const prepared = await captureWorkspaceManifest({ root: workspaceDir, baseCommit });
-  await fsp.writeFile(
-    path.join(manifests, `${prepared.manifestRef.slice(7)}.json`),
-    serializeWorkerWorkspaceManifest(prepared.manifest),
-  );
-  const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: path.join(root, "state") };
-  const options = { env, ephemeral: true };
-  const runtime = new NodeWorkerWorkspaceRuntime(options);
-  const registration = {
-    action: "register" as const,
-    gatewayNamespace: binding.gatewayNamespace,
-    environmentId: binding.environmentId,
-    preparationKey,
-    cacheKey,
-    workspaceDir,
-    homeDir,
-    sourceManifestRef,
-    preparedManifestRef: prepared.manifestRef,
-  };
-  const request = {
-    workspaceDir,
-    environmentId: binding.environmentId,
-    sessionId: binding.sessionId,
-    sessionKey: binding.sessionKey,
-    ownerEpoch: binding.ownerEpoch,
-  };
-  const command = {
-    gatewayNamespace: binding.gatewayNamespace,
-    environmentId: binding.environmentId,
-    sessionId: binding.sessionId,
-    sessionKey: binding.sessionKey,
-    preparationKey,
-    generation: binding.ownerEpoch,
-    argv: ["node", "-e", "process.stdout.write(process.cwd() + '\\n' + process.env.HOME)"],
-  };
-  return {
-    root,
-    ownerRoot,
-    workspaceDir,
-    homeDir,
-    env,
-    options,
-    runtime,
-    registration,
-    request,
-    command,
-    baseCommit,
-  };
-}
 
 async function serveManifest(raw: string | Buffer, blobs = new Map<string, Buffer>()) {
   const requests: string[] = [];
@@ -201,7 +91,7 @@ describe("prepared node workspace ownership", () => {
       /\.json$/u,
       ".memo",
     );
-    const prepare = async (input: NodeWorkerPreparedWorkspaceInput = f.registration) => {
+    const prepare = async (inputs: NodeWorkerPreparedWorkspaceInput[], state = "initial") => {
       await fsp.writeFile(reads, "");
       const result = await processExec.runCommandWithTimeout(
         [
@@ -217,7 +107,8 @@ describe("prepared node workspace ownership", () => {
           import { NodeWorkerWorkspaceRuntime } from './src/node-host/node-worker-workspace.ts';
           import { closeOpenClawStateDatabaseAsync } from './src/state/openclaw-state-db.ts';
           try {
-            await new NodeWorkerWorkspaceRuntime({ env: process.env, ephemeral: true }).prepare(JSON.parse(fs.readFileSync(0, 'utf8')));
+            const runtime = new NodeWorkerWorkspaceRuntime({ env: process.env, ephemeral: true });
+            for (const input of JSON.parse(fs.readFileSync(0, 'utf8'))) await runtime.prepare(input);
           } catch (error) { console.error(error.message); process.exitCode = 1; }
           finally { await closeOpenClawStateDatabaseAsync(); }
         `,
@@ -225,46 +116,126 @@ describe("prepared node workspace ownership", () => {
         {
           baseEnv: {
             ...f.env,
+            OPENCLAW_STATE_DIR: path.join(f.root, `state-${state}`),
             OPENCLAW_PREPARED_TEST_WORKSPACE: f.workspaceDir,
             OPENCLAW_PREPARED_TEST_READS: reads,
           },
-          input: JSON.stringify(input),
+          input: JSON.stringify(inputs),
           timeoutMs: 30_000,
         },
       );
       const count = (await fsp.readFile(reads, "utf8")).split("\n").filter(Boolean).length;
       return { result, count };
     };
-    const first = await prepare();
+    const registered = await prepare([f.registration]);
+    expect(registered.result.code, registered.result.stderr).toBe(0);
+    expect(registered.count).toBe(0);
+    const first = await prepare([binding]);
     expect(first.result.code, first.result.stderr).toBe(0);
     expect(first.count).toBe(5);
-    const restored = await prepare();
+    // Fresh registration state prevents bound-session replay from bypassing the
+    // checkpoint proof; only the persisted hash memo survives these processes.
+    const restored = await prepare([f.registration, binding], "restored");
     expect(restored.result.code, restored.result.stderr).toBe(0);
     expect(restored.count).toBe(0);
-    await fsp.writeFile(path.join(f.workspaceDir, "source.txt"), "changed checkpoint\n");
-    const changed = await prepare();
+    const sourcePath = path.join(f.workspaceDir, "source.txt");
+    await fsp.writeFile(sourcePath, "changed checkpoint\n");
+    const changed = await prepare([f.registration, binding], "changed");
+    expect(changed.result.code).not.toBe(0);
     expect(changed.result.stderr).toContain("does not match its manifest");
     expect(changed.count).toBe(1);
-    await fsp.writeFile(path.join(f.workspaceDir, "source.txt"), "setup changed source\n");
-    for (const corrupt of [false, true]) {
-      if (corrupt) {
+    await fsp.writeFile(sourcePath, "setup changed source\n");
+    for (const state of ["missing", "corrupt"]) {
+      if (state === "corrupt") {
         await fsp.writeFile(memo, "not a memo");
       } else {
         await fsp.unlink(memo);
       }
-      const fallback = await prepare();
+      const fallback = await prepare([f.registration, binding], state);
       expect(fallback.result.code, fallback.result.stderr).toBe(0);
       expect(fallback.count).toBe(5);
     }
-    const bound = await prepare(binding);
+    await fsp.writeFile(sourcePath, "private session edit\n");
+    const bound = await prepare([binding], "corrupt");
     expect(bound.result.code, bound.result.stderr).toBe(0);
     expect(bound.count).toBe(0);
+    await expect(fsp.readFile(sourcePath, "utf8")).resolves.toBe("private session edit\n");
+  });
+
+  it("negotiates the completed snapshot base through the real workspace binding owner", async () => {
+    const f = await fixture(true);
+    const invoke = (input: unknown, negotiated: boolean) =>
+      invokeNodeWorkerSupervisorCommand({
+        command: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+        paramsJSON: JSON.stringify(input),
+        workspace: f.runtime,
+        serverCapabilities: new Set(
+          negotiated ? [GATEWAY_SERVER_CAPS.NODE_WORKER_PREPARED_WORKSPACE_BASE] : [],
+        ),
+      });
+    const registered = await invoke(f.registration, false);
+    expect(registered).toMatchObject({ handled: true, ok: true });
+    expect(registered).toHaveProperty(
+      "payload.sourceManifestRef",
+      f.registration.sourceManifestRef,
+    );
+    expect(registered).not.toHaveProperty("payload.baseCommit");
+    const legacy = await invoke(binding, false);
+    expect(legacy).toMatchObject({ handled: true, ok: true });
+    expect(legacy).not.toHaveProperty("payload.baseCommit");
+    const current = await invoke(binding, true);
+    expect(current).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        baseCommit: f.baseCommit,
+        sourceManifestRef: f.registration.sourceManifestRef,
+        preparedManifestRef: f.registration.preparedManifestRef,
+      },
+    });
+  });
+
+  it("uses fresh snapshot content proof at first bind without a second inventory", async () => {
+    const f = await fixture(true);
+    await f.runtime.prepare(f.registration);
+    const capture = vi.spyOn(workspaceCommands, "captureManifest");
+    const fresh = {
+      ...binding,
+      initialSnapshot: {
+        checkpointId: "snapshot-fresh",
+        baseCommit: f.baseCommit,
+        sourceManifestRef: f.registration.sourceManifestRef,
+        preparedManifestRef: f.registration.preparedManifestRef,
+      },
+    };
+    await expect(f.runtime.prepare(fresh)).resolves.toMatchObject({ baseCommit: f.baseCommit });
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it("verifies bytes after code admission closes fresh snapshot provenance", async () => {
+    const f = await fixture(true);
+    await f.runtime.prepare(f.registration);
+    f.runtime.invalidateSnapshotPreparation();
+    await fsp.writeFile(path.join(f.workspaceDir, "source.txt"), "changed before binding\n");
+    const fresh = {
+      ...binding,
+      initialSnapshot: {
+        checkpointId: "snapshot-fresh",
+        baseCommit: f.baseCommit,
+        sourceManifestRef: f.registration.sourceManifestRef,
+        preparedManifestRef: f.registration.preparedManifestRef,
+      },
+    };
+    await expect(f.runtime.prepare(fresh)).rejects.toThrow("does not match its manifest");
   });
 
   it("verifies completed setup at first bind and preserves later session edits on replay and restart", async () => {
     const f = await fixture(true);
     expect(f.registration.preparedManifestRef).not.toBe(f.registration.sourceManifestRef);
+    const capture = vi.spyOn(workspaceCommands, "captureManifest");
     await f.runtime.prepare(f.registration);
+    expect(capture).not.toHaveBeenCalled();
+    await expect(f.runtime.exec(f.command)).rejects.toThrow("does not own");
     await fsp.writeFile(path.join(f.workspaceDir, "source.txt"), "changed while ready\n");
     await expect(f.runtime.prepare(binding)).rejects.toThrow("does not match its manifest");
     expect(
@@ -273,7 +244,9 @@ describe("prepared node workspace ownership", () => {
     ).toBe("available");
     await fsp.writeFile(path.join(f.workspaceDir, "source.txt"), "setup changed source\n");
     const bound = await f.runtime.prepare(binding);
+    expect(capture).toHaveBeenCalledTimes(2); // One rejected claim, then the successful claim.
     expect(bound).toMatchObject({
+      baseCommit: f.baseCommit,
       sourceManifestRef: f.registration.sourceManifestRef,
       preparedManifestRef: f.registration.preparedManifestRef,
     });
@@ -418,13 +391,15 @@ describe("prepared node workspace ownership", () => {
     const controller = new AbortController();
     const captured = createDeferred();
     const released = createDeferred();
-    const capture = workspaceCommands.captureManifest;
-    vi.spyOn(workspaceCommands, "captureManifest").mockImplementationOnce(async (params) => {
-      const result = await capture(params);
-      captured.resolve();
-      await released.promise;
-      return result;
-    });
+    const read = workspaceCommands.readWorkspaceManifest;
+    vi.spyOn(workspaceCommands, "readWorkspaceManifest").mockImplementationOnce(
+      async (...params) => {
+        const result = await read(...params);
+        captured.resolve();
+        await released.promise;
+        return result;
+      },
+    );
     const registration = f.runtime.prepare(f.registration, controller.signal);
     const registrationResult = registration.then(
       () => "registered",

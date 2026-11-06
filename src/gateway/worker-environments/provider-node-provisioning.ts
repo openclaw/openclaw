@@ -7,6 +7,8 @@ import type {
   WorkerNodeRuntimePreparation,
   WorkerProvider,
 } from "../../plugins/types.js";
+import type { NodeWorkerInitialSnapshot } from "../../worker/node-workspace-prepared-protocol.js";
+import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
@@ -18,6 +20,7 @@ import type { createWorkerProjectPreparation } from "./project-preparation.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
 import type { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
+import { requireWorkerProfile } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
@@ -34,6 +37,7 @@ type WorkerNodeProvisioningOptions = Pick<
   | "closeNodeRuntime"
   | "prepareNodeEnrollment"
   | "closeNodeEnrollment"
+  | "readInitialNodeConnection"
   | "ensureNodeWorkerBundle"
   | "registerPreparedWorkspace"
   | "move"
@@ -167,6 +171,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     const prepareInstallation = () =>
       (pendingInstallation ??= prepareBundle(preparedInstallation, signal));
     let enrollment: WorkerNodeEnrollment | undefined;
+    let initialNode: NodeWorkerSupervisorNodeProof | undefined;
     let pending: Promise<WorkerNodeEnrollment> | undefined;
     const close = () => {
       if (!open) {
@@ -180,6 +185,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         runtime = undefined;
       }
       if (enrollment) {
+        initialNode = options.readInitialNodeConnection?.(enrollment);
         options.closeNodeEnrollment?.(enrollment);
         enrollment = undefined;
       }
@@ -217,6 +223,9 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       }
     };
     return {
+      get initialNode() {
+        return initialNode ?? (enrollment && options.readInitialNodeConnection?.(enrollment));
+      },
       get installation() {
         return pendingInstallation ?? preparedInstallation;
       },
@@ -284,6 +293,11 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       ReturnType<typeof createWorkerProjectPreparation>["getPreparedWorkspace"]
     >,
     beforeProvision?: () => void,
+    initialSnapshot?: {
+      snapshot: NodeWorkerInitialSnapshot;
+      initialNode: NodeWorkerSupervisorNodeProof;
+      registered: (current: () => boolean) => void;
+    },
   ): Promise<WorkerEnvironmentRecord> => {
     const nodePatch = {
       ...patch,
@@ -334,6 +348,23 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         deviceId: lease.node.deviceId,
         artifact,
         prewarm,
+        ...(initialSnapshot &&
+        preparation &&
+        lease.sharedHost === false &&
+        (requireWorkerProfile(record.profileSnapshot.settings).runSetupScript === false ||
+          projectPreparation?.runSetupScript === false ||
+          (projectPreparation?.recipe?.postCreate === undefined &&
+            projectPreparation?.recipe?.postStart === undefined)) &&
+        lease.node.preparedRuntime?.nodeBootstrapSha256 ===
+          preparation.artifacts.nodeBootstrapSha256 &&
+        lease.node.preparedRuntime.workerBundleSha256 === artifact.tarballSha256 &&
+        lease.node.preparedRuntime.executionMode ===
+          (record.profileSnapshot.executionMode ?? "worker-turn")
+          ? {
+              initialSnapshot: initialSnapshot.snapshot.checkpointId,
+              initialNode: initialSnapshot.initialNode,
+            }
+          : {}),
         signal: workSignal,
         assertCurrent,
       });
@@ -350,14 +381,18 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         ) {
           throw new Error("Prepared worker requires its dedicated registered workspace");
         }
-        await options.registerPreparedWorkspace({
+        const isNodeCurrent = await options.registerPreparedWorkspace({
           record: options.store.get(record.environmentId)!,
           deviceId: lease.node.deviceId,
           workspace: preparedWorkspace,
+          initialNode: initialSnapshot?.initialNode,
           assertCurrent,
           signal: workSignal,
         });
         assertCurrent();
+        if (typeof isNodeCurrent === "function") {
+          initialSnapshot?.registered(isNodeCurrent);
+        }
       }
     } catch (error) {
       await cancellation?.settleStopIntent();

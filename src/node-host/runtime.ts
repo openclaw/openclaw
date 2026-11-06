@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
-import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { NODE_CLAUDE_SKILLS_MESSAGE_BYTES } from "../infra/node-claude-skill-protocol.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
@@ -50,6 +49,7 @@ import {
   notifyRegisteredNodeHostCommandDisconnect,
   watchRegisteredNodeHostCommandAvailability,
 } from "./plugin-node-host.js";
+import { createNodeHostUpdatePause, settleNodeHostCleanup } from "./runtime-lifecycle.js";
 import {
   requireRequestedCommands,
   buildNodeHostManifest,
@@ -64,38 +64,6 @@ export type { NodeHostInventory } from "./runtime-manifest.js";
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const WORKER_INITIALIZATION_RETRY_MS = 5_000;
-
-function createNodeHostUpdatePause(params: {
-  hasLocalActiveWork: () => boolean;
-  hasWorkerActiveWork: () => Promise<boolean> | undefined;
-}) {
-  let updatePause = false;
-  return {
-    get isPaused() {
-      return updatePause;
-    },
-    async tryPauseForUpdate(this: void) {
-      if (updatePause || params.hasLocalActiveWork()) {
-        return false;
-      }
-      // The update loop awaits this check before resuming; close invoke admission first.
-      updatePause = true;
-      let admitted = false;
-      try {
-        const workerBusy = await params.hasWorkerActiveWork();
-        admitted = !workerBusy && !params.hasLocalActiveWork();
-        return admitted;
-      } finally {
-        if (!admitted) {
-          updatePause = false;
-        }
-      }
-    },
-    resumeAfterUpdate(this: void) {
-      updatePause = false;
-    },
-  };
-}
 
 type ActiveNodeInvoke = {
   controller: AbortController;
@@ -113,14 +81,6 @@ function ensureNodePathEnv(): string {
   }
   process.env.PATH = DEFAULT_NODE_PATH;
   return DEFAULT_NODE_PATH;
-}
-
-async function settleNodeHostCleanup(owners: Array<Promise<unknown> | undefined>): Promise<void> {
-  const results = await Promise.allSettled(owners.filter((owner) => owner !== undefined));
-  const errors = [
-    ...new Set(results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))),
-  ];
-  throwCollectedErrors(errors, "node-host runtime cleanup failed");
 }
 
 /** Transport-independent CLI node-host runtime shared by Gateway and app workers. */
@@ -146,7 +106,13 @@ export async function prepareNodeHostRuntime(params?: {
   const config = params?.config ?? (await captureRuntimeConfigAsyncReader()());
   const env = params?.env ?? process.env;
   const platform = process.platform;
-  await ensureNodeHostPluginRegistry({ config, env, commandAllowlist });
+  const pluginPreparation = await ensureNodeHostPluginRegistry({
+    config,
+    env,
+    commandAllowlist,
+    deferComputerPreparation: params?.ephemeral === true && !commandAllowlist,
+  });
+  const pluginReady = pluginPreparation.ready;
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
   const installedAppsSharingEnabled =
@@ -450,6 +416,7 @@ export async function prepareNodeHostRuntime(params?: {
       const updatePause = createNodeHostUpdatePause({
         hasLocalActiveWork: () =>
           closing ||
+          pluginPreparation.hasPendingWork() ||
           !mcpStartupComplete ||
           pendingInvokes.size > 0 ||
           pendingDisconnectCleanups > 0 ||
@@ -621,6 +588,7 @@ export async function prepareNodeHostRuntime(params?: {
                   ? { workerComputer: { capabilities: () => resolvePluginNodeHost().computerUse } }
                   : {}),
                 ...(workerBundleInstaller ? { workerBundleInstaller } : {}),
+                workerPreparation: pluginReady,
                 ...(workerSupervisor ? { workerSupervisor } : {}),
                 ...(workerWorkspace ? { workerWorkspace } : {}),
               });
@@ -656,7 +624,13 @@ export async function prepareNodeHostRuntime(params?: {
           pendingDisconnectCleanups += 1;
           const idleCleanup = workerSupervisor?.retireIdle();
           const cleanup = settleNodeHostCleanup([
-            disconnectCleanup.catch(() => {}).then(notifyRegisteredNodeHostCommandDisconnect),
+            disconnectCleanup
+              .catch(() => {})
+              .then(async () => {
+                // Preparation may have created partial resources before failing.
+                await pluginReady.catch(() => {});
+                await notifyRegisteredNodeHostCommandDisconnect();
+              }),
             idleCleanup,
           ]).finally(() => {
             pendingDisconnectCleanups -= 1;
@@ -721,6 +695,7 @@ export async function prepareNodeHostRuntime(params?: {
             // Aborting an invocation does not settle its subprocess, stream or
             // finally block. Join those tails before registrations can be retired.
             await settleNodeHostCleanup([
+              pluginReady,
               watcherClose,
               disconnectClose,
               supervisorClose,

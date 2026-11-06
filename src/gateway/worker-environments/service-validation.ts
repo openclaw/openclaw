@@ -265,6 +265,33 @@ export function requireWorkerLease(value: unknown): WorkerLease {
   if (typeof deviceId !== "string" || !deviceId.trim()) {
     throw new Error("Worker provider returned an invalid node device id");
   }
+  const runtime = isRecord(value.node) ? value.node.preparedRuntime : undefined;
+  if (runtime !== undefined) {
+    if (
+      !isRecord(runtime) ||
+      typeof runtime.nodeBootstrapSha256 !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(runtime.nodeBootstrapSha256) ||
+      (runtime.executionMode !== "worker-turn" && runtime.executionMode !== "remote-exec") ||
+      (runtime.workerBundleSha256 !== undefined &&
+        (typeof runtime.workerBundleSha256 !== "string" ||
+          !/^[a-f0-9]{64}$/u.test(runtime.workerBundleSha256)))
+    ) {
+      throw new Error("Worker provider returned an invalid prepared runtime identity");
+    }
+    return {
+      ...common,
+      node: {
+        deviceId: deviceId.trim(),
+        preparedRuntime: {
+          nodeBootstrapSha256: runtime.nodeBootstrapSha256,
+          executionMode: runtime.executionMode,
+          ...(runtime.workerBundleSha256 === undefined
+            ? {}
+            : { workerBundleSha256: runtime.workerBundleSha256 }),
+        },
+      },
+    };
+  }
   return { ...common, node: { deviceId: deviceId.trim() } };
 }
 

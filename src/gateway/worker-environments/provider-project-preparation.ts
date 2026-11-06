@@ -43,7 +43,10 @@ export async function prepareWorkerProviderProject(params: {
     namespace: params.namespace,
     ...(repository
       ? {
-          revalidateRepositorySource: repository.revalidate,
+          revalidateRepositorySource: async (signal: AbortSignal) => {
+            signal.throwIfAborted();
+            repository.assertCurrent();
+          },
           prepareRepositoryGitPack: repository.prepareGitPack,
         }
       : {}),
@@ -55,6 +58,7 @@ export async function prepareWorkerProviderProject(params: {
         }
       : undefined,
     setupAuthorized: true,
+    snapshotStart: repository?.snapshotStart,
     signal: params.signal,
     requireCurrent: () => {
       params.requireCurrent();

@@ -23,13 +23,17 @@ import { CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../shared/devic
 import { workerBundleArchiveRelativePath } from "../../shared/worker-bundle-hash.js";
 import { WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH } from "../gateway-http-route-contracts.js";
 import { isLoopbackHost } from "../net.js";
+import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import type { TransferArtifact } from "./artifact-transfer-service.js";
 import {
   NODE_ENROLLMENT_TIMEOUT_MS,
   workerBootstrapOperationTimeoutMs,
 } from "./bootstrap-timeouts.js";
 import type { DeviceWorkerAvailability } from "./device-provider.js";
-import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact-contract.js";
+import type {
+  NodeBootstrapArtifact,
+  WorkerBundleArtifact,
+} from "./node-bootstrap-artifact-contract.js";
 import {
   DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
   BUNDLE_NODE_TOOLCHAIN_SETUP_SH,
@@ -44,6 +48,7 @@ type NodeEnrollmentBinding = {
   record: WorkerEnvironmentRecord;
   signal: AbortSignal;
   setupCredential?: { setupId: string; token: string; digest: string };
+  initialNode?: NodeWorkerSupervisorNodeProof;
   close: () => void;
 };
 
@@ -75,9 +80,9 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
   const controller = new AbortController();
   const { signal } = controller;
   const active = new Map<string, NodeEnrollmentBinding>();
-  const enrollmentClosers = new WeakMap<
+  const enrollmentBindings = new WeakMap<
     WorkerNodeRuntimePreparation | WorkerNodeEnrollment,
-    () => void
+    NodeEnrollmentBinding
   >();
   const commandRunner = async (argv: string[], runOptions: { timeoutMs: number }) =>
     await runCommandWithTimeout(argv, { timeoutMs: runOptions.timeoutMs });
@@ -229,7 +234,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
 
   const prepareRuntime = async (
     record: WorkerEnvironmentRecord,
-    bundle: TransferArtifact,
+    bundle: WorkerBundleArtifact,
     operationSignal?: AbortSignal,
   ): Promise<WorkerNodeRuntimePreparation> => {
     await options.store.ready();
@@ -250,9 +255,14 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         workerBundle: {
           ...grantArtifact(prepared, bundle, enrollmentSignal, isAuthorized, transferBytes),
           packageRelativePath: workerBundleArchiveRelativePath(bundle.tarballSha256),
+          build: {
+            bundleHash: bundle.bundleHash,
+            openclawVersion: bundle.openclawVersion,
+            protocolFeatures: bundle.protocolFeatures,
+          },
         },
       };
-      enrollmentClosers.set(runtime, binding.close);
+      enrollmentBindings.set(runtime, binding);
       return runtime;
     } catch (error) {
       binding.close();
@@ -375,6 +385,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
               const availability = await options.resolveAvailability(live.nodeDeviceId);
               enrollmentSignal.throwIfAborted();
               if (availability.available) {
+                binding.initialNode ??= availability.node;
                 return live.nodeDeviceId;
               }
             }
@@ -383,7 +394,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           throw new Error("Worker node did not connect before the enrollment deadline");
         },
       };
-      enrollmentClosers.set(enrollment, binding.close);
+      enrollmentBindings.set(enrollment, binding);
       return enrollment;
     } catch (error) {
       binding.close();
@@ -437,9 +448,12 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       );
     },
     retire,
+    // An observation only; installers and binding recheck this connection through their transport.
+    readInitialNodeConnection: (enrollment: WorkerNodeEnrollment) =>
+      enrollmentBindings.get(enrollment)?.initialNode,
     closeRuntime: (preparation: WorkerNodeRuntimePreparation) =>
-      enrollmentClosers.get(preparation)?.(),
-    close: (enrollment: WorkerNodeEnrollment) => enrollmentClosers.get(enrollment)?.(),
+      enrollmentBindings.get(preparation)?.close(),
+    close: (enrollment: WorkerNodeEnrollment) => enrollmentBindings.get(enrollment)?.close(),
     stop: () => {
       controller.abort();
       for (const binding of active.values()) {

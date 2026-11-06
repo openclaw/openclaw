@@ -77,7 +77,27 @@ Successful worker starts log the `openclaw-bootstrap-*` phase durations at info 
 
 Concurrent workspace installs on the same node share an in-progress integrity scan of the same already prewarmed bundle. Later requests scan the installed files again, so edits or damage still trigger repair. Retention and replacement separate scans; each request keeps its own cancellation and download credentials.
 
-For source builds, run `pnpm build` and restart the Gateway before dispatching. Bootstrap does not compile an unbuilt checkout or copy arbitrary source files. Missing or mismatched build metadata gives a rebuild-and-restart error. Runtime modules and installation scripts come from the package's published file list; custom distributions must declare their launcher helpers there. Private QA-only build chunks are excluded only when build metadata verifies their ownership; incomplete metadata or imports fail preparation.
+On ephemeral nodes, private-computer preparation can overlap connection and bundle
+installation. Installation acknowledgement and the first private-computer use wait
+for preparation to finish. Failures remain visible, and shutdown joins pending
+preparation before disposing its resources. Other node startup services retain
+their normal readiness ordering.
+
+For source builds, run `pnpm build` and restart the Gateway before dispatching.
+
+Runtime preparation can expand a verified worker bundle inside its owning package.
+A fresh lease validates that bundle and uses a lease-local alias to the exact
+package build, avoiding repeated archive extraction. Missing or damaged prepared
+code falls back to the existing verified archive installation path. Retention
+removes lease aliases without deleting the package's code. Node identity,
+credentials, workspaces, and journals remain lease-owned. The producer prewarms
+expanded worker code before snapshot capture. A fresh dedicated snapshot fork can
+reuse that preparation when its bootstrap, bundle, and execution mode match and
+setup will not run. Configured hooks do not prevent reuse when setup is explicitly
+disabled. The original enrollment connection must remain current, and both peers
+must support fresh-snapshot reuse. Reconnects, replayed allocations, code execution,
+or changed preparation use ordinary verification and prewarm instead.
+Bootstrap does not compile an unbuilt checkout or copy arbitrary source files. Missing or mismatched build metadata gives a rebuild-and-restart error. Runtime modules and installation scripts come from the package's published file list; custom distributions must declare their launcher helpers there. Private QA-only build chunks are excluded only when build metadata verifies their ownership; incomplete metadata or imports fail preparation.
 
 OpenClaw worker turns install the matching worker bundle, reusing a verified archive retained in a prepared image when available. Codex remote execution starts its managed exec-server directly. Node-command allowlists and invocation approval still apply. See [runtime support](/gateway/cloud-workers/dispatching-a-session#runtime-support) and [the security model](/gateway/cloud-workers/security-model).
 

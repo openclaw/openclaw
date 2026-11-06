@@ -274,6 +274,10 @@ printf 'setup\\n' >> "$HOME/count"
     });
     first.close();
     const prepared = result.preparedWorkspace!;
+    expect(prepared.baseCommit).toBe(f.project.baseCommit);
+    expect(await requireGit(prepared.workspaceDir, ["rev-parse", "HEAD"])).toBe(
+      prepared.baseCommit,
+    );
     expect(first.getPreparedWorkspace()).toEqual(prepared);
     const directory = path.join(f.home, ".openclaw-worker", "prepared", "gateway", "c".repeat(64));
     expect(prepared).toMatchObject({

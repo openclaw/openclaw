@@ -27,6 +27,7 @@ import {
 } from "./artifact-transfer-http.js";
 import { useNodeBootstrapArtifactFixtures } from "./node-bootstrap-artifact.test-support.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
@@ -87,6 +88,10 @@ describe("worker node enrollment", () => {
     enabledPluginIds: ["runtime-plugin"],
   });
   const bundle = () => ({
+    install: "bundle" as const,
+    bundleHash: "a".repeat(64),
+    openclawVersion: "2026.8.1",
+    protocolFeatures: [],
     tarballPath: path.join(root, "worker-bundle.tgz"),
     tarballSha256: "b".repeat(64),
     tarballBytes: 6,
@@ -653,11 +658,16 @@ describe("worker node enrollment", () => {
     );
     const record = await createProvisioning();
     const polledVersions: number[] = [];
+    const firstNode = createNodeWorkerBundleTestNode({
+      nodeId: "paired-cloud-node",
+      connId: "first",
+    });
+    let currentNode = firstNode;
     const manager = createManager({
       resolveAvailability: async (deviceId) => {
         expect(deviceId).toBe("paired-cloud-node");
         polledVersions.push(store.inventoryVersion());
-        return { available: polledVersions.length === 3 };
+        return { available: polledVersions.length >= 3, node: currentNode };
       },
     });
     const enrollment = await manager.begin(record);
@@ -696,6 +706,13 @@ describe("worker node enrollment", () => {
 
       await expect(waiting).resolves.toBe("paired-cloud-node");
       expect(polledVersions).toEqual([completedVersion, completedVersion, completedVersion]);
+      expect(manager.readInitialNodeConnection(enrollment)).toBe(firstNode);
+      currentNode = createNodeWorkerBundleTestNode({
+        nodeId: firstNode.nodeId,
+        connId: "reconnected",
+      });
+      await expect(enrollment.waitForDeviceId()).resolves.toBe(firstNode.nodeId);
+      expect(manager.readInitialNodeConnection(enrollment)).toBe(firstNode);
       expect(store.inventoryVersion()).toBe(completedVersion);
     } finally {
       manager.close(enrollment);

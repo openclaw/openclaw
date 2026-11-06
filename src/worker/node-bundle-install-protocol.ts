@@ -23,6 +23,8 @@ const BundleInstallInputSchema = z.strictObject({
   gatewayNamespace: z.string().regex(GATEWAY_NAMESPACE_PATTERN),
   prefetch: z.literal(1).optional(),
   bundlePrewarm: z.literal(WORKER_BUNDLE_PREWARM_VERSION).optional(),
+  // Fresh provisioning custody only; persisted bundle receipts cannot recreate this hint.
+  initialSnapshot: z.string().min(1).max(4096).optional(),
   build: WorkerBuildSchema,
   archive: z.strictObject({
     token: z.string().regex(TOKEN_PATTERN),
@@ -30,6 +32,20 @@ const BundleInstallInputSchema = z.strictObject({
     bytes: z.number().int().min(1).max(MAX_WORKER_BUNDLE_ARCHIVE_BYTES),
   }),
 });
+
+const BundlePreparationInputSchema = BundleInstallInputSchema.pick({ build: true }).extend({
+  archive: BundleInstallInputSchema.shape.archive.omit({ token: true }),
+});
+export type NodeWorkerBundlePreparationInput = z.infer<typeof BundlePreparationInputSchema>;
+
+export function parseNodeWorkerBundlePreparationInput(
+  raw: string,
+): NodeWorkerBundlePreparationInput {
+  if (!raw || Buffer.byteLength(raw, "utf8") > REQUEST_MAX_BYTES) {
+    throw new Error("INVALID_REQUEST: invalid worker bundle preparation input");
+  }
+  return BundlePreparationInputSchema.parse(JSON.parse(raw) as unknown);
+}
 
 export type NodeWorkerBundleInstallInput = z.infer<typeof BundleInstallInputSchema>;
 export type NodeWorkerBundleInstallResult = WorkerAdmissionHandshake;

@@ -473,15 +473,26 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     ) {
       sourceChanged();
     }
-    const after = await readRepository(current, assertSource, signal);
-    if (after.private !== metadata.private || after.repositoryId !== repositoryId) {
-      sourceChanged();
+    // The pinned query observes repository identity, visibility and commit together.
+    // URL-based REST reads still need the repository-instance fence on both sides.
+    if (!currentPinnedRepository) {
+      const after = await readRepository(current, assertSource, signal);
+      if (after.private !== metadata.private || after.repositoryId !== repositoryId) {
+        sourceChanged();
+      }
     }
     assertSource();
     identity = current;
   };
   return {
     project,
+    // Only fresh default-branch requests can reuse a snapshot's completed revision.
+    ...(!expected &&
+    !request.baseCommit &&
+    typeof metadata.defaultBranch === "string" &&
+    [metadata.defaultBranch, `heads/${metadata.defaultBranch}`].includes(requestedRef)
+      ? { snapshotStart: true as const }
+      : {}),
     setupRecipe,
     recipe,
     assertCurrent,
@@ -494,7 +505,6 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
             retainedCommit?: string;
           }) => {
             assertAdmission();
-            await revalidate(input.signal);
             const readIdentity = identity;
             const assertFetchCurrent = () => {
               input.signal.throwIfAborted();
@@ -515,8 +525,6 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
               assertCurrent: assertFetchCurrent,
             });
             assertFetchCurrent();
-            await revalidate(input.signal);
-            assertAdmission();
             return pack;
           },
         }

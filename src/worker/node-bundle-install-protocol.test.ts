@@ -24,6 +24,8 @@ const input = {
 describe("node worker bundle install protocol", () => {
   it("parses the closed exact-build install request", () => {
     expect(parseNodeWorkerBundleInstallInput(JSON.stringify(input))).toEqual(input);
+    const snapshot = { ...input, initialSnapshot: "checkpoint-fresh" };
+    expect(parseNodeWorkerBundleInstallInput(JSON.stringify(snapshot))).toEqual(snapshot);
     expect(parseNodeWorkerBundleInstallResult(build)).toEqual(build);
     expect(nodeWorkerBundleTransferPath(build.bundleHash)).toBe(
       `/__openclaw__/worker-bundle/v1/bundles/${build.bundleHash}`,
@@ -48,6 +50,9 @@ describe("node worker bundle install protocol", () => {
 
   it.each([
     { ...input, extra: true },
+    { ...input, initialSnapshot: "" },
+    { ...input, initialSnapshot: 1 },
+    { ...input, initialSnapshot: "x".repeat(4097) },
     { ...input, gatewayNamespace: "../escape" },
     { ...input, build: { ...build, bundleHash: "bad" } },
     { ...input, archive: { ...input.archive, token: "short" } },

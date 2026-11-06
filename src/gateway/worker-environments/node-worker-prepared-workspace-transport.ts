@@ -1,10 +1,14 @@
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../../infra/node-commands.js";
+import { NODE_WORKER_INITIAL_SNAPSHOT_VERSION } from "../../infra/node-runner-inventory.js";
 import {
   parseNodeWorkerPreparedWorkspaceResult,
   type NodeWorkerPreparedWorkspaceInput,
 } from "../../worker/node-workspace-prepared-protocol.js";
-import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import type {
+  NodeWorkerSupervisorNodeProof,
+  NodeWorkerSupervisorTransport,
+} from "../node-registry-private.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
@@ -24,6 +28,8 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
   const invokePreparedWorkspace = async (request: {
     deviceId: string;
     input: NodeWorkerPreparedWorkspaceInput;
+    isSnapshotCurrent?: () => boolean;
+    initialNode?: NodeWorkerSupervisorNodeProof;
     signal?: AbortSignal;
     assertCurrent: () => void;
   }) => {
@@ -45,12 +51,22 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
     if (!node || !transport.isCurrent(node)) {
       throw new Error("Prepared workspace node protocol is unavailable");
     }
-    // Registration and first binding verify completed contents; exact bind replay preserves edits.
+    let payload = input;
+    if (
+      input.action === "bind" &&
+      input.initialSnapshot &&
+      (node.workerHost.initialSnapshot !== NODE_WORKER_INITIAL_SNAPSHOT_VERSION ||
+        request.isSnapshotCurrent?.() !== true)
+    ) {
+      const { initialSnapshot: _snapshot, ...ordinary } = input;
+      payload = ordinary;
+    }
+    // Ordinary first binding verifies completed contents; exact bind replay preserves edits.
     const timeoutMs = input.action === "register" ? 10 * 60_000 + 5_000 : 30_000;
     const result = await transport.invoke({
       node,
       command: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
-      params: input,
+      params: payload,
       signal,
       timeoutMs,
       idempotencyKey: `${input.environmentId}:${input.preparationKey}:${input.action}`,
@@ -65,10 +81,10 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
         `Prepared workspace ${input.action} failed${result.error?.message ? `: ${result.error.message}` : ""}`,
       );
     }
-    const payload = result.payloadJSON
+    const resultPayload = result.payloadJSON
       ? (JSON.parse(result.payloadJSON) as unknown)
       : result.payload;
-    const registered = parseNodeWorkerPreparedWorkspaceResult(payload);
+    const registered = parseNodeWorkerPreparedWorkspaceResult(resultPayload);
     if (
       !registered ||
       registered.gatewayNamespace !== input.gatewayNamespace ||
@@ -83,10 +99,24 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
     ) {
       throw new Error("Node did not acknowledge the exact prepared workspace");
     }
-    return registered;
+    return {
+      registered,
+      isNodeCurrent: () =>
+        options.getNodeTransport() === transport &&
+        request.initialNode !== undefined &&
+        request.initialNode.connId === node.connId &&
+        transport.isCurrent(request.initialNode),
+    };
   };
   return {
-    registerPreparedWorkspace: async ({ record, deviceId, workspace, assertCurrent, signal }) => {
+    registerPreparedWorkspace: async ({
+      record,
+      deviceId,
+      workspace,
+      initialNode,
+      assertCurrent,
+      signal,
+    }) => {
       const enrollment = options.store.get(record.environmentId);
       const assertRegistrationCurrent = () => {
         signal?.throwIfAborted();
@@ -112,19 +142,26 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
           throw new Error("Prepared workspace lost its exact provisioning owner");
         }
       };
-      await invokePreparedWorkspace({
+      const registration = await invokePreparedWorkspace({
         deviceId,
         assertCurrent: assertRegistrationCurrent,
         signal,
+        initialNode,
         input: {
           action: "register",
           gatewayNamespace: options.gatewayNamespace,
           environmentId: record.environmentId,
-          ...workspace,
+          preparationKey: workspace.preparationKey,
+          cacheKey: workspace.cacheKey,
+          workspaceDir: workspace.workspaceDir,
+          homeDir: workspace.homeDir,
+          sourceManifestRef: workspace.sourceManifestRef,
+          preparedManifestRef: workspace.preparedManifestRef,
         },
       });
+      return registration.isNodeCurrent;
     },
-    bindPreparedWorkspace: async ({ assertCurrent, signal, ...binding }) => {
+    bindPreparedWorkspace: async ({ assertCurrent, signal, isSnapshotCurrent, ...binding }) => {
       const record = options.store.get(binding.environmentId);
       const placement = await options.placementStore.getAsync(binding.sessionId);
       const assertBindingCurrent = () => {
@@ -162,12 +199,14 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
         return record.nodeDeviceId;
       };
       const deviceId = assertBindingCurrent();
-      return await invokePreparedWorkspace({
+      const prepared = await invokePreparedWorkspace({
         deviceId,
         assertCurrent: assertBindingCurrent,
         signal,
+        isSnapshotCurrent,
         input: { action: "bind", gatewayNamespace: options.gatewayNamespace, ...binding },
       });
+      return prepared.registered;
     },
   };
 }

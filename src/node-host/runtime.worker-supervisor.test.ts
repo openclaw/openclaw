@@ -33,7 +33,11 @@ vi.mock("./mcp.js", () => ({
 
 // mock-isolation: the supervisor owns real workers here, but no plugin-host services are enabled.
 vi.mock("./plugin-node-host.js", () => ({
-  ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  ensureNodeHostPluginRegistry: vi.fn(async () => ({
+    ready: Promise.resolve(),
+    isReady: () => true,
+    hasPendingWork: () => false,
+  })),
   hasRegisteredNodeHostCommandActiveWork: vi.fn(() => false),
   isRegisteredNodeHostCommandDuplex: vi.fn(() => false),
   listRegisteredNodeHostCapsAndCommands: () => ({ caps: [], commands: [], nodePluginTools: [] }),

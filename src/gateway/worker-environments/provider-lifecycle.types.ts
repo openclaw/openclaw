@@ -9,7 +9,11 @@ import type {
   WorkerSshEndpoint,
   WorkerSshIdentity,
 } from "../../plugins/types.js";
-import type { NodeWorkerPreparedWorkspaceResult } from "../../worker/node-workspace-prepared-protocol.js";
+import type {
+  NodeWorkerInitialSnapshot,
+  NodeWorkerPreparedWorkspaceResult,
+} from "../../worker/node-workspace-prepared-protocol.js";
+import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
 import type { GatewayNodeWorkerBundleInstall } from "./node-worker-bundle-installer.js";
@@ -72,12 +76,13 @@ export type WorkerProviderLifecycleInputOptions = {
   registerPreparedWorkspace?: (params: {
     record: WorkerEnvironmentRecord;
     deviceId: string;
+    initialNode?: NodeWorkerSupervisorNodeProof;
     workspace: NonNullable<
       ReturnType<ReturnType<typeof createWorkerProjectPreparation>["getPreparedWorkspace"]>
     >;
     assertCurrent: () => void;
     signal?: AbortSignal;
-  }) => Promise<void>;
+  }) => Promise<(() => boolean) | void>;
   bindPreparedWorkspace?: (params: {
     environmentId: string;
     ownerEpoch: number;
@@ -85,6 +90,8 @@ export type WorkerProviderLifecycleInputOptions = {
     sessionKey: string;
     preparationKey: string;
     cacheKey: string;
+    initialSnapshot?: NodeWorkerInitialSnapshot;
+    isSnapshotCurrent?: () => boolean;
     signal?: AbortSignal;
     assertCurrent: () => void;
   }) => Promise<NodeWorkerPreparedWorkspaceResult>;
@@ -93,6 +100,9 @@ export type WorkerProviderLifecycleInputOptions = {
     signal?: AbortSignal,
   ) => Promise<WorkerNodeEnrollment>;
   closeNodeEnrollment?: (enrollment: WorkerNodeEnrollment) => void;
+  readInitialNodeConnection?: (
+    enrollment: WorkerNodeEnrollment,
+  ) => NodeWorkerSupervisorNodeProof | undefined;
   retireNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<void>;
   projectNamespace?: string;
   placementStore?: WorkerSessionPlacementGate;

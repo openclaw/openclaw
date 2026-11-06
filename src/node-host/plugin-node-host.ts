@@ -32,10 +32,16 @@ import { resolveNodeExecConfigPolicy } from "./exec-policy.js";
 const loadPluginRegistryLoaderModule = createLazyRuntimeModule(
   () => import("../plugins/loader.js"),
 );
-let nodeHostPluginRegistry: PluginRegistry | undefined;
+const COMPUTER_COMMANDS = new Set(["screen.snapshot", "computer.act"]);
+type NodeHostPluginPreparation = {
+  ready: Promise<void>;
+  isReady: () => boolean;
+  hasPendingWork: () => boolean;
+};
+let nodeHostPluginRegistry: (NodeHostPluginPreparation & { registry: PluginRegistry }) | undefined;
 
 function resolveNodeHostPluginRegistry() {
-  return nodeHostPluginRegistry ?? getActivePluginRegistry() ?? undefined;
+  return nodeHostPluginRegistry?.registry ?? getActivePluginRegistry() ?? undefined;
 }
 
 /** Ensure plugin registry data is loaded before node-host command dispatch. */
@@ -45,7 +51,8 @@ export async function ensureNodeHostPluginRegistry(params: {
   commandAllowlist?: ReadonlySet<string>;
   onlyPluginIds?: string[];
   logger?: PluginLogger;
-}): Promise<void> {
+  deferComputerPreparation?: boolean;
+}): Promise<NodeHostPluginPreparation> {
   const registry = (await loadPluginRegistryLoaderModule()).loadPluginRegistryHandle({
     config: params.config,
     activationSourceConfig: params.config,
@@ -53,23 +60,82 @@ export async function ensureNodeHostPluginRegistry(params: {
     onlyPluginIds: params.onlyPluginIds,
     logger: params.logger,
   });
-  // Resolve this registry's native readiness before publishing the first manifest.
-  // No process-wide preparation cache: a replacement registry owns fresh resources.
-  await withPluginRuntimeRegistryScope(registry, async () => {
-    const prepare = new Set(
+  const mandatory = new Set<NonNullable<PluginNodeHostCommandRegistration["command"]["prepare"]>>();
+  const deferred = new Set<NonNullable<PluginNodeHostCommandRegistration["command"]["prepare"]>>();
+  for (const { command } of registry.nodeHostCommands) {
+    if (
+      !command.prepare ||
+      (params.commandAllowlist && !params.commandAllowlist.has(command.command))
+    ) {
+      continue;
+    }
+    const callbacks =
+      params.deferComputerPreparation && COMPUTER_COMMANDS.has(command.command)
+        ? deferred
+        : mandatory;
+    callbacks.add(command.prepare);
+  }
+  // Shared preparation cannot be deferred when an advertised command needs it.
+  for (const callback of mandatory) {
+    deferred.delete(callback);
+  }
+  const prepare = async (callbacks: typeof mandatory) => {
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      const results = await Promise.allSettled(
+        [...callbacks].map(async (callback) =>
+          callback({ config: params.config, env: params.env ?? process.env }),
+        ),
+      );
+      throwIfSettledRejected(results, "node-host plugin preparation failed");
+    });
+  };
+  let computerState: "pending" | "ready" | "failed" = deferred.size === 0 ? "ready" : "pending";
+  const ready = prepare(deferred).then(
+    () => {
+      computerState = "ready";
+    },
+    (error: unknown) => {
+      computerState = "failed";
+      throw error;
+    },
+  );
+  // The runtime joins this original promise at use and cleanup; observe early rejection.
+  void ready.catch(() => {});
+  try {
+    await prepare(mandatory);
+  } catch (error) {
+    await Promise.allSettled([ready]);
+    // Computer preparation owns native resources whose disposer is supplied by
+    // its availability watcher, even when another startup callback fails.
+    const computerCommands = new Set(
       registry.nodeHostCommands
         .filter(
-          (entry) => !params.commandAllowlist || params.commandAllowlist.has(entry.command.command),
+          ({ command }) =>
+            command.prepare &&
+            COMPUTER_COMMANDS.has(command.command) &&
+            (!params.commandAllowlist || params.commandAllowlist.has(command.command)),
         )
-        .map((entry) => entry.command.prepare),
+        .map(({ command }) => command.command),
     );
-    await Promise.all(
-      [...prepare].map(async (callback) =>
-        callback?.({ config: params.config, env: params.env ?? process.env }),
-      ),
-    );
-  });
-  nodeHostPluginRegistry = registry;
+    try {
+      await watchRegisteredNodeHostCommandAvailability(
+        { config: params.config, env: params.env ?? process.env },
+        () => {},
+        computerCommands,
+        registry,
+      )();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "node-host preparation and cleanup failed");
+    }
+    throw error;
+  }
+  const preparation = {
+    ready,
+    isReady: () => computerState === "ready",
+    hasPendingWork: () => computerState === "pending",
+  };
+  nodeHostPluginRegistry = { registry, ...preparation };
+  return preparation;
 }
 
 /** List registered node-host capabilities and command ids in deterministic order. */
@@ -84,6 +150,14 @@ export function listRegisteredNodeHostCapsAndCommands(
     let computerUse: ComputerUseCapabilityDescriptor | undefined;
     const nodePluginTools = new Map<string, NodePluginToolDescriptor>();
     for (const entry of registry?.nodeHostCommands ?? []) {
+      if (
+        nodeHostPluginRegistry &&
+        nodeHostPluginRegistry.registry === registry &&
+        !nodeHostPluginRegistry.isReady() &&
+        COMPUTER_COMMANDS.has(entry.command.command)
+      ) {
+        continue;
+      }
       if (options.commandAllowlist && !options.commandAllowlist.has(entry.command.command)) {
         continue;
       }
@@ -121,30 +195,56 @@ export function watchRegisteredNodeHostCommandAvailability(
   context: OpenClawPluginNodeHostCommandAvailabilityContext,
   onChange: () => void,
   commandAllowlist?: ReadonlySet<string>,
+  registry = resolveNodeHostPluginRegistry(),
 ): () => Promise<void> {
-  const registry = resolveNodeHostPluginRegistry();
   let cleanups: Array<() => void | Promise<void>> = [];
   let stopped = false;
   let stopping: Promise<void> | undefined;
-  withPluginRuntimeRegistryScope(registry, () => {
-    for (const entry of registry?.nodeHostCommands ?? []) {
-      if (commandAllowlist && !commandAllowlist.has(entry.command.command)) {
-        continue;
-      }
-      const cleanup = entry.command.watchAvailability?.(context, () => {
-        if (!stopped) {
-          withPluginRuntimeRegistryScope(registry, onChange);
+  const pending =
+    nodeHostPluginRegistry &&
+    nodeHostPluginRegistry.registry === registry &&
+    !nodeHostPluginRegistry.isReady()
+      ? nodeHostPluginRegistry.ready
+      : undefined;
+  const start = (computerOnly: boolean) => {
+    withPluginRuntimeRegistryScope(registry, () => {
+      for (const entry of registry?.nodeHostCommands ?? []) {
+        if (pending && COMPUTER_COMMANDS.has(entry.command.command) !== computerOnly) {
+          continue;
         }
-      });
-      if (cleanup) {
-        cleanups.push(cleanup);
+        if (commandAllowlist && !commandAllowlist.has(entry.command.command)) {
+          continue;
+        }
+        const cleanup = entry.command.watchAvailability?.(context, () => {
+          if (!stopped) {
+            withPluginRuntimeRegistryScope(registry, onChange);
+          }
+        });
+        if (cleanup) {
+          cleanups.push(cleanup);
+        }
       }
-    }
-  });
+    });
+  };
+  start(false);
+  // Finish accepted attachment even after stop: its disposer owns resources
+  // created by preparation. Notifications remain fenced while cleanup joins it.
+  const starting = pending
+    ? pending
+        .catch(() => {})
+        .then(() => {
+          start(true);
+          if (!stopped) {
+            withPluginRuntimeRegistryScope(registry, onChange);
+          }
+        })
+    : Promise.resolve();
+  void starting.catch(() => {});
   return () => {
     stopped = true;
     return (stopping ??= Promise.resolve()
       .then(async () => {
+        const started = await Promise.allSettled([starting]);
         const results = await Promise.allSettled(
           cleanups.map(async (cleanup) =>
             withPluginRuntimeRegistryScope(registry, () => cleanup()),
@@ -152,7 +252,7 @@ export function watchRegisteredNodeHostCommandAvailability(
         );
         // Retry only unfinished owners; successful cleanup must not run twice.
         cleanups = cleanups.filter((_cleanup, index) => results[index]?.status === "rejected");
-        throwIfSettledRejected(results, "node-host watcher cleanup failed");
+        throwIfSettledRejected([...started, ...results], "node-host watcher cleanup failed");
       })
       .catch((error: unknown) => {
         stopping = undefined;

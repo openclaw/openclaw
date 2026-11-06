@@ -149,7 +149,11 @@ vi.mock("./config.js", () => ({
 
 // mock-isolation: Synthetic node-host capabilities avoid real plugin discovery and lifecycle effects.
 vi.mock("./plugin-node-host.js", () => ({
-  ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  ensureNodeHostPluginRegistry: vi.fn(async () => ({
+    ready: Promise.resolve(),
+    isReady: () => true,
+    hasPendingWork: () => false,
+  })),
   notifyRegisteredNodeHostCommandDisconnect: vi.fn(async () => {}),
   listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
     commands: [...mocks.nodeHostCommands],

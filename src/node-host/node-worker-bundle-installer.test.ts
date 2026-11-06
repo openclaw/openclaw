@@ -14,7 +14,9 @@ import {
 import { withinTest } from "../../test/helpers/promise.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as bundleArchive from "../shared/worker-bundle-archive.js";
 import { NodeWorkerBundleInstallError } from "../worker/node-bundle-install-protocol.js";
+import { preparePackagedNodeWorkerBundle } from "./node-worker-bundle-cache.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import {
   buildBundleFixture,
@@ -363,6 +365,84 @@ describe("node worker bundle installer", () => {
     return { fixture, archivePath, served, ...installation(fixture, served.gatewayUrl) };
   }
 
+  it("shares prepared code across leases while keeping prewarm and retention lease-owned", async () => {
+    const prewarmMarker = path.join(root, "prewarm");
+    const fixture = await bundleFixture({ prewarmMarker, bundlePrewarm: 1 });
+    const archivePath = await prepareLocalArchive(fixture);
+    const expanded = path.join(
+      path.dirname(archivePath),
+      "expanded",
+      fixture.input.build.bundleHash,
+    );
+    await bundleArchive.extractWorkerBundleArchive({
+      tarballPath: archivePath,
+      destination: expanded,
+      expectedBundleHash: fixture.input.build.bundleHash,
+      limits: bundleArchive.DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+    });
+    await fs.writeFile(
+      path.join(expanded, "bootstrap-receipt.json"),
+      JSON.stringify(fixture.input.build),
+    );
+    const extractions = vi.spyOn(bundleArchive, "extractWorkerBundleArchive");
+    const served = await serve(fixture);
+    const destinations: string[] = [];
+    for (const lease of ["first", "second"]) {
+      const leaseRoot = path.join(root, lease);
+      const installer = new NodeWorkerBundleInstaller({ root: leaseRoot });
+      await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
+      await expectText(prewarmMarker, "ready");
+      await fs.unlink(prewarmMarker);
+      const destination = path.join(
+        leaseRoot,
+        fixture.input.gatewayNamespace,
+        "bundles",
+        fixture.input.build.bundleHash,
+      );
+      destinations.push(await fs.realpath(destination));
+      await installer.retain({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHashes: [],
+      });
+      expect(existsSync(destination)).toBe(false);
+      expect(existsSync(path.join(expanded, "worker.mjs"))).toBe(true);
+    }
+    expect(extractions).not.toHaveBeenCalled();
+    expect(served.requests).not.toHaveBeenCalled();
+    expect(destinations).toEqual([expanded, expanded]);
+  });
+
+  it("verifies prepared packages without repair and falls back when their code is damaged", async () => {
+    const { fixture, archivePath, ensure, inspect } = await localSetup();
+    const input = {
+      build: fixture.input.build,
+      archive: { sha256: fixture.input.archive.sha256, bytes: fixture.input.archive.bytes },
+    };
+    const expanded = path.join(
+      path.dirname(archivePath),
+      "expanded",
+      fixture.input.build.bundleHash,
+    );
+    await expect(preparePackagedNodeWorkerBundle(input, true)).rejects.toThrow(
+      "missing or invalid",
+    );
+    expect(existsSync(expanded)).toBe(false);
+    await preparePackagedNodeWorkerBundle(input);
+    await preparePackagedNodeWorkerBundle(input, true);
+    const entry = path.join(expanded, "worker.mjs");
+    await fs.writeFile(entry, "damaged");
+    await expect(preparePackagedNodeWorkerBundle(input, true)).rejects.toThrow(
+      "missing or invalid",
+    );
+    await expectText(entry, "damaged");
+    await ensure();
+    await expect(inspect()).resolves.toMatchObject({ status: "installed" });
+    expect((await fs.lstat(bundleDirectory(fixture))).isSymbolicLink()).toBe(false);
+    await expectText(entry, "damaged");
+    await preparePackagedNodeWorkerBundle(input);
+    await preparePackagedNodeWorkerBundle(input, true);
+  });
+
   it("cancels retry backoff without another request and removes staging", async () => {
     const fixture = await bundleFixture();
     const controller = new AbortController();
@@ -414,7 +494,7 @@ describe("node worker bundle installer", () => {
         request: { body: "synthetic private request" },
       });
       let failuresRemaining = 2;
-      const readFile = fs.readFile.bind(fs);
+      const openFile = fs.open.bind(fs);
       const failRead = () => {
         if (failuresRemaining > 0) {
           failuresRemaining--;
@@ -423,11 +503,11 @@ describe("node worker bundle installer", () => {
       };
       const readFailure =
         phase === "receipt"
-          ? vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+          ? vi.spyOn(fs, "open").mockImplementation(async (...args) => {
               if (args[0] === path.join(destination, "bootstrap-receipt.json")) {
                 failRead();
               }
-              return await readFile(...args);
+              return await openFile(...args);
             })
           : observeDirectory(destination, failRead);
       const warning = expect.stringContaining(

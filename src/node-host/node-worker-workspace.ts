@@ -170,6 +170,10 @@ export class NodeWorkerWorkspaceRuntime {
     await probe.cleanup();
   }
 
+  invalidateSnapshotPreparation(): void {
+    this.prepared.invalidateSnapshotPreparation();
+  }
+
   /** Only the fresh provisioning owner may register, before Gateway readiness is committed. */
   async prepare(
     input: NodeWorkerPreparedWorkspaceInput,

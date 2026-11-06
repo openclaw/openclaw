@@ -12,9 +12,11 @@ import { assertEnvironmentRecipeSecretsMapped } from "./environment-recipe.js";
 import {
   createWorkerPreparationIdentity,
   type WorkerProviderPreparedIntent,
+  type WorkerInitialSnapshotCustody,
 } from "./preparation-identity.js";
 import * as prep from "./preparation-identity.schema.js";
 import * as projects from "./project-preparation.js";
+import { createWorkerProviderIntentAdmission } from "./provider-intent-admission.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { WorkerProviderRepositorySource } from "./provider-project-preparation.js";
 import {
@@ -42,6 +44,7 @@ type WorkerProviderIntentOptions = Pick<
     beforeProvision?: () => void,
     repositorySource?: WorkerProviderRepositorySource,
     wakeRetained?: () => void,
+    recordInitialSnapshot?: (custody: WorkerInitialSnapshotCustody) => void,
   ) => Promise<WorkerEnvironmentRecord>;
 };
 
@@ -115,29 +118,14 @@ export async function failUnallocatedImageIntent(
 
 /** Admits one immutable allocation intent before the provider lifecycle can allocate a lease. */
 export function createWorkerProviderIntent(options: WorkerProviderIntentOptions) {
-  const preparedIntents = new WeakMap<
-    WorkerProviderPreparedIntent,
-    { profileId: string; assertCurrent: () => void; repository?: WorkerProviderRepositorySource }
-  >();
-  const assertPreparedIntentCurrent = (profileId: string, intent: WorkerProviderPreparedIntent) => {
-    const prepared = preparedIntents.get(intent);
-    if (!prepared || prepared.profileId !== profileId) {
-      throw serviceError("invalid_state", "Worker preparation is not owned by this lifecycle");
-    }
-    prepared.assertCurrent();
-  };
+  const {
+    preparedIntents,
+    assertPreparedIntentCurrent,
+    requireProfileId,
+    takeInitialSnapshot,
+    preparedRepositorySource,
+  } = createWorkerProviderIntentAdmission(options);
   const { store, withLock, providerFor, resumeProvision } = options;
-  const requireProfileId = (profileId: string, signal?: AbortSignal) => {
-    signal?.throwIfAborted();
-    if (options.isStopping()) {
-      throw serviceError("invalid_state", "Worker environment service is stopping");
-    }
-    const normalizedProfileId = profileId.trim();
-    if (!normalizedProfileId || normalizedProfileId !== profileId) {
-      throw serviceError("invalid_profile", "Worker profile id must be non-empty and trimmed");
-    }
-    return normalizedProfileId;
-  };
   const resolveProfile = (
     profileId: string,
     createOptions: WorkerProviderIntentPreparationOptions,
@@ -233,9 +221,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     const machineClass =
       typeof profileSnapshot.machineClass === "string" ? profileSnapshot.machineClass : undefined;
     const os = typeof profileSnapshot.os === "string" ? profileSnapshot.os : undefined;
-    let repositoryAdmission:
-      | Awaited<ReturnType<typeof prepareRepositoryWorkerProjectSource>>
-      | undefined;
+    let repositoryAdmission: WorkerProviderRepositorySource | undefined;
     const profile = validation.requireWorkerProfile(profileSnapshot.settings);
     let assertImageCurrent: (() => void) | undefined;
     if (
@@ -556,15 +542,9 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       createOptions.retainedPolicy,
       admittedIntent?.retainedPolicy,
     );
-    const inherited = createOptions.inherited
-      ? {
-          providerId: createOptions.inherited.providerId,
-          profileSnapshot: allocationSnapshot(
-            createOptions.inherited.profileSnapshot,
-            createOptions,
-          ),
-        }
-      : undefined;
+    const inherited = createOptions.inherited;
+    const inheritedSnapshot =
+      inherited && allocationSnapshot(inherited.profileSnapshot, createOptions);
     const normalizedProfileId = requireProfileId(profileId, signal);
     const beforeProvision = (intent?: WorkerProviderPreparedIntent) => () => {
       createOptions.beforeProvision?.();
@@ -656,13 +636,10 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           existing.profileId !== normalizedProfileId ||
           (inherited !== undefined &&
             (existing.providerId !== inherited.providerId ||
-              !isDeepStrictEqual(existing.profileSnapshot, {
-                ...inherited.profileSnapshot,
-                ...(existingProject ? { project: existing.profileSnapshot.project } : {}),
-                ...(existing.profileSnapshot.runtimePreparation
-                  ? { runtimePreparation: existing.profileSnapshot.runtimePreparation }
-                  : {}),
-              }))) ||
+              !isDeepStrictEqual(
+                allocationSnapshot(existing.profileSnapshot, {}),
+                inheritedSnapshot,
+              ))) ||
           (inherited === undefined &&
             (existing.profileSnapshot.machineClass !== machineClass ||
               existing.profileSnapshot.os !== os ||
@@ -718,8 +695,20 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         undefined,
         beforeProvision(admitted),
         preparedIntents.get(admitted)?.repository,
+        undefined,
+        (custody) => {
+          assertPreparedIntentCurrent(profileId, admitted);
+          preparedIntents.get(admitted)!.initialSnapshot = custody;
+        },
       );
     });
   };
-  return { prepareIntent, prepareRetention, assertPreparedIntentCurrent, createWithProfile };
+  return {
+    prepareIntent,
+    prepareRetention,
+    assertPreparedIntentCurrent,
+    createWithProfile,
+    takeInitialSnapshot,
+    preparedRepositorySource,
+  };
 }

@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { GatewayClient } from "../gateway/client.js";
+import { GatewayClient } from "../gateway/client.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
@@ -20,6 +20,7 @@ import {
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+  NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
 import * as logger from "../logger.js";
@@ -139,8 +140,15 @@ async function invokePrivate(params: {
   gatewayCloudflareAccess?: { clientId: string; clientSecret: string };
   workspace?: NodeWorkerWorkspaceRuntime;
   signal?: AbortSignal;
+  serverCapabilities?: ReadonlySet<string>;
+  workerPreparation?: Promise<void>;
 }) {
-  const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+  // An unstarted client preserves the generic RPC signature without opening a connection.
+  const client = Object.assign(new GatewayClient({}), {
+    serverCapabilities: params.serverCapabilities,
+  });
+  const request = vi.spyOn(client, "request").mockResolvedValue(null);
+  onTestFinished(() => request.mockRestore());
   await handleInvoke(
     {
       id: "invoke-1",
@@ -148,13 +156,14 @@ async function invokePrivate(params: {
       command: params.command,
       paramsJSON: params.paramsJSON,
     },
-    { request } as unknown as GatewayClient,
+    client,
     { current: async () => [] },
     undefined,
     {
       ...(params.bundleInstaller ? { workerBundleInstaller: params.bundleInstaller } : {}),
       ...(params.supervisor ? { workerSupervisor: params.supervisor } : {}),
       ...(params.workspace ? { workerWorkspace: params.workspace } : {}),
+      workerPreparation: params.workerPreparation,
       ...(params.signal ? { signal: params.signal } : {}),
       gatewayUrl: params.gatewayUrl ?? "wss://gateway.example/tenant",
       ...(params.gatewayTlsFingerprint
@@ -174,6 +183,42 @@ async function invokePrivate(params: {
 }
 
 describe("node-host worker supervisor commands", () => {
+  it.each([false, true])(
+    "negotiates the prepared base with the Gateway (supported=%s)",
+    async (supported) => {
+      const workspace = new NodeWorkerWorkspaceRuntime({
+        root: tempDirs.make("node-prepared-wire-"),
+      });
+      // v2026.11.1 accepts this exact strict result shape; baseCommit is opt-in.
+      const legacy = {
+        gatewayNamespace: "gateway",
+        environmentId: "environment",
+        preparationKey: "a".repeat(64),
+        cacheKey: "b".repeat(64),
+        workspaceDir: "/prepared/workspace",
+        homeDir: "/prepared/home",
+        sourceManifestRef: `sha256:${"c".repeat(64)}`,
+        preparedManifestRef: `sha256:${"d".repeat(64)}`,
+      };
+      const prepared = Object.freeze({ ...legacy, baseCommit: "e".repeat(40) });
+      const prepare = vi.spyOn(workspace, "prepare").mockResolvedValue(prepared);
+      try {
+        const { result } = await invokePrivate({
+          command: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+          paramsJSON: JSON.stringify({ action: "register", ...legacy }),
+          workspace,
+          serverCapabilities: supported
+            ? new Set(["node-worker-prepared-workspace-base-v1"])
+            : undefined,
+        });
+        expect(result?.ok).toBe(true);
+        expect(JSON.parse(result?.payloadJSON ?? "null")).toEqual(supported ? prepared : legacy);
+      } finally {
+        prepare.mockRestore();
+      }
+    },
+  );
+
   it("passes a bounded status wait and its connection cancellation to the supervisor", async () => {
     const supervisor = supervisorWith(fullReceipt());
     const controller = new AbortController();
@@ -224,6 +269,17 @@ describe("node-host worker supervisor commands", () => {
     const input = launchInput();
     const receipt = fullReceipt(input);
     const supervisor = supervisorWith(receipt);
+    const invalidateSnapshotPreparation = vi.fn();
+    const workspace = new NodeWorkerWorkspaceRuntime({
+      root: tempDirs.make("invoke-preparation-owner-"),
+    });
+    const invalidateWorkspace = vi.spyOn(workspace, "invalidateSnapshotPreparation");
+    onTestFinished(() => invalidateWorkspace.mockRestore());
+    supervisor[method].mockImplementationOnce(async () => {
+      expect(invalidateSnapshotPreparation).toHaveBeenCalledTimes(method === "status" ? 0 : 1);
+      expect(invalidateWorkspace).toHaveBeenCalledTimes(method === "status" ? 0 : 1);
+      return receipt;
+    });
     const pluginHandle = registerCollidingPlugin(command);
 
     const { result } = await invokePrivate({
@@ -236,6 +292,13 @@ describe("node-host worker supervisor commands", () => {
             : { launchId: input.launchId },
       ),
       supervisor,
+      workspace,
+      bundleInstaller: {
+        ensure: async () => {
+          throw new Error("No bundle install expected");
+        },
+        invalidateSnapshotPreparation,
+      },
     });
 
     expect(supervisor[method].mock.calls).toHaveLength(1);
@@ -417,12 +480,13 @@ setInterval(() => {}, 1000);
       archive: { token: "A".repeat(43), sha256: "b".repeat(64), bytes: 123 },
     };
     const ensure = vi.fn(async () => build);
+    const invalidateSnapshotPreparation = vi.fn();
     const pluginHandle = registerCollidingPlugin(NODE_WORKER_BUNDLE_INSTALL_COMMAND);
 
     const { result } = await invokePrivate({
       command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
       paramsJSON: JSON.stringify(input),
-      bundleInstaller: { ensure },
+      bundleInstaller: { ensure, invalidateSnapshotPreparation },
       gatewayUrl: "wss://gateway.example/tenant",
       gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
       gatewayCloudflareAccess: {
@@ -441,10 +505,74 @@ setInterval(() => {}, 1000);
       },
       signal: undefined,
     });
+    expect(invalidateSnapshotPreparation).not.toHaveBeenCalled();
     expect(pluginHandle).not.toHaveBeenCalled();
     expect(result?.ok).toBe(true);
     expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual(build);
   });
+
+  it.each(["ready", "install failure", "preparation failure"])(
+    "overlaps bundle install and preparation but drains both before replying: %s",
+    async (mode) => {
+      const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+      onTestFinished(() => warn.mockRestore());
+      const build = {
+        bundleHash: "a".repeat(64),
+        openclawVersion: "2026.8.1",
+        protocolFeatures: [],
+      };
+      const installed = createDeferred<typeof build>();
+      const prepared = createDeferred();
+      const ensure = vi.fn(() => installed.promise);
+      // Observe the controlled failure even on the pre-fix path that ignores preparation.
+      void prepared.promise.catch(() => {});
+      const running = invokePrivate({
+        command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
+        paramsJSON: JSON.stringify({
+          gatewayNamespace: "gateway-test",
+          build,
+          archive: { token: "A".repeat(43), sha256: "b".repeat(64), bytes: 123 },
+        }),
+        bundleInstaller: { ensure },
+        workerPreparation: prepared.promise,
+      });
+      let finished = false;
+      void running.finally(() => {
+        finished = true;
+      });
+      try {
+        expect(ensure).toHaveBeenCalledOnce();
+        if (mode === "preparation failure") {
+          prepared.reject(new Error("private preparation failed"));
+        } else if (mode === "install failure") {
+          installed.reject(new Error("bundle installation failed"));
+        } else {
+          installed.resolve(build);
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(finished).toBe(false);
+      } finally {
+        installed.resolve(build);
+        prepared.resolve();
+        await running;
+      }
+      const { result } = await running;
+      expect(result?.ok).toBe(mode === "ready");
+      if (mode !== "ready") {
+        expect(result?.error).toEqual({
+          code: "UNAVAILABLE",
+          message: "node worker supervisor command failed",
+        });
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining(
+            mode === "install failure"
+              ? "bundle installation failed"
+              : "private preparation failed",
+          ),
+        );
+      }
+    },
+  );
 
   it("dispatches workspace retention before a colliding plugin command", async () => {
     const input = launchInput();
@@ -931,17 +1059,21 @@ setInterval(() => {}, 1000);
 
   it("preserves a typed workspace transfer failure across node invoke", async () => {
     const cause = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
-    const workspace = {
-      exec: vi.fn(async () => {
-        throw Object.assign(
+    const workspace = new NodeWorkerWorkspaceRuntime({
+      root: tempDirs.make("typed-transfer-failure-"),
+    });
+    const exec = vi
+      .spyOn(workspace, "exec")
+      .mockRejectedValueOnce(
+        Object.assign(
           new NodeWorkerWorkspaceTransferError(
             "workspace-transfer-failed: transfer did not complete",
             { cause },
           ),
           { operation: "upload", stage: "reconcile" },
-        );
-      }),
-    } as unknown as NodeWorkerWorkspaceRuntime;
+        ),
+      );
+    onTestFinished(() => exec.mockRestore());
 
     const { result } = await invokePrivate({
       command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
@@ -971,14 +1103,18 @@ setInterval(() => {}, 1000);
       new Error(`socket hang up ${"detail ".repeat(300)} Authorization: Bearer ${secret}`),
       { code: "ECONNRESET" },
     );
-    const workspace = {
-      exec: vi.fn(async () => {
-        throw new NodeWorkerWorkspaceTransferError(
+    const workspace = new NodeWorkerWorkspaceRuntime({
+      root: tempDirs.make("bounded-transfer-failure-"),
+    });
+    const exec = vi
+      .spyOn(workspace, "exec")
+      .mockRejectedValueOnce(
+        new NodeWorkerWorkspaceTransferError(
           "workspace-transfer-failed: transfer did not complete",
           { cause, operation: "upload", stage: "reconcile" },
-        );
-      }),
-    } as unknown as NodeWorkerWorkspaceRuntime;
+        ),
+      );
+    onTestFinished(() => exec.mockRestore());
 
     const { result } = await invokePrivate({
       command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
