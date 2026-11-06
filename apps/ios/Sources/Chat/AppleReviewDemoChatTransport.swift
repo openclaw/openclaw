@@ -1,7 +1,6 @@
 import Foundation
 import OpenClawChatUI
 import OpenClawProtocol
-import os
 
 enum AppleReviewDemoMode {
     static let setupCode = "APPLE-REVIEW-DEMO"
@@ -218,12 +217,6 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     private let store: LocalFixtureChatStore
     private let reactionsRouteID = UUID()
 
-    /// Launch-scoped call counter for `--openclaw-partial-sessions-fixture`:
-    /// the first two roster loads keep the final page failing (200 of 201 sessions
-    /// retained) and every later load recovers to the full roster so a UI test can
-    /// prove the in-screen Refresh path end to end.
-    private static let partialSessionsFixtureLoads = OSAllocatedUnfairLock(initialState: 0)
-
     init(fixture: LocalChatFixture) {
         self.fixture = fixture
         self.store = LocalFixtureChatStore(fixture: fixture)
@@ -411,13 +404,6 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 status: "running",
                 hasActiveRun: true))
         }
-        if self.fixture.sessionIDPrefix == "screenshot-fixture",
-           ProcessInfo.processInfo.arguments.contains("--openclaw-partial-sessions-fixture"),
-           !archived,
-           search == nil
-        {
-            return Self.partialSessionsFixtureRoster()
-        }
         if archived {
             sessions = []
         }
@@ -429,42 +415,6 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             path: response.path,
             count: sessions.count,
             defaults: response.defaults,
-            sessions: sessions)
-    }
-
-    /// Mirrors the issue #193789 failure shape at the roster boundary: a paginated
-    /// load that retained its first 200 sessions while the offset-200 page kept
-    /// timing out (`isComplete == false`, total known), recovering to the full
-    /// 201-session roster on a later load.
-    private static func partialSessionsFixtureRoster() -> OpenClawChatSessionsListResponse {
-        let loadIndex = self.partialSessionsFixtureLoads.withLock { state in
-            state += 1
-            return state
-        }
-        let recovered = loadIndex > 2
-        let totalCount = 201
-        let delivered = recovered ? totalCount : totalCount - 1
-        let now = Date().timeIntervalSince1970 * 1000
-        let sessions = (1...delivered).map { index in
-            let paddedIndex = String(repeating: "0", count: max(0, 3 - String(index).count)) + String(index)
-            return OpenClawChatSessionEntry(
-                key: "agent:main:partial-\(index)",
-                kind: "chat",
-                displayName: "Partial session \(paddedIndex)",
-                surface: "ios",
-                subject: "Later-page timeout fixture",
-                updatedAt: now - Double(index),
-                sessionId: "screenshot-fixture-partial-\(index)")
-        }
-        return OpenClawChatSessionsListResponse(
-            ts: now,
-            path: nil,
-            count: sessions.count,
-            totalCount: totalCount,
-            offset: 0,
-            nextOffset: delivered,
-            hasMore: !recovered,
-            defaults: nil,
             sessions: sessions)
     }
 
