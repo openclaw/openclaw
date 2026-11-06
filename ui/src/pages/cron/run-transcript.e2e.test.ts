@@ -4,7 +4,10 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronRunLogEntry } from "../../api/types.ts";
 import { configResponse } from "../../e2e/appearance-prefs.test-support.ts";
-import { controlUiE2eBuiltModuleRequest } from "../../e2e/control-ui-built-module.test-support.ts";
+import {
+  controlUiE2eBuiltModuleRequest,
+  failControlUiModuleForDocuments,
+} from "../../e2e/control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -80,10 +83,10 @@ suite.define(() => {
         expect(held.requests()).toBe(0);
         const { button, region } = await openRunHistory(page);
         await heldHistory.request;
-        await region.getByRole("status").waitFor();
+        await region.getByRole("status").first().waitFor();
         heldHistory.release();
         await held.request;
-        await region.getByRole("status").waitFor();
+        await region.getByRole("status").first().waitFor();
         await expect
           .poll(() => region.evaluate((element) => element === document.activeElement))
           .toBe(true);
@@ -113,10 +116,7 @@ suite.define(() => {
   ])("recovers a failed %s import through the guarded document reload", async (_name, module) => {
     await suite.withPage({ viewport: { width: 1100, height: 900 } }, async ({ page }) => {
       const transcriptModule = controlUiE2eBuiltModuleRequest(module);
-      let requests = 0;
-      await page.route(transcriptModule, (route) =>
-        ++requests === 1 ? route.abort("internetdisconnected") : route.fallback(),
-      );
+      const failed = await failControlUiModuleForDocuments(page, transcriptModule);
       const gateway = await installCron(page, {
         "cron.history": history("Recovered transcript output"),
       });
@@ -128,7 +128,7 @@ suite.define(() => {
       await reload;
       const { button, region } = await openRunHistory(page);
       await exactText(region, "Recovered transcript output").waitFor();
-      expect(requests).toBe(2);
+      expect(failed.documentCount()).toBe(2);
       expect((await gateway.getRequests("cron.history")).map(({ params }) => params)).toEqual([
         { id: entry.jobId, runAtMs: entry.runAtMs, limit: 100 },
       ]);
