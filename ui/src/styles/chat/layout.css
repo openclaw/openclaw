@@ -2453,7 +2453,6 @@ openclaw-chat-ci-details {
   max-height: min(420px, 52dvh);
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
 }
 
 .chat-ci__job {
@@ -3188,7 +3187,6 @@ openclaw-chat-ci-details {
   padding: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
   border: none;
   border-radius: 0;
   outline: none;

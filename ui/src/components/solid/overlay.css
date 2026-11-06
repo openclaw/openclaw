@@ -1,10 +1,33 @@
-/* Keep shadow-hosted resets, with separate ancestors for selector fast rejection. */
+/* Keep shadow-hosted resets, with separate ancestors for selector fast rejection.
+   The scrollbar rules mirror the canonical profile in styles/base.css, which
+   can't reach into shadow roots. */
 .oc-overlay,
 .oc-modal-dialog,
 .oc-overlay *,
 .oc-modal-dialog * {
   box-sizing: border-box;
-  scrollbar-width: thin;
+}
+
+/* Menus and popovers use the compact thumb. */
+.oc-overlay {
+  --scrollbar-size: var(--scrollbar-size-compact);
+  --scrollbar-thumb-inset: var(--scrollbar-thumb-inset-compact);
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .oc-overlay,
+  .oc-modal-dialog,
+  .oc-overlay *,
+  .oc-modal-dialog * {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+    scrollbar-width: thin;
+  }
+
+  :is(.oc-overlay, .oc-modal-dialog):hover,
+  .oc-overlay :hover,
+  .oc-modal-dialog :hover {
+    scrollbar-color: var(--scrollbar-thumb-near) transparent;
+  }
 }
 
 .oc-overlay::-webkit-scrollbar,
@@ -33,11 +56,26 @@
   border-radius: var(--radius-full);
 }
 
+/* Same repaint flag as styles/base.css; the property itself is registered there. */
+:is(.oc-overlay, .oc-modal-dialog):hover,
+.oc-overlay :hover,
+.oc-modal-dialog :hover {
+  --scrollbar-hover: 1;
+}
+
+:is(.oc-overlay, .oc-modal-dialog):hover::-webkit-scrollbar-thumb,
+.oc-overlay :hover::-webkit-scrollbar-thumb,
+.oc-modal-dialog :hover::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-near);
+}
+
 :is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-thumb:hover,
+:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-thumb:active,
 .oc-overlay ::-webkit-scrollbar-thumb:hover,
-.oc-modal-dialog ::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
-  background-clip: content-box;
+.oc-overlay ::-webkit-scrollbar-thumb:active,
+.oc-modal-dialog ::-webkit-scrollbar-thumb:hover,
+.oc-modal-dialog ::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 /* The anchor owner sets position-anchor; each surface keeps its own placement and size budget. */

@@ -19,6 +19,7 @@ export const WIDGET_THEME_TOKENS = [
   "scrollbar-size",
   "scrollbar-thumb-inset",
   "scrollbar-thumb",
+  "scrollbar-thumb-near",
   "scrollbar-thumb-hover",
   "font-body",
   "font-mono",

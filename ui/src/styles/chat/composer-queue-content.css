@@ -29,8 +29,9 @@
 
   min-width: 0;
   overflow: hidden;
-  scrollbar-color: color-mix(in srgb, var(--muted) 34%, transparent) transparent;
-  scrollbar-width: thin;
+  /* A short list stacked on the composer takes the compact thumb. */
+  --scrollbar-size: var(--scrollbar-size-compact);
+  --scrollbar-thumb-inset: var(--scrollbar-thumb-inset-compact);
 }
 
 .chat-queue__global-state {
@@ -115,19 +116,6 @@
 
 .chat-queue__scroll[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
   mask-image: linear-gradient(to bottom, var(--chat-queue-fade-in), var(--chat-queue-fade-out));
-}
-
-.chat-queue__scroll::-webkit-scrollbar {
-  width: 5px;
-}
-
-.chat-queue__scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.chat-queue__scroll::-webkit-scrollbar-thumb {
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--muted) 34%, transparent);
 }
 
 .chat-queue__item {

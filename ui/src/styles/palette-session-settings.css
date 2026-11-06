@@ -241,7 +241,8 @@
   max-height: 230px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
+  --scrollbar-size: var(--scrollbar-size-compact);
+  --scrollbar-thumb-inset: var(--scrollbar-thumb-inset-compact);
 }
 
 .palette-session-settings__choices > section + section {
