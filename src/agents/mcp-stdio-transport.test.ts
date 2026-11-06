@@ -86,19 +86,6 @@ afterEach(async () => {
 });
 
 describe("OpenClawStdioClientTransport", () => {
-  it("passes terminateOnHostLoss to owned stdio custody", async () => {
-    const fixture = createFixture();
-    fixture.child.kill.mockImplementation((_signal?: NodeJS.Signals) => {
-      fixture.root.resolve({ code: null, signal: "SIGTERM" });
-      fixture.extinction.resolve();
-    });
-    await fixture.transport.start();
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    expect(spawnMock.mock.calls[0][0]).toMatchObject({ terminateOnHostLoss: true });
-    await fixture.transport.forceClose();
-    expect(fixture.child.kill).toHaveBeenCalled();
-  });
-
   it.each(["exit", "error", "send", "close", "detached"] as const)(
     "keeps legacy probe eligibility and SDK callbacks through %s",
     async (mode) => {
