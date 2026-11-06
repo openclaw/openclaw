@@ -52,7 +52,8 @@
     --details-fade-bottom: 24px;
   }
 
-  &:is([data-fade-top], [data-fade-bottom]) {
+  &[data-fade-top],
+  &[data-fade-bottom] {
     mask:
       linear-gradient(
         to bottom,

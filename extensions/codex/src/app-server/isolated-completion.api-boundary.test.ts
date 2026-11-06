@@ -207,6 +207,7 @@ it.each(["api-key", "siwc"] as const)(
     params.authorization.plan.selectedAuthMode = "oauth";
     params.authorization.plan.selectedAuthFlow = "chatgpt-token-sharing";
     if (mode === "api-key") {
+      params.streamParams = { maxTokens: 37, temperature: 0 };
       params.authorization = {
         owner: "host",
         model: {
@@ -257,6 +258,7 @@ it.each(["api-key", "siwc"] as const)(
         stream: true,
         store: false,
         tool_choice: "none",
+        ...(mode === "api-key" ? { max_output_tokens: 37, temperature: 0 } : {}),
       });
       expect(body).not.toHaveProperty("previous_response_id");
       expect(calls.filter((call) => call.method === "turn/start")).toHaveLength(1);
@@ -278,6 +280,23 @@ it("rejects identity-only SIWC before starting a native client", async () => {
   const clientFactory = vi.spyOn(shared, "createIsolatedCodexAppServerClient");
   await expect(runCodexIsolatedCompletion(params, {})).rejects.toThrow();
   expect(clientFactory).not.toHaveBeenCalled();
+});
+
+it("rejects unsupported SIWC sampling before starting a native client", async () => {
+  const params = isolatedParams(siwcStore(), profileId);
+  if (params.authorization.owner !== "harness") {
+    throw new Error("fixture");
+  }
+  params.authorization.plan.modelRoute!.authRequirement = "api-key";
+  params.authorization.plan.modelRoute!.api = "openai-responses";
+  params.authorization.plan.modelRoute!.baseUrl = "https://api.openai.com/v1";
+  params.streamParams = { maxTokens: 37, temperature: 0 };
+  const clientFactory = vi.spyOn(shared, "createIsolatedCodexAppServerClient");
+  await expect(runCodexIsolatedCompletion(params, {})).rejects.toThrow(
+    "ChatGPT token sharing does not support",
+  );
+  expect(clientFactory).not.toHaveBeenCalled();
+  expect(transport.fetch).not.toHaveBeenCalled();
 });
 
 it.each([

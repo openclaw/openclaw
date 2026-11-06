@@ -3,8 +3,10 @@
 // identity, numeric close codes and stream reset codes. Runs on every CI platform.
 "use strict";
 const assert = require("node:assert/strict");
+const { execFile } = require("node:child_process");
 const crypto = require("node:crypto");
 const { test } = require("node:test");
+const { promisify } = require("node:util");
 const binding = require("../index.js");
 const { load, loopbackAddrs } = require("./support/adapters.cjs");
 const { ALPN, serveEndpoint, echo } = require("./support/proto.cjs");
@@ -60,6 +62,39 @@ test("exports the spike binding API", () => {
 test("rejects a secret key that is not 32 bytes", async () => {
   await assert.rejects(binding.bind({ secretKey: new Uint8Array(31) }), /32 bytes/);
 });
+
+for (const pending of [true, false]) {
+  test(`home relay watcher ends and Node exits with a ${pending ? "pending" : "later"} next`, async () => {
+    // A stuck native promise keeps Node alive even after JS finishes. Isolate it so the
+    // parent can bound the regression without forcing a successful child's exit.
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        "-e",
+        `
+        const assert = require("node:assert/strict");
+        const { bind } = require(${JSON.stringify(require.resolve("../index.js"))});
+        (async () => {
+          const endpoint = await bind({ secretKey: require("node:crypto").randomBytes(32) });
+          const watcher = await endpoint.watchHomeRelay();
+          assert.deepEqual(await watcher.next(), []);
+          const next = ${pending} ? watcher.next() : undefined;
+          await endpoint.close();
+          console.log("endpoint closed");
+          assert.equal(await (next ?? watcher.next()), null);
+          assert.equal(await watcher.next(), null);
+          console.log("watcher ended");
+        })().catch((error) => {
+          console.error(error);
+          process.exitCode = 1;
+        });
+      `,
+      ],
+      { timeout: 10000 },
+    );
+    assert.equal(stdout.replaceAll("\r\n", "\n"), "endpoint closed\nwatcher ended\n");
+  });
+}
 
 test("direct echo keeps every byte and reports the authenticated peer", async () => {
   const own = load("own");

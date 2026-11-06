@@ -354,8 +354,9 @@ export class ResearchJobs {
       assertCurrent();
       signal.throwIfAborted();
       if (existing?.state === "done") {
+        // SAFETY: This job/key namespace is written only by this operation's typed producer.
         return existing.value as T;
-      } // This namespace is written only by this operation's typed producer.
+      }
       if (existing?.state === "started") {
         uncertain = true;
         throw new Error("Interrupted operation has no recorded receipt; not repeated.");

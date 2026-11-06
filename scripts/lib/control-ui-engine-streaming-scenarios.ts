@@ -186,7 +186,6 @@ function streamScenario(options: {
           );
           await page
             .locator(`${activePane} .chat-activity-group__summary[aria-expanded='false']`)
-            .filter({ hasText: "Raw details" })
             .last()
             .click();
           const imageTool = page.locator(`${activePane} [data-message-id*='mixed-tool-24']`);
@@ -201,14 +200,14 @@ function streamScenario(options: {
           await page.locator(`${activePane} .chat-thread`).evaluate((thread) => {
             thread.scrollBy({ top: -thread.clientHeight, behavior: "instant" });
           });
-          const latest = page.getByRole("button", { name: "Scroll to latest", exact: true });
+          const latest = page.locator(`${activePane} .chat-scroll-to-bottom`);
           await latest.waitFor({ state: "visible" });
           await latest.click();
           await page.waitForFunction((selector) => {
             const thread = document.querySelector<HTMLElement>(`${selector} .chat-thread`)!;
             return Math.abs(thread.scrollHeight - thread.clientHeight - thread.scrollTop) <= 2;
           }, activePane);
-          const toggle = page.getByRole("button", { name: "Show more", exact: true }).first();
+          const toggle = page.locator(".sidebar-session-pagination__button").first();
           await toggle.click();
           await page.waitForFunction(() => {
             const samples = Reflect.get(window, "__streamingReply").sidebarInputs();
@@ -327,7 +326,6 @@ function streamScenario(options: {
         // ActivityGroupBody mounts its messages only after Raw details opens.
         const activity = page
           .locator(`${activePane} .chat-activity-group__summary[aria-expanded='false']`)
-          .filter({ hasText: "Raw details" })
           .last();
         if (await activity.count()) {
           await activity.click();

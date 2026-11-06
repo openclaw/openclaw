@@ -336,7 +336,8 @@ div.chat-thread:where(.chat-thread--annotations) {
 /* Direct (1:1) threads drop avatars entirely: one agent plus one user makes
    the repeated identity icons pure decoration. Group threads (any labeled
    foreign sender) keep avatars as the always-visible identity marker. */
-.chat-thread--direct :is(.chat-avatar, .chat-avatar-slot) {
+.chat-thread--direct .chat-avatar,
+.chat-thread--direct .chat-avatar-slot {
   display: none;
 }
 
@@ -538,12 +539,14 @@ div.chat-thread:where(.chat-thread--annotations) {
     height: var(--rail-header-action-glyph-size);
   }
 
-  & :is(.chat-pane__panels-toggle, .chat-details-toggle)[aria-expanded="true"] {
+  & .chat-pane__panels-toggle[aria-expanded="true"],
+  & .chat-details-toggle[aria-expanded="true"] {
     background: var(--session-header-control-surface);
     color: var(--session-header-control-active-color, var(--text));
   }
 
-  & :is(.chat-details-toggle, .chat-pane__panels-toggle)[aria-expanded="true"]:hover {
+  & .chat-details-toggle[aria-expanded="true"]:hover,
+  & .chat-pane__panels-toggle[aria-expanded="true"]:hover {
     background: var(--session-header-control-active-hover-bg);
   }
 
@@ -800,7 +803,8 @@ div.chat-thread:where(.chat-thread--annotations) {
   flex: 1 1 auto;
 }
 
-.chat-pane__header--mobile :is(.chat-header-session-menu__trigger, .chat-pane__layout-trigger) {
+.chat-pane__header--mobile .chat-header-session-menu__trigger,
+.chat-pane__header--mobile .chat-pane__layout-trigger {
   display: inline-flex;
   flex: 0 0 44px;
   align-items: center;
@@ -1420,8 +1424,8 @@ openclaw-chat-sidebar-region,
   min-height: var(--desktop-header-height);
 }
 
-.sidebar-region--desktop:not(.sidebar-region--open)
-  :is([data-region="side"], [data-region-header="side"]),
+.sidebar-region--desktop:not(.sidebar-region--open) [data-region="side"],
+.sidebar-region--desktop:not(.sidebar-region--open) [data-region-header="side"],
 .sidebar-region--desktop [data-region="side"][hidden] {
   opacity: 0;
   pointer-events: none;
@@ -1451,15 +1455,16 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-region--desktop[data-sidebar-resizing],
-.sidebar-region--desktop[data-sidebar-resizing]
-  :is([data-region="side"], [data-region-header="side"]) {
+.sidebar-region--desktop[data-sidebar-resizing] [data-region="side"],
+.sidebar-region--desktop[data-sidebar-resizing] [data-region-header="side"] {
   transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .sidebar-region--desktop,
   .sidebar-region--desktop .chat-main__conversation-frame,
-  .sidebar-region--desktop :is([data-region="side"], [data-region-header="side"]) {
+  .sidebar-region--desktop [data-region="side"],
+  .sidebar-region--desktop [data-region-header="side"] {
     transition: none;
   }
 }
