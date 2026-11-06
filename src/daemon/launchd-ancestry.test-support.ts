@@ -178,6 +178,7 @@ function executeLaunchctlMock(file: string, args: string[]) {
     }
     if (!state.bootoutLeavesLoaded) {
       Object.assign(state, { serviceLoaded: false, serviceRunning: false });
+      state.serviceStates.delete(call[1] ?? "");
     }
     return commandResult();
   }

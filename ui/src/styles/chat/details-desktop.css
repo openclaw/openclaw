@@ -479,12 +479,6 @@
   height: var(--details-row-line-height);
 }
 
-.chat-details .chat-details-desktop-body .session-progress-card__step-marker svg {
-  width: var(--details-row-icon-size);
-  height: var(--details-row-icon-size);
-  stroke-width: 2px;
-}
-
 .chat-details .chat-details-desktop-body .session-progress-card__step-text {
   font-size: var(--details-row-font-size);
 }

@@ -63,7 +63,7 @@ const skill = (name: string) => ({
   name,
   description: name,
   source: "skill" as const,
-  skillModelVisible: true,
+  skillReferenceable: true,
 });
 
 const skillEntry = (name: string) => ({
@@ -72,7 +72,7 @@ const skillEntry = (name: string) => ({
   name,
   scope: "both" as const,
   source: "skill" as const,
-  skillModelVisible: true,
+  skillReferenceable: true,
   textAliases: [`/${name}`],
 });
 

@@ -2071,16 +2071,24 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
     validateChildReuse(selection, request) {
       return validateReusableReleaseChild(selection, request);
     },
-    getWorkflowSource(sha) {
+    getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
+      if (
+        ![
+          ".github/workflows/full-release-validation.yml",
+          ".github/workflows/plugin-npm-release.yml",
+        ].includes(sourceWorkflowPath)
+      ) {
+        throw new Error("Unsupported immutable release workflow path");
+      }
       const exactSha = normalizeSha(sha, "source admission workflow SHA");
       const payload = githubRestJson(
-        `contents/.github/workflows/full-release-validation.yml?ref=${exactSha}`,
+        `contents/${sourceWorkflowPath}?ref=${exactSha}`,
         normalizedRepository,
       );
       if (
         payload?.type !== "file" ||
         payload.encoding !== "base64" ||
-        payload.path !== ".github/workflows/full-release-validation.yml" ||
+        payload.path !== sourceWorkflowPath ||
         !Number.isSafeInteger(payload.size) ||
         payload.size < 1 ||
         payload.size > 1024 * 1024 ||

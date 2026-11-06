@@ -13,10 +13,8 @@ import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { isChatRunWorking } from "../chat-run-working.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
-import {
-  createChatComposerContext,
-  createComposerDictationOptions,
-} from "./chat-composer-frame.ts";
+import { createComposerDictationOptions } from "./chat-composer-dictation-options.ts";
+import { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerPrediction } from "./chat-composer-prediction.ts";
 import { createComposerQuestionPanel } from "./chat-composer-question.tsx";

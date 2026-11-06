@@ -435,11 +435,6 @@ describe("scripts/pr wrappers", () => {
 
   function reviewRecoveryFixture() {
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
-    // The real salvage owner additionally loads review-artifacts' record helper.
-    const recordHelper = "scripts/lib/record-shared.mjs";
-    cpSync(recordHelper, join(fixture.canonical, recordHelper));
-    const inventory = join(fixture.canonical, "scripts/pr-lib/wrapper-components.txt");
-    writeFileSync(inventory, readScript(inventory) + recordHelper + "\n");
     const bindingRef = "refs/openclaw/pr-workflow-bindings/123";
     const origin = join(fixture.root, "origin.git");
     const currentWrapper = readScript("scripts/pr");
@@ -463,16 +458,7 @@ describe("scripts/pr wrappers", () => {
       "scripts/pr",
       currentWrapper.replaceAll("review-transition-recover", "unavailable-review-recovery"),
     );
-    fixture.commit(
-      [
-        "scripts/pr",
-        "scripts/pr-lib/review.sh",
-        "scripts/pr-lib/wrapper-components.txt",
-        recordHelper,
-        "recovery-tracked.txt",
-      ],
-      true,
-    );
+    fixture.commit(["scripts/pr", "scripts/pr-lib/review.sh", "recovery-tracked.txt"], true);
     const oldSource = fixture.gitText(["rev-parse", "HEAD"]);
     fixture.git(fixture.canonical, [
       "config",
@@ -1383,7 +1369,7 @@ exec "$anchor/scripts/pr" "$@"
   ])(
     "routes mismatched $command through the trusted wrapper (parked=$parked)",
     ({ command, parked }) => {
-      const fixture = makeMismatchedWrapperRepo();
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
       seedReadyReview(fixture);
       if (parked) {
         parkCanonicalOffAnchor(fixture);
@@ -3048,9 +3034,7 @@ fi
     "missing",
   ])("refuses anchor extraction on %s", (failure) => {
     const sourceFault = failure === "tampered" || failure === "missing";
-    const fixture = makeMismatchedWrapperRepo(
-      sourceFault ? { realModules: true } : { toolingOnly: true },
-    );
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true, realModules: sourceFault });
     if (sourceFault) {
       advanceAnchorReviewDependency(fixture);
     }
@@ -3132,7 +3116,7 @@ throw new Error("untrusted caller helper executed");
   });
 
   itPosix("executes extracted helpers through a symlinked temporary root", () => {
-    const fixture = makeMismatchedWrapperRepo({ realModules: true });
+    const fixture = makeMismatchedWrapperRepo({ realModules: true, toolingOnly: true });
     // Exercise the wrapper's own helper path, not a physical path reconstructed by the test.
     fixture.write(
       "scripts/pr-lib/gates.sh",
@@ -3156,7 +3140,7 @@ throw new Error("untrusted caller helper executed");
   itPosix(
     "executes review artifacts from the extracted anchor dependency closure with canonical dirty added dependency",
     () => {
-      const fixture = makeMismatchedWrapperRepo({ realModules: true });
+      const fixture = makeMismatchedWrapperRepo({ realModules: true, toolingOnly: true });
       advanceAnchorReviewDependency(fixture);
       fixture.write(
         "scripts/lib/anchor-review-record.mjs",
