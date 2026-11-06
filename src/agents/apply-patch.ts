@@ -21,6 +21,13 @@ import {
 } from "./apply-patch-file-ops.js";
 import { type Hunk, parsePatchText } from "./apply-patch-parse.js";
 import { resolveApplyPatchInputPath, toDisplayPath } from "./apply-patch-paths.js";
+import {
+  type ApplyPatchSummary,
+  type ChangedPaths,
+  formatSummary,
+  summarizeChangedPaths,
+  withAppliedPatchEffects,
+} from "./apply-patch-summary.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import {
@@ -36,12 +43,6 @@ import {
   withFileMutationQueueKeysResolution,
 } from "./sessions/tools/file-mutation-queue.js";
 import { ToolInputError } from "./tool-input-error.js";
-
-export type ApplyPatchSummary = {
-  added: string[];
-  modified: string[];
-  deleted: string[];
-};
 
 type ApplyPatchResult = {
   summary: ApplyPatchSummary;
@@ -598,13 +599,34 @@ async function commitPatchHunks(
   fileOps: PatchFileOps,
   options: ApplyPatchOptions,
 ): Promise<ApplyPatchResult> {
-  const changedPaths = {
+  const changedPaths: ChangedPaths = {
     added: new Set<string>(),
     modified: new Set<string>(),
     deleted: new Set<string>(),
   };
   const noOpPaths = new Set<string>();
 
+  try {
+    await commitPatchHunksInOrder(hunks, fileOps, options, changedPaths, noOpPaths);
+  } catch (error) {
+    throw withAppliedPatchEffects(error, summarizeChangedPaths(changedPaths));
+  }
+
+  const summary = summarizeChangedPaths(changedPaths);
+  const noOp = noOpPaths.size > 0 && Object.values(summary).every((paths) => paths.length === 0);
+  return {
+    summary,
+    text: noOp ? `No changes made to ${Array.from(noOpPaths).join(", ")}.` : formatSummary(summary),
+  };
+}
+
+async function commitPatchHunksInOrder(
+  hunks: ResolvedHunk[],
+  fileOps: PatchFileOps,
+  options: ApplyPatchOptions,
+  changedPaths: ChangedPaths,
+  noOpPaths: Set<string>,
+): Promise<void> {
   for (const entry of hunks) {
     throwIfPatchAborted(options.signal);
     const { hunk } = entry;
@@ -641,7 +663,13 @@ async function commitPatchHunks(
         ops: fileOps,
         hint: "Delete it earlier in the same patch to replace it.",
       });
+      // Until the source is gone the destination is a new copy, not a completed move.
+      const addedEarlier = changedPaths.added.has(moveTarget.display);
+      changedPaths.added.add(moveTarget.display);
       await fileOps.remove(target.resolved);
+      if (!addedEarlier) {
+        changedPaths.added.delete(moveTarget.display);
+      }
       changedPaths.modified.add(moveTarget.display);
       continue;
     }
@@ -654,17 +682,6 @@ async function commitPatchHunks(
       changedPaths.modified.add(target.display);
     }
   }
-
-  const summary: ApplyPatchSummary = {
-    added: [...changedPaths.added],
-    modified: [...changedPaths.modified],
-    deleted: [...changedPaths.deleted],
-  };
-  const noOp = noOpPaths.size > 0 && Object.values(summary).every((paths) => paths.length === 0);
-  return {
-    summary,
-    text: noOp ? `No changes made to ${Array.from(noOpPaths).join(", ")}.` : formatSummary(summary),
-  };
 }
 
 async function readmitPatchHunk(
@@ -706,17 +723,6 @@ async function resolvePatchInputPaths(
     );
   }
   return resolved;
-}
-
-function formatSummary(summary: ApplyPatchSummary): string {
-  const lines = ["Success. Updated the following files:"];
-  const filesByMarker = { A: summary.added, M: summary.modified, D: summary.deleted };
-  for (const [marker, files] of Object.entries(filesByMarker)) {
-    for (const file of files) {
-      lines.push(`${marker} ${file}`);
-    }
-  }
-  return lines.join("\n");
 }
 
 async function ensureDir(filePath: string, ops: PatchFileOps) {
