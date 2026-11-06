@@ -52,14 +52,10 @@ struct ChatToolActivityItem: Identifiable, Equatable {
     var statusTitle: LocalizedStringResource {
         // Missing execution status is not missing output. Keep unknown outcomes
         // neutral while allowing the recorded result to be opened.
-        if self.displayState == .unavailable, self.activity != nil {
+        if self.displayState == .unavailable, self.resultText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             return "Outcome unknown"
         }
         return self.displayState.title
-    }
-
-    var showsCollapsedStatus: Bool {
-        self.displayState == .failed || self.displayState == .blocked || self.displayState == .skipped
     }
 
     var isError: Bool {
@@ -227,7 +223,7 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var expandable: Bool {
-        self.resolvedDiff != nil || !self.formattedResult.isEmpty || self.item.displayState == .unavailable
+        self.resolvedDiff != nil || !self.formattedResult.isEmpty
     }
 
     private var accessibilityValue: String {
@@ -391,8 +387,8 @@ private struct ChatToolActivityRowContent: View {
 
             Spacer(minLength: 0)
 
-            // Keep actionable outcomes visible; unknown outcomes appear inside the disclosure.
-            if self.item.showsCollapsedStatus {
+            // Preserve the native collapsed cues when a local title replaces the Gateway warning.
+            if self.isDesktopLayout || self.item.displayState == .unavailable {
                 Text(self.item.statusTitle)
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : .secondary)

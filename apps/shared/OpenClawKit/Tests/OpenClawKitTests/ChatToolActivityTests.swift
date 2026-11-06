@@ -5,15 +5,6 @@ import Testing
 
 @Suite("ChatToolActivity")
 struct ChatToolActivityTests {
-    @Test func `collapsed status preserves blocked outcomes without output`() {
-        for state: ChatToolActivityItem.State in [.running, .finished, .failed, .blocked, .skipped, .unavailable] {
-            let item = ChatToolActivityItem(
-                id: "call", name: "exec", arguments: nil, details: nil,
-                resultText: nil, state: state, liveDiffStat: nil)
-            #expect(item.showsCollapsedStatus == [.failed, .blocked, .skipped].contains(state))
-        }
-    }
-
     @Test func `prepared unknown outcome does not become finished from raw result presence`() {
         var item = ChatToolActivityItem(
             id: "call", name: "read", arguments: nil, details: nil,

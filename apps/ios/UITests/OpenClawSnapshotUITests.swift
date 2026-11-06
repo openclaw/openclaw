@@ -1185,7 +1185,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         work.tap()
         for (command, expectedStatus) in [
             ("printf ready", "Outcome unknown"),
-            ("printf missing", "Outcome unknown"),
+            ("printf missing", "No result"),
             ("printf complete", "Finished"),
         ] {
             let row = app.descendants(matching: .any).matching(NSPredicate(
@@ -1194,7 +1194,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertTrue(
                 (row.value as? String)?.hasPrefix(expectedStatus) == true,
                 "The row must retain the prepared outcome for \(command)")
-            // Unknown outcomes appear only inside the disclosure, matching web tool cards.
+            // Preserve visible uncertainty even when the row has no disclosure.
             let image = try XCTUnwrap(row.screenshot().image.cgImage)
             let recognition = VNRecognizeTextRequest()
             recognition.recognitionLevel = .accurate
@@ -1203,14 +1203,12 @@ final class OpenClawSnapshotUITests: XCTestCase {
             let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
                 .joined(separator: " ").lowercased()
             XCTAssertTrue(text.contains("exec"), "Rendered tool title was not recognized: \(text)")
-            XCTAssertFalse(text.contains("outcome unknown"), "Collapsed row has an unknown badge: \(text)")
-            XCTAssertFalse(text.contains("no result"), "Collapsed row has a status badge: \(text)")
+            XCTAssertEqual(text.contains("outcome unknown"), command == "printf ready", "Wrong visible outcome cue: \(text)")
+            XCTAssertEqual(text.contains("no result"), command == "printf missing", "Wrong missing-output cue: \(text)")
             XCTAssertFalse(text.contains("finished"), "Collapsed row has a status badge: \(text)")
-            if command == "printf ready" || command == "printf missing" {
+            if command == "printf ready" {
                 row.tap()
-                if command == "printf ready" {
-                    XCTAssertTrue(app.staticTexts["ready"].waitForExistence(timeout: 5))
-                }
+                XCTAssertTrue(app.staticTexts["ready"].waitForExistence(timeout: 5))
                 XCTAssertTrue(app.staticTexts["Outcome unknown"].waitForExistence(timeout: 5))
                 self.attachScreenshot(named: "step-output-and-outcome")
                 row.tap()
