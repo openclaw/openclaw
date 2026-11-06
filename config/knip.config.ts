@@ -439,6 +439,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/correction-review.mjs!",
   // prepare-core.sh invokes correction continuation and recovery by path.
   "scripts/pr-lib/correction-continuation.mjs!",
+  // worktree.sh executes the selected-task inventory and artifact closeout helper.
+  "scripts/pr-lib/finalized-task.mjs!",
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/materialize-dependencies.mjs!",
   "scripts/pr-lib/merge-body.mjs!",

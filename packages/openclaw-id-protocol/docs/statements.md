@@ -65,21 +65,24 @@ additive change. v1-draft accepts only `ed25519`.
   fingerprint"): a verifier that pinned only fp(R) must still be able to check R's signature.
 - There is no certificate chain. A statement signed by an owner device is checked against
   the claw's **current owner devices** (its allowlist), which only the Gateway holds.
-- `sig` is unpadded base64url. Unknown envelope or body fields are rejected in v1-draft
-  (an envelope that still carries a `chain` member is malformed).
+- `sig` is unpadded base64url. Unknown envelope or body fields are rejected (an envelope
+  that still carries a `chain` member is malformed); a new signed field needs a new envelope
+  version.
+- `v` selects the schema and the signing domain. A well-formed `v` this build does not
+  implement is refused as `unsupported_version`, not `malformed` (versioning.md).
 - Timestamps are unix **seconds** (integers).
 
 ## Statement types
 
-| Type               | Body                                                                                                     | Valid signer                             | Owner capability needed                                        |
-| ------------------ | -------------------------------------------------------------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------- |
-| OwnerDeviceCert    | device_pub, peer_keys[W] (<= 10), label, scope `owner`, caps, issued_at, expires_at\|null, root_epoch    | R, or a current owner device of the claw | `approve_device`; caps within the signer's (`caps_escalation`) |
-| ServerBinding      | claw_id, hostname, k_srv, k_gw, binding_seq, root_epoch, issued_at                                       | R only                                   | n/a                                                            |
-| InviteCap          | claw_id, invite_id, role, audience {kind, value}, label, created_at, expires_at, single_use, secret_hash | current owner device (or R)              | `invite`                                                       |
-| MembershipChange   | claw_id, seq, target (by op), issued_at                                                                  | current owner device (or R)              | `manage_members`; `approve_device` for `add_owner_device`      |
-| Revocation         | target_fp, target_kind (`owner_device` \| `peer_key`), reason, root_epoch, issued_at                     | R or any current owner device            | none                                                           |
-| MembershipSnapshot | claw_id, seq, binding_seq, owner_devices[{device_pub, caps}], owner_peer_keys, members[], issued_at      | K_gw of the verified binding             | n/a (a mirror of current state, never an authority)            |
-| InviteRedemption   | claw_id, invite_id, account_id, device_pub, peer_key, proof, requested_at                                | the invitee's own D_I (self-signed)      | n/a                                                            |
+| Type               | Body                                                                                                           | Valid signer                             | Owner capability needed                                        |
+| ------------------ | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------- |
+| OwnerDeviceCert    | device_pub, peer_keys[W] (<= 10), label, scope `owner`, caps, issued_at, expires_at\|null, root_epoch          | R, or a current owner device of the claw | `approve_device`; caps within the signer's (`caps_escalation`) |
+| ServerBinding      | claw_id, hostname, k_srv, k_gw, binding_seq, root_epoch, issued_at                                             | R only                                   | n/a                                                            |
+| InviteCap          | claw_id, invite_id, role, audience {kind, value}, label, created_at, expires_at, single_use, secret_hash       | current owner device (or R)              | `invite`                                                       |
+| MembershipChange   | claw_id, seq, target (by op), issued_at                                                                        | current owner device (or R)              | `manage_members`; `approve_device` for `add_owner_device`      |
+| Revocation         | target_fp, target_kind (`owner_device` \| `peer_key`), reason, root_epoch, issued_at                           | R or any current owner device            | none                                                           |
+| MembershipSnapshot | claw_id, seq, binding_seq, owner_devices[{device_pub, caps}], owner_peer_keys, members[], protocols, issued_at | K_gw of the verified binding             | n/a (a mirror of current state, never an authority)            |
+| InviteRedemption   | claw_id, invite_id, account_id, device_pub, peer_key, proof, requested_at                                      | the invitee's own D_I (self-signed)      | n/a                                                            |
 
 `root_epoch` is the constant 1 (`ROOT_EPOCH`); any other value is `malformed`. A claw's root
 never changes in this version, so there is no RootRotation statement: owner reset is out of
@@ -271,6 +274,7 @@ node --import ./scripts/tsx.mjs -e 'const { buildStatementVectors } = await impo
 - MembershipSnapshot adds `owner_devices` (key and granted caps), `owner_peer_keys` and
   `binding_seq` (relay admission needs owner devices, Discovery's owner mailbox needs owner
   device keys and their caps, consumers
-  need to tie a snapshot to a binding), and carries no `revoked` list.
+  need to tie a snapshot to a binding), and carries no `revoked` list. It also carries
+  `protocols`, the versions the Gateway accepts (versioning.md, "Choosing a version").
 - K_gw is separate from K_srv: the Gateway never reads the tunnel child's key file
   (process-model.md).

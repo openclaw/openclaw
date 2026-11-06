@@ -126,6 +126,7 @@ values. Then, from an external shell using the same account and profile:
 ```bash
 openclaw gateway uninstall
 openclaw gateway install
+openclaw gateway start
 openclaw gateway health
 ```
 

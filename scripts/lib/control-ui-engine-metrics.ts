@@ -60,7 +60,7 @@ export type EngineMeasurement = {
   cpuSamples?: WebKitCpuEvent[];
 };
 
-type MeasurementOptions = { trace: boolean; cpuOnly?: boolean };
+type MeasurementOptions = { trace: boolean; cpuOnly?: boolean; cpuProfile?: boolean };
 
 /** Union nested same-category records so recursive calls are counted once. */
 function intervalMilliseconds(intervals: Array<{ startTime: number; endTime: number }>) {
@@ -291,6 +291,8 @@ export async function startEngineMeasurement(
         categories: "toplevel,blink.user_timing,devtools.timeline",
         transferMode: "ReportEvents",
       });
+    }
+    if (options.trace || options.cpuProfile) {
       await session.send("Profiler.enable");
       await session.send("Profiler.start");
     }
@@ -320,8 +322,10 @@ export async function startEngineMeasurement(
             return (current - previous) * factor;
           };
           let profile: unknown;
-          if (options.trace) {
+          if (options.trace || options.cpuProfile) {
             profile = (await session.send("Profiler.stop")).profile;
+          }
+          if (options.trace) {
             const complete = new Promise<void>((resolve) => {
               session.once("Tracing.tracingComplete", () => resolve());
             });
@@ -342,10 +346,13 @@ export async function startEngineMeasurement(
               cpuMs: delta("TaskDuration"),
               notes: [
                 "Chromium Performance threadTicks records renderer main-thread CPU. cpuMs is TaskDuration, not total renderer-process CPU.",
-                ...(options.trace ? ["Tracing and V8 sampling add instrumentation overhead."] : []),
+                ...(options.trace || options.cpuProfile
+                  ? ["V8 sampling adds instrumentation overhead; use separate timing runs."]
+                  : []),
               ],
             },
-            ...(options.trace ? { timeline, profile } : {}),
+            ...(options.trace ? { timeline } : {}),
+            ...(options.trace || options.cpuProfile ? { profile } : {}),
           };
         } finally {
           await session.detach();
