@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { registerEmbeddingCapabilityCliTests } from "./capability-cli.embedding.test-support.js";
+import {
+  interruptCapability,
+  registerEmbeddingCapabilityCliTests,
+} from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 import {
   invalidModelRunOptionCases,
@@ -75,10 +78,12 @@ const mocks = await vi.hoisted(async () => ({
   acquireSimpleCompletionModelForAgent: vi.fn(async () =>
     preparedModel({ release: mocks.releaseSimpleCompletion }),
   ),
-  completeWithPreparedSimpleCompletionModel: vi.fn(async () => ({
-    content: [{ type: "text", text: "local reply" }],
-  })),
-  callGateway: vi.fn(async ({ method }: { method: string }) => {
+  completeWithPreparedSimpleCompletionModel: vi.fn(
+    async (_params: { options?: { signal?: AbortSignal } }) => ({
+      content: [{ type: "text", text: "local reply" }],
+    }),
+  ),
+  callGateway: vi.fn(async ({ method }: { method: string; signal?: AbortSignal }) => {
     if (method === "tts.status") {
       return { enabled: true, provider: "openai" };
     }
@@ -162,8 +167,9 @@ const mocks = await vi.hoisted(async () => ({
   getProviderEnvVarsCore: vi.fn((providerId: string) => [
     `${providerId.toUpperCase().replaceAll("-", "_")}_API_KEY`,
   ]),
-  embedBatch: vi.fn(async (inputs: unknown[], options?: { inputType?: string }) =>
-    inputs.map(() => (options?.inputType === "document" ? [0.1, 0.2] : [9, 9])),
+  embedBatch: vi.fn(
+    async (inputs: unknown[], options?: { inputType?: string; signal?: AbortSignal }) =>
+      inputs.map(() => (options?.inputType === "document" ? [0.1, 0.2] : [9, 9])),
   ),
   createEmbeddingProvider: vi.fn(async () => ({
     provider: {
@@ -504,7 +510,7 @@ describe("capability cli", () => {
       messages?: Array<{ content?: unknown; role?: unknown }>;
       systemPrompt?: unknown;
     };
-    options?: { reasoning?: unknown };
+    options?: { reasoning?: unknown; signal?: AbortSignal };
   };
   type ImageDescribeParams = {
     agentId?: string;
@@ -588,6 +594,12 @@ describe("capability cli", () => {
       },
       diagnostics: [],
     });
+  }
+
+  function primeMediaRegistry(id: string, capability: "audio" | "video", model: string) {
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([[id, { id, capabilities: [capability], defaultModels: { [capability]: model } }]]),
+    );
   }
 
   function primeChatGptModel(provider: string, modelId: string) {
@@ -913,28 +925,16 @@ describe("capability cli", () => {
     expect(sessionIds[1]).not.toBe(sessionIds[0]);
   });
 
-  it.each([
-    {
-      model: "Anthropic/CLAUDE-HAIKU-4-5",
-      catalogId: "claude-haiku-4-5",
-      name: "Haiku",
-      provider: "anthropic",
-      forwardedModel: "claude-haiku-4-5",
-      thinking: true,
-    },
-    {
-      model: "Anthropic/CLAUDE-OPUS-4-7@work",
-      catalogId: "claude-opus-4-7",
-      name: "Claude Opus 4.7",
-      provider: "Anthropic",
-      forwardedModel: "CLAUDE-OPUS-4-7@work",
-      thinking: false,
-    },
-  ])(
-    "authorizes Gateway model override $model and preserves profile refs",
-    async ({ model, catalogId, name, provider, forwardedModel, thinking }) => {
+  it.each([false, true])(
+    "authorizes Gateway model overrides and preserves profile refs (profile: %s)",
+    async (profile) => {
+      const model = profile ? "Anthropic/CLAUDE-OPUS-4-7@work" : "Anthropic/CLAUDE-HAIKU-4-5";
+      const catalogId = profile ? "claude-opus-4-7" : "claude-haiku-4-5";
+      const provider = profile ? "Anthropic" : "anthropic";
+      const forwardedModel = profile ? "CLAUDE-OPUS-4-7@work" : "claude-haiku-4-5";
+      const thinking = !profile;
       mocks.loadModelCatalog.mockResolvedValueOnce([
-        { id: catalogId, provider: "anthropic", name },
+        { id: catalogId, provider: "anthropic", name: catalogId },
       ]);
       await runModelProbe(
         "--gateway",
@@ -957,6 +957,28 @@ describe("capability cli", () => {
       });
     },
   );
+
+  it.each(["local", "gateway", "audio"])("cancels pending %s execution", async (kind) => {
+    await interruptCapability((waitForAbort) => {
+      if (kind === "gateway") {
+        mocks.callGateway.mockImplementationOnce(({ signal }) => waitForAbort(signal));
+      } else if (kind === "local") {
+        mocks.completeWithPreparedSimpleCompletionModel.mockImplementationOnce(({ options }) =>
+          waitForAbort(options?.signal),
+        );
+      } else {
+        mocks.transcribeAudioFile.mockImplementationOnce((_params, execution) =>
+          waitForAbort(execution?.signal),
+        );
+        return runCap("infer", "audio", "transcribe", "--file", "memo.m4a", "--json");
+      }
+      return runModelProbe(...(kind === "gateway" ? ["--gateway"] : []));
+    });
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.runtime.log).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.releaseSimpleCompletion).toHaveBeenCalledTimes(kind === "local" ? 1 : 0);
+  });
 
   it("defaults tts status to gateway transport", async () => {
     await runCapability("tts", "status", "--json");
@@ -987,31 +1009,19 @@ describe("capability cli", () => {
     expect(output).not.toContain("model:");
   });
 
-  it.each([
-    {
-      action: "describe",
-      files: ["https://cdn.example.com/clip%2Emp4?download=1#preview"],
-      model: undefined,
-      prompt: undefined,
-      timeoutMs: undefined,
-    },
-    {
-      action: "describe",
-      files: ["https://example.com/photo.png"],
-      model: "ollama/qwen2.5vl:7b",
-      prompt: "Count visible buttons",
-      timeoutMs: 120000,
-    },
-    {
-      action: "describe-many",
-      files: ["a.jpg", "b.jpg"],
-      model: undefined,
-      prompt: "Extract all visible labels",
-      timeoutMs: 45000,
-    },
+  it.each<[string, string[], string?, string?, number?]>([
+    ["describe", ["https://cdn.example.com/clip%2Emp4?download=1#preview"]],
+    [
+      "describe",
+      ["https://example.com/photo.png"],
+      "ollama/qwen2.5vl:7b",
+      "Count visible buttons",
+      120000,
+    ],
+    ["describe-many", ["a.jpg", "b.jpg"], undefined, "Extract all visible labels", 45000],
   ])(
-    "describes $files through $action with model $model",
-    async ({ action, files, model, prompt, timeoutMs }) => {
+    "describes images through %s with files %j and model %s",
+    async (action, files, model, prompt, timeoutMs) => {
       await runCapability(
         "image",
         action,
@@ -1130,18 +1140,7 @@ describe("capability cli", () => {
   it("rewrites mismatched explicit image output extensions to the detected file type", async () => {
     const jpegBase64 =
       "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRUVFRUVFRUVFRUVFRUVFRUXFhUVFRUYHSggGBolHRUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0fHyUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBIgACEQEDEQH/xAAXAAEBAQEAAAAAAAAAAAAAAAAAAQID/8QAFhEBAQEAAAAAAAAAAAAAAAAAAAER/9oADAMBAAIQAxAAAAH2AP/EABgQAQEAAwAAAAAAAAAAAAAAAAEAEQIS/9oACAEBAAEFAk1o7//EABYRAQEBAAAAAAAAAAAAAAAAAAABEf/aAAgBAwEBPwGn/8QAFhEBAQEAAAAAAAAAAAAAAAAAABEB/9oACAECAQE/AYf/xAAaEAACAgMAAAAAAAAAAAAAAAABEQAhMUFh/9oACAEBAAY/AjK9cY2f/8QAGhABAQACAwAAAAAAAAAAAAAAAAERITFBUf/aAAgBAQABPyGQk7W5jVYkA//Z";
-    mocks.generateImage.mockResolvedValue({
-      provider: "openai",
-      model: "gpt-image-1",
-      attempts: [],
-      images: [
-        {
-          buffer: Buffer.from(jpegBase64, "base64"),
-          mimeType: "image/png",
-          fileName: "provider-output.png",
-        },
-      ],
-    });
+    primeGeneratedImage("gpt-image-1", "provider-output.png", Buffer.from(jpegBase64, "base64"));
 
     const tempOutput = path.join(os.tmpdir(), `openclaw-image-mismatch-${Date.now()}.png`);
     await fs.rm(tempOutput, { force: true });
@@ -1294,12 +1293,7 @@ describe("capability cli", () => {
 
   it("preserves buffered image output when publication fails", async () => {
     const buffer = Buffer.alloc(2_048, 0x49);
-    mocks.generateImage.mockResolvedValue({
-      provider: "openai",
-      model: "gpt-image-2",
-      attempts: [],
-      images: [{ buffer, mimeType: "image/png", fileName: "generated.png" }],
-    });
+    primeGeneratedImage("gpt-image-2", "generated.png", buffer);
     const fixture = await outputFixture(".png", "existing-image");
     const { outputBase } = fixture;
 
@@ -1527,6 +1521,7 @@ describe("capability cli", () => {
     });
   });
   it("reports actual audio attribution and forwards request hints", async () => {
+    const hints = { language: "en", prompt: "Focus on names" };
     mocks.transcribeAudioFile.mockResolvedValueOnce({
       text: "meeting notes",
       provider: "fixture-asr",
@@ -1536,17 +1531,9 @@ describe("capability cli", () => {
       "infer",
       "audio",
       "transcribe",
-      ...cliOptions({
-        file: "memo.m4a",
-        model: "openai/whisper-1",
-        language: "en",
-        prompt: "Focus on names",
-      }),
+      ...cliOptions({ file: "memo.m4a", model: "openai/whisper-1", ...hints }),
     );
-    expect(mocks.transcribeAudioFile).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ language: "en", prompt: "Focus on names" }),
-    );
+    expect(mocks.transcribeAudioFile.mock.calls[0]?.[0]).toMatchObject(hints);
     const output = mocks.runtime.log.mock.calls.at(-1)?.[0];
     expect(output).toContain("provider: fixture-asr");
     expect(output).toContain("model: fixture-actual-model");
@@ -1841,18 +1828,26 @@ describe("capability cli", () => {
     );
   });
 
-  it("marks env-backed image providers as configured", async () => {
-    vi.stubEnv("FAL_KEY", "fal-test-key");
-    mocks.getProviderEnvVarsCore.mockReturnValueOnce(["FAL_KEY"]);
-    mocks.listRuntimeImageGenerationProviders.mockReturnValueOnce([
-      { id: "fal", label: "fal", defaultModel: "fal-ai/flux", models: [] },
-    ] as never);
-
-    await runCap("capability", "image", "providers", "--json");
-
-    expect(firstJsonOutput()).toMatchObject([
-      { id: "fal", available: true, configured: true, selected: false },
-    ]);
+  it.each(["image", "tts"])("marks env-backed %s providers as configured", async (domain) => {
+    const image = domain === "image";
+    const envVar = image ? "FAL_KEY" : "XAI_API_KEY";
+    vi.stubEnv(envVar, image ? "fal-test-key" : "xai-test-key");
+    mocks.getProviderEnvVarsCore.mockReturnValueOnce([envVar]);
+    if (image) {
+      mocks.listRuntimeImageGenerationProviders.mockReturnValueOnce([
+        { id: "fal", label: "fal", defaultModel: "fal-ai/flux", models: [] },
+      ] as never);
+    } else {
+      mocks.listSpeechProviders.mockReturnValueOnce([
+        { id: "xai", label: "xAI", models: [], voices: [] },
+      ] as never);
+    }
+    await runCap("capability", domain, "providers", ...(image ? [] : ["--local"]), "--json");
+    expect(firstJsonOutput()).toMatchObject(
+      image
+        ? [{ id: "fal", available: true, configured: true, selected: false }]
+        : { providers: [{ id: "xai", configured: true, selected: false }] },
+    );
   });
 
   it("marks env-backed video generation and description providers as configured", async () => {
@@ -1864,18 +1859,7 @@ describe("capability cli", () => {
     mocks.listRuntimeVideoGenerationProviders.mockReturnValueOnce([
       { id: "runway", label: "Runway", defaultModel: "gen4", models: [] },
     ] as never);
-    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
-      new Map([
-        [
-          "google",
-          {
-            id: "google",
-            capabilities: ["video"],
-            defaultModels: { video: "gemini-3-flash-preview" },
-          },
-        ],
-      ]),
-    );
+    primeMediaRegistry("google", "video", "gemini-3-flash-preview");
 
     await runCap("capability", "video", "providers", "--json");
 
@@ -1885,34 +1869,9 @@ describe("capability cli", () => {
     });
   });
 
-  it("marks env-backed TTS providers as configured", async () => {
-    vi.stubEnv("XAI_API_KEY", "xai-test-key");
-    mocks.getProviderEnvVarsCore.mockReturnValueOnce(["XAI_API_KEY"]);
-    mocks.listSpeechProviders.mockReturnValueOnce([
-      { id: "xai", label: "xAI", models: [], voices: [] },
-    ] as never);
-
-    await runCap("capability", "tts", "providers", "--local", "--json");
-
-    expect(firstJsonOutput()).toMatchObject({
-      providers: [{ id: "xai", configured: true, selected: false }],
-    });
-  });
-
   it("distinguishes the local STT fallback winner from global provider selection", async () => {
     vi.stubEnv("DEEPGRAM_API_KEY", "deepgram-test-key");
-    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
-      new Map([
-        [
-          "deepgram",
-          {
-            id: "deepgram",
-            capabilities: ["audio"],
-            defaultModels: { audio: "nova-3" },
-          },
-        ],
-      ]),
-    );
+    primeMediaRegistry("deepgram", "audio", "nova-3");
     const candidate = {
       id: "whisper-cli" as const,
       command: "whisper-cli",

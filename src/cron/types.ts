@@ -88,6 +88,7 @@ type CronCompletionDestination = {
 type CronFailureDestination = {
   channel?: CronMessageChannel;
   to?: string;
+  threadId?: string | number;
   accountId?: string;
   mode?: "announce" | "webhook";
 };
@@ -501,6 +502,7 @@ type CronJobStateInput = Partial<
     CronJobState,
     | "lastMeaningfulResult"
     | "autoDisabled"
+    | "admissionDeferred"
     | "scheduleActivatedAtMs"
     | "streamSourceIdentity"
     | "sourceIdentity"

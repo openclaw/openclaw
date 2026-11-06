@@ -70,6 +70,19 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.connectRoleEvents.stream
     }
 
+    /// Nil preserves the original node-only hello; set scopes to model an admitted operator session.
+    var acceptedOperatorScopes: [String]? {
+        get { self.queue.sync { self.operatorScopes } }
+        set { self.queue.sync { self.operatorScopes = newValue } }
+    }
+
+    private var operatorScopes: [String]?
+    var issuedDeviceTokensByRole: [String: String]? {
+        get { self.queue.sync { self.roleDeviceTokens } }
+        set { self.queue.sync { self.roleDeviceTokens = newValue } }
+    }
+
+    private var roleDeviceTokens: [String: String]?
     private var httpResponseHandler: HTTPResponseHandler?
     private var receivedRequests: [Request] = []
     private var receivedRoles: [String] = []
@@ -555,7 +568,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         if let failure = self.connectFailures[index] {
             self.sendConnectFailure(id: id, failure: failure, index: index)
         } else {
-            self.sendConnectOK(id: id, index: index, role: params?["role"] as? String ?? "node")
+            self.sendConnectOK(id: id, role: role, index: index)
         }
     }
 
@@ -589,16 +602,23 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.sendJSON(frame, index: index)
     }
 
-    private func sendConnectOK(id: String, index: Int, role: String) {
+    private func sendConnectOK(id: String, role: String, index: Int) {
         var auth: [String: Any] = [
             "role": role,
             "scopes": [],
         ]
         auth["method"] = self.authMethod
         auth["recoveryScope"] = self.recoveryScope
-        if self.issuedDeviceTokens.indices.contains(index),
-           let token = self.issuedDeviceTokens[index]
-        {
+        if role == "operator", let scopes = self.operatorScopes {
+            auth["role"] = "operator"
+            auth["scopes"] = scopes
+        }
+        let token: String? = if let roleDeviceTokens = self.roleDeviceTokens {
+            roleDeviceTokens[role]
+        } else {
+            self.issuedDeviceTokens.indices.contains(index) ? self.issuedDeviceTokens[index] : nil
+        }
+        if let token {
             auth["deviceToken"] = token
         }
         let frame: [String: Any] = [

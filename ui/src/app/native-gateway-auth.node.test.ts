@@ -363,8 +363,36 @@ describe("native authenticated Control UI", () => {
     },
   );
 
+  it("connects an ingress-authenticated native session without a reusable Gateway credential", async () => {
+    Object.assign(window, {
+      OpenClawNativeGatewayAuth: undefined,
+      webkit: {
+        messageHandlers: {
+          OpenClawNativeGatewayAuth: {
+            postMessage: async (challenge: Challenge) => {
+              const reply = nativeAuthorization(challenge);
+              return { ...reply, result: { ...reply.result, auth: {} } };
+            },
+          },
+        },
+      },
+    });
+    const socket = connect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(gateway!.snapshot.lastError).toBeFalsy();
+    expect(socket.sent).toHaveLength(1);
+    const frame = await socket.connect.promise;
+    expectNativeGrant(frame.params, {});
+    expect(frame.params.device).toEqual({ ...nativeProof, nonce: "challenge-1", signedAt });
+    expect(bridge.postMessage).not.toHaveBeenCalled();
+    socket.hello(frame.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(gateway!.snapshot.phase).toBe("connected");
+    expectNoStoredCredentials(identityKey, authKey);
+  });
+
   type Rejection =
-    | { kind: "credential"; auth: Record<string, string> }
+    | { kind: "credential"; auth: unknown }
     | { kind: "gateway"; expectedGatewayId: unknown }
     | {
         kind: "personalRequirement";
@@ -399,6 +427,10 @@ describe("native authenticated Control UI", () => {
       requiredAuthMethod: "tailscale",
       expectedRecoveryScope: personalRecoveryScope,
     },
+    { kind: "credential", auth: undefined },
+    { kind: "credential", auth: null },
+    { kind: "credential", auth: [] },
+    { kind: "credential", auth: "invalid" },
     { kind: "target", target: "wss://other.example/work/" },
     { kind: "target", target: "wss://gateway.example/other/" },
     { kind: "target", target: "wss://gateway.example/work/?tenant=other" },

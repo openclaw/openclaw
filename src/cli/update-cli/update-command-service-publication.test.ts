@@ -12,6 +12,7 @@ import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
+import * as lockPayload from "../../infra/gateway-lock-payload.js";
 import * as gatewayLocks from "../../infra/gateway-lock.js";
 import { tryAcquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as portProbe from "../../infra/ports-probe.js";
@@ -80,7 +81,9 @@ async function withRuntimePublicationFixture(
   }) => Promise<void>,
 ): Promise<void> {
   await withServiceHome(async (home) => {
+    const nativeNamespace = lockPayload.readGatewayLockProcessNamespace();
     mockProcessPlatform("linux");
+    vi.spyOn(lockPayload, "readGatewayLockProcessNamespace").mockReturnValue(nativeNamespace);
     const root = path.join(home, "checkout");
     await writeRuntimeRoot(root);
     await fs.mkdir(path.join(root, "dist-runtime"));
@@ -203,11 +206,10 @@ it.each([undefined, false, true])(
   (sourceRuntimePrepared) =>
     withRuntimePublicationFixture(async ({ root, env, service }) => {
       vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("git");
-      const scripts = path.join(root, "scripts");
       const artifact = path.join(root, "dist-runtime", "published.txt");
-      await fs.mkdir(path.join(scripts, "lib"), { recursive: true });
+      await fs.mkdir(path.join(root, "scripts", "lib"), { recursive: true });
       await fs.writeFile(
-        path.join(scripts, "stage-bundled-plugin-runtime.mts"),
+        path.join(root, "scripts", "stage-bundled-plugin-runtime.mts"),
         `import fs from "node:fs/promises";
 export function prepareBundledPluginRuntime() {
   if (${sourceRuntimePrepared === true}) throw new Error("Prepared runtime must not be staged again");
@@ -223,7 +225,7 @@ export function prepareBundledPluginRuntime() {
 `,
       );
       await fs.writeFile(
-        path.join(scripts, "lib", "dist-artifact-ownership.mts"),
+        path.join(root, "scripts", "lib", "dist-artifact-ownership.mts"),
         sourceRuntimePrepared === false
           ? "throw new Error('The admitted runtime must not load the legacy lock owner');\n"
           : "export async function withDistArtifactOwnership(_root, run) { return await run(); }\n",
@@ -248,10 +250,9 @@ export function prepareBundledPluginRuntime() {
         }
         return value;
       };
-      const leaseMs = 1_000;
       try {
         await expect(
-          withPluginLifecycleLease({ env, waitMs: 0, leaseMs }, async (lease) => {
+          withPluginLifecycleLease({ env, waitMs: 0, leaseMs: 1_000 }, async (lease) => {
             const writeFile = fs.writeFile;
             vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
               if (args[0] === artifact && args[1] === "candidate") {
@@ -446,7 +447,6 @@ it.each([
     const output = "dist-runtime";
     const sibling = path.join(home, "sibling");
     await writeRuntimeRoot(sibling);
-    await fs.mkdir(path.join(root, output), { recursive: true });
     if (late) {
       await fs.symlink(path.join(root, output), path.join(sibling, output), "junction");
     }

@@ -176,7 +176,7 @@ suite.define(() => {
         "cron.runs": runsPage([oldRun], 51, 0, 50),
       });
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Run history", exact: true }).click();
+      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
       await page.getByText(oldRun.summary, { exact: true }).waitFor();
       await gateway.deferNext("cron.runs");
       await gateway.setMethodResponse("cron.runs", runsPage([secondRun], 2, 50, null));
@@ -187,7 +187,7 @@ suite.define(() => {
             (await gateway.getRequests("cron.runs", { query: "Lunar", offset: 0 })).length,
         )
         .toBe(1);
-      const loadMore = page.getByRole("button", { name: "Load more runs", exact: true });
+      const loadMore = page.getByRole("button", { name: "Load more activity", exact: true });
       if ((await loadMore.isVisible()) && (await loadMore.isEnabled())) {
         await loadMore.click();
       }

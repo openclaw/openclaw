@@ -44,6 +44,8 @@
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
   --chat-send-foreground: var(--primary-foreground);
+  --chat-send-hover-bg: color-mix(in srgb, var(--primary) 86%, var(--text-strong));
+  --chat-send-active-bg: var(--primary-active);
   --chat-composer-surface: var(--popover);
   /* Composer controls take their ink from the composer's own surface rather
      than the canvas. Built-in dark themes lift that surface well above the
@@ -90,7 +92,7 @@
   --sidebar-toolbar-action-opacity: 1;
   --sidebar-rail-action-bg: var(--accent);
   --sidebar-rail-action-hover-bg: var(--accent-hover);
-  --sidebar-rail-action-active-bg: color-mix(in srgb, var(--accent) 90%, var(--text));
+  --sidebar-rail-action-active-bg: var(--accent-active);
 
   /* GitHub references share an opaque neutral surface; only their ink carries status. */
   --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
@@ -138,6 +140,7 @@
   --accent-muted: #ff5c5c;
   --accent-subtle: rgba(255, 92, 92, 0.1);
   --accent-foreground: #0e1015;
+  --accent-active: var(--accent);
   --accent-glow: rgba(255, 92, 92, 0.2);
   --inbox-attention: #e5243b;
   --inbox-attention-foreground: #ffffff;
@@ -168,6 +171,7 @@
   /* Imported palettes supply a fill/ink pair, not a hover pair. Keep their
      contrast intact; built-in palettes override with audited hover colors. */
   --primary-hover: var(--primary);
+  --primary-active: var(--primary);
   --primary-foreground: #ffffff;
 
   --secondary: #161920;
@@ -582,7 +586,12 @@
     :is(.chat-thread, .chat-session-rail__thread)
     .chat-group.user
     :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
-    > :is(.chat-text, .chat-message-disclosure) {
+    > .chat-text,
+  :where(:root:not([data-theme="crt"], [data-theme="crt-light"]))
+    :is(.chat-thread, .chat-session-rail__thread)
+    .chat-group.user
+    :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
+    > .chat-message-disclosure {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
@@ -1287,7 +1296,8 @@ textarea,
   content: "";
   /* Keep the highlight offscreen when accessibility modes disable the sweep. */
   transform: translateX(-100%);
-  animation: shimmer var(--skeleton-duration) var(--skeleton-easing) infinite;
+  animation: var(--skeleton-animation, shimmer) var(--skeleton-duration) var(--skeleton-easing)
+    infinite;
   will-change: transform;
 }
 
@@ -1326,15 +1336,16 @@ textarea,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    /* A positive duration enables the default transition-property: all, even
-       on static controls. Keep reduced-motion updates immediate instead. */
+    /* Avoid WebKit transition work on static elements. Authored property lists
+       still win; the duration reset keeps their reduced-motion updates immediate. */
+    transition-property: none;
     transition-duration: 0ms !important;
     scroll-behavior: auto !important;
   }
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 

@@ -1117,6 +1117,14 @@ sizes. Budget violations do not prevent artifact generation. The separate
 `control-ui-performance` job enforces the budgets without blocking other jobs
 from building or testing the same source.
 
+Both the absolute check and `ui:check-performance:base` normalize generated
+asset hashes before measuring gzip and Brotli budgets. Asset stems, extensions,
+and code stay intact, so a rename alone cannot consume the budget. The report's
+compressed budget numbers are normalized; its separate **served** gzip, Brotli,
+and raw sizes describe the bytes on the wire, including identity fallback when
+a compression sidecar is absent. JSON metrics use `gzipBytes`/`brotliBytes` for
+budgets and `servedGzipBytes`/`servedBrotliBytes` for transfer sizes (schema 2).
+
 Every production UI build checks generated protocol validators before building
 or reusing cached output. After changing a schema used by the Control UI, run
 `pnpm ui:validators:gen` and commit the generated

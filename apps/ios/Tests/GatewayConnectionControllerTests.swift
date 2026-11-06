@@ -172,6 +172,31 @@ private let preconnectTimeoutProblem = GatewayConnectionProblem(
     retryable: true,
     pauseReconnect: false)
 
+@MainActor
+private func makeTestGatewayIngressController() -> GatewayIngressController {
+    GatewayIngressController(
+        persistence: .init(
+            load: { _ in nil },
+            save: { _, _ in true },
+            delete: { _ in true }),
+        requestFactory: { _ in
+            { request, _ in
+                guard let url = request.url,
+                      let response = HTTPURLResponse(
+                          url: url,
+                          statusCode: 200,
+                          httpVersion: nil,
+                          headerFields: nil)
+                else { throw URLError(.badURL) }
+                return (Data(), response)
+            }
+        },
+        customHeaders: { _ in [:] },
+        profiles: { [] },
+        saveProfileOrigin: { _, _ in true },
+        retireTransports: { _ in })
+}
+
 private struct ControllableTLSProbe {
     let started = AsyncStream<Void>.makeStream()
     let results = AsyncStream<GatewayTLSFingerprintProbeResult>.makeStream()
@@ -1522,6 +1547,36 @@ private func pendingHandoffDiagnostic(
         }
     }
 
+    @Test @MainActor func `onboarding reset forgets saved chat focus for every paired gateway`() async throws {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let temporaryState = try TemporaryOpenClawState()
+        defer { temporaryState.restore() }
+        let gatewayIDs = (0..<2).map { "manual|reset-\($0)-\(UUID().uuidString).example.com|443" }
+        defer {
+            for stableID in gatewayIDs {
+                GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            }
+        }
+        for stableID in gatewayIDs {
+            #expect(saveActiveManualGateway(
+                host: "reset.example.com", port: 443, useTLS: true, stableID: stableID))
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
+                stableID: stableID, sessionKey: "agent:main:reset-proof")
+            #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) != nil)
+        }
+        let defaults = try #require(UserDefaults(suiteName: "onboarding-reset-\(UUID().uuidString)"))
+        let appModel = NodeAppModel()
+        await GatewayOnboardingReset.reset(appModel: appModel, instanceId: "", defaults: defaults)
+
+        #expect(GatewaySettingsStore.loadGatewayRegistry().entries.isEmpty)
+        for stableID in gatewayIDs {
+            #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == nil)
+            appModel.prepareForGatewayConnect(stableID: stableID)
+            #expect(appModel.chatSessionKey == appModel.mainSessionKey)
+        }
+    }
+
     @Test @MainActor func `bootstrap pairing clears only the target gateway`() async throws {
         let temporaryState = try TemporaryOpenClawState()
         defer { temporaryState.restore() }
@@ -2371,6 +2426,36 @@ private func pendingHandoffDiagnostic(
         }
     }
 
+    @Test @MainActor func `legacy manual auto connect registers route before Access admission`() async {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let host = "legacy-access-\(UUID().uuidString).example.invalid"
+        let stableID = "manual|\(host.lowercased())|443"
+        await withUserDefaults([
+            "gateway.autoconnect": false,
+            "gateway.manual.enabled": true,
+            "gateway.manual.host": host,
+            "gateway.manual.port": 443,
+            "gateway.manual.tls": true,
+            "node.instanceId": "ios-test",
+        ]) {
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            #expect(GatewaySettingsStore.loadGatewayRegistry().entries.isEmpty)
+
+            UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
+            controller._test_triggerAutoConnect()
+
+            let entry = GatewaySettingsStore.loadGatewayRegistry().entries.first {
+                GatewayStableIdentifier.matches($0.stableID, stableID)
+            }
+            #expect(entry?.kind == .manual)
+            #expect(entry?.host == host)
+            #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == stableID)
+        }
+    }
+
     @Test @MainActor func `active manual TLS auto connect uses system trust before legacy defaults`() async {
         let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
@@ -2775,6 +2860,38 @@ private func pendingHandoffDiagnostic(
         }
     }
 
+    @Test @MainActor func `forget gateway erases only its saved chat focus`() async {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let forgottenID = "focus-forgotten-\(UUID().uuidString)"
+        let keptID = "focus-kept-\(UUID().uuidString)"
+        let keptChat = "agent:main:dashboard:kept"
+        defer {
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: forgottenID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: keptID, sessionKey: nil)
+        }
+        for stableID in [forgottenID, keptID] {
+            #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+                stableID: stableID, kind: .manual, name: "Focus test", host: "localhost", port: 443,
+                useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: false))
+        }
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
+            stableID: forgottenID, sessionKey: "agent:main:dashboard:forgotten")
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: keptID, sessionKey: keptChat)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        await controller.forgetGateway(stableID: forgottenID)
+
+        // Re-adding the same stable ID starts without the forgotten conversation.
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: forgottenID, kind: .manual, name: "Focus test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: false))
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: forgottenID) == nil)
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: keptID) == keptChat)
+    }
+
     @Test(arguments: [false, true])
     @MainActor func `forget gateway cancels its pending trust handoff`(personal: Bool) async {
         let registryIsolation = await GatewayRegistryTestIsolation()
@@ -3149,7 +3266,8 @@ private func pendingHandoffDiagnostic(
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            forceReconnectReset: { _ in })
+            forceReconnectReset: { _ in },
+            ingress: makeTestGatewayIngressController())
 
         appModel.isGatewayPickerRequestInFlight = true
         let result = await controller.switchToGateway(stableID: targetID)

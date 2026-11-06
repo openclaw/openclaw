@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
   chmodSync,
   chownSync,
@@ -527,7 +527,7 @@ NODE
       target="$(cd "$target" && pwd -P)"
       replacement="$(cd "$replacement" && pwd -P)"
       ln -s "$target" "$alias_path"
-
+      npm() { [[ "$1" == view ]] || return 1; printf '>=24.16.0 <25 || >=26.1.0\\n'; }
       check_git() { return 0; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
       checkout_git_openclaw_ref() {
@@ -1493,7 +1493,7 @@ EOF
       warn_duplicate_openclaw_global_installs() { :; }; npm_global_bin_dir() { :; }; warn_shell_path_missing_dir() { :; }
       has_openclaw_config() { return 0; }; refresh_gateway_service_if_loaded() { :; }
       run_doctor() { return 9; }; resolve_openclaw_version() { printf 'test-version\n'; }
-      retire_git_wrapper_after_npm_install() { :; }; show_footer_links() { :; }
+      retire_git_wrapper_after_npm_install() { :; }; show_footer_links() { :; }; npm() { [[ "$1" == view ]] || return 1; printf '>=24.16.0 <25 || >=26.1.0\\n'; }
       main
     `);
 
@@ -2039,8 +2039,8 @@ EOF
       source "${SCRIPT_PATH}"
       OS=${os}
       bootstrap_gum_temp() { :; }
-      print_installer_banner() { :; }
-      print_gum_status() { :; }
+      print_installer_banner() { :; }; print_gum_status() { :; }
+      npm() { [[ "$1" == view ]] || return 1; printf '>=24.16.0 <25 || >=26.1.0\\n'; }
       detect_os_or_die() { :; }
       detect_openclaw_checkout() { :; }
       show_install_plan() { :; }
@@ -2138,8 +2138,8 @@ EOF
     ["24.21.0", ">=24.22.1 <25 || >=26.12.1", true],
     ["24.22.1", ">=24.22.1 <25 || >=26.12.1", false],
     ["24.21.0", ">=24.16.0 <25 || >=26.1.0", false],
-    ["24.21.0", "", true],
-    ["26.12.0", "", true],
+    ["24.21.0", "", false],
+    ["26.12.0", "", false],
     ["26.12.1", "", false],
   ])(
     "selects a package-compatible runtime for Node %s and engines %s",
@@ -2169,6 +2169,13 @@ EOF
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toContain("package install reached");
       expect(result.stdout.includes("runtime upgraded")).toBe(upgrade);
+      const warnings = result.stderr.match(/SECURITY WARNING:/g) ?? [];
+      expect(warnings).toHaveLength(!upgrade && ["24.21.0", "26.12.0"].includes(version) ? 1 : 0);
+      expect(result.stdout).not.toContain("SECURITY WARNING:");
+      if (warnings.length) {
+        expect(result.stderr).toContain("may trust TLS certificates signed with keys compromised");
+        expect(result.stderr).toContain("Node 24.22.1+ on the 24.x line or Node 26.12.1+");
+      }
     },
   );
 
@@ -2663,7 +2670,7 @@ EOF
     }
     chmodSync(profile, readable ? 0o400 : 0o000);
     try {
-      const shellScript = `source "${SCRIPT_PATH}"; ${
+      const shellScript = `${readable ? "" : '[[ ! -r "$HOME/.bash_profile" ]] || { echo "Fixture profile remains readable" >&2; exit 90; }; '}source "${SCRIPT_PATH}"; ${
         readable
           ? 'persist_path_line_to_profile "$HOME/.profile" \'export PATH="$HOME/.local/bin:$PATH"\''
           : "ensure_user_local_bin_on_path"
@@ -2673,7 +2680,18 @@ EOF
         PATH: "/usr/bin:/bin",
         ...(!readable ? { SHELL: "/bin/bash" } : {}),
       };
-      let result: ReturnType<typeof spawnSync>;
+      const spawnOptions = {
+        encoding: "utf8" as const,
+        env: { ...process.env, ...env, BASH_ENV: "", ENV: "", OPENCLAW_INSTALL_SH_NO_RUN: "1" },
+      };
+      let dropReadCapabilities = false;
+      if (!readable && process.platform === "linux" && process.getuid?.() !== 0) {
+        const probe = runInstallShell('[[ -r "$HOME/.bash_profile" ]]', env);
+        expect(probe.error).toBeUndefined();
+        expect([0, 1], probe.stderr).toContain(probe.status);
+        dropReadCapabilities = probe.status === 0;
+      }
+      let result: SpawnSyncReturns<string>;
       if (process.getuid?.() === 0) {
         chmodSync(tmp, 0o755);
         chownSync(home, 65534, 65534);
@@ -2684,15 +2702,27 @@ EOF
         result = spawnSync(
           "setpriv",
           ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", shellScript],
-          {
-            encoding: "utf8",
-            env: { ...process.env, ...env, BASH_ENV: "", ENV: "", OPENCLAW_INSTALL_SH_NO_RUN: "1" },
-          },
+          spawnOptions,
+        );
+      } else if (dropReadCapabilities) {
+        // Some VM images grant non-root processes capabilities that bypass chmod.
+        result = spawnSync(
+          "setpriv",
+          [
+            "--inh-caps=-dac_read_search,-dac_override",
+            "--ambient-caps=-dac_read_search,-dac_override",
+            "/bin/bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+            shellScript,
+          ],
+          spawnOptions,
         );
       } else {
         result = runInstallShell(shellScript, env);
       }
-      expect(result.status).toBe(0);
+      expect(result.status, result.stderr).toBe(0);
       if (readable) {
         expect(readFileSync(profile, "utf8")).toBe(
           'export PATH="$HOME/.local/bin:$PATH"\n# readonly profile\n',

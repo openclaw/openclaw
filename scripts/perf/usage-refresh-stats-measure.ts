@@ -358,11 +358,6 @@ if (values.prepare) {
         archiveStorePaths: [fixture.databasePath],
         operation: { kind: "refresh", pricingFingerprint: "synthetic" },
       },
-      control: {
-        signal: new AbortController().signal,
-        runNativeSection: async (read) => read(),
-        throwIfCancelled() {},
-      },
       target: () => database,
       readStore: async (_agentId, _storePath, read) => scope.run(database, read),
       readCheckpoint: (marker) => checkpoints.get(marker.sessionId),

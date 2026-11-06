@@ -30,7 +30,7 @@ public struct GatewayConnectOptions: Sendable, Equatable {
     /// role/scoped sessions such as operator UI clients.
     public var includeDeviceIdentity: Bool
     /// Set false for an endpoint handoff whose explicit credentials (including none) must be
-    /// tried without loading a previously stored device token.
+    /// tried without using a previously stored device token as authentication.
     public var allowStoredDeviceAuth: Bool
     /// Stable Gateway owner for device tokens. Nil preserves legacy unscoped storage only when
     /// `allowStoredDeviceAuth` is true; false plus nil disables both lookup and persistence.

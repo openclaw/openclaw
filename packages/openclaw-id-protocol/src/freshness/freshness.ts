@@ -9,7 +9,7 @@
 // Gateway has signed a newer one. A replaced server key is retired by that binding_seq alone;
 // no list of revoked keys exists. Withheld or stale freshness is refused under the "enforce"
 // policy and only reported under "report"; positive evidence of a stale binding always refuses.
-import type { ServerBindingBody } from "../statements/types.js";
+import type { ProtocolVersions, ServerBindingBody } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
 import { verifyMembershipSnapshot } from "../statements/verify.js";
 
@@ -56,7 +56,12 @@ export type FreshnessAssessment = {
   state: FreshnessState;
   /** Verdict for dialing this binding. */
   verdict:
-    | { ok: true; fresh: true; snapshotAge: number }
+    /**
+     * Fresh evidence. `protocols` is the Gateway's signed version list from that snapshot: the
+     * only input `selectVersion` may use. Without fresh evidence there is no list; the Gateway's
+     * own enforcement is what keeps a client off a version it refuses (docs/versioning.md).
+     */
+    | { ok: true; fresh: true; snapshotAge: number; protocols: ProtocolVersions }
     | { ok: true; fresh: false; gap: FreshnessGap }
     | { ok: false; code: "stale_binding" | "freshness_unavailable"; detail: string };
 };
@@ -111,7 +116,12 @@ export async function assessFreshness(
   if (gap === null) {
     return {
       ...result,
-      verdict: { ok: true, fresh: true, snapshotAge: now - snapshot!.issued_at },
+      verdict: {
+        ok: true,
+        fresh: true,
+        snapshotAge: now - snapshot!.issued_at,
+        protocols: snapshot!.protocols,
+      },
     };
   }
   if (ctx.policy === "enforce") {
@@ -120,7 +130,12 @@ export async function assessFreshness(
   return { ...result, verdict: { ok: true, fresh: false, gap } };
 }
 
-type SnapshotFacts = { seq: number; issued_at: number; binding_seq: number };
+type SnapshotFacts = {
+  seq: number;
+  issued_at: number;
+  binding_seq: number;
+  protocols: ProtocolVersions;
+};
 
 // The snapshot's facts when it is well formed and signed by this binding's K_gw for this claw.
 async function verifiedSnapshot(
@@ -135,8 +150,8 @@ async function verifiedSnapshot(
   if (!verified.ok) {
     return null;
   }
-  const { seq, issued_at, binding_seq } = parsed.statement.body;
-  return { seq, issued_at, binding_seq };
+  const { seq, issued_at, binding_seq, protocols } = parsed.statement.body;
+  return { seq, issued_at, binding_seq, protocols };
 }
 
 // Why the snapshot is not fresh evidence for this binding, or null when it is.

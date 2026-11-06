@@ -123,11 +123,6 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const controls: CatalogRowControls = {};
   const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
     handleContextMenuEvent(event, controls.link ?? null, (trigger, x, y) => {
-      const catalogMenu = display()?.catalogMenu;
-      if (catalogMenu) {
-        host().sidebarMenus.catalogMenu.open(catalogMenu, x, y, trigger ?? undefined);
-        return;
-      }
       if (!host().sidebarSnapshot) {
         host().sidebarMenus.openSessionMenu(actionSession(), x, y, trigger);
       }
@@ -139,14 +134,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     const sessionValue = session();
     return t(sessionValue.archived ? "sessionsView.restoreSession" : "sessionsView.archiveSession");
   });
-  const menuOpen = createMemo(() => {
-    const displayValue = display();
-    const hostValue = host();
-    const sessionValue = session();
-    return displayValue?.catalogMenu
-      ? hostValue.sidebarMenus.catalogMenuView.isOpenFor(displayValue.catalogMenu.key)
-      : hostValue.sidebarMenus.sessionMenu?.session.key === sessionValue.key;
-  });
+  const menuOpen = createMemo(() => host().sidebarMenus.sessionMenu?.session.key === session().key);
   const color = createMemo(() => normalizeSessionColorValue(session().color ?? ""));
   const archived = createMemo(() => session().archived === true);
   const pinnable = createMemo(() => session().pinnable);
@@ -382,11 +370,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
             aria-expanded={menuOpen() ? "true" : "false"}
             onClick={(event) => {
               event.stopPropagation();
-              host().toggleSessionMenu(
-                actionSession(),
-                event.currentTarget,
-                display()?.catalogMenu,
-              );
+              host().toggleSessionMenu(actionSession(), event.currentTarget);
             }}
           >
             <Icon name="moreHorizontal" />

@@ -46,8 +46,11 @@ const repositoryScriptEntries = [
   "test/fixtures/beam-live-handoff-client/beam.mjs",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-android-release-history.mts!",
+  "scripts/bench-ios-release-note-overlap.mjs!",
+  "scripts/bench-mobile-release-dependencies.mjs!",
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/bench-plugin-catalog.ts!",
+  "scripts/bench-template-detail.mts!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
@@ -94,6 +97,8 @@ const repositoryScriptEntries = [
   "scripts/ci-shard-timings-refresh.mts!",
   "scripts/ci-test-observations.mjs!",
   "scripts/ci-adaptive-select.mjs!",
+  "scripts/ci-adaptive-evaluate.mjs!",
+  "scripts/ci-adaptive-jev.mjs!",
   "scripts/ci-adaptive-priors.mjs!",
   "scripts/ci-adaptive-costs.mjs!",
   // The scheduled-run execution context design invokes this development replay by path.
@@ -121,17 +126,23 @@ const repositoryScriptEntries = [
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
+  ".github/actions/setup-node-env/transform-fingerprint.mjs!",
   // setup-pnpm-store-cache invokes this helper from composite-action YAML.
   ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
   // scripts/README.md invokes this warm-interaction benchmark CLI by path.
   "scripts/bench-control-ui-interactions.ts!",
+  // Its companion guide invokes the isolated RPC payload census by path.
+  "scripts/bench-control-ui-rpc-payloads.ts!",
   // scripts/README.md invokes the real-Gateway Usage benchmark; it spawns this exact child path.
   "scripts/bench-usage-gateway.ts!",
   "scripts/lib/usage-bench-child.ts!",
   "scripts/lib/usage-bench-observer.mjs!",
   // scripts/README.md invokes the Chromium/WebKit companion with shared scenarios.
   "scripts/bench-control-ui-engines.ts!",
+  // Its companion guide invokes the same-document aged-tab census by path.
+  "scripts/bench-control-ui-aged-tab.ts!",
+  "scripts/bench-control-ui-aged-tab-compare.ts!",
   // The opt-in projection benchmark builds its browser fixture through this CLI.
   "scripts/build-control-ui-projection-fixture.mts!",
   // The reactive graph guide invokes this isolated diagnostic build by path.
@@ -435,6 +446,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/correction-review.mjs!",
   // prepare-core.sh invokes correction continuation and recovery by path.
   "scripts/pr-lib/correction-continuation.mjs!",
+  // worktree.sh executes the selected-task inventory and artifact closeout helper.
+  "scripts/pr-lib/finalized-task.mjs!",
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/materialize-dependencies.mjs!",
   "scripts/pr-lib/merge-body.mjs!",
@@ -853,6 +866,8 @@ const rootToolingAndWorkspaceDependencies = [
   "signal-utils",
   // Root declaration builds compile terminal-core source and resolve this package from root.
   "string-width",
+  // The rule-cache benchmark resolves this dependency from extensions/tokenjuice/package.json.
+  "tokenjuice",
 ] as const;
 
 function workspacePackage(packageDir: string, extraEntries: readonly string[] = []) {
@@ -878,11 +893,16 @@ function compileDynamicMjsConsumers(source: string, filePath: string): string {
     return compileViteConfigConsumers(source, filePath);
   }
   if (path.resolve(filePath) === path.resolve("scripts/ci-build-manifest.mjs")) {
-    // The trusted manifest resolves this planner from the target checkout by file URL.
-    return source.replace(
-      /(const changedNodeTestPlan = await )importTargetPlan\([\s\S]*?\n\);/u,
-      '$1import("./lib/ci-changed-node-test-plan.mts");',
-    );
+    // The trusted manifest resolves these planners from the target checkout by file URL.
+    return source
+      .replace(
+        /(const changedNodeTestPlan = await )importTargetPlan\([\s\S]*?\n\);/u,
+        '$1import("./lib/ci-changed-node-test-plan.mts");',
+      )
+      .replace(
+        'import(fromTarget("./scripts/lib/postgres-conformance-shards.mts"))',
+        'import("./lib/postgres-conformance-shards.mts")',
+      );
   }
   if (path.resolve(filePath) === path.resolve("scripts/prepare-native-protocol.mjs")) {
     // The temporary esbuild bundle exports this source module's unchanged API.
@@ -1183,6 +1203,15 @@ const config = {
     "src/agents/model-auth-runtime.ts": ["nsExports"],
     "src/agents/model-auth-runtime-shared.ts": ["nsExports"],
     "src/agents/prepared-model-runtime.ts": ["nsExports"],
+    // OpenClaw ID focused tests drive retry timers, mailbox handling and connection custody
+    // through these exports; the full-tree scan still audits those tests.
+    "src/gateway/openclaw-id/mailbox-reader.ts": ["exports"],
+    "src/gateway/openclaw-id/publication-retry.ts": ["exports"],
+    "src/gateway/openclaw-id/tunnel-connections.ts": ["exports"],
+    // The stacked OpenClaw ID tunnel change is the first production importer of these
+    // exports, which focused tests cover now; drop each entry with that importer.
+    "src/gateway/openclaw-id/device-token-binding.ts": ["exports"],
+    "src/gateway/openclaw-id/tunnel-child/keyfile.ts": ["exports"],
   },
   workspaces: {
     ".": {

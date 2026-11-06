@@ -24,6 +24,7 @@ import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import { resolveAfterToolHttpFailure } from "./mock-openai-after-tool-failures.js";
 import {
   buildAssistantText,
+  buildImageGenerationCompletionReply,
   buildImageInspectionReply,
   readForkedContextCompletion,
   isCanonicalCompactionRetryWriteResult,
@@ -1724,6 +1725,10 @@ async function buildResponsesPayload(
       );
     }
     return buildAssistantEvents("NONE");
+  }
+  const imageCompletionReply = buildImageGenerationCompletionReply(input);
+  if (imageCompletionReply) {
+    return buildAssistantEvents(imageCompletionReply);
   }
   if (
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&

@@ -353,8 +353,10 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                 }
               : undefined,
             progressCard:
-              detailsProgress?.card ??
-              (this.detailsProgressCardInitialLoading ? cached?.snapshot.progressCard : null),
+              this.cachedSessionStatePending() && this.cachedSessionState()?.archived
+                ? null
+                : (detailsProgress?.card ??
+                  (this.detailsProgressCardInitialLoading ? cached?.snapshot.progressCard : null)),
             progressCardIdentity: detailsProgress?.identity,
             progressCardLifetime: detailsProgress?.lifetime,
             progressCardInitialLoading: this.detailsProgressCardInitialLoading,

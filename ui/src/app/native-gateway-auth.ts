@@ -9,7 +9,7 @@ import {
 } from "@openclaw/gateway-protocol/client-info";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../i18n/index.ts";
-import { formatUiError } from "../lib/format-error.ts";
+import { formatConnectionError, formatConnectionErrorSummary } from "../lib/connection-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { generateUUID } from "../lib/uuid.ts";
 
@@ -25,7 +25,7 @@ export type NativeGatewayAuthorization = {
     | { deviceToken: string; token?: never; password?: never }
     | { token: string; deviceToken?: never; password?: never }
     | { password: string; token?: never; deviceToken?: never }
-    | Record<string, never>;
+    | { deviceToken?: never; token?: never; password?: never };
   expectedHelloAuth?: NativeGatewayHelloExpectation;
   expectedGatewayId?: string;
   device: NonNullable<ConnectParams["device"]>;
@@ -56,18 +56,30 @@ type NativeAuthHost = Window & {
   };
 };
 
-function readNativeCredential(value: Record<string, unknown>): NativeGatewayAuthorization["auth"] {
+function readNativeCredential(value: unknown): NativeGatewayAuthorization["auth"] {
   // Preserve the accepted native method. In particular, role-configured Gateways
   // distinguish shared-owner token/password auth from device-token authentication.
-  if (Object.keys(value).length === 1) {
-    if (typeof value.deviceToken === "string" && value.deviceToken) {
-      return { deviceToken: value.deviceToken };
-    }
-    if (typeof value.token === "string" && value.token) {
-      return { token: value.token };
-    }
-    if (typeof value.password === "string" && value.password) {
-      return { password: value.password };
+  if (!isRecord(value)) {
+    throw new Error("The app returned an invalid Gateway credential. Reconnect in the app.");
+  }
+  const keys = Object.keys(value);
+  // Ingress-authenticated sessions sign device proof without a reusable Gateway credential.
+  if (keys.length === 0) {
+    return {};
+  }
+  if (keys.length === 1) {
+    const credential = value[keys[0]!];
+    if (typeof credential === "string" && credential) {
+      switch (keys[0]) {
+        case "deviceToken":
+          return { deviceToken: credential };
+        case "token":
+          return { token: credential };
+        case "password":
+          return { password: credential };
+        default:
+          break;
+      }
     }
   }
   throw new Error(t("runtimeErrors.nativeCredential"));
@@ -80,7 +92,6 @@ function readAuthorization(
   const result = isRecord(value) ? value : {};
   const client = isRecord(result.client) ? result.client : {};
   const device = isRecord(result.device) ? result.device : {};
-  const auth = isRecord(result.auth) ? result.auth : {};
   const id = normalizeGatewayClientId(typeof client.id === "string" ? client.id : undefined);
   const mode = normalizeGatewayClientMode(
     typeof client.mode === "string" ? client.mode : undefined,
@@ -106,22 +117,19 @@ function readAuthorization(
   ) {
     throw new Error(t("runtimeErrors.nativeAuthorization"));
   }
-  let nativeAuth: NativeGatewayAuthorization["auth"];
+  const nativeAuth = readNativeCredential(result.auth);
   let expectedHelloAuth: NativeGatewayAuthorization["expectedHelloAuth"];
-  if (Object.keys(auth).length === 0) {
+  if (result.requiredAuthMethod !== undefined || result.expectedRecoveryScope !== undefined) {
     const recoveryScope = result.expectedRecoveryScope;
     if (
-      !isRecord(result.auth) ||
+      Object.keys(nativeAuth).length !== 0 ||
       result.requiredAuthMethod !== "tailscale" ||
       typeof recoveryScope !== "string" ||
       recoveryScope.trim().length === 0
     ) {
       throw new Error(t("runtimeErrors.nativeCredential"));
     }
-    nativeAuth = {};
     expectedHelloAuth = { method: "tailscale", recoveryScope };
-  } else {
-    nativeAuth = readNativeCredential(auth);
   }
   return {
     client: {
@@ -215,7 +223,7 @@ export function createNativeGatewayConnectAuth(
           // MessagePort has a fixed peer, not a Window target origin.
           port.postMessage(message);
         } catch (error) {
-          accept({ id, error: formatUiError(error) });
+          void formatConnectionError(error).then((detail) => accept({ id, error: detail }));
         }
       }
       waitingForPort.clear();
@@ -275,9 +283,17 @@ export function createNativeGatewayConnectAuth(
           resolve(authorization);
         }
       };
+      const failBridge = (error: unknown) =>
+        formatConnectionError(error).then((message) =>
+          finish(new NativeGatewayAuthUnavailableError(message, { cause: error })),
+        );
       const abort = () =>
         finish(
-          new Error(formatUiError(signal.reason ?? "Native Gateway authorization cancelled.")),
+          new Error(
+            formatConnectionErrorSummary(
+              signal.reason ?? "Native Gateway authorization cancelled.",
+            ),
+          ),
         );
       const timer = setTimeout(
         () => finish(new NativeGatewayAuthUnavailableError(t("runtimeErrors.nativeTimeout"))),
@@ -292,7 +308,7 @@ export function createNativeGatewayConnectAuth(
         try {
           finish(undefined, readAuthorization(reply.result, request));
         } catch (error) {
-          finish(error instanceof Error ? error : new Error(formatUiError(error)));
+          finish(error instanceof Error ? error : new Error(formatConnectionErrorSummary(error)));
         }
       });
       const stopAbort = listen(signal, "abort", abort, { once: true });
@@ -311,12 +327,10 @@ export function createNativeGatewayConnectAuth(
           waitingForPort.set(request.id, JSON.stringify(request));
         }
         if (result) {
-          void result.then(accept, (error: unknown) =>
-            finish(new NativeGatewayAuthUnavailableError(formatUiError(error))),
-          );
+          void result.then(accept, failBridge);
         }
       } catch (error) {
-        finish(new NativeGatewayAuthUnavailableError(formatUiError(error)));
+        void failBridge(error);
       }
     });
   };

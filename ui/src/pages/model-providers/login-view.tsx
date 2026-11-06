@@ -1,10 +1,10 @@
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import { ModelSetupWizard } from "../model-setup/wizard-view-solid.tsx";
 import type { ModelProviderLogin } from "./login-controller.ts";
 import { ProviderAccountSummary } from "./profiles-view.tsx";
@@ -90,7 +90,7 @@ function PickerDialog(props: {
             <Show when={current().provider} fallback={t("modelProviders.login.title")}>
               {(provider) => (
                 <>
-                  <ProviderBrandIcon provider={provider().id} class="model-providers__icon" />{" "}
+                  <ModelProviderIcon provider={provider().id} class="model-providers__icon" />{" "}
                   {provider().label}
                 </>
               )}
@@ -299,7 +299,7 @@ function LoginOption(props: {
       onClick={() => props.onClick()}
     >
       <Show when={props.provider}>
-        {(provider) => <ProviderBrandIcon provider={provider()} class="model-providers__icon" />}
+        {(provider) => <ModelProviderIcon provider={provider()} class="model-providers__icon" />}
       </Show>
       <span class="model-provider-login__copy">
         <strong>{props.label}</strong>

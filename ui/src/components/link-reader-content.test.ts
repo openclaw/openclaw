@@ -192,7 +192,7 @@ describe("link reader document content", () => {
       "<script>unsafe</script>",
     );
     expect(container.querySelector(".lr-checks")?.textContent).toContain(
-      "Some checks could not be shown",
+      "Couldn’t show all checks. Open the original to see them.",
     );
     update(container, {
       ...detail("Description"),
@@ -480,8 +480,8 @@ describe("link reader document content", () => {
     expect(container.querySelector<HTMLDetailsElement>(".lr-file")?.open).toBe(true);
     expect(container.textContent).toContain("Renamed from src/old.ts");
     expect(container.textContent).not.toContain("This view is incomplete");
-    expect(container.textContent).toContain("Some comments could not be shown");
-    expect(container.textContent).toContain("Some files could not be shown");
+    expect(container.textContent).toContain("Couldn’t show all comments.");
+    expect(container.textContent).toContain("Couldn’t show all files.");
     expect(container.textContent).toContain("No text diff available");
   });
 });

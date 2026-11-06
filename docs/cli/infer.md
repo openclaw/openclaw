@@ -165,6 +165,8 @@ Notes:
 - Use `model run --gateway` to test Gateway routing or agent-runtime setup while keeping the model input raw. Use [`openclaw agent`](/cli/agent) or a chat surface for full agent context, tools, memory, and session transcript.
 - `--thinking adaptive` maps to the completion-runtime level `medium`; `--thinking max` maps to `max` for OpenAI models that support the native max effort, otherwise `xhigh`.
 - `model auth login`, `model auth logout`, and `model auth status` manage saved provider auth state.
+- An interrupt accepted during generation cancels the in-flight local request or Gateway call and stops waiting for it instead of letting the run finish, and publishes no output for the interrupted run.
+- For `model run --gateway`, interruption cancels the caller's RPC and does not change the lifetime of Gateway-owned generation.
 
 ## Image
 
@@ -189,6 +191,7 @@ openclaw infer image describe --file ./photo.jpg --model ollama/qwen2.5vl:7b --p
 Notes:
 
 - Use `image edit` when starting from existing input files; `--size`, `--aspect-ratio`, or `--resolution` add geometry hints on providers/models that support them.
+- `image edit --file` accepts regular files and symlinks to regular files. Special files such as FIFOs are refused before any provider request.
 - `image generate` and `image edit` accept positive numeric `W:H` aspect ratios, including `7:5` and `1.5:1`. Malformed values such as `16x9`, `16/9`, or `0:5` fail before a provider request or output file is created.
 - `--output-format png --background transparent` with `--model openai/gpt-image-1.5` gives transparent-background OpenAI PNG output; `--openai-background` is an OpenAI-specific alias for the same hint. Providers that do not declare background support report it as an ignored override (see `ignoredOverrides` in the [JSON envelope](#json-output)).
 - `--quality low|medium|high|auto` works for providers that support image-quality hints, including OpenAI. OpenAI also accepts `--openai-moderation low|auto`.
@@ -224,6 +227,9 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 ```
 
 `--model` must be `<provider/model>`.
+
+An accepted interrupt cancels the pending transcription request and suppresses
+late transcript output.
 
 For audio transcription and video description on POSIX systems, `--file` follows
 directory symlinks before resolving `..`, matching filesystem path resolution.
@@ -313,6 +319,9 @@ that prefix; model ids that contain a slash keep the provider prefix, for exampl
 Without `--json`, `embedding create` shows the provider and model, followed by
 each input, its dimension count, and a preview of the first eight vector values.
 Longer vectors end with `...`; use `--json` to retrieve complete vectors.
+
+An accepted interrupt forwards cancellation to the embedding provider and suppresses
+output from the interrupted batch.
 
 ## JSON output
 
