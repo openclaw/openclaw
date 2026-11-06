@@ -119,8 +119,8 @@ it("keeps nested causes behind the debug gate", () => {
   );
 });
 
-it.each(["gateway", "gateway run", "node run"])(
-  "prints the redacted service startup reason without debug: %s",
+it.each(["gateway", "gateway run", "node run", "plugins enable x", "plugins disable x"])(
+  "prints the redacted command reason without debug: %s",
   (args) => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const lines = failure(
