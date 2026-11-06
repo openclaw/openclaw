@@ -1,2 +1,2 @@
-# Manual-only and slash-only catalog distinction, affected fixtures, and composer send regressions.
-69
+# Manual-only and slash-only catalog distinction, affected fixtures, composer send and snapshot restore regressions.
+81
