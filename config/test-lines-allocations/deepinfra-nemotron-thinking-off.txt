@@ -1,4 +1,0 @@
-# PR #192979: 106 new LF lines in extensions/deepinfra/reasoning.test.ts.
-# Registered-provider/final-request regression plus five distinct compatibility controls.
-# Retains real transport capture; the shared scalar is unchanged.
-106
