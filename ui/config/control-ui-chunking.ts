@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, type Plugin, type ResolvedConfig } from "vite";
 import {
-  controlUiLocaleErrorNamespaces,
   resolvedLocaleConfigHintsModulePrefix,
   resolvedLocaleNamespaceModulePrefix,
 } from "./control-ui-locales.ts";
@@ -508,14 +507,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
   }
   if (normalized.startsWith(resolvedLocaleNamespaceModulePrefix)) {
-    const [locale, namespace] = normalized
-      .slice(resolvedLocaleNamespaceModulePrefix.length)
-      .split("/");
-    // The local-error registrar prepares these together. Share their request without
-    // pulling them into the locale entry or changing when their copy is installed.
-    if (controlUiLocaleErrorNamespaces.includes(namespace!)) {
-      return `locale-errors-${locale}`;
-    }
     return `locale-namespace-${normalized.slice(resolvedLocaleNamespaceModulePrefix.length).replace("/", "-")}`;
   }
 
