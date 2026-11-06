@@ -3,7 +3,7 @@ import { elementRef } from "../lib/reactive/element-ref.ts";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import type { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import type { SidebarSessionsScrollState } from "./app-sidebar-session-types.ts";
-import { scrollStateForGeometry } from "./scroll-state-observer.ts";
+import { readScrollState } from "./scroll-state-observer.ts";
 
 export const SidebarScrollContext = createContext<{
   element(): HTMLElement | undefined;
@@ -50,20 +50,14 @@ export function createSidebarScroll(
       if (!element) {
         return;
       }
-      const size = element.scrollHeight;
-      const viewport = element.clientHeight;
       const restoreTop = pendingTop;
-      const position =
-        restoreTop === undefined
-          ? element.scrollTop
-          : Math.min(restoreTop, Math.max(0, size - viewport));
-      const next = scrollStateForGeometry(size, viewport, position);
+      const next = readScrollState(element, false, restoreTop);
       return () => {
         if (scroller !== element) {
           return;
         }
         if (restoreTop !== undefined) {
-          element.scrollTop = position;
+          element.scrollTop = restoreTop;
           pendingTop = undefined;
         }
         setState(

@@ -5,11 +5,21 @@ import { listen } from "../lib/reactive/listener.ts";
 
 export type ScrollState = { scrollable: boolean; atStart: boolean; atEnd: boolean };
 
-export function scrollStateForGeometry(
-  size: number,
-  viewport: number,
-  position: number,
+export function readScrollState(
+  element: HTMLElement,
+  horizontal = false,
+  restoredPosition?: number,
 ): ScrollState {
+  const size = horizontal ? element.scrollWidth : element.scrollHeight;
+  const viewport = horizontal ? element.clientWidth : element.clientHeight;
+  // Horizontal consumers describe physical left/right edges, including in RTL.
+  const position =
+    restoredPosition ??
+    (horizontal
+      ? getComputedStyle(element).direction === "rtl"
+        ? size - viewport + element.scrollLeft
+        : element.scrollLeft
+      : element.scrollTop);
   const scrollable = size > viewport + 1;
   return {
     scrollable,
@@ -40,15 +50,7 @@ function schedule(element: HTMLElement): void {
     const updates = [...entries].map((entry) => {
       let state = states.get(entry.horizontal);
       if (!state) {
-        const size = entry.horizontal ? element.scrollWidth : element.scrollHeight;
-        const viewport = entry.horizontal ? element.clientWidth : element.clientHeight;
-        // Horizontal consumers describe physical left/right edges, including in RTL.
-        const position = entry.horizontal
-          ? getComputedStyle(element).direction === "rtl"
-            ? size - viewport + element.scrollLeft
-            : element.scrollLeft
-          : element.scrollTop;
-        state = scrollStateForGeometry(size, viewport, position);
+        state = readScrollState(element, entry.horizontal);
         states.set(entry.horizontal, state);
       }
       return { entry, state };
