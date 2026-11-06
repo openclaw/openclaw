@@ -2,13 +2,13 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createProjection, createSignal, mapArray, merge, onSettled } from "solid-js";
 import type { useSessionMenuEntries } from "../../../components/session-menu-view.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import {
   Menu,
   type MenuEntry,
   type MenuItem,
   type MenuItemBindings,
 } from "../../../components/solid/menu.tsx";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerSessionMenuEnglish } from "../../../i18n/locales/en-session-menu.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";

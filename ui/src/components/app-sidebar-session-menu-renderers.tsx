@@ -35,12 +35,12 @@ import { Icon } from "./solid/icon.tsx";
 import type { MenuEntry, MenuItem } from "./solid/menu.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { SettingsSegmented } from "./solid/settings-ui.tsx";
-import { SwitchIndicator } from "./solid/switch.tsx";
 import {
   SidebarMenuRadioItem,
   SidebarOwnerFilter,
   SidebarOwnerOptions,
 } from "./solid/sidebar-owner-filter.tsx";
+import { SwitchIndicator } from "./solid/switch.tsx";
 
 registerSessionMenuEnglish();
 

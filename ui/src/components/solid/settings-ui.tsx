@@ -4,8 +4,8 @@ import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "./icon.tsx";
-import { Switch, type SwitchSize } from "./switch.tsx";
 import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
+import { Switch, type SwitchSize } from "./switch.tsx";
 import "../tooltip.ts";
 
 export type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
