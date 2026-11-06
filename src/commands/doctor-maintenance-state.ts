@@ -410,6 +410,8 @@ export async function createDoctorMaintenanceState(options: {
     async cleanupRetainedRuntimes(inspectService: boolean) {
       const { captureRetainedNativeWorkerSource } =
         await import("../infra/worker-native-lifecycle.js");
+      const { retireIdlePluginPreparationWorkers } =
+        await import("../plugins/plugin-generation-worker.js");
       const { retireIdleOpenClawStateReadWorkers } =
         await import("../state/openclaw-state-read-worker.js");
       const { prepareRetainedUpdateRuntimeCleanup } = await import("./doctor-retained-runtime.js");
@@ -424,6 +426,10 @@ export async function createDoctorMaintenanceState(options: {
       try {
         await closeResources();
         readersRetired = await retireIdleOpenClawStateReadWorkers(nativeSource);
+        // A failed close leaves a live worker, which only retains the runtime below.
+        await retireIdlePluginPreparationWorkers(nativeSource).catch((error: unknown) => {
+          process.emitWarning(`Plugin preparation cleanup failed: ${formatErrorMessage(error)}`);
+        });
         brokerRetired = await nativeSource.retireIdleBroker();
       } catch (cause) {
         throw new DoctorMaintenanceRefusalError(
