@@ -243,7 +243,13 @@ Completed source classifications and durable census counts remain unchanged.
   rows while catalog reads stayed3→3 and the option stayed enabled; the same
   invalid event failed both strengthened rows. Restored valid fixtures passed6/6
   with every destination, draft, reconnect and terminal assertion retained.
-- Batches114–115: causal qualification and repairs remain in progress.
+- Batch114: match the History roster response to its Research query and assert
+  the complete visible-row snapshot together. Original1/1 passed with both Main
+  and Research visible; the repaired assertion rejected both an unfiltered result
+  and an empty result. Restored1/1 passed through filtering, transcript navigation
+  and archive/Undo feedback. This proves browser request/render behavior against a
+  fixture response, not backend search correctness.
+- Batch115: causal qualification and recorder repair remain in progress.
 
 Final scoped checks, removal scans, independent review and hosted gates are pending.
 
