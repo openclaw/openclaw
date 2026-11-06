@@ -166,17 +166,24 @@
       color: var(--text-strong);
     }
 
-    &:is(:hover, [aria-current="page"], [aria-pressed="true"], .nav-item--active) {
+    &:hover,
+    &[aria-current="page"],
+    &[aria-pressed="true"],
+    &.nav-item--active {
       --sidebar-rail-control-surface: var(--sidebar-rail-hover-surface);
       background: var(--sidebar-rail-control-surface);
       color: var(--text-strong);
     }
 
-    &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active) {
+    &[aria-current="page"],
+    &[aria-pressed="true"],
+    &.nav-item--active {
       --sidebar-rail-control-surface: var(--sidebar-rail-selected-surface);
     }
 
-    &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active):hover {
+    &[aria-current="page"]:hover,
+    &[aria-pressed="true"]:hover,
+    &.nav-item--active:hover {
       --sidebar-rail-control-surface: var(--sidebar-rail-selected-hover-surface);
     }
 
@@ -193,7 +200,8 @@
     box-shadow: none;
   }
 
-  &:is(:disabled, [aria-disabled="true"]) {
+  &:disabled,
+  &[aria-disabled="true"] {
     opacity: 0.4;
   }
 
@@ -453,9 +461,9 @@
   letter-spacing: -0.008em;
 }
 
+.sidebar-pages__entry:hover :is(.nav-item:not(.nav-item--active)),
 .sidebar-pages__entry:hover
   :is(
-    .nav-item:not(.nav-item--active),
     .sidebar-recent-session:not(.sidebar-recent-session--active, .sidebar-recent-session--selected)
   ) {
   color: var(--text);

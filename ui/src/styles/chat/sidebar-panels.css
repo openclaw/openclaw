@@ -252,7 +252,8 @@
 
 .chat-workspace-rail__row-action:hover,
 .chat-workspace-rail__row-action:focus-visible,
-.chat-workspace-rail__row-actions :where(.chat-copy-btn:hover, .chat-copy-btn:focus-visible) {
+.chat-workspace-rail__row-actions :where(.chat-copy-btn:hover),
+.chat-workspace-rail__row-actions :where(.chat-copy-btn:focus-visible) {
   border-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
   color: var(--text);
