@@ -14,14 +14,16 @@ import {
 import { withGatewayServiceInstallationRecovery } from "./service-update-authority.js";
 
 const { runGlobalPackageUpdateSteps, installedCopyErrors, packageLock } = vi.hoisted(() => ({
-  // Reaches the activation gate the way the package updater does, then finishes.
+  // Validates, then reaches the activation gate the way the package updater does, then finishes.
   runGlobalPackageUpdateSteps: vi.fn(
     async (params: {
       env?: NodeJS.ProcessEnv;
       installSpec?: string;
+      validateCandidate?: (packageRoot: string) => Promise<unknown>;
       beforeActivate?: () => Promise<void>;
       onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
     }) => {
+      await params.validateCandidate?.("/nonexistent-candidate");
       await params.beforeActivate?.();
       return { failedStep: null };
     },
@@ -160,6 +162,7 @@ describe("resolveDurableServiceCli", () => {
         : [`expected ${expectedVersion}, found ${liveVersion()}`],
     );
     runGlobalPackageUpdateSteps.mockImplementation(async (params) => {
+      await params.validateCandidate?.("/nonexistent-candidate");
       await params.beforeActivate?.();
       const previous = liveVersion();
       await params.onTransaction?.({

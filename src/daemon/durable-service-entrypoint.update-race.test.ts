@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createNpmTarget, writePackageRoot } from "../infra/package-update-steps.test-support.js";
-import type { PackageUpdateTransaction } from "../infra/package-update-swap-contract.js";
+import {
+  PackageUpdateActivationError,
+  type PackageUpdateTransaction,
+} from "../infra/package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "../infra/package-update-swap.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import { installDurableServiceCli } from "./durable-service-entrypoint.js";
@@ -100,6 +103,7 @@ async function publish(
   version: string,
   updater: {
     validateCandidate?: (packageRoot: string) => Promise<Array<{ exitCode: number | null }>>;
+    beforeActivate?: () => Promise<void>;
     onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   } = {},
   options: { mayFail?: boolean } = {},
@@ -111,6 +115,7 @@ async function publish(
     installTarget: createNpmTarget(durable().globalRoot),
     packageName: "openclaw",
     stage: staged,
+    ...(updater.beforeActivate ? { beforeActivate: updater.beforeActivate } : {}),
     ...(updater.onTransaction ? { onTransaction: updater.onTransaction } : {}),
   });
   if (!options.mayFail) {
@@ -142,24 +147,21 @@ it.each([
   await writePackageRoot(packageRoot(), "1.0.0");
   fs.mkdirSync(durable().binDir, { recursive: true });
   fs.writeFileSync(path.join(durable().binDir, "openclaw"), "launcher 1.0.0\n");
-  runGlobalPackageUpdateSteps.mockImplementation(
-    async (params: Parameters<typeof publish>[2] & { beforeActivate?: () => Promise<void> }) => {
-      await params.beforeActivate?.();
-      if (when === "launcher-copy-fails") {
-        failLauncherCopy.run = async () => {};
-      } else if (when === "update-then-launcher-copy-fails") {
-        failLauncherCopy.run = async () => {
-          await publish("update-stage", "3.0.0");
-        };
-      }
-      const result = await publish("install-stage", "2.0.0", params, { mayFail: true });
-      if (when === "after-publication") {
-        // The updater still awaits its stage cleanup after publishing this install's copy.
+  runGlobalPackageUpdateSteps.mockImplementation(async (params: Parameters<typeof publish>[2]) => {
+    if (when === "launcher-copy-fails") {
+      failLauncherCopy.run = async () => {};
+    } else if (when === "update-then-launcher-copy-fails") {
+      failLauncherCopy.run = async () => {
         await publish("update-stage", "3.0.0");
-      }
-      return { failedStep: result.status === "committed" ? null : result.step };
-    },
-  );
+      };
+    }
+    const result = await publish("install-stage", "2.0.0", params, { mayFail: true });
+    if (when === "after-publication") {
+      // The updater still awaits its stage cleanup after publishing this install's copy.
+      await publish("update-stage", "3.0.0");
+    }
+    return { failedStep: result.status === "committed" ? null : result.step };
+  });
   const warn = vi.fn();
 
   // A node install publishes 2.0.0 and its activation fails; `openclaw update` publishes 3.0.0
@@ -212,3 +214,74 @@ it.each([
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("replaced by another install"));
   }
 });
+
+it.each([
+  ["published", "3.0.0"],
+  // The update fails its own restart check and renames the copy it replaced back.
+  ["published and rolled back", "1.0.0"],
+] as const)(
+  "refuses to replace a copy another update %s while it waited to activate",
+  async (change, expected) => {
+    await writePackageRoot(packageRoot(), "1.0.0");
+    fs.mkdirSync(durable().binDir, { recursive: true });
+    fs.writeFileSync(path.join(durable().binDir, "openclaw"), "launcher 1.0.0\n");
+    const held = path.join(root, "held-1.0.0");
+    // The real swap reads its baseline before the activation gate, as the package updater does.
+    runGlobalPackageUpdateSteps.mockImplementation(
+      async (params: Parameters<typeof publish>[2] & { beforeActivate: () => Promise<void> }) => {
+        const staged = await stage("install-stage", "2.0.0");
+        if (change !== "published") {
+          // `openclaw update` publishes 3.0.0 during npm staging and keeps 1.0.0 aside.
+          fs.renameSync(packageRoot(), held);
+          await writePackageRoot(packageRoot(), "3.0.0");
+        }
+        await params.validateCandidate?.(staged.packageRoot);
+        const result = await swapStagedPackageInstall({
+          installTarget: createNpmTarget(durable().globalRoot),
+          packageName: "openclaw",
+          stage: staged,
+          // The update changes the copy while this install waits for its service install.
+          beforeActivate: async () => {
+            if (change === "published") {
+              await publish("update-stage", "3.0.0");
+            } else {
+              fs.rmSync(packageRoot(), { recursive: true });
+              fs.renameSync(held, packageRoot());
+            }
+            await params.beforeActivate();
+          },
+          onTransaction: params.onTransaction,
+        }).catch((error: unknown) => {
+          throw error instanceof PackageUpdateActivationError ? error.cause : error;
+        });
+        return { failedStep: result.status === "committed" ? null : result.step };
+      },
+    );
+    const warn = vi.fn();
+    let mutated = false;
+
+    await expect(
+      installDurableServiceCli({
+        env: env(),
+        replacement: {
+          version: "2.0.0",
+          globalRoot: durable().globalRoot,
+          packageRoot: packageRoot(),
+          entrypoint: path.join(packageRoot(), "dist", "index.js"),
+        },
+        install: async (beforeMutation, beforeRecovery) => {
+          await beforeMutation?.();
+          mutated = true;
+          await beforeRecovery?.();
+          throw new Error("node activation failed");
+        },
+        verify: async () => true,
+        warn,
+      }),
+    ).rejects.toThrow("changed while this install waited");
+
+    expect(mutated).toBe(false);
+    expect(liveVersion()).toBe(expected);
+    expect(warn).not.toHaveBeenCalled();
+  },
+);

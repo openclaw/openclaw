@@ -1,4 +1,4 @@
 # npx/dlx/bunx Gateway services: durable-copy reuse checks, PATH filtering, Doctor fallback, the
 # service-install composition (runtime and wrapper decided before staging; swap, restore, and backup retirement inside the service install),
-# first-install planning through the real argument builder for Gateway and node services, the shared package lock between them, including reuse, restoring the copy before native recovery restarts the old service, and never restoring over a copy another owner published, checked at the restore itself, and LaunchAgent recovery waiting for every booted-out PID before the restore.
-1177
+# first-install planning through the real argument builder for Gateway and node services, the shared package lock between them, including reuse, restoring the copy before native recovery restarts the old service, and never restoring over a copy another owner published, checked at the restore itself, and LaunchAgent recovery waiting for every booted-out PID before the restore, and refusing a durable copy another update published or rolled back while the install waited to activate.
+1253

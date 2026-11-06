@@ -290,7 +290,7 @@ async function installUnderPackageLock(
       } catch (error) {
         params.warn(`Durable OpenClaw copy cleanup failed: ${String(error)}`);
       }
-    } else if (!settled && outcome === "failed" && replacesExisting) {
+    } else if (!settled && outcome === "failed" && replacesExisting && staged.published()) {
       // No proof that native recovery settled: the replacement may still run on this copy, or
       // the service may run it successfully. Keep the copy and its backup for the operator.
       params.warn(
@@ -348,6 +348,14 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
     const stat = fsSync.lstatSync(entry, { bigint: true, throwIfNoEntry: false });
     return stat ? { dev: stat.dev, ino: stat.ino } : undefined;
   };
+  const sameIdentity = (a: Identity | undefined, b: Identity | undefined) =>
+    a !== undefined && b !== undefined && a.dev === b.dev && a.ino === b.ino;
+  // The swap reads its rollback baseline right after validateCandidate and before the activation
+  // gate, where this install can wait on its service install while another update publishes or
+  // rolls back. Replacing that copy would back up a copy the rollback cannot verify against its
+  // baseline, so the gate refuses when the live copy is no longer the one seen at validation.
+  // A publish in the few awaits after validation or after the gate check is not covered.
+  let baseline: Identity | undefined;
   // The swap renames this validated candidate into place, so its identity is the published
   // copy's. It is read here, never from the live path after the updater returns.
   let candidate: Identity | undefined;
@@ -368,6 +376,7 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
     // Refuse before the swap a candidate without the entry the planned service runs.
     validateCandidate: async (candidateRoot) => {
       candidate = identityOf(candidateRoot);
+      baseline = identityOf(replacement.packageRoot);
       const entry = path.join(
         candidateRoot,
         path.relative(replacement.packageRoot, replacement.entrypoint),
@@ -405,6 +414,12 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
       if (!(await gate.promise)) {
         throw cancelled;
       }
+      const live = identityOf(replacement.packageRoot);
+      if (live === undefined ? baseline !== undefined : !sameIdentity(live, baseline)) {
+        throw new Error(
+          `The durable OpenClaw copy at ${replacement.packageRoot} changed while this install waited to replace it, probably by another update; nothing was replaced. Rerun the install to replace it with OpenClaw ${replacement.version}.`,
+        );
+      }
     },
     // A retained transaction keeps the previous copy until settle restores or retires it.
     onTransaction: (registered) => {
@@ -418,8 +433,6 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
   }
   // Service installs have no update-run fence; the package lock orders them among themselves.
   const unfenced = () => undefined;
-  const sameIdentity = (a: Identity | undefined, b: Identity | undefined) =>
-    a !== undefined && b !== undefined && a.dev === b.dev && a.ino === b.ino;
   const restoreAuthority = (owned: Array<Identity | undefined>) => () => {
     const live = identityOf(replacement.packageRoot);
     if (live && !owned.some((identity) => sameIdentity(live, identity))) {
@@ -430,6 +443,8 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
     }
   };
   return {
+    /** Whether the updater registered a transaction, i.e. started changing the live copy. */
+    published: () => transaction !== undefined,
     activate: async () => {
       gate.resolve(true);
       const result = await completed;
