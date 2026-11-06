@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { MessageChannel, receiveMessageOnPort, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readSqliteDatabaseScopedWriteToken } from "../sqlite-database-admission.js";
+import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import { PostgresSyncConnection } from "./connection.js";
 import type { BridgeReply, BridgeRequest, PostgresErrorData } from "./protocol.js";
@@ -106,6 +107,7 @@ function transportFixture(
     waits,
     terminate,
     normal: () => (mode = "normal"),
+    dropReplies: () => (mode = "missing"),
     command: (value: string) => (command = value),
     rejectQuery: (error: PostgresErrorData) => (queryError = error),
   };
@@ -253,5 +255,151 @@ describe("PostgreSQL bridge request correlation", () => {
     const count = sent.mock.calls.length;
     expect(() => db.exec("SELECT 8")).toThrow("PostgreSQL connection lost; outcome unknown");
     expect(sent).toHaveBeenCalledTimes(count);
+  });
+});
+
+describe("PostgreSQL staged physical settlement", () => {
+  function stage(db: PostgresSyncConnection, phases: string[], name = "state", refuse = false) {
+    stageSqliteTransactionState(db, {
+      stage() {},
+      prepareCommit() {
+        phases.push(name + ":prepare");
+        if (refuse) {
+          throw new Error("staged authority revoked");
+        }
+      },
+      commit: () => phases.push(name + ":commit"),
+      rollback: () => phases.push(name + ":rollback"),
+      invalidate: () => phases.push(name + ":invalidate"),
+    });
+  }
+
+  it.each([false, true])("prepares only at physical commit (nested=%s)", (nested) => {
+    const { db, command } = transportFixture("normal");
+    const phases: string[] = [];
+    db.runTransaction(() => {
+      if (nested) {
+        db.runTransaction(() => stage(db, phases));
+        expect(phases).toEqual([]);
+      } else {
+        stage(db, phases);
+      }
+      command("COMMIT");
+    });
+    expect(phases).toEqual(["state:prepare", "state:commit"]);
+  });
+
+  it.each([false, true])("rolls back a staged refusal (nested=%s)", (nested) => {
+    const { db, command } = transportFixture("normal");
+    const phases: string[] = [];
+    expect(() =>
+      db.runTransaction(() => {
+        if (nested) {
+          db.runTransaction(() => stage(db, phases, "state", true));
+          expect(phases).toEqual([]);
+        } else {
+          stage(db, phases, "state", true);
+        }
+        command("COMMIT");
+      }),
+    ).toThrow("staged authority revoked");
+    expect(phases).toEqual(["state:prepare", "state:rollback"]);
+    expect(db.isOpen).toBe(true);
+    expect(db.isTransaction).toBe(false);
+  });
+
+  it("invalidates staged state after a lost COMMIT reply", () => {
+    const { db, dropReplies } = transportFixture("normal");
+    const phases: string[] = [];
+    expect(() =>
+      db.runTransaction(() => {
+        stage(db, phases);
+        dropReplies();
+      }),
+    ).toThrow(expect.objectContaining({ code: "outcome-unknown" }));
+    expect(phases).toEqual(["state:prepare", "state:invalidate"]);
+    expect(db.isOpen).toBe(false);
+  });
+
+  it("keeps a known rejected COMMIT distinct from an unknown outcome", () => {
+    const { db, command } = transportFixture("normal");
+    const phases: string[] = [];
+    expect(() =>
+      db.runTransaction(() => {
+        stage(db, phases);
+        command("ROLLBACK");
+      }),
+    ).toThrow("rolled back instead of committing");
+    expect(phases).toEqual(["state:prepare", "state:rollback"]);
+    expect(db.isOpen).toBe(true);
+  });
+
+  it.each(["throw", "promise"])("invalidates after a successful COMMIT then %s", (mode) => {
+    const { db, command } = transportFixture("normal");
+    const phases: string[] = [];
+    expect(() =>
+      db.runTransaction(
+        () => {
+          stage(db, phases);
+          command("COMMIT");
+        },
+        {
+          withCommit(commit) {
+            commit();
+            if (mode === "throw") {
+              throw new Error("guard failed after COMMIT");
+            }
+            return Promise.resolve();
+          },
+        },
+      ),
+    ).toThrow(mode === "throw" ? "guard failed after COMMIT" : "synchronous");
+    expect(phases).toEqual(["state:prepare", "state:invalidate"]);
+    expect(db.isOpen).toBe(false);
+  });
+
+  it.each([false, true])("invalidates all state after failed rollback (nested=%s)", (nested) => {
+    const { db, dropReplies } = transportFixture("normal");
+    const phases: string[] = [];
+    expect(() =>
+      db.runTransaction(() => {
+        stage(db, phases, "outer");
+        const fail = () => {
+          stage(db, phases, "inner");
+          dropReplies();
+          throw new Error("write refused");
+        };
+        return nested ? db.runTransaction(fail) : fail();
+      }),
+    ).toThrow("write refused");
+    expect(phases).toEqual(["inner:invalidate", "outer:invalidate"]);
+    expect(db.isOpen).toBe(false);
+  });
+
+  it("preserves canonical uncertainty when invalidation also fails", () => {
+    const { db, dropReplies } = transportFixture("normal");
+    const cleanup = new Error("authority invalidation failed");
+    let failure: unknown;
+    try {
+      db.runTransaction(() => {
+        stageSqliteTransactionState(db, {
+          stage() {},
+          commit() {},
+          rollback() {},
+          invalidate() {
+            throw cleanup;
+          },
+        });
+        dropReplies();
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      cause: expect.objectContaining({ code: "outcome-unknown" }),
+      errors: [expect.objectContaining({ code: "outcome-unknown" }), cleanup],
+    });
+    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+    expect(db.isOpen).toBe(false);
   });
 });

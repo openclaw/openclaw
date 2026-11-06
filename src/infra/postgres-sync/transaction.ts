@@ -4,7 +4,12 @@ import {
   sqlPublicationAnchor,
 } from "../sql-connection.js";
 import type { PostgresSqlConnection } from "../sql-connection.js";
-import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
+import {
+  discardSqliteTransactionState,
+  prepareSqliteTransactionCommit,
+  withSqlitePostCommitPublications,
+} from "../sqlite-post-commit.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
 import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
 
@@ -26,6 +31,7 @@ export function runPostgresTransactionSync<T>(
   assertPostgresOperationCurrent();
   return withSqlitePostCommitPublications(sqlPublicationAnchor(db), () => {
     const nested = db.isTransaction && !reserved;
+    let writeCommitted = false;
     try {
       if (nested) {
         db.exec("SAVEPOINT openclaw_tx_nested");
@@ -48,8 +54,12 @@ export function runPostgresTransactionSync<T>(
         }
         const commit = () => {
           assertPostgresOperationCurrent();
+          if (!readOnly) {
+            prepareSqliteTransactionCommit(db);
+          }
           // End read snapshots without publishing the connection's COMMIT write receipt.
           db.exec(readOnly ? "ROLLBACK" : "COMMIT");
+          writeCommitted = !readOnly;
         };
         if (options?.withCommit) {
           assertSyncTransactionResult(options.withCommit(commit));
@@ -59,19 +69,29 @@ export function runPostgresTransactionSync<T>(
       }
       return result;
     } catch (error) {
-      try {
-        if (nested) {
-          db.exec("ROLLBACK TO SAVEPOINT openclaw_tx_nested");
-          db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
-        } else if (db.isTransaction) {
-          db.exec("ROLLBACK");
-        }
-      } catch {
-        // An unjoinable rollback cannot leave a reusable connection behind.
+      let unsafe = hasSqliteWorkerOutcomeUnknown(error) || writeCommitted;
+      if (!unsafe) {
         try {
-          db.close();
+          if (nested) {
+            db.exec("ROLLBACK TO SAVEPOINT openclaw_tx_nested");
+            db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
+          } else if (db.isTransaction) {
+            db.exec("ROLLBACK");
+          }
         } catch {
-          // Retain the operation failure after retiring the connection.
+          unsafe = true;
+        }
+      }
+      if (unsafe) {
+        // A lost or completed commit cannot restore pre-transaction authority.
+        try {
+          discardSqliteTransactionState(db, error, "unknown");
+        } finally {
+          try {
+            db.close();
+          } catch {
+            // Retain the operation failure after retiring the connection.
+          }
         }
       }
       throw error;

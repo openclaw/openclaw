@@ -5,11 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
+import type { PostgresSqlConnection } from "../sql-connection.js";
 import {
   captureSqliteDatabaseAdmissions,
   publishSqliteDatabaseSchemaChange,
 } from "../sqlite-database-admission.js";
+import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
+import { SqliteWorkerError } from "../sqlite-worker-contract.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { StoreSchema } from "./contract.js";
 import { openEngineStore, readEngineAnchor } from "./open.js";
@@ -27,7 +30,10 @@ const schema: StoreSchema = { id: "fixture", version: 1, sqlite: "", postgres: d
 
 function fixture(
   test: (input: {
-    open: (schema?: StoreSchema) => PostgresSyncConnection;
+    open: (
+      schema?: StoreSchema,
+      admit?: (db: PostgresSqlConnection) => void,
+    ) => PostgresSyncConnection;
     db: PostgresSyncConnection;
     invalidate: () => void;
   }) => void,
@@ -35,10 +41,11 @@ function fixture(
   withEngineStoreAdmission(() => {
     const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-schema-"), "anchor.sqlite"));
     const connections: PostgresSyncConnection[] = [];
-    const open = (selected = schema) => {
+    const open = (selected = schema, admit?: (db: PostgresSqlConnection) => void) => {
       const db = openEngineStore({
         anchor,
         schema: selected,
+        admitPostgres: admit,
         input: { connection: connection!, schemaPrefix: "r2" },
         openSqlite: () => {
           throw new Error("Unexpected SQLite bootstrap");
@@ -73,6 +80,64 @@ function fixture(
 }
 
 describe.skipIf(!connection)("PostgreSQL schema admission", () => {
+  it.each([false, true])(
+    "settles schema migration authority after physical commit (refuse=%s)",
+    (refuse) => {
+      fixture(({ db, open }) => {
+        const target: StoreSchema = {
+          ...schema,
+          version: 2,
+          postgres: `${ddl}\nALTER TABLE items ADD COLUMN label TEXT;`,
+          postgresMigrations: [
+            {
+              version: 2,
+              fromSchema: { postgres: ddl },
+              sql: "ALTER TABLE items ADD COLUMN label TEXT",
+              schema: { postgres: `${ddl}\nALTER TABLE items ADD COLUMN label TEXT;` },
+            },
+          ],
+        };
+        // oxlint-disable-next-line typescript/unbound-method -- Replay with the intercepted connection below.
+        const nativeExec = PostgresSyncConnection.prototype.exec;
+        if (!refuse) {
+          vi.spyOn(PostgresSyncConnection.prototype, "exec").mockImplementation(function (
+            this: PostgresSyncConnection,
+            sql,
+          ) {
+            nativeExec.call(this, sql);
+            if (sql === "COMMIT") {
+              throw new SqliteWorkerError("lost migration COMMIT reply", "outcome-unknown");
+            }
+          });
+        }
+        expect(() =>
+          open(target, (migrating) => {
+            if (refuse) {
+              stageSqliteTransactionState(migrating, {
+                stage() {},
+                commit() {},
+                rollback() {},
+                prepareCommit() {
+                  throw new Error("migration authority revoked");
+                },
+              });
+            }
+          }),
+        ).toThrow(refuse ? "migration authority revoked" : "lost migration COMMIT reply");
+        vi.restoreAllMocks();
+        expect(db.prepare("SELECT version FROM openclaw_schema_meta").get()?.version).toBe(
+          refuse ? 1 : 2,
+        );
+        if (refuse) {
+          expect(getPostgresPhysicalFacts(db)?.version).toBe(1);
+        } else {
+          expect(getPostgresPhysicalFacts(db)).toBeUndefined();
+          expect(open(target).prepare("SELECT label FROM items").all()).toEqual([]);
+        }
+      });
+    },
+  );
+
   it.each([
     ["default value", "ALTER TABLE items ALTER COLUMN value SET DEFAULT 2"],
     [
