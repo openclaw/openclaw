@@ -1,5 +1,5 @@
 // Dotted providers cannot collide with Tailscale's email-ish, non-domain provider suffixes.
-export const OPENCLAW_ID_PROFILE_PROVIDER = "openclaw.id";
+export const openClawIdProfileProvider = "openclaw.id";
 
 /** Authenticated OCID account key plus optional, non-authorizing display metadata. */
 export type OpenClawIdUserProfileInput = {

@@ -45,7 +45,7 @@ export async function applyMailboxMessage(
     results.push(result);
     await settle(result);
   };
-  if (!(GATEWAY_MAILBOX_KINDS as readonly string[]).includes(payload.kind)) {
+  if (!GATEWAY_MAILBOX_KINDS.some((kind) => kind === payload.kind)) {
     await record({
       ok: false,
       code: "unsupported",

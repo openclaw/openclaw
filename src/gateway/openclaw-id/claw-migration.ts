@@ -39,8 +39,7 @@ type LegacyClaw = Omit<StoredClaw, "authority"> & {
  * their granted caps, or before root epochs were removed, and must be upgraded.
  */
 export function needsAllowlistUpgrade(record: StoredClaw): boolean {
-  // SAFETY: a stored record is either current or the legacy shape; only optional fields differ.
-  const legacy = record as unknown as LegacyClaw;
+  const legacy: LegacyClaw = record;
   return (
     "revocations" in legacy ||
     "published_revocations" in legacy.discovery ||
@@ -112,9 +111,14 @@ function upgradeMembers(authority: LegacyAuthority, now: number): AuthorityState
  * `revoked`, and a descriptor without `rotations` whose binding has no `chain`).
  */
 export async function upgradeToAllowlist(record: StoredClaw, now: number): Promise<StoredClaw> {
-  // SAFETY: a stored record is either current or the legacy shape; only optional fields differ.
-  const legacy = record as unknown as LegacyClaw;
-  const { revocations: _revocations, ...rest } = legacy;
+  const legacy: LegacyClaw = record;
+  const {
+    revocations: _revocations,
+    authority: _authority,
+    binding: _binding,
+    discovery: _discovery,
+    ...rest
+  } = legacy;
   const { published_revocations: _published, ...discovery } = legacy.discovery;
   let authority: AuthorityState | null = null;
   if (legacy.authority) {
@@ -133,8 +137,7 @@ export async function upgradeToAllowlist(record: StoredClaw, now: number): Promi
     };
   }
   return {
-    // SAFETY: the legacy-only fields were removed above; the rest is the current record.
-    ...(rest as unknown as StoredClaw),
+    ...rest,
     authority,
     binding: legacy.binding ? withoutChain(legacy.binding) : null,
     discovery: legacy.authority ? { ...discovery, publish_pending: true } : discovery,

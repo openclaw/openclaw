@@ -408,12 +408,16 @@ export function createOpenClawIdService(params: {
 
   // Mails owner notices through Discovery once the claw is registered there.
   const notifyOwners = async (events: AuthorityEvent[]) => {
+    // The admitting lifetime is captured before any await, so a stop during import ends the notice.
+    const signal = lifecycle.signal;
     const { sendOwnerNotices } = await import("./owner-notices.js");
+    if (signal.aborted) {
+      return;
+    }
     await sendOwnerNotices({
       events,
       log: params.log,
       target: async () => {
-        const signal = lifecycle.signal;
         const config = params.getConfig();
         const record = (await getAuthority()).current();
         if (!config?.discoveryUrl || !record?.discovery.owner_account_id) {

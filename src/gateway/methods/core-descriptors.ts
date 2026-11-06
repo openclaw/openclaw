@@ -745,8 +745,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
   ["sessions.groups.create", "sessions-groups", "operator.write", "2026.10"],
   ["sessions.catalog.resolve", "session-catalog", "operator.read", "2026.10"],
-  ["openclawId.status", "openclaw-id", "operator.read", "2026.10"],
-  ["openclawId.people", "openclaw-id", "operator.admin", "2026.10"],
-  ["openclawId.authority", "openclaw-id", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["openclawId.status", "openclaw-id", "operator.read", "2026.11"],
+  ["openclawId.people", "openclaw-id", "operator.admin", "2026.11"],
+  ["openclawId.authority", "openclaw-id", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
   ["chat.steerNow", "chat", "operator.write", "2026.11", OWN_SESSION_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

@@ -160,6 +160,7 @@ export async function readStoredClaw(): Promise<StoredClaw | undefined> {
   }
   if (record.v === 1) {
     // The existing bindings row wins, including an empty row after successful revocation.
+    // SAFETY: only this module writes token-bindings, always as StoredTokenBindings.
     const bindings = entries.get("token-bindings") as StoredTokenBindings | undefined;
     return bindings ? { ...record, token_bindings: bindings.bindings } : record;
   }

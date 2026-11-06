@@ -7,8 +7,10 @@ import {
   type IrohEndpointKey,
   type SignedStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
-import type { AuthorityRefusal } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
+
+/** A refused binding, in the shape the authority returns to its caller. */
+export type BindingRefusal = { ok: false; code: string; detail: string };
 
 /** Expected binding fields: the claw's keys and the binding seq to sign for. */
 export type ExpectedBinding = {
@@ -27,7 +29,7 @@ export async function verifyBinding(
   record: StoredClaw,
   expected: ExpectedBinding,
   now: number,
-): Promise<{ ok: true; statement: SignedStatement<"ServerBinding"> } | AuthorityRefusal> {
+): Promise<{ ok: true; statement: SignedStatement<"ServerBinding"> } | BindingRefusal> {
   const parsed = parseStatement(input, "ServerBinding");
   if (!parsed.ok) {
     return { ok: false, code: "malformed", detail: parsed.detail };

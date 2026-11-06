@@ -11,8 +11,6 @@ export const gatewayPluginTestFiles = [
 
 // Native database consumers retain lifecycle cleanup within each forked process.
 export const gatewayDatabaseWorkerTestFiles = [
-  "src/gateway/openclaw-id/claw-store.persistence.test.ts",
-  "src/gateway/openclaw-id/member-profiles.persistence.test.ts",
   "src/gateway/agent-runtime-identity-token.test.ts",
   "src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts",
   "src/gateway/agent-turn/agent-run-media.test.ts",
@@ -150,6 +148,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/node-invoke-plugin-policy.test.ts",
   "src/gateway/node-invoke-system-run-approval.test.ts",
   "src/gateway/node-reapproval-coordinator.test.ts",
+  "src/gateway/openclaw-id/claw-store.persistence.test.ts",
+  "src/gateway/openclaw-id/member-profiles.persistence.test.ts",
   "src/gateway/openresponses-session-store.test.ts",
   "src/gateway/operator-approval-mcp-grants.test.ts",
   "src/gateway/operator-approval-placement-grants.test.ts",

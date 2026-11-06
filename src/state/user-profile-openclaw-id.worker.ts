@@ -10,7 +10,7 @@ import {
   type UserProfileMutationOptions,
 } from "./user-profile-mutation.js";
 import {
-  OPENCLAW_ID_PROFILE_PROVIDER,
+  openClawIdProfileProvider,
   type OpenClawIdProfileDisplayMetadata,
   type OpenClawIdUserProfileInput,
 } from "./user-profile-openclaw-id.types.js";
@@ -53,7 +53,7 @@ export function ensureOpenClawIdUserProfile(
         kysely
           .selectFrom("user_profile_identities")
           .select(["profile_id", "verified_email_json"])
-          .where("provider", "=", OPENCLAW_ID_PROFILE_PROVIDER)
+          .where("provider", "=", openClawIdProfileProvider)
           .where("subject", "=", input.accountId),
       );
       const now = Date.now();
@@ -70,7 +70,7 @@ export function ensureOpenClawIdUserProfile(
         executeSqliteQuerySync(
           db,
           kysely.insertInto("user_profile_identities").values({
-            provider: OPENCLAW_ID_PROFILE_PROVIDER,
+            provider: openClawIdProfileProvider,
             subject: input.accountId,
             profile_id: profile.id,
             canonical_login: null,
@@ -88,7 +88,7 @@ export function ensureOpenClawIdUserProfile(
           kysely
             .updateTable("user_profile_identities")
             .set({ verified_email_json: metadata })
-            .where("provider", "=", OPENCLAW_ID_PROFILE_PROVIDER)
+            .where("provider", "=", openClawIdProfileProvider)
             .where("subject", "=", input.accountId),
         );
       }

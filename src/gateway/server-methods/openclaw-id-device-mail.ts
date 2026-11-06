@@ -29,10 +29,7 @@ export async function handleOpenClawIdDeviceMail(
     deny();
     return;
   }
-  // SAFETY: relayDeviceMail validates every field and the operation before relaying.
-  const request = opts.params as unknown as Omit<DeviceMailRequest, "operation"> & {
-    operation: string;
-  };
+  const request = opts.params;
   const link = await service.linkStatus();
   if (!owner() || !link.linked || !link.clawId) {
     deny();
@@ -69,7 +66,7 @@ export async function handleOpenClawIdDeviceMail(
       baseUrl,
       clawId: link.clawId,
       // SAFETY: relayDeviceMail validates the operation and every field before relaying.
-      request: request as DeviceMailRequest,
+      request: opts.params as DeviceMailRequest,
       activeCertificates: (link.ownerDevices ?? []).map((device) => device.cert),
       stillAuthorized,
       signal: opts.client?.connectionSignal,

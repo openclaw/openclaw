@@ -10,6 +10,7 @@ import { fullClaw, NOW, id } from "./claw-store.test-support.js";
 
 // The claw namespace's rows, held in memory in place of the plugin-state store.
 const storedRows = vi.hoisted(() => new Map<string, unknown>());
+// mock-isolation: these unit tests keep claw rows in memory instead of the shared state database.
 vi.mock("../../plugin-state/plugin-state-store.js", () => ({
   prepareCorePluginStateReplacement: () => ({
     entries: async () => [...storedRows].map(([key, value]) => ({ key, value })),

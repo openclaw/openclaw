@@ -4,7 +4,7 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
-  OPENCLAW_ID_PROFILE_PROVIDER,
+  openClawIdProfileProvider,
   type OpenClawIdUserProfiles,
 } from "./user-profile-openclaw-id.types.js";
 import { userProfilesDb } from "./user-profiles-internal.js";
@@ -46,7 +46,7 @@ export function readOpenClawIdUserProfilesInDatabase(
       kysely
         .selectFrom("user_profile_identities")
         .select(["subject", "profile_id", "verified_email_json"])
-        .where("provider", "=", OPENCLAW_ID_PROFILE_PROVIDER)
+        .where("provider", "=", openClawIdProfileProvider)
         .where("subject", "in", [...new Set(accountIds)]),
     ).rows;
     if (!identities.length) {
