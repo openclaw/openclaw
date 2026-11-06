@@ -85,6 +85,21 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   let sourceReplyDelivered: true | undefined;
   let terminalSourceReplyDelivered = false;
   let latestStartedTool: CliLoopbackCall | string | undefined;
+  const observeToolResult = (
+    call: CliLoopbackCall | undefined,
+    cliToolCallId?: string,
+    alreadyObserved = false,
+  ) => {
+    const isLatest =
+      (call !== undefined && latestStartedTool === call) ||
+      (cliToolCallId !== undefined && latestStartedTool === cliToolCallId);
+    // A delayed CLI mirror of an observed loopback result is not new work.
+    if (!isLatest && !alreadyObserved) {
+      terminalSourceReplyDelivered = false;
+      latestStartedTool = undefined;
+    }
+    return isLatest;
+  };
   let inFlightUnclassifiedMcpRequests = 0;
   let inFlightMessagingToolCalls = 0;
   const inFlightPreparedMessagingCalls = new Set<McpLoopbackToolCallStart>();
@@ -458,6 +473,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ) {
           acceptedSessionSpawns.push(acceptedSessionSpawn);
         }
+        const candidate = candidates.length === 1 ? candidates[0] : undefined;
+        const isLatestToolResult = observeToolResult(candidate, candidate?.boundToolCallId);
         if (isMessagingToolDeliveryAction(toolName, call.args)) {
           commitMessagingToolResult({
             toolName,
@@ -465,11 +482,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
             args: call.args,
             result: "result" in call ? call.result : undefined,
             isError: call.outcome !== "completed",
-            isLatestToolResult:
-              candidates.length === 1 &&
-              (latestStartedTool === candidates[0] ||
-                (typeof latestStartedTool === "string" &&
-                  latestStartedTool === candidates[0]?.boundToolCallId)),
+            isLatestToolResult,
           });
         } else if (call.outcome === "completed") {
           const artifact = extractToolResultMediaArtifact(call.result);
@@ -543,6 +556,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   };
   const handleCliToolResult = (event: CliToolResultDelta) => {
     const activeTool = activeCliTools.get(event.toolCallId);
+    const isLatestToolResult = observeToolResult(
+      activeTool?.loopbackCall,
+      event.toolCallId,
+      activeTool?.loopbackCall?.outcome !== undefined,
+    );
     if (
       yielded &&
       !event.isError &&
@@ -564,9 +582,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ...pending,
         result: event.result,
         isError: event.isError,
-        isLatestToolResult:
-          latestStartedTool === event.toolCallId ||
-          (activeTool?.loopbackCall !== undefined && latestStartedTool === activeTool.loopbackCall),
+        isLatestToolResult,
       });
     }
     return activeTool?.loopbackAmbiguous ? undefined : activeTool?.loopbackCall?.current.args;

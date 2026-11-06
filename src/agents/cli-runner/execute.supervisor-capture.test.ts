@@ -1470,6 +1470,8 @@ it.each([
   ["continued work", undefined, "source", "required", "The operation failed", false],
   ["overlapping work", true, "source", "required", "Fresh check result", false],
   ["overlapping default final", undefined, "source", "required", "Fresh check result", false],
+  ["earlier overlapping work", true, "source", "required", "Fresh check result", false],
+  ["earlier result before send", undefined, "source", "required", "Fresh check result", false],
   ["progress", false, "source", "required", "Final answer", false],
   ["other conversation", true, "other", "required", "Final answer", false],
   ["partial delivery", true, "partial", "required", "Final answer", false],
@@ -1489,6 +1491,26 @@ it.each([
     mockCaptureSpawn((input, captureKey) => {
       const checkArgs = { command: "check-result" };
       let overlappingCheck: ReturnType<typeof markMcpLoopbackToolCallStarted>;
+      const finishOverlappingCheck = () => {
+        if (!overlappingCheck) {
+          return;
+        }
+        recordMcpLoopbackToolCallResultForHandle({
+          captureHandle: overlappingCheck,
+          toolName: "exec",
+          args: checkArgs,
+          outcome: _label.startsWith("earlier") ? "failed" : "completed",
+        });
+        markMcpLoopbackToolCallFinished(overlappingCheck);
+        overlappingCheck = undefined;
+      };
+      if (_label.startsWith("earlier")) {
+        overlappingCheck = markMcpLoopbackToolCallStarted({
+          captureKey,
+          toolName: "exec",
+          args: checkArgs,
+        });
+      }
       recordToolOutcome(
         captureKey,
         "message",
@@ -1522,6 +1544,9 @@ it.each([
           },
         },
         () => {
+          if (_label === "earlier result before send") {
+            finishOverlappingCheck();
+          }
           if (_label.startsWith("overlapping")) {
             overlappingCheck = markMcpLoopbackToolCallStarted({
               captureKey,
@@ -1531,15 +1556,7 @@ it.each([
           }
         },
       );
-      if (overlappingCheck) {
-        recordMcpLoopbackToolCallResultForHandle({
-          captureHandle: overlappingCheck,
-          toolName: "exec",
-          args: checkArgs,
-          outcome: "completed",
-        });
-        markMcpLoopbackToolCallFinished(overlappingCheck);
-      }
+      finishOverlappingCheck();
       if (_label === "continued work") {
         recordToolOutcome(captureKey, "exec", checkArgs, "completed");
       }
