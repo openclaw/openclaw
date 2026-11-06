@@ -134,6 +134,66 @@ function publicationRequest(ready = readyRelease(), resumeRunId = "") {
 }
 
 describe("release readiness contract", () => {
+  it("transports the original FRV identity on prepared and direct npm adoption", () => {
+    const parent = parse(readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"));
+    expect(parent.jobs.resolve_release_target.outputs.plugin_npm_artifact).toContain(
+      "steps.full_manifest.outputs.plugin_npm_artifact",
+    );
+    const publishSteps = Object.values<{ steps?: Array<{ run?: string }> }>(parent.jobs)
+      .flatMap((job) => job.steps ?? [])
+      .map((step) => step.run ?? "")
+      .join("\n");
+    expect(publishSteps).toContain('elif [[ -n "${QUALIFIED_PLUGIN_NPM}" ]]');
+    expect(publishSteps).toContain(
+      '-f full_release_validation_run_attempt="$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"',
+    );
+    const child = parse(readFileSync(".github/workflows/plugin-npm-release.yml", "utf8"));
+    expect(child.env.PREPARED_NPM_FRV_RUN_ID).toContain("inputs.full_release_validation_run_id");
+    expect(child.env.PREPARED_NPM_FRV_RUN_ATTEMPT).toContain(
+      "inputs.full_release_validation_run_attempt",
+    );
+    const writes = child.jobs.publish_plugins_npm.steps.filter((step: { run?: string }) =>
+      step.run?.includes('300s npm publish "$TARBALL_PATH"'),
+    );
+    expect(writes).toHaveLength(2);
+    for (const step of writes) {
+      expect(step.run).toContain("plugin-npm-prepared-release.mjs authorize");
+      expect(step.run.indexOf("plugin-npm-prepared-release.mjs authorize")).toBeLessThan(
+        step.run.indexOf('300s npm publish "$TARBALL_PATH"'),
+      );
+    }
+    const dispatch = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
+    expect(dispatch).toContain('../plugin-npm-prepared-release.mjs" authorize');
+    expect(dispatch.indexOf('../plugin-npm-prepared-release.mjs" authorize')).toBeLessThan(
+      dispatch.indexOf('dispatch_response="$(printf'),
+    );
+  });
+
+  it("keeps P tooling and ClawHub identities when the authenticated npm producer is Q", () => {
+    const value = readyRelease();
+    value.plugins.npm.workflowSha = SOURCE_SHA;
+    value.plugins.npm.workflowHeadBranch = `release-ci/${SOURCE_SHA.slice(0, 12)}-1`;
+    value.plugins.npm.artifactName = preparedNpmArtifactName(SOURCE_SHA, value.plugins.npm);
+    expect(() =>
+      validateReadyRelease(value, { sourceSha: SOURCE_SHA, tooling: TOOLING }),
+    ).toThrow();
+    expect(
+      validateReadyRelease(value, {
+        sourceSha: SOURCE_SHA,
+        tooling: TOOLING,
+        npmWorkflowSha: SOURCE_SHA,
+      }),
+    ).toBe(value);
+    value.plugins.clawhub.workflowSha = SOURCE_SHA;
+    expect(() =>
+      validateReadyRelease(value, {
+        sourceSha: SOURCE_SHA,
+        tooling: TOOLING,
+        npmWorkflowSha: SOURCE_SHA,
+      }),
+    ).toThrow("Prepared clawhub producer");
+  });
+
   it("binds core postpublish evidence to the exact failed publisher", () => {
     const expected = {
       releaseTag: "v2026.9.2-beta.1",
@@ -322,6 +382,19 @@ function bridgeFixture(releaseRunAttempt = 1, conclusion = "success") {
       `
       import { trace, preparedPackage } from './fixture-trace.mjs';
       export { prepared${prefix}ArtifactName${target === "npm" ? ", validatePreparedNpmArtifactDescriptor" : ""} } from ${JSON.stringify(pathToFileURL(resolve(`scripts/${moduleName}.mjs`)).href)};
+      ${
+        target === "npm"
+          ? `
+      import { authenticatePreparedNpmArtifact as authenticateFrv } from ${JSON.stringify(pathToFileURL(resolve("scripts/plugin-npm-prepared-release.mjs")).href)};
+      // This fixture isolates finalization/transfer ordering. Real FRV admission
+      // and byte consumption are exercised by plugin-npm-prepared-release.test.ts.
+      export async function authenticatePreparedNpmArtifact(options) {
+        if (process.env.FIXTURE_AUTHENTICATE_FRV === 'true') return authenticateFrv(options);
+        return { artifact: options.artifact ?? ${JSON.stringify(descriptor("npm"))}, workflowSha: options.workflowSha,
+          publisherPolicySha256: 'c'.repeat(64), revalidateAuthority: () => {} };
+      }`
+          : ""
+      }
       export async function downloadPrepared${prefix}Release(options) {
         trace('manifest', { target: '${target}', sourceSha: options.sourceSha ?? options.candidateSha,
           toolingSha: options.workflowSha ?? options.toolingSha, selectionMode: options.selectionMode });
@@ -530,6 +603,9 @@ describe("release readiness executable handoff", () => {
       const env = {
         ...fixture.env,
         PREPARED_PLUGINS: JSON.stringify(readyRelease().plugins),
+        QUALIFIED_PLUGIN_NPM: "",
+        FULL_RELEASE_VALIDATION_RUN_ID: "200",
+        FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
         TARGET_SHA: SOURCE_SHA,
         RELEASE_NPM_DIST_TAG: "beta",
         PLUGIN_PUBLISH_SCOPE: "all-publishable",
@@ -1460,6 +1536,7 @@ async function preparationFixture(
         env: {
           ...fixture.env,
           PUBLISH_INPUTS: JSON.stringify({ ...selectedInputs, ...actualInputs }),
+          FIXTURE_AUTHENTICATE_FRV: "true",
           PREPARATION_REQUEST: request === undefined ? "" : JSON.stringify(request),
           GITHUB_RUN_ATTEMPT: String(attempt),
         },
