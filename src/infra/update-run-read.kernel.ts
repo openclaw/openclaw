@@ -43,6 +43,16 @@ export function decodeRun(row: UpdateRuns) {
   if (record.origin.admission) {
     record.admission = record.origin.admission;
   }
+  if (record.verification.recovery?.serviceRestartSafe === false) {
+    const dataAtRisk = record.steps.find((step) => step.step === "finalize:data-at-risk")
+      ?.failureFacts?.[0]?.code;
+    if (dataAtRisk) {
+      record.verification.recovery.dataAtRisk = dataAtRisk;
+    } else if (record.verification.recovery.reason === "state-migration-started") {
+      // Shipped pre-backport writers recorded migration risk only in this reason.
+      record.verification.recovery.dataAtRisk = "legacy-state-migration";
+    }
+  }
   return record;
 }
 

@@ -171,6 +171,16 @@ describe("managed handoff repair facts", () => {
     },
   );
 
+  it("identifies a child lease's own run after adoption dropped its dead updater", async () => {
+    vi.mocked(listUpdateRunsAsync).mockResolvedValue([run(lease.owner, {})]);
+
+    expect(await readManagedHandoffRepairFacts(lease, env)).toEqual({
+      runIds: [lease.owner],
+      artifactPaths: [lease.key],
+      timeoutMs: null,
+    });
+  });
+
   it.each(["missing", "conflicting"])("refuses %s original run identity", async (identity) => {
     if (identity === "conflicting") {
       await helper("matching", { runId: "helper-run" });

@@ -2,6 +2,7 @@ import { isUpdateDoctorInspectionReportMode } from "../../commands/doctor/shared
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildControlPlaneUpdateRestartHealthPendingResult } from "../../infra/update-control-plane-sentinel.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -86,19 +87,10 @@ async function finishSettledUpdate(
   captured: ReturnType<typeof captureUpdateFinalization>,
   progressFailure?: { cause: unknown },
 ): Promise<UpdateRunResult> {
-  const {
-    beganSuccessfully,
-    fence,
-    assertCurrent,
-    originalRun,
-    compensate,
-    forward,
-    recordPhase,
-    sentinelOptions,
-  } = captured;
-  let gatewayStartAttempted = false;
-  const onGatewayStartAttempted = () => {
-    gatewayStartAttempted = true;
+  const { fence, assertCurrent, compensate, forward } = captured;
+  let gatewayStartAttempted: "install" | "restart" | undefined;
+  const onGatewayStartAttempted = (action: "install" | "restart" = "restart") => {
+    gatewayStartAttempted = gatewayStartAttempted === "restart" ? gatewayStartAttempted : action;
     observeGatewayStartAttempted?.();
   };
   const definitionRecovery: UpdateServiceDefinitionRecovery = {};
@@ -109,7 +101,7 @@ async function finishSettledUpdate(
     ? false
     : await preparePostUpdateService(params, assertCurrent);
   assertCurrent();
-  const createFailure = bindUpdateFinalizationFailure(progressFailure);
+  const { createFailure, settleResult } = bindUpdateFinalizationFailure(progressFailure);
   let rollbackAttempted = false;
   let latestServiceStop = params.preManagedServiceStop;
   // Doctor parking and rollback replace this run's earlier service observation.
@@ -128,16 +120,16 @@ async function finishSettledUpdate(
       pendingRestartAtMs = undefined;
     }
   };
-  // Restart can let the new Gateway finish the row before CLI finalization resumes.
-  // Store the next action before that handoff, and refresh it if recovery changes the outcome.
+  // Store the next action before the restarted Gateway can finish the row; refresh after recovery.
   assertCurrent();
   recordUpdateResultNextAction(params, params.result);
 
   let pendingResult = params.result;
+  let settledResult: UpdateRunResult | undefined;
   let terminalRecord: UpdateCommandTerminalRecord | undefined;
   let pendingNotify = true;
   const writeRestartSentinel = (result: UpdateRunResult) =>
-    writeControlPlaneUpdateRestartSentinelBestEffort({ ...sentinelOptions, result });
+    writeControlPlaneUpdateRestartSentinelBestEffort({ ...captured.sentinelOptions, result });
   const publishFinalResult = (
     failure?: unknown,
     onTerminalRecord?: (record: UpdateCommandTerminalRecord["record"]) => void,
@@ -187,7 +179,9 @@ async function finishSettledUpdate(
             result,
             previousRoot: params.root,
             databaseBackup:
-              beganSuccessfully && !gatewayStartAttempted ? params.databaseBackup : undefined,
+              captured.beganSuccessfully && !gatewayStartAttempted
+                ? params.databaseBackup
+                : undefined,
             allowGatewayRestart: params.shouldRestart,
             onGatewayStartAttempted,
             preManagedServiceStop: currentServiceStop(),
@@ -214,7 +208,7 @@ async function finishSettledUpdate(
       recoverService = false;
     }
     if (result.status === "error" && params.rollbackBlockedReason) {
-      result = { ...result, reason: params.rollbackBlockedReason };
+      result = completeUpdateCommandResult(params, result);
     } else if (
       result.status === "error" &&
       params.result.status === "ok" &&
@@ -237,6 +231,9 @@ async function finishSettledUpdate(
     recoverService ||=
       !gatewayStartAttempted &&
       (await admitInstalledGatewayRecovery(recoveryParams, result, assertCurrent));
+    if (recoverService) {
+      params.rollbackBlockedReason = undefined;
+    }
     if (isUpdateGatewayReadinessPending(result)) {
       return { result, recoverService: false };
     }
@@ -268,9 +265,11 @@ async function finishSettledUpdate(
           !isUpdateGatewayReadinessPending(finalResult) &&
           finalResult.recovery?.serviceRestartSafe !== true
         ) {
-          // Stable records coarse safety refusals, not separate data-risk facts.
-          // Keep those refusals; only an unknown verdict remains recoverable.
-          if (finalResult.recovery?.serviceRestartSafe === false) {
+          // Only a named data risk prohibits recovering the owned stopped service.
+          if (
+            finalResult.recovery?.serviceRestartSafe === false &&
+            finalResult.recovery.dataAtRisk
+          ) {
             await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(false);
           }
         } else {
@@ -299,8 +298,7 @@ async function finishSettledUpdate(
       pendingNotify = false;
       await writeRestartSentinel(finalResult);
     }
-    // The recovering Gateway reads this notification at startup. Persist once
-    // before restarting; rewriting a consumed sentinel could deliver it twice.
+    // Persist the startup notification once; rewriting a consumed sentinel could deliver it twice.
     if (recoverService && finalResult.recovery?.serviceRestartSafe === true) {
       const service = await maybeRestartServiceAfterFailedMutableUpdate({
         onGatewayStartAttempted,
@@ -343,6 +341,9 @@ async function finishSettledUpdate(
         preManagedServiceStop: currentServiceStop(),
         gatewayStartAttempted,
         definitionRecovery,
+        onGatewayStartAttempted,
+        nodeRunner: params.packageUpdateNodeRunner,
+        invocationCwd: params.invocationCwd,
         serviceStopped: !rolledBack && currentServiceStop()?.stopped,
         serviceUpdateVerdict: gatewayStartAttempted
           ? undefined
@@ -353,8 +354,7 @@ async function finishSettledUpdate(
       assertCurrent();
       rolledBack &&= isVerifiedUpdateRollback(finalResult);
     }
-    // Final recovery may still start the stopped Gateway. Retain compensation
-    // until that owner's readiness check settles.
+    // Retain compensation until final recovery settles its restart readiness check.
     try {
       await currentServiceStop()?.windowsTaskAutoStartRecovery?.complete(
         rolledBack ||
@@ -384,8 +384,7 @@ async function finishSettledUpdate(
       throw new UpdateCommandFailure(reportedResult, 1, detail, { cause: cleanupFailure });
     }
     if (restoreFailure) {
-      // Persist the unsafe outcome before unwinding. Keep both failures for
-      // recovery diagnostics, with the failed compensation as the primary cause.
+      // Persist before unwinding; keep both failures with failed compensation as the primary cause.
       const priorDetail = [result.reason, params.failure?.detail].filter(Boolean).join(": ");
       const detail =
         `${priorDetail ? `${priorDetail}; ` : ""}Windows Scheduled Task autostart recovery failed: ` +
@@ -397,6 +396,7 @@ async function finishSettledUpdate(
         : restoreFailure.cause;
       throw createFailure(reportedResult, detail, { cause });
     }
+    settledResult = reportedResult;
     return reportedResult;
   };
   const restoreWindowsAutoStart = (result: UpdateRunResult) =>
@@ -420,7 +420,7 @@ async function finishSettledUpdate(
           { ...params.result, status: "error" },
           params.result.recovery?.serviceRestartSafe === true,
         );
-        throw createFailure(reported, params.failure?.detail, params.failure);
+        return settleResult(reported, params.failure?.detail, params.failure);
       }
 
       if (params.result.status === "skipped" && !params.coreAlreadyCurrent) {
@@ -437,8 +437,7 @@ async function finishSettledUpdate(
       }
 
       const postUpdateRoot = params.result.root ?? params.root;
-      // A current core may converge plugins online, parking before fresh Doctor.
-      // A replaced core keeps convergence in its original stopped interval.
+      // Only current-core convergence runs online, parking before fresh Doctor.
       const deferPluginConvergence =
         shouldRestart &&
         params.preManagedServiceStop?.serviceMutationAllowed !== false &&
@@ -474,8 +473,7 @@ async function finishSettledUpdate(
             params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "absent" &&
             params.preManagedServiceStop.serviceMutationSkipMessage
           ) {
-            // An absent service needs no repair. Keep the explanation without
-            // reporting a service-install command as completed maintenance.
+            // Explain the absent service without claiming completed service-install maintenance.
             defaultRuntime.error(params.preManagedServiceStop.serviceMutationSkipMessage);
           } else if (params.preManagedServiceStop?.serviceMutationSkipMessage) {
             recordServiceReconciliationWarning(
@@ -578,31 +576,34 @@ async function finishSettledUpdate(
           ...resultWithPostUpdate,
           status: "error",
           reason: verificationFailure,
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          recovery: unsafeUpdateRecovery(resultWithPostUpdate.recovery),
         };
         const recovered = await recoverFailedResult(failure, false);
         if (recovered.result.status !== "ok") {
           // The Gateway may have consumed its sentinel. Update only the existing
           // receipt so the terminal failure cannot deliver a duplicate notification.
           await markControlPlaneUpdateRestartSentinelFailureBestEffort({
-            ...sentinelOptions,
+            ...captured.sentinelOptions,
             reason: recovered.result.reason ?? verificationFailure,
           });
           const reported = await reportResult(recovered.result, false, undefined, false);
-          throw createFailure(reported);
+          return settleResult(reported);
         }
         resultWithPostUpdate = recovered.result;
         return true;
       };
       if (!params.coreAlreadyCurrent) {
-        await restart();
+        const recovered = await restart();
+        if (typeof recovered !== "boolean") {
+          return recovered;
+        }
       }
       if (deferPluginConvergence) {
         ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins(async () => {
           const stopped = await parkPostUpdateService(params, {
             before: currentServiceStop(),
-            updateRun: originalRun,
-            recordPhase,
+            updateRun: captured.originalRun,
+            recordPhase: captured.recordPhase,
             assertCurrent,
             mode: resultWithPostUpdate.mode,
             root: postUpdateRoot,
@@ -624,10 +625,8 @@ async function finishSettledUpdate(
           params.serviceRuntimeRefreshRequired ||
           requiresInstallRootRefresh
         ) {
-          // Installation-only repair keeps the old Gateway serving; the native
-          // installer owns replacement and rollback with its actual running state.
-          // Convergence awaited package managers and plugin hooks. Revalidate the
-          // exact native owner before activating plugins or the selected Node runtime.
+          // Native installation-only repair owns replacement/rollback while the old Gateway serves.
+          // Revalidate its owner after convergence awaits, before activating plugins or Node.
           restartContext = await prepareUpdateRestart(
             {
               ...params,
@@ -645,6 +644,9 @@ async function finishSettledUpdate(
           await notifyRestart();
           await restoreWindowsAutoStart(resultWithPostUpdate);
           const reconciled = await restart();
+          if (typeof reconciled !== "boolean") {
+            return reconciled;
+          }
           if (
             requiresInstallRootRefresh &&
             reconciled &&
@@ -681,7 +683,7 @@ async function finishSettledUpdate(
         params,
         resultWithPostUpdate,
         assertCurrent,
-        { root: postUpdateRoot, sentinel: sentinelOptions, activationVerified },
+        { root: postUpdateRoot, sentinel: captured.sentinelOptions, activationVerified },
       );
       if (maintenanceFailure) {
         const reported = await reportResult(maintenanceFailure.result, false, undefined, false);
@@ -718,5 +720,6 @@ async function finishSettledUpdate(
     }
   };
   // Reporting cannot revoke verified activation or authorize another native rollback.
-  return await reportResult(await runPostUpdate());
+  const result = await runPostUpdate();
+  return settledResult === result ? result : await reportResult(result);
 }

@@ -15,7 +15,8 @@ import type {
   UpdateRunReconciliationResult,
 } from "./update-run-reconciliation.types.js";
 import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record.js";
-import { persistRun, updateRunLedgerSchema as schema, upsertStep } from "./update-run-write.js";
+import { upsertStep } from "./update-run-step-upsert.js";
+import { persistRun, updateRunLedgerSchema as schema } from "./update-run-write.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 
