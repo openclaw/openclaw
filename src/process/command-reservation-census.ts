@@ -79,19 +79,25 @@ export function findCommandReservationCandidates(reservedAtMs: number): number[]
   if (!births) {
     throw new Error(`Command reservation census is unavailable on ${process.platform}.`);
   }
-  // The inspecting command's own launchers are not the reserved command.
+  // The inspector's launchers and its own workers are not the reserved command: a dead
+  // spawner's orphan never reparents beneath the process settling its custody.
   const byPid = new Map(births.map((birth) => [birth.pid, birth]));
-  const inspector = new Set<number>();
-  for (let pid: number | undefined = process.pid; pid && !inspector.has(pid);) {
-    inspector.add(pid);
-    pid = byPid.get(pid)?.ppid;
-  }
+  const ancestry = (pid: number) => {
+    const chain = new Set<number>();
+    for (let next: number | undefined = pid; next && !chain.has(next); ) {
+      chain.add(next);
+      next = byPid.get(next)?.ppid;
+    }
+    return chain;
+  };
+  const inspector = ancestry(process.pid);
   return births
     .filter(
       ({ pid, bornAtMs, zombie }) =>
         // A zombie leader may retain live Linux threads.
         !(zombie && isPidDefinitelyDead(pid)) &&
         !inspector.has(pid) &&
+        !ancestry(pid).has(process.pid) &&
         (bornAtMs === undefined ||
           (bornAtMs >= reservedAtMs - CLOCK_SLACK_MS &&
             bornAtMs <= reservedAtMs + BORN_AFTER_RESERVATION_MS)),
