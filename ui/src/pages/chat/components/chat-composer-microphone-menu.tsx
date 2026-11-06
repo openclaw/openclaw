@@ -64,11 +64,7 @@ export function MicrophoneMenu(props: {
           disabled: true,
           class: "chat-talk-input-picker__notice",
           content: (
-            <InlineAlert
-              compact
-              tone={issue === "permission-blocked" || issue === "failed" ? "danger" : "warning"}
-              class="chat-talk-input-picker__alert"
-            >
+            <InlineAlert compact tone="warning" class="chat-talk-input-picker__alert">
               {message}
             </InlineAlert>
           ),
