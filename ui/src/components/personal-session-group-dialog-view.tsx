@@ -14,6 +14,7 @@ import { nativeListener } from "../lib/solid-native-listener.ts";
 import { Checkbox } from "./solid/checkbox.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Radio } from "./solid/radio.tsx";
+import { IconButton } from "./solid/icon-button.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 
@@ -335,16 +336,13 @@ export function PersonalSessionGroupDialogView(props: {
                   <span class="muted">
                     {t("sessionsView.personalGroupSelected", { count: String(selectedCount()) })}
                   </span>
-                  <button
+                  <IconButton
+                    size={28}
+                    icon="search"
+                    label={t("sessionsView.personalGroupSearch")}
                     ref={(element) => (searchToggle = element)}
-                    type="button"
-                    class="btn btn--sm btn--icon btn--ghost"
-                    aria-label={t("sessionsView.personalGroupSearch")}
-                    title={t("sessionsView.personalGroupSearch")}
                     onClick={() => setSearching(true)}
-                  >
-                    <Icon name="search" />
-                  </button>
+                  />
                 </>
               }
             >
@@ -381,15 +379,12 @@ export function PersonalSessionGroupDialogView(props: {
                   run(SEARCH_DELAY_MS);
                 }}
               />
-              <button
-                type="button"
-                class="btn btn--sm btn--icon btn--ghost"
-                aria-label={t("sessionsView.personalGroupSearchClose")}
-                title={t("sessionsView.personalGroupSearchClose")}
+              <IconButton
+                size={28}
+                icon="x"
+                label={t("sessionsView.personalGroupSearchClose")}
                 onClick={closeSearch}
-              >
-                <Icon name="x" />
-              </button>
+              />
             </Show>
           </div>
           <div

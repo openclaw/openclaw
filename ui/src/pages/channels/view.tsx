@@ -6,6 +6,7 @@ import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import "../../components/openclaw-mascot.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -563,14 +564,13 @@ function WizardDialog(props: { controls: ChannelsProps }) {
             </Show>
             {t("channels.setup.title", { channel: label() })}
           </h2>
-          <button
-            type="button"
+          <IconButton
+            size={28}
             class="oc-dialog__close"
-            aria-label={t("common.close")}
+            icon="x"
+            label={t("common.close")}
             onClick={() => props.controls.wizardHost.close()}
-          >
-            <Icon name="x" />
-          </button>
+          />
           <div class="oc-dialog__description">
             <p class="channels-wizard__subtitle">
               <span>{t("channels.setup.subtitle")}</span>{" "}

@@ -6,6 +6,7 @@ import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
@@ -592,14 +593,13 @@ function EmbeddedModelSetup(props: {
         <div class="oc-dialog model-setup-wizard model-setup-discovery">
           <div class="oc-dialog__header">
             <h2 class="oc-dialog__title">{t("modelSetup.discovery.title")}</h2>
-            <button
-              type="button"
+            <IconButton
+              size={28}
               class="oc-dialog__close"
-              aria-label={t("common.close")}
+              icon="x"
+              label={t("common.close")}
               onClick={() => props.view.onClose?.()}
-            >
-              <Icon name="x" />
-            </button>
+            />
             <div class="oc-dialog__description">
               <p>{t("modelSetup.discovery.description", { agent: props.view.agentLabel ?? "" })}</p>
             </div>

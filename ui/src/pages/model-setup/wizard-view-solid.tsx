@@ -3,6 +3,7 @@ import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import "../../components/modal-dialog.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
@@ -124,16 +125,15 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
               <h2 class="oc-dialog__title">
                 {props.state.authLabel || stepState()?.step.title || t(copy().titleKey)}
               </h2>
-              <button
-                ref={autofocusRef}
-                type="button"
+              <IconButton
+                size={28}
                 class="oc-dialog__close"
+                icon="x"
+                label={t(canCancel() ? "common.cancel" : "common.close")}
+                ref={autofocusRef}
                 autofocus={displayPhase() !== "step"}
-                aria-label={t(canCancel() ? "common.cancel" : "common.close")}
                 onClick={() => (canCancel() ? props.onCancel() : props.onClose())}
-              >
-                <Icon name="x" />
-              </button>
+              />
             </div>
           </Show>
           <div class="oc-dialog__body model-setup-wizard__body">

@@ -2,8 +2,8 @@ import { asNullableRecord, readStringField } from "@openclaw/normalization-core/
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
 import "../../components/modal-dialog.tsx";
@@ -287,14 +287,13 @@ export function renderChannelDetail(params: {
             />
             {params.label}
           </h2>
-          <button
-            type="button"
+          <IconButton
+            size={28}
             class="oc-dialog__close"
-            aria-label={t("common.close")}
+            icon="x"
+            label={t("common.close")}
             onClick={() => params.onClose()}
-          >
-            <Icon name="x" />
-          </button>
+          />
           <ChannelDetailStatus channelId={params.channelId} props={params.props} />
         </div>
         <div class="oc-dialog__body channels-detail__body">

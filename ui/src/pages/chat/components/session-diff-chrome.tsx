@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -65,19 +66,19 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
           </span>
           <Icon name="chevronDown" />
         </button>
-        <button
-          type="button"
-          class="btn btn--ghost btn--icon session-diff__refresh"
-          aria-label={t("chat.sessionDiff.refresh")}
+        <IconButton
+          size={28}
+          class="session-diff__refresh"
+          icon="refresh"
+          label={t("chat.sessionDiff.refresh")}
           disabled={loading() || !props.loader}
           onClick={() => loadDiff()}
-        >
-          <Icon name="refresh" />
-        </button>
-        <button
-          type="button"
-          class="btn btn--ghost btn--icon session-diff__toolbar-icon"
-          aria-label={t("chat.sessionDiff.viewOptions")}
+        />
+        <IconButton
+          size={28}
+          class="session-diff__toolbar-icon"
+          icon="moreHorizontal"
+          label={t("chat.sessionDiff.viewOptions")}
           onClick={(event) =>
             openAnchoredMenu(event, {
               kind: "view",
@@ -88,9 +89,7 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
               canOpenSync: Boolean(props.onOpenMobilePage),
             })
           }
-        >
-          <Icon name="moreHorizontal" />
-        </button>
+        />
       </div>
     );
   }
@@ -368,10 +367,12 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
           )}
         </Show>
         <openclaw-tooltip prop:content={t("chat.sessionDiff.viewOptions")}>
-          <button
-            class="btn btn--ghost btn--icon session-diff__toolbar-icon"
-            type="button"
-            aria-label={t("chat.sessionDiff.viewOptions")}
+          <IconButton
+            size={28}
+            class="session-diff__toolbar-icon"
+            icon="moreHorizontal"
+            label={t("chat.sessionDiff.viewOptions")}
+            tooltip={false}
             onClick={(event) =>
               openAnchoredMenu(event, {
                 kind: "view",
@@ -388,22 +389,20 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
                   : {}),
               })
             }
-          >
-            <Icon name="moreHorizontal" />
-          </button>
+          />
         </openclaw-tooltip>
         <openclaw-tooltip prop:content={t("chat.sessionDiff.refresh")}>
-          <button
-            class="btn btn--ghost btn--icon session-diff__refresh"
-            type="button"
-            aria-label={t("chat.sessionDiff.refresh")}
+          <IconButton
+            size={28}
+            class="session-diff__refresh"
+            icon="refresh"
+            label={t("chat.sessionDiff.refresh")}
+            tooltip={false}
             disabled={loading()}
             onClick={() => {
               loadDiff();
             }}
-          >
-            <Icon name="refresh" />
-          </button>
+          />
         </openclaw-tooltip>
       </div>
     );

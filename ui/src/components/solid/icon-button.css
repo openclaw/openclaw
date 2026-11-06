@@ -16,7 +16,7 @@
   margin: 0;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--icon-button-radius, var(--radius-md));
   background: transparent;
   color: var(--icon-button-color, var(--muted));
   font: inherit;
