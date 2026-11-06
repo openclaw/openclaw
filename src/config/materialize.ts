@@ -10,6 +10,7 @@ import {
   applySessionDefaults,
 } from "./defaults.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
+import { applyOpenClawIdDefaults } from "./openclaw-id-defaults.js";
 import { captureConfigResolutionFactsThroughRewrite } from "./resolution-facts.js";
 import { projectSkillWorkshopPluginPolicy } from "./skill-workshop-plugin-migration.js";
 import { normalizeTalkConfig } from "./talk.js";
@@ -43,6 +44,7 @@ export function materializeRuntimeConfig(
   const carryResolutionFacts = captureConfigResolutionFactsThroughRewrite(config);
   let next = applyMessageDefaults(config);
   next = applySessionDefaults(next);
+  next = applyOpenClawIdDefaults(next);
   next = applyAgentDefaults(next);
   next = applyContextPruningDefaults(next, options);
   next = applyCompactionDefaults(next);

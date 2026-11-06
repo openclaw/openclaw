@@ -71,26 +71,42 @@ describe("publishClaw first registration", () => {
     expect(outcome).toMatchObject({ state: "failed", retryable: true, ownerAccountId: "acct-new" });
   });
 
-  it("does not report an account when registration itself failed", async () => {
-    const claw = await linkedClaw();
-    const client = {
-      registerClaw: vi.fn(async () => {
-        throw new DiscoveryRequestError(503, "unavailable", "x");
-      }),
-      publishDescriptor: vi.fn(),
-      publishSnapshot: vi.fn(),
-    };
-    const outcome = await publishClaw({
-      record: claw.authority.current()!,
-      relayUrl: "https://relay.example.test/",
-      client: client as never,
-      signer: await generateEd25519Signer(),
-      enrollmentCode: "one-time-code",
-    });
-    expect(outcome).toMatchObject({ state: "failed", retryable: true });
-    expect(outcome).not.toHaveProperty("ownerAccountId");
-    expect(client.publishSnapshot).not.toHaveBeenCalled();
-  });
+  it.each([
+    [503, "unavailable", true],
+    [403, "preview_access_required", false],
+  ] as const)(
+    "retains registration refusal %s %s without an account",
+    async (status, code, retryable) => {
+      const claw = await linkedClaw();
+      const client = {
+        registerClaw: vi.fn(async (): Promise<{ owner_account_id: string }> => {
+          throw new DiscoveryRequestError(status, code, "x");
+        }),
+        publishDescriptor: vi.fn(),
+        publishSnapshot: vi.fn(),
+      };
+      const params = {
+        record: claw.authority.current()!,
+        relayUrl: "https://relay.example.test/",
+        client: client as never,
+        signer: await generateEd25519Signer(),
+        enrollmentCode: "one-time-code",
+      };
+      const outcome = await publishClaw(params);
+      expect(outcome).toMatchObject({ state: "failed", code, retryable });
+      expect(outcome).not.toHaveProperty("ownerAccountId");
+      expect(client.publishSnapshot).not.toHaveBeenCalled();
+      // A fresh code resumes registration with the exact saved root and binding.
+      const savedRecord = JSON.stringify(params.record);
+      client.registerClaw.mockResolvedValueOnce({ owner_account_id: "acct-restored" });
+      expect(await publishClaw({ ...params, enrollmentCode: "fresh-code" })).toMatchObject({
+        state: "published",
+        ownerAccountId: "acct-restored",
+      });
+      expect(client.registerClaw).toHaveBeenLastCalledWith("fresh-code", expect.any(Object));
+      expect(JSON.stringify(params.record)).toBe(savedRecord);
+    },
+  );
 });
 
 describe("isRetryableDiscoveryError", () => {

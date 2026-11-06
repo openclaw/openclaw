@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyOpenClawIdDefaults } from "../../config/openclaw-id-defaults.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 
 // Every way the OpenClaw ID owner could start a process, open a socket or reach
@@ -73,7 +74,8 @@ describe("OpenClaw ID with the Labs switch off", () => {
     ],
   ])("starts no child, opens no sockets and calls no service when %s", async (_label, config) => {
     const service = createOpenClawIdService({
-      getConfig: () => config,
+      getConfig: () =>
+        applyOpenClawIdDefaults({ gateway: { openclawId: config } }).gateway?.openclawId,
       getStateDir: () => "/nonexistent/openclaw-id-inert-test",
       getGatewayServer: () => undefined,
       log,

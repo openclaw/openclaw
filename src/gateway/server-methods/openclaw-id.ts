@@ -7,6 +7,7 @@ import { isEd25519PublicKey } from "../../../packages/openclaw-id-protocol/src/i
 // relayed clients can read status and send owner-signed membership changes, which
 // the authority verifies itself. Status is the same small summary for every client;
 // people, devices and activity come only from openclawId.people, for an owner.
+import { openClawIdStagingDefaults } from "../../config/openclaw-id-defaults.js";
 import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
 import { createOpenClawIdSignIn, type OpenClawIdSignIn } from "../openclaw-id/account-sign-in.js";
 import {
@@ -104,6 +105,7 @@ async function handleAccount(opts: GatewayRequestHandlerOptions, action: string)
         await accountSignIn.begin({
           issuerUrl: config.issuerUrl,
           clientId: config.clientId,
+          discoveryUrl: config.discoveryUrl,
           redirectUri: params.redirectUri,
         }),
       );
@@ -176,6 +178,7 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
       // Who this connection is (the account menu): loopback, owner device or member.
       connection,
       services: {
+        environment: config?.issuerUrl === openClawIdStagingDefaults.issuerUrl ? "staging" : null,
         issuerUrl: config?.issuerUrl ?? null,
         discoveryUrl: config?.discoveryUrl ?? null,
         loaderDomain: config?.loaderDomain ?? null,

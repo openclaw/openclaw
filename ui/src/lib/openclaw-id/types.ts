@@ -30,6 +30,8 @@ export type OpenClawIdStatusResult = {
   /** Identity verified by the Gateway for this connection. */
   connection?: OpenClawIdConnection;
   services: {
+    /** Staging is a private preview, not the production identity environment. */
+    environment?: "staging" | null;
     issuerUrl: string | null;
     discoveryUrl: string | null;
     loaderDomain: string | null;
@@ -91,6 +93,8 @@ export type OpenClawIdSignedIn = {
   /** ID token expiry, seconds since the epoch. */
   exp: number;
   idToken: string;
+  /** Discovery permits new claws; existing access and invited membership are separate. */
+  previewAccess?: boolean;
 };
 
 export type { OpenClawIdLinkPreparation };

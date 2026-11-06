@@ -9,6 +9,7 @@ function refusal(code: string, message = "internal diagnostic") {
 
 describe("OpenClaw ID display errors", () => {
   it.each([
+    ["preview_access_required", "private preview"],
     ["issuer_invalid", "Sign-in stopped because OpenClaw ID could not be verified"],
     ["id_token_invalid", "your account could not be verified"],
     ["registration_mismatch", "does not match the saved ownership details"],

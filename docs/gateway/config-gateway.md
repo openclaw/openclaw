@@ -204,7 +204,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 - `terminal.enabled`: the admin-scoped operator terminal. Default: `true`; set `false` to opt out. The terminal starts a host PTY in the selected agent workspace, inherits the Gateway process environment, and is refused for agents with `sandbox.mode: "all"`. Changes hot-apply: disabling closes attached, detached, and conversation-owned sessions and cancels pending opens; re-enabling allows fresh sessions. Reload open Control UI pages to pick up the updated content security policy.
 - `terminal.shell`: optional shell executable. When unset, OpenClaw uses `$SHELL` on Unix and `%ComSpec%` on Windows. Changes hot-apply to newly opened terminals; existing terminals keep running their original shell.
 - `terminal.detachedSessionTimeoutSeconds`: how long a terminal session survives after its connection drops (page reload, laptop sleep), staying reattachable via `terminal.attach` with its recent output replayed. Default: `300`. Set `0` to kill sessions the moment their connection drops. Changes hot-apply to existing detached sessions using their original disconnect time; expired sessions close immediately, while attached terminals keep running. Detached sessions keep running their commands, so shorten this on shared or exposed hosts.
-- `openclawId`: experimental [OpenClaw ID remote access](/concepts/experimental-features#openclaw-id-remote-access). `enabled` is the Labs switch (default `false`); `relayUrl` is the only iroh relay the tunnel uses; `issuerUrl`, `discoveryUrl` and `loaderDomain` are needed to turn on remote access for a claw; `clientId` (a public PKCE client) enables Sign in with OpenClaw ID in the Control UI account menu; `ownerDeviceInactivityDays` (default 90) and `memberDeviceInactivityDays` (default 30) set how long an owner device or a member's browser may go unused before the claw removes it. Off means inert: no tunnel child, no tunnel sockets and no calls to OpenClaw ID, Discovery or relays. Changes hot-apply.
+- `openclawId`: experimental [OpenClaw ID remote access](/concepts/experimental-features#openclaw-id-remote-access). `enabled` is the Labs switch (default `false`); unset service fields use the [staging private-preview defaults](#openclaw-id-private-preview); `relayUrl` is the only iroh relay the tunnel uses; `clientId` (a public PKCE client) enables Sign in with OpenClaw ID in the Control UI account menu; `ownerDeviceInactivityDays` (default 90) and `memberDeviceInactivityDays` (default 30) set how long an owner device or a member's browser may go unused before the claw removes it. Off means inert: no tunnel child, no tunnel sockets and no calls to OpenClaw ID, Discovery or relays. Changes hot-apply.
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `wss://` for public hosts; plaintext `ws://` is accepted only for loopback, LAN, link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
 - `remote.url`: remote client endpoint. In macOS SSH mode, its loopback port selects the local tunnel port independently of `gateway.port`.
 - `remote.remotePort`: Gateway port on the remote SSH host. The macOS tunnel falls back to the port in `remote.url`, then `18789`; set this explicitly when the tunnel and destination ports differ.
@@ -368,3 +368,23 @@ The earlier `"restart"` and `"hot"` values are retired; [`openclaw doctor --fix`
 Reload debounce and in-flight operation deferral are no longer configurable and run behind built-in defaults. [`openclaw doctor --fix`](/cli/doctor) removes the retired `debounceMs` and `deferralTimeoutMs` keys from older config files.
 
 ---
+
+### OpenClaw ID private preview
+
+`gateway.openclawId.enabled: true` opts into the staging private preview. Unset
+`issuerUrl`, `clientId`, `discoveryUrl`, `relayUrl`, and `loaderDomain` use the
+built-in staging services. Each explicit field overrides its default. With the
+flag off, these defaults do not apply and the Gateway contacts none of them.
+
+Sign in from the Control UI on the Gateway machine. The staging public client
+accepts `http://127.0.0.1:<port>/openclaw-id/callback` and
+`http://[::1]:<port>/openclaw-id/callback` on arbitrary ports. Use an IP-literal
+loopback URL: arbitrary-port `localhost` callbacks are not accepted by that
+client. Custom Control UI base paths need their callback registered separately.
+
+Discovery decides who may create new claws. If your account is not enabled,
+the account menu shows the private-preview message and lets you sign out or use
+another account instead of turning on remote access. Existing claw access and
+invited membership are unaffected. Older Discovery servers that return HTTP
+404 for `/v1/access` retain their existing behavior; other access-check failures
+stop setup rather than granting access.
