@@ -99,6 +99,7 @@ const PUBLIC_CODES = new Set<string>([
   "verification-result-missing",
   "finalization-timeout",
   "finalization-failed",
+  "ancestry-unverified",
   "no-output-timeout",
   "output-limit",
   "signal",

@@ -47,6 +47,7 @@ For the full key index and the other top-level config domains, see [Configuratio
           sessions: { others: "write" }, // none | view | suggest | write
           agents: ["roboclaw"],
           scopes: ["operator.read", "operator.write", "operator.approvals"],
+          workerProfiles: ["development"], // optional: explicit dispatch of own sessions only
         },
         guest: {
           sessions: { others: "view" },
@@ -203,6 +204,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 - `terminal.enabled`: the admin-scoped operator terminal. Default: `true`; set `false` to opt out. The terminal starts a host PTY in the selected agent workspace, inherits the Gateway process environment, and is refused for agents with `sandbox.mode: "all"`. Changes hot-apply: disabling closes attached, detached, and conversation-owned sessions and cancels pending opens; re-enabling allows fresh sessions. Reload open Control UI pages to pick up the updated content security policy.
 - `terminal.shell`: optional shell executable. When unset, OpenClaw uses `$SHELL` on Unix and `%ComSpec%` on Windows. Changes hot-apply to newly opened terminals; existing terminals keep running their original shell.
 - `terminal.detachedSessionTimeoutSeconds`: how long a terminal session survives after its connection drops (page reload, laptop sleep), staying reattachable via `terminal.attach` with its recent output replayed. Default: `300`. Set `0` to kill sessions the moment their connection drops. Changes hot-apply to existing detached sessions using their original disconnect time; expired sessions close immediately, while attached terminals keep running. Detached sessions keep running their commands, so shorten this on shared or exposed hosts.
+- `openclawId`: experimental [OpenClaw ID remote access](/concepts/experimental-features#openclaw-id-remote-access). `enabled` is the Labs switch (default `false`); `relayUrl` is the only iroh relay the tunnel uses; `issuerUrl`, `discoveryUrl` and `loaderDomain` are needed to turn on remote access for a claw; `clientId` (a public PKCE client) enables Sign in with OpenClaw ID in the Control UI account menu; `ownerDeviceInactivityDays` (default 90) and `memberDeviceInactivityDays` (default 30) set how long an owner device or a member's browser may go unused before the claw removes it. Off means inert: no tunnel child, no tunnel sockets and no calls to OpenClaw ID, Discovery or relays. Changes hot-apply.
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `wss://` for public hosts; plaintext `ws://` is accepted only for loopback, LAN, link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
 - `remote.url`: remote client endpoint. In macOS SSH mode, its loopback port selects the local tunnel port independently of `gateway.port`.
 - `remote.remotePort`: Gateway port on the remote SSH host. The macOS tunnel falls back to the port in `remote.url`, then `18789`; set this explicitly when the tunnel and destination ports differ.

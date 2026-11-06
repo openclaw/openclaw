@@ -18,7 +18,7 @@ import type {
 } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { defaultRuntime } from "../runtime.js";
-import { throwExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError, throwExpectedCliError } from "./expected-cli-error.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -56,10 +56,18 @@ async function readExactStateRequest(filename: string | undefined) {
   if (!filename) {
     return undefined;
   }
-  const { readFile } = await import("node:fs/promises");
+  const { readRegularFile } = await import("../infra/fs-safe.js");
   const { exactStateRetirementSchema } =
     await import("../agents/worktrees/snapshot-exact-state-contract.js");
-  return exactStateRetirementSchema.parse(JSON.parse(await readFile(filename, "utf8")));
+  let buffer: Buffer;
+  try {
+    // Follow selected symlinks while refusing special files before owner admission can hang.
+    ({ buffer } = await readRegularFile({ filePath: realpathSync(filename) }));
+  } catch (cause) {
+    const message = `Cannot read exact-state request ${filename}. Choose a readable regular JSON file and retry.`;
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message, cause });
+  }
+  return exactStateRetirementSchema.parse(JSON.parse(buffer.toString("utf8")));
 }
 
 function printRecord(record: ManagedWorktreeRecord, json: boolean): void {
@@ -380,7 +388,7 @@ export function registerWorktreesCli(program: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption & { job?: string; retryDeferred?: boolean }) => {
       if (opts.job === "") {
-        throw new Error("--job must not be empty.");
+        throwExpectedCliError("--job must not be empty.");
       }
       const { formatWorktreeGcResult } = await import("../agents/worktrees/gc-result.js");
       const result = await mutateWorktree<ManagedWorktreeGcResult | ManagedWorktreeGcReceipt>(
@@ -392,7 +400,7 @@ export function registerWorktreesCli(program: Command): void {
         },
         async (service, guard, config) => {
           if (opts.job) {
-            throw new Error(
+            throwExpectedCliError(
               "Cleanup progress belongs to the running Gateway; start it before querying this job.",
             );
           }

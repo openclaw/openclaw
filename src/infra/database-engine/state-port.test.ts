@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { stateWorkerResourceReceiptMigration } from "../../state/openclaw-state-db-schema-v37-resource-receipts.js";
 import { resolveSchemaMigrationBackupTables } from "../../state/schema-migration-backup-scope.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { extractSqliteTableSchema } from "../sqlite-schema-sql.js";
 import { admitDatabasePortDescriptor } from "./port-descriptor.js";
 import { loadStatePortDescriptor } from "./state-port-descriptor.js";
 import { resolveStatePortRoots, statePortProvider } from "./state-port.js";
@@ -191,6 +194,32 @@ it("retains the exact predecessor credential tables for PostgreSQL update recove
     expect(current.preData).not.toContain(`CREATE TABLE "${table}"`);
   }
   expect(current.tables.some((entry) => entry.name === "exec_approvals_config")).toBe(true);
+});
+
+it("keeps receipt migration and predecessor backups aligned with native column positions", async () => {
+  // v36 renamed Template tables but preserved this released worker table verbatim.
+  const released = readFileSync(
+    new URL("../../../test/fixtures/sqlite/openclaw-state-schema-v35.sql", import.meta.url),
+    "utf8",
+  );
+  using source = openNodeSqliteDatabase(":memory:");
+  source.exec(extractSqliteTableSchema(released, "worker_environments"));
+  for (const version of [36, 37]) {
+    if (version === 37) {
+      stateWorkerResourceReceiptMigration.migrate(source, 36);
+    }
+    const descriptor = await loadStatePortDescriptor(version);
+    expect(
+      descriptor.expectedCatalog.filter(
+        (fact) => fact.table === "worker_environments" && fact.kind === "column",
+      ),
+    ).toMatchObject(
+      rows(source, "PRAGMA table_info(worker_environments)").map((column) => ({
+        table: "worker_environments",
+        value: { name: column.name, position: Number(column.cid) + 1 },
+      })),
+    );
+  }
 });
 
 it("captures only the credential retirement scope plus required schema metadata and statistics", () => {

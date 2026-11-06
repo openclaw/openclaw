@@ -19,7 +19,7 @@ import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 type ExpectedTestConfig = {
   include?: string[];
   exclude?: string[];
-  browser?: { enabled?: boolean; provider?: BrowserProviderOption };
+  browser?: { enabled?: boolean; provider?: BrowserProviderOption; instances?: unknown[] };
   isolate?: boolean;
   name?: string;
   projects?: unknown[];
@@ -183,12 +183,12 @@ describe("ui package vitest config", () => {
           .toSorted(),
       ).toEqual(report.discovered);
       const nodeRequired = new Set([
-        "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
+        "ui/src/components/desktop/desktop-mobile-keyboard-retention.test.ts",
         "ui/src/pages/chat/chat-pane-retention.test.ts",
         "ui/src/pages/chat/chat-thread-retention.test.ts",
         "ui/src/pages/chat/components/chat-transcript-layout-retention.test.ts",
         "ui/src/pages/chat/session-message-cache-retention.test.ts",
-        "ui/src/pages/chat/session-snapshot-store.test.ts",
+        "ui/src/pages/chat/session-snapshot-store-retention.test.ts",
         "ui/src/pages/usage/usage-page-retention.test.ts",
       ]);
       for (const row of report.rows) {
@@ -310,21 +310,38 @@ export default {
           OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "transforms"),
         });
         const reports = JSON.parse(readFileSync(reportPath, "utf8")) as Array<{
-          projects: Array<{ name: string; root: string; viteRoot: string; setupFiles: string[] }>;
+          projects: Array<{
+            name: string;
+            isolate: boolean;
+            root: string;
+            viteRoot: string;
+            setupFiles: string[];
+          }>;
           files: string[];
         }>;
         expect(reports).toHaveLength(4);
         const [standalone, embedded, topLevel, testOption] = reports;
         const uiRoot = path.join(process.cwd(), "ui");
-        const browserProject = (projectRoot: string) => [
-          {
-            name: browser,
-            root: projectRoot,
-            viteRoot: projectRoot,
-            setupFiles: [path.join(projectRoot, "src/test-helpers/dom.setup.ts")],
-          },
-        ];
+        const browserProject = (projectRoot: string) =>
+          (browser === "chromium" ? [browser, "chromium-mock-registry"] : [browser]).map(
+            (name) => ({
+              name,
+              isolate: name === "chromium-mock-registry",
+              root: projectRoot,
+              viteRoot: projectRoot,
+              setupFiles: [path.join(projectRoot, "src/test-helpers/dom.setup.ts")],
+            }),
+          );
         expect(standalone?.projects).toEqual(browserProject(uiRoot));
+        expect(new Set(standalone?.files).size).toBe(standalone?.files.length);
+        if (browser === "chromium") {
+          for (const file of [
+            "src/pages/chat/chat-pane-frame-updates.browser.test.tsx",
+            "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
+          ]) {
+            expect(standalone?.files).toContain(path.join(uiRoot, file));
+          }
+        }
         expect(standalone?.files).toContain(
           path.join(
             uiRoot,
@@ -450,6 +467,13 @@ export default {
       );
     }
     expect(resolveChromium).toHaveBeenCalledTimes(1);
+    for (const files of [[], ["ui/src/components/markdown-mermaid.runtime.browser.test.ts"]]) {
+      writeJson(includeFile, files);
+      const scoped = requireTestConfig(
+        createUiBrowserVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
+      );
+      expect(scoped.browser?.instances).toHaveLength(1);
+    }
     writeJson(includeFile, [...nativeFiles, ...nodeFiles]);
     const scopedRoot = requireTestConfig(
       createUiVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),

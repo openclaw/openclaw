@@ -7,6 +7,7 @@ import type {
 } from "@openclaw/gateway-protocol";
 import type { ControlUiComponents } from "./control-ui-components.js";
 export { createSessionHeaderLink } from "./control-ui-session-link.js";
+export { translateControlUiMessage } from "./control-ui-translation.js";
 export type {
   ControlUiAgentPickerProps,
   ControlUiComponentHandle,

@@ -394,7 +394,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     void this.progressCards
       .dismiss(target, card)
-      .catch(() => showToast({ message: t("sessionProgressCard.clearFailed") }));
+      .catch(() => showToast({ severity: "error", message: t("sessionProgressCard.clearFailed") }));
   };
 
   protected hideProgressCard(rendered: RetainedProgressCard, card: ProgressCard): void {
@@ -563,6 +563,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       this.retireHeaderSessionMutations();
       this.dashboardPresentationActivation = undefined;
       this.retainedProgressCard = undefined;
+      this.forgetMobilePresentation();
       this.syncSessionCompanionPresentation(false);
       this.activeSessionResources.sync(null);
       if (this.state) {

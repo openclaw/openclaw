@@ -1,10 +1,12 @@
 import { registryFor } from "./overlay-registry.ts";
 
+type MenuSearchControl = HTMLInputElement | HTMLButtonElement;
+
 const shortcutItems = new WeakMap<
   HTMLElement,
   {
     items: () => Iterable<{ element: HTMLElement; key: string | undefined }>;
-    search?: () => HTMLInputElement | undefined;
+    search?: () => MenuSearchControl | undefined;
   }
 >();
 
@@ -12,7 +14,7 @@ const shortcutItems = new WeakMap<
 export function registerMenuShortcuts(
   surface: HTMLElement,
   read: () => Iterable<{ element: HTMLElement; key: string | undefined }>,
-  search?: () => HTMLInputElement | undefined,
+  search?: () => MenuSearchControl | undefined,
 ): () => void {
   shortcutItems.set(surface, { items: read, search });
   return () => shortcutItems.delete(surface);
@@ -42,14 +44,14 @@ export function findMenuShortcut(
 }
 
 /** Hover can open a submenu while keyboard focus remains in its parent. */
-export function findMenuSearch(surface: HTMLElement): HTMLInputElement | undefined {
+export function findMenuSearch(surface: HTMLElement): MenuSearchControl | undefined {
   const active = registryFor(surface.ownerDocument).stack.findLast(
     (overlay) => overlay.open && surface.contains(overlay.surface),
   );
   const search = active && shortcutItems.get(active.surface)?.search?.();
   return search &&
     !search.disabled &&
-    !search.readOnly &&
+    !(search instanceof HTMLInputElement && search.readOnly) &&
     !search.closest("[inert]") &&
     search.checkVisibility({ checkVisibilityCSS: true })
     ? search

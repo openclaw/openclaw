@@ -209,18 +209,6 @@ async function enqueueGuardedCliWatchdog(params: {
 it.for([
   { entry: { archivedAt: 1 }, error: "archived", retryable: false },
   { entry: { initializationPending: true }, error: "still initializing", retryable: true },
-  {
-    entry: {
-      mainRestartRecovery: {
-        cycleId: "failed-recovery",
-        revision: 1,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
-    },
-    error: "ended during restart recovery",
-    retryable: false,
-  },
 ] satisfies Array<{ entry: Partial<InternalSessionEntry>; error: string; retryable: boolean }>)(
   "preserves session event admission policy: $error",
   async ({ entry, error, retryable }, { signal }) => {

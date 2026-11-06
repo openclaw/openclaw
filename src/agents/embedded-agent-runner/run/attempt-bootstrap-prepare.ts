@@ -13,6 +13,7 @@ import {
 import { buildBootstrapContextForFiles } from "../../embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { isUnreadableWorkspaceBootstrapFile } from "../../workspace-bootstrap-read.js";
+import { resolveRunBootstrapWorkspaceDir } from "../../workspace-run.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceBootstrapPending,
@@ -36,9 +37,11 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   isRawModelRun: boolean;
 }) {
   const { attempt } = params;
-  const bootstrapWorkspaceDir = attempt.bootstrapWorkspaceDir ?? params.setup.resolvedWorkspace;
-  // The selected session workspace owns execution. Agent bootstrap identity stays
-  // in the configured workspace; execution project instructions layer after it.
+  const bootstrapWorkspaceDir = resolveRunBootstrapWorkspaceDir({
+    ...attempt,
+    workspaceDir: params.setup.resolvedWorkspace,
+    agentId: params.setup.sessionAgentId,
+  });
   const bootstrapPromptWorkspaceDir =
     bootstrapWorkspaceDir === params.setup.resolvedWorkspace
       ? params.setup.effectiveWorkspace
@@ -62,7 +65,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       sessionId: attempt.sessionId,
       chatType: attempt.chatType,
       workspaceDir: bootstrapWorkspaceDir,
-      executionWorkspaceDir: params.setup.resolvedWorkspace,
+      executionWorkspaceDir: attempt.sessionRoot ?? params.setup.resolvedWorkspace,
       agentId: params.setup.sessionAgentId,
       warn: bootstrapWarn,
       contextMode: attempt.bootstrapContextMode,

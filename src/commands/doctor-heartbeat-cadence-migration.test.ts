@@ -934,7 +934,7 @@ describe("heartbeat cadence Doctor cutover", () => {
     async (operation) => {
       const f = fixture();
       const nodeIdentity = loadOrCreateDeviceIdentity({ env: f.env, identityKey: "node" });
-      const seed = resolveHeartbeatSchedulerSeed(undefined, { env: f.env, readOnly: true });
+      const seed = await resolveHeartbeatSchedulerSeed(undefined, { env: f.env, readOnly: true });
       if (operation === "migrate") {
         expect(
           (
@@ -955,7 +955,9 @@ describe("heartbeat cadence Doctor cutover", () => {
       const job = readState(f)!.jobs[0]!;
       expect(job.payload.kind).toBe("agentTurn");
       vi.spyOn(process, "cwd").mockReturnValue(tempDirs.make("openclaw-heartbeat-cwd-"));
-      expect(resolveHeartbeatSchedulerSeed(undefined, { env: f.env, readOnly: true })).toBe(seed);
+      expect(await resolveHeartbeatSchedulerSeed(undefined, { env: f.env, readOnly: true })).toBe(
+        seed,
+      );
       await ensureHeartbeatMonitorJobs(f.cfg, f.storePath, f.env);
       expect(readState(f)!.jobs[0]?.schedule).toEqual(job.schedule);
     },

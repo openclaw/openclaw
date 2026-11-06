@@ -1,18 +1,23 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { createOperatorRecoveryAuthority } from "../agents/operator-recovery.test-support.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type {
   SessionEventOptions,
   SessionEventOutcome,
 } from "../auto-reply/reply/session-event-contract.js";
 import type * as SessionHandoff from "../auto-reply/reply/session-event-handoff.js";
 import type { RestoredGatewayOperatorAuthority } from "../gateway/operator-run-recovery.js";
+import { operatorRecoverySnapshotFixture } from "../gateway/server/client-fixtures.test-support.js";
+import { prepareAutomationSystemEvents } from "../infra/system-events.js";
+import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { resolveCronSourceDeliveryPlan } from "./isolated-agent/source-delivery-plan.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { createCronAgentWatchdog } from "./service/agent-watchdog.js";
 import { runCronSessionTurn } from "./session-run.js";
+import * as cronStore from "./store.js";
 
 const fixture = vi.hoisted(() => ({
   config: {},
@@ -21,6 +26,7 @@ const fixture = vi.hoisted(() => ({
   delivery:
     vi.fn<typeof import("./isolated-agent/run-delivery-trace.js").resolveCronDeliveryContext>(),
   restore: vi.fn<typeof import("../gateway/cron-operator-source.js").restoreCronOperatorSource>(),
+  readScratch: vi.fn<typeof import("./scratch-read.js").readCronScratchSnapshot>(),
 }));
 
 // mock-isolation: Fixed session receipts exercise the Cron owner without invoking a model.
@@ -40,7 +46,7 @@ vi.mock("../gateway/cron-operator-source.js", () => ({
   restoreCronOperatorSource: fixture.restore,
 }));
 // mock-isolation: These receipt/prompt contracts use a job with no saved scratch.
-vi.mock("./scratch-read.js", () => ({ readCronScratchSnapshot: async () => undefined }));
+vi.mock("./scratch-read.js", () => ({ readCronScratchSnapshot: fixture.readScratch }));
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -111,13 +117,10 @@ function input(): Parameters<typeof runCronSessionTurn>[0] {
           agentId: "main",
           ...target,
           sourceRunId: "original-request",
-          snapshot: {
-            ...expectDefined(
-              createOperatorRecoveryAuthority("requester", "original-grant").recoverySnapshot,
-              "operator recovery fixture",
-            ),
+          snapshot: operatorRecoverySnapshotFixture("requester", "original-grant", {
+            sourceIngress: "control-ui",
             controlUiAdmin: true,
-          },
+          }),
         },
       },
     },
@@ -175,15 +178,77 @@ describe("scheduled session prompts", () => {
     );
   });
 
-  it("submits the job identity and localized current time with the scheduled instructions", async () => {
-    const params = input();
-    params.cfg = { agents: { defaults: { userTimezone: "America/Los_Angeles" } } };
-    const text = await prepareLivePrompt(params, () => {
-      vi.setSystemTime(new Date("2026-10-20T16:10:00Z"));
+  it("resolves store off-thread before submitting localized job context", async () => {
+    await withOpenClawTestState({ label: "cron-session-store-path" }, async (state) => {
+      const storePath = state.statePath("cron", "jobs.json");
+      await writeConfigMachineStateAsync("cron.store", storePath, { env: state.env });
+      const observation = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        const params = input();
+        params.cfg = { agents: { defaults: { userTimezone: "America/Los_Angeles" } } };
+        const text = await prepareLivePrompt(params, () => {
+          vi.setSystemTime(new Date("2026-10-20T16:10:00Z"));
+        });
+        expect(text).toContain("[cron:job-1 test] Check the report.");
+        expect(text).toMatch(/Current time: .*9:00.*\(America\/Los_Angeles\)/);
+        expect(text).toContain("Reference UTC: 2026-10-20 16:00 UTC");
+        expect(observation.queries.filter((sql) => sql.includes('"config_machine_state"'))).toEqual(
+          [],
+        );
+        expect(fixture.readScratch.mock.calls[0]?.[0]).toBe(storePath);
+        fixture.readScratch.mockClear();
+        const prepared = input();
+        prepared.cfg = params.cfg;
+        prepared.sessionPreparation = {
+          agentId: prepared.agentId,
+          sessionKey: prepared.sessionKey,
+          notices: await prepareAutomationSystemEvents(
+            prepared.sessionKey,
+            prepared.job.id,
+            prepared.job.state.runningAtMs,
+          ),
+          scratch: {
+            currentRevision: 1,
+            scratch: { content: "Prepared proof scratch", revision: 1, updatedAtMs: 1 },
+          },
+        };
+        expect(await prepareLivePrompt(prepared)).toContain("Prepared proof scratch");
+        expect(fixture.readScratch).not.toHaveBeenCalled();
+      } finally {
+        observation.restore();
+      }
     });
-    expect(text).toContain("[cron:job-1 test] Check the report.");
-    expect(text).toMatch(/Current time: .*9:00.*\(America\/Los_Angeles\)/);
-    expect(text).toContain("Reference UTC: 2026-10-20 16:00 UTC");
+  });
+
+  it("uses the admitted cron partition without resolving changed configuration again", async () => {
+    await withOpenClawTestState({ label: "cron-admitted-partition" }, async (state) => {
+      const admitted = state.statePath("cron", "admitted.json");
+      const changed = state.statePath("cron", "changed.json");
+      await writeConfigMachineStateAsync("cron.store", changed, { env: state.env });
+      const select = vi.spyOn(cronStore, "resolveCronJobsStorePathFromConfigAsync");
+      try {
+        const params = input();
+        params.cronStorePath = admitted;
+        fixture.readScratch.mockImplementation(async (storePath) => ({
+          jobId: params.job.id,
+          state: {
+            currentRevision: 1,
+            scratch: {
+              content:
+                storePath === admitted ? "Admitted partition scratch" : "Changed partition scratch",
+              revision: 1,
+              updatedAtMs: 1,
+            },
+          },
+        }));
+        const prompt = await prepareLivePrompt(params);
+        expect(prompt).toContain("Admitted partition scratch");
+        expect(prompt).not.toContain("Changed partition scratch");
+        expect(select).not.toHaveBeenCalled();
+      } finally {
+        select.mockRestore();
+      }
+    });
   });
 
   it.each([
@@ -289,7 +354,7 @@ describe("scheduled session execution custody", () => {
     const triggerTimeout = vi.fn();
     const watchdog = createCronAgentWatchdog({
       deferUntilRunner: true,
-      jobTimeoutMs: 120_000,
+      jobTimeoutMs: 180_001,
       triggerTimeout,
     });
     watchdog.start();

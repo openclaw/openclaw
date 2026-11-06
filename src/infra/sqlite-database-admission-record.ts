@@ -4,6 +4,7 @@ import path from "node:path";
 import { setEnvironmentData, threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { SqliteCleanCloseSealRefusal } from "./sqlite-clean-close-seal.js";
+import { changedAdmissionEntries } from "./sqlite-database-admission-delta.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
   isSoleDatabaseFileDescriptor,
@@ -137,6 +138,8 @@ export type Admission = {
   descriptorOwner: number;
   generationId: string;
   generation: SharedArrayBuffer;
+  /** Bounded, process-local diagnostics only; never consulted for admission. */
+  writerDiagnostic: Int32Array<SharedArrayBuffer>;
   /** First-load diagnostic, shared with workers without rereading the seal. */
   cleanCloseRefusal?: SqliteCleanCloseSealRefusal;
   /** Last complete host snapshot; relays preserve this value without advancing it. */
@@ -156,7 +159,8 @@ export type SqliteDatabaseAdmissionKey<T> = {
   schemaDependent?: boolean;
   /** Physical validation and owner-published decisions survive ordinary native close. */
   lifetime?: "process";
-  writer?: "host";
+  /** Physical cache facts can be recaptured locally; their transport never gates a live connection. */
+  writer?: "host" | "connection";
 };
 export type SqliteDatabaseAdmissionExchange = (
   admissions: SqliteDatabaseAdmissions,
@@ -215,7 +219,10 @@ export function advanceSqliteDatabaseGeneration(
 }
 export function publishSqliteDatabaseFact(
   record: Admission,
-  key: { name: string; schemaDependent?: boolean; lifetime?: "process"; writer?: "host" },
+  key: Pick<
+    SqliteDatabaseAdmissionKey<unknown>,
+    "name" | "schemaDependent" | "lifetime" | "writer"
+  >,
   value: AdmissionFactValue,
   revision: number,
   publication: string,
@@ -346,19 +353,6 @@ export function createSqliteDatabaseAdmissionCursor(): SqliteDatabaseAdmissionCu
   return { revision: -1, records: new WeakMap() };
 }
 
-function changedAdmissionEntries<Key, Value>(
-  current: Map<Key, Value>,
-  previous: Map<Key, Value>,
-): Map<Key, Value> {
-  const changed = new Map<Key, Value>();
-  for (const [key, value] of current) {
-    if (previous.get(key) !== value) {
-      changed.set(key, value);
-    }
-  }
-  return changed;
-}
-
 export class SqliteDatabaseAdmissionRegistry {
   readonly records = new Map<string, Admission>();
   private exchangeCursor = createSqliteDatabaseAdmissionCursor();
@@ -430,6 +424,8 @@ export class SqliteDatabaseAdmissionRegistry {
       if (!references) {
         continue;
       }
+      // A terminated worker cannot run the transaction's diagnostic finally.
+      Atomics.compareExchange(record.writerDiagnostic, 1, owner + 1, 0);
       // Zero permits a live worker to reopen; negative cells cannot be revived by old snapshots.
       Atomics.store(new Int32Array(references), 0, -1);
       this.retireUnreferenced(record);
@@ -440,12 +436,26 @@ export class SqliteDatabaseAdmissionRegistry {
     }
   }
 
-  observeLocation(location: string, identity: string): void {
-    this.locations.set(normalizeDatabasePath(path.resolve(location)), identity);
+  observeLocation(location: string, identity: string | undefined): void {
+    const pathname = normalizeDatabasePath(path.resolve(location));
+    if (identity === undefined) {
+      this.locations.delete(pathname);
+    } else {
+      this.locations.set(pathname, identity);
+    }
   }
 
   forLocation(location: string): Admission | undefined {
-    const identity = this.locations.get(normalizeDatabasePath(path.resolve(location)));
+    return this.forPathname(normalizeDatabasePath(path.resolve(location)));
+  }
+
+  prepareLocation(location: string): () => Admission | undefined {
+    const pathname = normalizeDatabasePath(path.resolve(location));
+    return () => this.forPathname(pathname);
+  }
+
+  private forPathname(pathname: string): Admission | undefined {
+    const identity = this.locations.get(pathname);
     const record = identity === undefined ? undefined : this.records.get(identity);
     return record && !isSqliteDatabaseAdmissionRetired(record) ? record : undefined;
   }
@@ -483,6 +493,7 @@ export class SqliteDatabaseAdmissionRegistry {
       generation: new SharedArrayBuffer(
         Int32Array.BYTES_PER_ELEMENT * SQLITE_DATABASE_GENERATION_LENGTH,
       ),
+      writerDiagnostic: new Int32Array(new SharedArrayBuffer(125 * Int32Array.BYTES_PER_ELEMENT)),
       writeScopes: new Map(),
       writeScopeRevision: 0,
       references: new Map(),

@@ -241,7 +241,7 @@ suite.define(() => {
           await plan.waitFor({ state: "attached" });
           await refreshProgress(null);
           if (mobile) {
-            await progress.getByText("No saved progress", { exact: true }).waitFor();
+            await progress.getByText("No saved progress yet.", { exact: true }).waitFor();
           } else {
             await card.waitFor({ state: "detached" });
           }

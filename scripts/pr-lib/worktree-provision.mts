@@ -262,7 +262,6 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
         killProcessTree: true,
       };
       const rawGit = async (args: string[], cwd = root) => {
-        assertCurrent();
         const result = await executeGitCommand(cwd, args, gitOptions);
         assertCurrent();
         return result;

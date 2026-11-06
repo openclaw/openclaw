@@ -134,7 +134,7 @@ describe("Gateway host lifecycle authority", () => {
       resumeScheduling: () => {},
       inspect: { getRootRequests: () => 1, getTerminalPersistence: () => 0 },
     });
-    if (lease.status !== "draining" || !first.capability.externalRestart) {
+    if (lease.status !== "ready" || !first.capability.externalRestart) {
       throw new Error("missing owned lease");
     }
     try {

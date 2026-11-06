@@ -1,12 +1,17 @@
 import type { GatewaySessionRow } from "../api/types.ts";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { registerSessionPlacementEnglish } from "../i18n/locales/en-session-placement.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "../lib/session-owner.ts";
 import { customSnoozeStorageKey, readCustomSnooze } from "../lib/sessions/custom-snooze.ts";
+import {
+  createPersonalSessionGroupActions,
+  personalSessionGroupCandidates,
+  personalSessionGroupCandidate,
+} from "./personal-session-group-actions.ts";
 import {
   createSessionMenuSettings,
   type SessionCommunicationMenuAction,
@@ -14,7 +19,6 @@ import {
 import { createSessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
 
-registerSessionOrganizationEnglish();
 registerSessionPlacementEnglish();
 
 export type SessionMenuData = {
@@ -100,6 +104,34 @@ export type SessionMenuActionsState = {
 export class SessionMenuActions {
   private readonly context = useOptionalApplication();
   private readonly gateway = this.context ? projectGateway(this.context.gateway) : undefined;
+  private readonly navigation = this.context
+    ? projectOwner(this.context.navigation, (owner) => owner.snapshot)
+    : undefined;
+  private readonly sessions = this.context
+    ? projectOwner(this.context.sessions, (owner) =>
+        owner.canonicalListReady ? personalSessionGroupCandidates(this.context!) : [],
+      )
+    : undefined;
+  private readonly collections = this.context
+    ? createPersonalSessionGroupActions(this.context)
+    : undefined;
+  get personalGroups() {
+    return this.navigation?.read().personalSessionGroups ?? [];
+  }
+  get collectionTarget() {
+    const state = this.readState();
+    const described = this.advanced.row();
+    const row = described
+      ? personalSessionGroupCandidate(described)
+      : this.sessions?.read().find((candidate) => candidate.key === state.session.target?.key);
+    return state.selectionCount === 1 &&
+      !state.session.archived &&
+      state.session.pinnable !== false &&
+      row?.pinnable &&
+      !row.archived
+      ? row
+      : undefined;
+  }
   readonly advanced;
   openCustomSnooze?: () => void;
   customSnoozeKeydown?: (event: KeyboardEvent) => boolean;
@@ -222,6 +254,23 @@ export class SessionMenuActions {
   }
 
   handleSelect(value: string): boolean {
+    if (value.startsWith("personal-collection:")) {
+      const target = this.collectionTarget;
+      if (!this.readState().disabled && target && this.collections) {
+        const id = value.slice("personal-collection:".length);
+        if (id === "new") {
+          void this.collections.edit(
+            undefined,
+            target.key,
+            this.readState().session.target?.agentId,
+          );
+        } else {
+          void this.collections.add(id, target.key, this.readState().session.target?.agentId);
+        }
+        this.onClose();
+      }
+      return true;
+    }
     if (this.advanced.handleSelect(value)) {
       return true;
     }

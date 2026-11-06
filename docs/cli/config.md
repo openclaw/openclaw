@@ -138,7 +138,9 @@ syntax and whole-list inputs still work with `set`, `patch`, and `unset`; writes
 persist the current keyed roster. Indexed edits use the current roster order.
 Within a batch, a submitted list keeps its order across subsequent keyed edits,
 including when agent IDs are numeric strings. Existing roster-deletion and
-`$include` ownership protections still apply.
+`$include` ownership protections still apply. `config unset agents.entries.<id>`,
+or a patch that sets it to `null`, removes only that config entry; use
+`openclaw agents delete` to also clean up the agent's state.
 
 When a legacy roster expands a single-agent installation in the root config file,
 writes retire its `default` marker and preserve the existing agent's responsibilities
@@ -169,7 +171,8 @@ are rejected; they do not suppress validation of later options.
 
 A schema-valid but unset authorable path explains that the runtime default applies and suggests
 `openclaw config set`. For automatically managed metadata, such as `meta.lastTouchedVersion`,
-`meta.migrations.modelPolicyAllowlist`, and `meta.migrations.utilityModelSeparation`, the message
+`meta.migrations.modelPolicyAllowlist`, `meta.migrations.utilityModelSeparation`,
+`meta.migrations.skillWorkshopPlugin`, and `meta.migrations.skillLibraryToolSplit`, the message
 instead explains that OpenClaw manages the values on config writes. Reading their unset parent
 paths (`meta` or `meta.migrations`) gives the same explanation, not a refused set command.
 An unknown path suggests `openclaw config schema`. With `--json`, unset and unknown paths use
@@ -382,6 +385,8 @@ Batch parsing always uses the batch payload (`--batch-json`/`--batch-file`) as t
 
 Supplying either batch option selects batch mode. Empty or whitespace-only values are rejected; omit both options to use positional `<path> <value>` mode.
 
+Supplying any `--ref-*` or `--provider-*` option selects that builder mode, even when its value is empty. Builder modes do not accept a positional `<value>`; omit builder options to use value mode.
+
 `--batch-file` and `config patch --file` use the exact file path you provide, including leading or trailing spaces. Quote paths that contain spaces in your shell.
 
 Batch assignments apply in order, then validation checks the final config. A SecretRef replaced by a later assignment is not resolved or counted in dry-run output, even with `--allow-exec`. Providers that remain in a changed provider collection still receive command-path trust checks.
@@ -424,7 +429,7 @@ Provider builder targets must use `secrets.providers.<alias>` as the path.
     - `--provider-no-output-timeout-ms <ms>`
     - `--provider-max-output-bytes <bytes>`
     - `--provider-json-only`
-    - `--provider-env <KEY=VALUE>` (repeatable)
+    - `--provider-env <KEY=VALUE>` (repeatable; keys `__proto__`, `constructor`, and `prototype` are reserved)
     - `--provider-pass-env <ENV_VAR>` (repeatable)
     - `--provider-trusted-dir <path>` (repeatable)
 
@@ -455,6 +460,10 @@ openclaw config patch --file ./openclaw.patch.json5
 ```
 
 Patch files are limited to 8 MiB. Piped `--stdin` patches are limited to 1 MiB.
+
+While `--stdin` is waiting for input, Ctrl-C or SIGTERM stops the read and exits
+with status 130 or 143 without applying the pending patch. A write already
+admitted after input preparation keeps its existing completion and cleanup path.
 
 Pipe a patch over stdin for remote setup scripts:
 

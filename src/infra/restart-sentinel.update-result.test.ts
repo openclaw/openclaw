@@ -26,6 +26,7 @@ import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payloa
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import type { UpdateRunResult } from "./update-run-result.js";
 
 // Frozen v2026.9.4 reader contract; do not replace with the current recovery schema.
 // https://github.com/openclaw/openclaw/blob/3a9d69db306cd7f081e06254cb89c4bcc14a7107/src/infra/update-recovery.ts
@@ -73,7 +74,7 @@ async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<vo
 }
 
 describe("control-plane update restart sentinel", () => {
-  it("tells the heartbeat agent that stop-requiring repair needs an external terminal", () => {
+  it("reports that stop-requiring repair needs an external terminal", () => {
     const payload = buildUpdateRestartSentinelPayload({
       result: { status: "error", reason: "doctor-failed", mode: "npm", steps: [], durationMs: 1 },
       meta: { sessionKey: "agent:main:main" },
@@ -90,7 +91,7 @@ describe("control-plane update restart sentinel", () => {
     { status: "skipped", reason: "already-current", eligible: true },
     { status: "skipped", reason: "cancelled", eligible: false },
   ] as const)(
-    "publishes exhausted readiness without a success continuation (status=$status, reason=$reason)",
+    "publishes exhausted readiness as unverified (status=$status, reason=$reason)",
     ({ status, reason, eligible }) => {
       const payload = buildUpdateRestartSentinelPayload({
         result: {
@@ -113,13 +114,12 @@ describe("control-plane update restart sentinel", () => {
             },
           ],
         },
-        meta: { continuationMessage: "Continue after success" },
+        meta: {},
       });
       expect(payload).toMatchObject({
         status: eligible ? "skipped" : status,
         stats: { reason: eligible ? "gateway-readiness-unverified" : reason },
       });
-      expect(payload.continuation).toBeUndefined();
       expect(isPendingControlPlaneUpdateRestartSentinel(payload)).toBe(false);
     },
   );
@@ -176,7 +176,6 @@ describe("control-plane update restart sentinel", () => {
     { label: "delivery", meta: { deliveryContext: { channel: "slack", to: "room" } } },
     { label: "thread", meta: { threadId: "thread-1" } },
     { label: "note", meta: { note: "Explicit operator follow-up" } },
-    { label: "continuation", meta: { continuationMessage: "Resume the requested work" } },
     { label: "recorded session", meta: {}, origin: { sessionKey: "agent:ops:main" } },
     {
       label: "recorded delivery",
@@ -204,12 +203,17 @@ describe("control-plane update restart sentinel", () => {
       if (meta.threadId) {
         expect(payload?.threadId).toBe(meta.threadId);
       }
-      if (meta.continuationMessage) {
-        expect(payload?.continuation).toEqual({
-          kind: "agentTurn",
-          message: meta.continuationMessage,
-        });
-      }
+    });
+  });
+
+  it("ignores a legacy continuation request without creating a targetless CLI notice", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const run = createUpdateRun({ trigger: "cli" });
+      const result: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 1 };
+      const meta = { runId: run.runId, continuationMessage: "Resume the requested work" };
+      expect(buildUpdateRestartSentinelPayload({ result, meta }).continuation).toBeUndefined();
+      await writeControlPlaneUpdateRestartSentinel({ result, meta });
+      expect(await readRestartSentinel()).toBeNull();
     });
   });
 
@@ -267,7 +271,6 @@ describe("control-plane update restart sentinel", () => {
           runId: run.runId,
           handoffId: "owner",
           note: "Requested note",
-          continuationMessage: "Requested continuation",
           ...(route === "explicit"
             ? {
                 sessionKey: "agent:other:slack:channel:room2",
@@ -311,10 +314,6 @@ describe("control-plane update restart sentinel", () => {
             : (meta.threadId ?? "recorded-thread"),
         );
         expect(payload?.message).toBe(meta.note);
-        expect(payload?.continuation).toEqual({
-          kind: "agentTurn",
-          message: meta.continuationMessage,
-        });
         expect(payload?.stats).toMatchObject({ runId: run.runId, handoffId: "owner" });
       });
     },
@@ -333,7 +332,6 @@ describe("control-plane update restart sentinel", () => {
               runId: owner === "other-run" ? other.runId : run.runId,
               handoffId: owner === "other-handoff" ? "successor" : "original",
               sessionKey: "agent:ops:main",
-              continuationMessage: "Do not lose the requested continuation",
             },
           }),
         );
@@ -528,24 +526,16 @@ describe("control-plane update restart sentinel", () => {
           steps: [],
           durationMs: 42,
         },
-        meta: { continuationMessage: "Verify the completed runtime maintenance." },
+        meta: {},
         nowMs: 1,
       });
 
       expect(payload.status).toBe(status);
       expect(payload.stats?.reason).toBe(status === "skipped" ? "already-current" : null);
-      expect(payload.continuation).toEqual(
-        status === "ok"
-          ? {
-              kind: "agentTurn",
-              message: "Verify the completed runtime maintenance.",
-            }
-          : undefined,
-      );
     },
   );
 
-  it("keeps restart-health-pending sentinels continuation-free until final success", () => {
+  it("retains readiness verification when a pending update finishes", () => {
     const result = {
       runId: "ab186c13-181b-4cf7-a882-c179928539e6",
       status: "ok" as const,
@@ -560,7 +550,6 @@ describe("control-plane update restart sentinel", () => {
     const meta = {
       target: "version 2026.4.24",
       sessionKey: "agent:main:webchat:dm:user-123",
-      continuationMessage: "  Check the running version and finish the update report.\n",
     };
 
     const pendingResult = buildControlPlaneUpdateRestartHealthPendingResult(result);
@@ -575,7 +564,6 @@ describe("control-plane update restart sentinel", () => {
       runId: result.runId,
       reason: "restart-health-pending",
     });
-    expect(pendingPayload.continuation).toBeUndefined();
     expect(isPendingControlPlaneUpdateRestartSentinel(pendingPayload)).toBe(true);
 
     const finalPayload = buildUpdateRestartSentinelPayload({
@@ -589,10 +577,6 @@ describe("control-plane update restart sentinel", () => {
       runId: result.runId,
       target: "version 2026.4.24",
       recovery: { serviceRestartSafe: true },
-    });
-    expect(finalPayload.continuation).toEqual({
-      kind: "agentTurn",
-      message: "Check the running version and finish the update report.",
     });
     expect(isPendingControlPlaneUpdateRestartSentinel(finalPayload)).toBe(false);
   });

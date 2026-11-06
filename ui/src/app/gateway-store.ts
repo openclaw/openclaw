@@ -561,6 +561,8 @@ export function createApplicationGateway(
         const closeReason = formatUiExternalText(reason);
         setConnectionSnapshot({
           client: nextClient,
+          // An observed failure ends the initial presentation grace, through subsequent retries.
+          offlineStable: true,
           // Retained capabilities describe this client, never its live dispatch authority.
           hello: retainPresentation ? snapshot.hello : null,
           pluginCapabilities: retainPresentation ? snapshot.pluginCapabilities : null,
@@ -586,7 +588,7 @@ export function createApplicationGateway(
             : error?.message
               ? formatUiError(error.message)
               : closeReason
-                ? `disconnected (${code}): ${closeReason}`
+                ? `${t("connection.interrupted", { code: String(code) })} ${closeReason}`
                 : t(willRetry ? "connection.interruptedRetrying" : "connection.interrupted", {
                     code: String(code),
                   }),

@@ -33,23 +33,6 @@ import {
   installGatewayTestHooks,
 } from "./test-helpers.js";
 
-vi.mock(
-  "../agents/main-session-recovery/main-session-restart-recovery.js",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("../agents/main-session-recovery/main-session-restart-recovery.js")
-    >()),
-    // Attachment admission owns these cases; background recovery has no work to perform.
-    scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease: vi.fn(),
-    retryRestartAbortedMainSessionRecovery: vi.fn(async () => ({
-      started: 0,
-      settled: 0,
-      failed: 1,
-      skipped: 0,
-    })),
-  }),
-);
-
 installGatewayTestHooks({ scope: "suite" });
 const directories = createTempDirTracker();
 const sessionStoreFixture = createDirectChatSessionStoreFixture(directories);
@@ -171,7 +154,7 @@ test("chat.send keeps duplicate attachment sends retryable until input is admitt
       {
         id: "first",
         ok: true,
-        payload: { runId: "idem-attachment-race", status: "started" },
+        payload: { runId: "idem-attachment-race", status: "started", messageSeq: 1 },
         error: undefined,
       },
     ]);

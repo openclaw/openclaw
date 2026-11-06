@@ -1,19 +1,20 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, For } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
-import { createInertViewHost } from "../../../plugins/control-ui-view.test-support.ts";
 import "../../../plugins/control-ui-view.solid.tsx";
+import { createInertViewHost } from "../../../plugins/control-ui-view.test-support.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
-import { splitMixedWorkGroup } from "../chat-work-chunks.ts";
-import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
+import { groupMessages } from "../chat-thread-grouping.ts";
+import { collapseCompletedTurnWork } from "../chat-turn-presentation.ts";
 import { buildLocalUserMessage } from "../user-message-content.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -24,11 +25,32 @@ import {
   MessageGroup,
   type NativeMessageGroupOptions,
 } from "./chat-message-group-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
-import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
+import { ChatTimestamp, MessageMeta } from "./chat-message-timestamp-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
-it("shares the mobile layout query while preserving initial and updated message actions", () => {
+it("adds and removes usage details on a retained plain timestamp", () => {
+  const [meta, setMeta] = createSignal<Parameters<typeof MessageMeta>[0]["meta"]>(null);
+  const view = mountSolid(() => <MessageMeta timestamp={1000} meta={meta()} />);
+  const tooltip = view.container.querySelector("openclaw-tooltip");
+  expect(view.container.querySelector(".msg-meta__details")).toBeNull();
+  setMeta({
+    input: 21,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+    model: null,
+    contextPercent: null,
+  });
+  flush();
+  expect(view.container.querySelector(".msg-meta__details")?.textContent).toContain("↑21");
+  setMeta(null);
+  flush();
+  expect(view.container.querySelector(".msg-meta__details")).toBeNull();
+  expect(view.container.querySelector("openclaw-tooltip")).toBe(tooltip);
+});
+
+it("shares mobile layout only for earlier-message actions and preserves updates", () => {
   const query =
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
   const media = Object.assign(new EventTarget(), { matches: true });
@@ -39,12 +61,31 @@ it("shares the mobile layout query while preserving initial and updated message 
   const subscribe = vi.spyOn(media, "addEventListener");
   const unsubscribe = vi.spyOn(media, "removeEventListener");
   const message = { role: "user", content: "First message", timestamp: 1000 };
+  const singleGroup = createMessageGroup(message, "user");
+  const single = mountSolid(() => (
+    <MessageGroup group={singleGroup} options={{ showReasoning: false, onReply: vi.fn() }} />
+  ));
+  flush();
+  expect(single.container.querySelector(".chat-message-actions-row")).toBeNull();
+  expect(matchMedia.mock.calls.filter(([value]) => value === query)).toHaveLength(0);
+  expect(subscribe).not.toHaveBeenCalled();
+  single.unmount();
   const group = createMessageGroup(message, "user", {
     messages: [
       { key: "first", message },
       { key: "second", message: { ...message, content: "Second message", timestamp: 1001 } },
     ],
   });
+  // AgentRunFrame always owns assistant chrome around its representative messages.
+  const frame = mountSolid(() => (
+    <MessageGroup
+      group={{ ...group, role: "assistant" }}
+      options={{ showReasoning: false, frameContent: [<span>Completed fragment</span>] }}
+    />
+  ));
+  flush();
+  expect(matchMedia.mock.calls.filter(([value]) => value === query)).toHaveLength(0);
+  frame.unmount();
   const view = mountSolid(() => (
     <>
       <MessageGroup group={group} options={{ showReasoning: false, onReply: vi.fn() }} />
@@ -64,6 +105,8 @@ it("shares the mobile layout query while preserving initial and updated message 
     media.dispatchEvent(new Event("change"));
     flush();
     expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(2);
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(unsubscribe).not.toHaveBeenCalled();
     view.unmount();
     expect(unsubscribe).toHaveBeenCalledOnce();
   } finally {
@@ -161,6 +204,76 @@ it.each([
     answered ? ["answer"] : [],
   );
 });
+
+it.each([false, true])(
+  "keeps a mixed terminal answer visible with its actions (bubble=%s)",
+  (bubbleMode) => {
+    const answer = {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "read-a", name: "read", arguments: {} },
+        { type: "toolCall", id: "read-b", name: "read", arguments: {} },
+        { type: "text", text: "Both files are correct." },
+      ],
+      timestamp: 2000,
+      __openclaw: { id: "mixed-answer", runId: "mixed-run" },
+    };
+    const messages = [
+      {
+        role: "user",
+        content: "Check the files",
+        timestamp: 1000,
+        __openclaw: { id: "prompt", runId: "mixed-run" },
+      },
+      answer,
+    ];
+    const grouped = groupMessages(
+      messages.map((message, index) => ({ kind: "message", key: String(index), message })),
+    );
+    const frame = coalesceAgentRunFrames(
+      collapseCompletedTurnWork(grouped, {
+        sessionKey: "agent:main:dashboard:mixed",
+        runWorking: false,
+        bubbleMode,
+      }),
+      { messages },
+    ).find((item) => item.kind === "agent-run-frame");
+    if (!frame) {
+      throw new Error("Missing answer frame");
+    }
+    const onReply = vi.fn();
+    const view = mountSolid(() => (
+      <AgentRunFrame
+        frame={frame}
+        options={{
+          streamOptions: { bubbleMode },
+          workPreviews: new Map(),
+          renderGroupOptions: () => ({
+            bubbleMode,
+            showReasoning: false,
+            onReply,
+            onReact: vi.fn(),
+          }),
+          isWorkExpanded: () => false,
+          onToggleWork: () => {},
+        }}
+      />
+    ));
+    flush();
+    expect(view.container.textContent).toContain("Both files are correct.");
+    const reply = view.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Reply to message"]',
+    );
+    expect(reply).not.toBeNull();
+    reply!.click();
+    expect(onReply.mock.calls[0]?.[0]).toMatchObject({
+      sourceMessageId: "mixed-answer",
+      text: "Both files are correct.",
+    });
+    expect(view.container.querySelector('button[aria-label="Copy as markdown"]')).not.toBeNull();
+    expect(view.container.querySelector(".chat-reaction-action")).not.toBeNull();
+  },
+);
 
 it("does not give provider speech unframed answer actions", () => {
   const speech = {
@@ -517,7 +630,7 @@ describe("owned message controls", () => {
       />
     ));
     const disclosure = view.container.querySelector<HTMLDetailsElement>(
-      ".chat-context-attachment",
+      "details.chat-context-attachment",
     )!;
     expect(disclosure).not.toBeNull();
     disclosure.open = true;
@@ -591,7 +704,8 @@ it("prepares the detailed timestamp only when metadata exposes its label", () =>
     second: "2-digit",
     timeZoneName: "short",
   });
-  const calendarFormat = vi.spyOn(Date.prototype, "toLocaleString");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(9_000_000_000_000);
+  const calendarFormat = vi.spyOn(Intl, "DateTimeFormat");
   const [metadata, setMetadata] = createSignal(false);
   const view = mountSolid(() => (
     <ChatTimestamp timestamp={1000} metadata={metadata() ? [<span>Usage</span>] : undefined} />
@@ -605,6 +719,58 @@ it("prepares the detailed timestamp only when metadata exposes its label", () =>
   } finally {
     view.unmount();
     calendarFormat.mockRestore();
+    clock.mockRestore();
+  }
+});
+
+it("shares timestamp formatting across scroll tasks and refreshes it the next minute", async () => {
+  const timestamp = 8_000_000_000_000;
+  const older = timestamp - 10 * 24 * 60 * 60 * 1000;
+  const previousYear = new Date(older);
+  previousYear.setFullYear(previousYear.getFullYear() - 1);
+  const dateLabels = [new Date(older), previousYear].map((date) =>
+    date.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+      ...(date.getFullYear() === new Date(timestamp).getFullYear() ? {} : { year: "numeric" }),
+    }),
+  );
+  const clock = vi.spyOn(Date, "now").mockReturnValue(timestamp);
+  const formatter = vi.spyOn(Intl, "DateTimeFormat");
+  const nativeDate = vi.spyOn(Date.prototype, "toLocaleDateString");
+  const nativeTime = vi.spyOn(Date.prototype, "toLocaleString");
+  const views: ReturnType<typeof mountSolid>[] = [];
+  try {
+    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp} />));
+    await Promise.resolve();
+    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp + 1000} />));
+    expect(formatter).toHaveBeenCalledTimes(1);
+    expect(views[0]!.container.querySelector("time")?.dateTime).toBe(
+      new Date(timestamp).toISOString(),
+    );
+    views.push(
+      mountSolid(() => <ChatTimestamp timestamp={older} metadata={[<span>Usage</span>]} />),
+    );
+    views.push(
+      mountSolid(() => (
+        <ChatTimestamp timestamp={previousYear.getTime()} metadata={[<span>Usage</span>]} />
+      )),
+    );
+    expect(formatter).toHaveBeenCalledTimes(4);
+    expect(views.slice(2).map((view) => view.container.querySelector("time")?.textContent)).toEqual(
+      dateLabels,
+    );
+    expect(nativeDate).not.toHaveBeenCalled();
+    expect(nativeTime).not.toHaveBeenCalled();
+    clock.mockReturnValue(timestamp + 60_000);
+    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp + 2000} />));
+    expect(formatter).toHaveBeenCalledTimes(5);
+  } finally {
+    views.forEach((view) => view.unmount());
+    formatter.mockRestore();
+    nativeDate.mockRestore();
+    nativeTime.mockRestore();
+    clock.mockRestore();
   }
 });
 
@@ -644,289 +810,10 @@ it("leaves timestamp attributes untouched when only message usage changes", () =
   flush();
   expect(view.container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑200");
   expect(time.dateTime).toBe("1970-01-01T00:00:01.000Z");
-  expect(time.textContent).toBe("6m ago");
+  expect(time.textContent).toBe("5m ago");
   expect(observer.takeRecords()).toEqual([]);
   observer.disconnect();
   clock.mockRestore();
   expect(calendarFormat).not.toHaveBeenCalled();
   calendarFormat.mockRestore();
-});
-
-it.each([false, true])(
-  "keeps split terminal actions on the original envelope (mixed phase=%s)",
-  (mixedPhase) => {
-    const message = {
-      role: "assistant",
-      stopReason: "stop",
-      content: [
-        {
-          type: "text",
-          text: "Before work",
-          ...(mixedPhase
-            ? { textSignature: JSON.stringify({ v: 1, id: "before", phase: "final_answer" }) }
-            : {}),
-        },
-        { type: "thinking", thinking: "Internal reasoning" },
-        {
-          type: "text",
-          text: "After work",
-          ...(mixedPhase
-            ? { textSignature: JSON.stringify({ v: 1, id: "after", phase: "commentary" }) }
-            : {}),
-        },
-      ],
-      __openclaw: { id: "original-entry", runId: "run" },
-    };
-    const original = createMessageGroup(message, "assistant", {
-      messages: [{ message, key: "source-action-key" }],
-      runId: "run",
-    });
-    const parts = splitMixedWorkGroup(original);
-    expect(parts).toHaveLength(3);
-    const last = parts[2]!;
-    const actions = prepareGroupMessage(last, last.messages[0]!, {
-      onReply: () => {},
-      showReasoning: false,
-    }).actions;
-    expect(actions?.copyMarkdown).toBe("Before work\nAfter work");
-    expect(actions?.reactionMessageId).toBe("original-entry");
-    expect(actions?.replyTarget).toMatchObject({
-      messageId: "source-action-key",
-      sourceMessageId: "original-entry",
-      text: "Before work\nAfter work",
-    });
-    expect((last.messages[0]!.message as typeof message).content).toEqual([message.content[2]]);
-    const frame = coalesceAgentRunFrames(parts)[0];
-    expect(frame?.kind === "agent-run-frame" && frame.outcome).toMatchObject({
-      kind: "completed",
-      actionOwner: last.messages[0],
-    });
-    expect(parts.map((part) => part.messages[0]?.presentationOwnsFooter)).toEqual([
-      false,
-      false,
-      true,
-    ]);
-    const view = mountSolid(() => (
-      <>
-        <For each={parts}>
-          {(part) => <MessageGroup group={part} options={{ showReasoning: false }} />}
-        </For>
-      </>
-    ));
-    flush();
-    expect(view.container.querySelectorAll(".chat-group-footer")).toHaveLength(1);
-  },
-);
-
-it("renders persisted media once in a mixed narration and reasoning envelope", async () => {
-  const message = {
-    role: "assistant",
-    stopReason: "stop",
-    content: [
-      { type: "text", text: "Before" },
-      { type: "thinking", thinking: "Work" },
-      { type: "text", text: "After" },
-    ],
-    __openclaw: {
-      id: "media-source",
-      media: [{ url: "data:image/png;base64,cG5n", contentType: "image/png" }],
-    },
-  };
-  const parts = splitMixedWorkGroup(createMessageGroup(message, "assistant"));
-  const view = mountSolid(() => (
-    <For each={parts}>
-      {(part) => <MessageGroup group={part} options={{ showReasoning: false }} />}
-    </For>
-  ));
-  await waitForSolid(() =>
-    expect(view.container.querySelectorAll(".chat-message-image-button")).toHaveLength(1),
-  );
-  expect(view.container.textContent).toContain("Before");
-  expect(view.container.textContent).toContain("After");
-  expect(view.container.textContent).not.toContain("Work");
-});
-
-it("renders source reactions once across split visible and work parts", () => {
-  const message = {
-    role: "assistant",
-    stopReason: "stop",
-    content: [
-      { type: "text", text: "Before" },
-      { type: "thinking", thinking: "Work" },
-      { type: "text", text: "After" },
-    ],
-    __openclaw: { id: "reacted-source", runId: "run" },
-  };
-  const parts = splitMixedWorkGroup(createMessageGroup(message, "assistant"));
-  const onReact = vi.fn();
-  const view = mountSolid(() => (
-    <For each={parts}>
-      {(part) => (
-        <MessageGroup
-          group={part}
-          options={{
-            showReasoning: true,
-            userId: "viewer",
-            onReact,
-            messageReactions: new Map([
-              [
-                "reacted-source",
-                [{ emoji: "👍", count: 1, identities: [{ id: "viewer", label: "Viewer" }] }],
-              ],
-            ]),
-          }}
-        />
-      )}
-    </For>
-  ));
-  flush();
-  expect(view.container.querySelectorAll(".chat-message-reactions")).toHaveLength(1);
-  view.container.querySelector<HTMLButtonElement>(".chat-reaction-chip")!.click();
-  expect(onReact).toHaveBeenCalledExactlyOnceWith("reacted-source", "👍", true);
-  expect(
-    parts.map(
-      (part) =>
-        prepareGroupMessage(part, part.messages[0]!, { showReasoning: true }).actions
-          ?.reactionMessageId,
-    ),
-  ).toEqual([undefined, undefined, "reacted-source"]);
-});
-
-it.each(["aborted", "error", "live-aborted"])(
-  "gives a split %s envelope one terminal frame and tail",
-  (reason) => {
-    const message = {
-      role: "assistant",
-      stopReason: reason === "live-aborted" ? "stop" : reason,
-      content: [
-        { type: "text", text: "Before interruption" },
-        { type: "thinking", thinking: "Work" },
-        { type: "text", text: "After interruption" },
-      ],
-      __openclaw: { id: "interrupted-source", runId: "run" },
-    };
-    if (reason === "live-aborted") {
-      rememberLiveTerminalRun(message, "run", "aborted");
-    }
-    const parts = splitMixedWorkGroup(createMessageGroup(message, "assistant", { runId: "run" }));
-    const prompt = createMessageGroup(
-      { role: "user", content: "Start", __openclaw: { id: "prompt", runId: "run" } },
-      "user",
-    );
-    const items = coalesceAgentRunFrames([prompt, ...parts], { messages: [message] });
-    expect(items).toHaveLength(2);
-    const frame = items[1];
-    if (frame?.kind !== "agent-run-frame") {
-      throw new Error("Missing terminal frame");
-    }
-    expect(frame.outcome.kind).toBe("failed");
-    const view = mountSolid(() => (
-      <AgentRunFrame
-        frame={frame}
-        options={{
-          streamOptions: {},
-          renderGroupOptions: () => ({ showReasoning: true }),
-          isWorkExpanded: () => true,
-          onToggleWork: () => {},
-        }}
-      />
-    ));
-    flush();
-    expect(view.container.textContent).toContain("Before interruption");
-    expect(view.container.textContent).toContain("After interruption");
-    expect(view.container.textContent?.match(/Interrupted/g) ?? []).toHaveLength(
-      reason === "error" ? 0 : 1,
-    );
-    expect(parts.every((part) => part.messages[0]?.actionMessage === message)).toBe(true);
-  },
-);
-
-it("renders source previews cited before the final split slice", async () => {
-  const message = {
-    role: "assistant",
-    stopReason: "stop",
-    content: [
-      { type: "thinking", thinking: "Find sources" },
-      { type: "text", text: "See https://example.test/earlier." },
-      { type: "thinking", thinking: "Compare sources" },
-    ],
-    __openclaw: { id: "cited-source", runId: "run" },
-  };
-  const parts = splitMixedWorkGroup(createMessageGroup(message, "assistant", { runId: "run" }));
-  expect(parts).toHaveLength(3);
-  const search = createMessageGroup(
-    {
-      role: "toolResult",
-      toolName: "web_search",
-      toolCallId: "search",
-      runId: "run",
-      details: {
-        kind: "results",
-        externalContent: { source: "web_search", untrusted: true, wrapped: true },
-        results: [{ url: "https://example.test/earlier", title: "Earlier source" }],
-      },
-      content: [{ type: "text", text: "Search results" }],
-    },
-    "tool",
-    { runId: "run" },
-  );
-  const frame = coalesceAgentRunFrames([search, ...parts])[0];
-  if (frame?.kind !== "agent-run-frame") {
-    throw new Error("Missing completed frame");
-  }
-  const view = mountSolid(() => (
-    <AgentRunFrame
-      frame={frame}
-      options={{
-        streamOptions: {},
-        renderGroupOptions: () => ({ showReasoning: true }),
-        isWorkExpanded: () => true,
-        onToggleWork: () => {},
-      }}
-    />
-  ));
-  flush();
-  await waitForSolid(() =>
-    expect(view.container.querySelector(".chat-source-strip")?.textContent).toContain(
-      "example.test",
-    ),
-  );
-});
-
-it("keeps one interrupted tail when the last split part is hidden reasoning", () => {
-  const message = {
-    role: "assistant",
-    stopReason: "aborted",
-    content: [
-      { type: "text", text: "Visible before interrupted thinking" },
-      { type: "thinking", thinking: "Hidden reasoning" },
-    ],
-    __openclaw: { id: "trailing-work", runId: "run" },
-  };
-  const prompt = createMessageGroup(
-    { role: "user", content: "Start", __openclaw: { id: "prompt", runId: "run" } },
-    "user",
-  );
-  const parts = splitMixedWorkGroup(createMessageGroup(message, "assistant", { runId: "run" }));
-  const items = coalesceAgentRunFrames([prompt, ...parts], { messages: [message] });
-  expect(items).toHaveLength(2);
-  const frame = items[1];
-  if (frame?.kind !== "agent-run-frame") {
-    throw new Error("Missing terminal frame");
-  }
-  const view = mountSolid(() => (
-    <AgentRunFrame
-      frame={frame}
-      options={{
-        streamOptions: {},
-        renderGroupOptions: () => ({ showReasoning: false }),
-        isWorkExpanded: () => true,
-        onToggleWork: () => {},
-      }}
-    />
-  ));
-  flush();
-  expect(view.container.textContent).toContain("Visible before interrupted thinking");
-  expect(view.container.textContent).not.toContain("Hidden reasoning");
-  expect(view.container.textContent?.match(/Interrupted/g) ?? []).toHaveLength(1);
 });

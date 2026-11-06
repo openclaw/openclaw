@@ -1,17 +1,24 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { registerSessionBindingAdapter, testing } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  getSessionBindingService,
+  registerSessionBindingAdapter,
+  testing,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import { telegramPlugin } from "./channel.js";
 import { inspectTelegramConversationRouteOwner } from "./conversation-route-owner.test-support.js";
 import {
+  inspectTelegramConversationRouteAsync,
   resolveTelegramConversationRoute,
   resolveTelegramTargetSession,
 } from "./conversation-route.js";
+import { useTelegramThreadBindingsFixture } from "./thread-bindings.test-support.js";
 
 const tryReadSecretFileSyncMock = vi.hoisted(() =>
   vi.fn(() => {
@@ -121,7 +128,7 @@ describe("telegram session route", () => {
         threadId: 21,
         currentSessionKey: "agent:drafts:telegram:direct:12345:thread:12345:10",
       });
-      const { route: inboundRoute } = await resolveTelegramConversationRoute({
+      const { route: inboundRoute, bindingMode } = await resolveTelegramConversationRoute({
         cfg,
         accountId: "drafts",
         chatId: 12345,
@@ -132,6 +139,7 @@ describe("telegram session route", () => {
       const inboundSessionKey = resolveTelegramTargetSession({
         cfg,
         route: inboundRoute,
+        bindingMode,
         chatId: 12345,
         isGroup: false,
         senderId: 12345,
@@ -434,6 +442,65 @@ describe("telegramPlugin reply threading", () => {
           toolContext: { currentChannelId, currentThreadTs },
         }),
       ).toBe(expected);
+    },
+  );
+});
+
+describe("Telegram private-topic ACP bindings", () => {
+  const fixture = useTelegramThreadBindingsFixture();
+  it.each([false, true])(
+    "keeps the bound ACP target for private-topic inspection=%s",
+    async (inspect) => {
+      await fixture.createManager({ accountId: "default", persist: false });
+      const conversation = telegramPlugin.bindings!.resolveCommandConversation!({
+        accountId: "default",
+        originatingTo: "telegram:1234",
+        threadId: "42",
+      })!;
+      expect(conversation.conversationId).toBe("1234:topic:42");
+      const targetSessionKey = "agent:claude:acp:private-topic";
+      await getSessionBindingService().bind({
+        targetSessionKey,
+        conversation: { channel: "telegram", accountId: "default", ...conversation },
+        targetKind: "session",
+        placement: "current",
+      });
+      const params = {
+        cfg: {
+          agents: { entries: { main: {}, claude: {} } },
+          bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
+        },
+        accountId: "default",
+        chatId: 1234,
+        senderId: 1234,
+        isGroup: false,
+      };
+      for (const topic of [42, 43, undefined]) {
+        const threadSpec = resolveTelegramMessageThreadSpec({
+          message_id: 1,
+          date: 1,
+          chat: { id: 1234, type: "private", first_name: "Alice" },
+          message_thread_id: topic,
+        });
+        const resolve = inspect
+          ? inspectTelegramConversationRouteAsync
+          : resolveTelegramConversationRoute;
+        const resolved = await resolve({ ...params, threadSpec });
+        expect(
+          resolveTelegramTargetSession({
+            ...params,
+            ...resolved,
+            dmThreadId: topic,
+            botHasTopicsEnabled: true,
+          }),
+        ).toBe(
+          topic === 42
+            ? targetSessionKey
+            : topic === 43
+              ? "agent:main:main:thread:1234:43"
+              : "agent:main:main",
+        );
+      }
     },
   );
 });

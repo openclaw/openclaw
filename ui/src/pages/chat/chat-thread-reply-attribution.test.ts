@@ -79,6 +79,20 @@ const assistantGroups = (props: Partial<Props>) =>
 const forwarded = { provenance: { kind: "inter_session", sourceTool: "sessions_send" } };
 const projected = { senderSession: { sessionKey: "agent:other:main", agentId: "other" } };
 beforeEach(() => resetChatThreadState());
+it("does not treat a search-hidden source as a displayed adjacent message", () => {
+  const groups = assistantGroups({
+    searchOpen: true,
+    searchQuery: "matching answer",
+    messages: [
+      userMessage("First request", 1000, { __openclaw: { id: "first-prompt" } }),
+      assistantMessage("Earlier answer", 1001, { __openclaw: { id: "earlier-answer" } }),
+      userMessage("Latest request", 1002, { __openclaw: { id: "latest-prompt" } }),
+      assistantMessage("The matching answer", 1003, { __openclaw: { id: "matching-answer" } }),
+    ],
+  });
+  expect(groups).toHaveLength(1);
+  expect(groups[0]?.replyPreviousMessageId).toBeUndefined();
+});
 it.each([
   boundary("sender-less user", false, { role: "user" }),
   boundary("[System] Scheduled report", false, {
@@ -158,13 +172,9 @@ it.each([
 it.each(["human", "forwarded", "projected source"] as const)(
   "keeps tool results across a hidden %s boundary",
   (kind) => {
-    const invocation = assistantMessage(
-      [
-        { type: "text", text: "Rollout started" },
-        { type: "tool_call", id: "reused", name: "custom", arguments: {} },
-      ],
-      1000,
-    );
+    const narration = { type: "text", text: "Rollout started" };
+    const call = { type: "tool_call", id: "reused", name: "custom", arguments: {} };
+    const invocation = assistantMessage([narration, call], 1000);
     const separator =
       kind === "human"
         ? userMessage("New request", 1001)
@@ -178,12 +188,16 @@ it.each(["human", "forwarded", "projected source"] as const)(
       searchOpen: true,
       searchQuery: "Rollout",
     }).flatMap((group) => group.messages);
-    expect(sources.map((source) => source.message)).toEqual([invocation, result]);
+    expect(sources.map((source) => source.message)).toEqual([
+      { ...invocation, content: [narration] },
+      { ...invocation, content: [call] },
+      result,
+    ]);
   },
 );
 
 it.each(["pending", "local"] as const)(
-  "attributes recovered output across hidden %s prompts",
+  "uses only live input custody across hidden %s prompts",
   (source) => {
     const local = source === "local";
     const prompt = namedPrompt("Please resume", 1002, "bob", "Bob", { id: "pending:bob" });
@@ -217,17 +231,21 @@ it.each(["pending", "local"] as const)(
         : [{ id: "bob", acceptedAt: 1002, state: "interrupted", message: prompt }],
     });
     const replies = groups.filter((group) => group.role === "assistant");
-    expect(replies.map((group) => [group.messages.length, group.replyToSender?.name])).toEqual([
-      [1, local ? "Bob" : "Alice"],
-      [1, local ? undefined : "Bob"],
-    ]);
+    expect(replies.map((group) => [group.messages.length, group.replyToSender?.name])).toEqual(
+      local
+        ? [
+            [1, "Bob"],
+            [1, undefined],
+          ]
+        : [[2, undefined]],
+    );
     if (local) {
       expect(replies[1]).toMatchObject({
         replyShared: true,
         replyTurnSource: { key: "msg:send:local-run:0" },
       });
     } else {
-      expect(replies[1]?.replyTurnSource?.message).toBe(prompt);
+      expect(replies[0]?.replyTurnSource?.message).not.toBe(prompt);
       expect(groups.some((group) => group.messages.some((entry) => entry.message === prompt))).toBe(
         false,
       );

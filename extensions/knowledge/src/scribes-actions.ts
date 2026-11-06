@@ -61,8 +61,13 @@ export async function startScribe(
 }
 
 /**
- * Ask the scribe's conversation to re-check its setup and take over its automation, keeping the
- * automation's schedule and run message.
+ * Repair a scribe so its automation runs again in its own conversation.
+ * - Archived conversation: restore it and turn the automation back on, without a model turn.
+ *   Archiving turned the automation off; one paused before archiving also comes back on, a
+ *   visible change Pause undoes.
+ * - Deleted conversation, or a failing scribe: the automation must be owned by the scribe's
+ *   conversation, which only a turn there can do, so send it the repair prompt (in a new
+ *   conversation when the old one was deleted).
  */
 export async function repairScribe(
   host: ScribeHost,
@@ -71,11 +76,17 @@ export async function repairScribe(
   agentId: string,
 ) {
   const { scribe } = snapshot;
+  const sessionKey = await conversation(host, snapshot, agentId);
+  if (snapshot.status === "missing" && snapshot.session?.archived) {
+    if (!job.enabled) {
+      await setScribePaused(host, job, false);
+    }
+    return sessionKey;
+  }
   const prompt = repairPrompt(scribe.id, {
     schedule: job.schedule,
     ...(job.payload?.message ? { runMessage: job.payload.message } : {}),
   });
-  const sessionKey = await conversation(host, snapshot, agentId);
   await host.request("chat.send", {
     sessionKey,
     agentId,

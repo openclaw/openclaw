@@ -385,6 +385,57 @@ describe("ensureConfigReady", () => {
     }
   });
 
+  it.each([false, true])(
+    "keeps every issue but offers local commands only for writable config (readOnly=%s)",
+    async (readOnly) => {
+      const legacyIssues = [
+        {
+          path: "agents.defaults.models",
+          message:
+            'Legacy agents.defaults.models restricts model overrides; run "openclaw doctor --fix" to migrate valid refs to agents.defaults.modelPolicy.allow.',
+        },
+        {
+          path: "memorySearch",
+          message:
+            'top-level memorySearch was moved; use memory.search instead. Run "openclaw doctor --fix".',
+        },
+        {
+          path: "gateway.controlUi.toolTitles",
+          message:
+            'gateway.controlUi.toolTitles is retired. Run "openclaw doctor --fix" to remove it.',
+        },
+      ];
+      setInvalidSnapshot({ legacyIssues });
+      if (readOnly) {
+        setTestEnvValue("OPENCLAW_CONFIG_READONLY", "1");
+      }
+
+      const gatewayRuntime = await runGuard("gateway run");
+      const output = errorOutput(gatewayRuntime);
+
+      expect(gatewayRuntime.exit).toHaveBeenCalledWith(78);
+      expect(output).toContain("channels.quietchat: invalid");
+      expect(output).toContain("Legacy config keys detected:");
+      if (readOnly) {
+        expect(output).toContain(
+          [
+            "  - agents.defaults.models: Legacy agents.defaults.models restricts model overrides; migrate valid refs to agents.defaults.modelPolicy.allow.",
+            "  - memorySearch: top-level memorySearch was moved; use memory.search instead.",
+            "  - gateway.controlUi.toolTitles: gateway.controlUi.toolTitles is retired. Remove it.\n",
+          ].join("\n"),
+        );
+        expect(output).toContain("OPENCLAW_CONFIG_READONLY=1");
+        expect(output).not.toMatch(/doctor|config validate/);
+      } else {
+        for (const issue of legacyIssues) {
+          expect(output).toContain(`- ${issue.path}: ${issue.message}`);
+        }
+        expect(output).toContain(formatCliCommand("openclaw config validate"));
+        expect(output).toContain("doctor commands still run with invalid config");
+      }
+    },
+  );
+
   it("replaces doctor fix advice for plugin packaging-only invalid config", async () => {
     setInvalidSnapshot(createPluginPackagingConfigIssues());
     const messageRuntime = await runGuard("message");

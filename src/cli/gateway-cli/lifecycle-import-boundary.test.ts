@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  createActiveWorkSnapshot,
   createCloseMock,
   createRuntimeWithExitSignal,
   createSignaledStart,
@@ -75,7 +74,6 @@ describe("gateway lifecycle hub import boundaries", () => {
         }
         try {
           let primed = false;
-          const idle = createActiveWorkSnapshot();
           const hub = {
             detectGatewayRespawnSupervisorIdentity: () => ({
               kind: "systemd" as const,
@@ -89,7 +87,6 @@ describe("gateway lifecycle hub import boundaries", () => {
             waitForSystemServiceUpdateHandoffs: () => undefined,
             isGatewayRestartExternallyAllowed: () => false,
             scheduleGatewayRestart: vi.fn<LifecycleRuntime["scheduleGatewayRestart"]>(),
-            abortEmbeddedAgentRun: () => false,
             prepareGatewayRestartIntentConsumption: vi.fn(() => async () => null),
             consumeGatewayRestartAuthorization: () => true,
             consumeGatewayRestartIntent: () => null,
@@ -97,9 +94,7 @@ describe("gateway lifecycle hub import boundaries", () => {
             markGatewayRestartHandled: vi.fn(),
             abortPendingChannelReloads: vi.fn(),
             markGatewayDraining: vi.fn(),
-            resolveGatewayRestartDrainTimeoutMs: () => 300_000,
-            createGatewayActiveWorkSnapshot: () => idle,
-            waitForGatewayActiveWork: vi.fn(async () => ({ drained: true, snapshot: idle })),
+            abortActiveCronTaskRuns: vi.fn(() => 0),
             stopActiveManagedProviderLocalServices: vi.fn(async () => {}),
             restartGatewayProcessWithFreshPid: vi.fn(() => ({ mode: "supervised" as const })),
             writeGatewayRestartHandoff: vi.fn(async () => null),
@@ -155,7 +150,6 @@ describe("gateway lifecycle hub import boundaries", () => {
               await expect(exited).resolves.toBe(0);
               expect(missingChunk).not.toHaveBeenCalled();
               expect(hub.prepareGatewayRestartIntentConsumption).toHaveBeenCalledOnce();
-              expect(hub.waitForGatewayActiveWork).toHaveBeenCalledOnce();
               expect(close).toHaveBeenCalledOnce();
               expect(hub.stopActiveManagedProviderLocalServices).toHaveBeenCalledOnce();
               expect(fixture.releaseLock).toHaveBeenCalledOnce();

@@ -1,4 +1,5 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 
 export function parseOptionalPositiveInteger(
   raw: unknown,
@@ -10,7 +11,7 @@ export function parseOptionalPositiveInteger(
   }
   const value = parseStrictPositiveInteger(raw);
   if (value === undefined) {
-    throw new Error(`${label} must be a positive integer${suffix}`);
+    throwExpectedCliError(`${label} must be a positive integer${suffix}`);
   }
   return value;
 }

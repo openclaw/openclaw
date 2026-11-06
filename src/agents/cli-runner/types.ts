@@ -20,7 +20,7 @@ import type { AdmittedRunContext } from "../admitted-run-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { resolveCliSessionReuse } from "../cli-session.js";
-import type { AgentRunExecutionContext } from "../command/shared-types.js";
+import type { AgentRunExecutionContext } from "../command/execution-context.types.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type { RunEmbeddedAgentParams } from "../embedded-agent-runner/run/params.js";
@@ -184,6 +184,8 @@ type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> 
   claimLiveSessionResources?: () => (() => Promise<void>) | undefined;
   /** Private child-only credential transport; never serialized into env or public plugin state. */
   secretInput?: CliSecretInput;
+  /** Check saved-account presence only at process launch and initial input. */
+  prepareCredentialUse?: () => Promise<void>;
   /** Gateway-owned capture fence for this prepared bundle-MCP client. */
   mcpClientGrantCapture?: {
     /** Fresh bearer minted for this prepared turn. */
@@ -255,7 +257,7 @@ export type PreparedCliRunContext = {
     import("./claude-skills-plugin.js").ClaudeCliSkillsPlugin,
     "args" | "skillCommands"
   >;
-  /** Host-held, policy-selected personal Workshop tool for the paired-node adapter. */
+  /** Host-held, policy-selected skill_library tool for the paired-node "workshop" slot. */
   nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;
   /** Only the exact resumed native session may receive these newly committed conversation rows. */

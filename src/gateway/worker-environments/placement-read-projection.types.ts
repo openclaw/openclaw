@@ -45,4 +45,5 @@ export type WorkerPlacementRecoveryCandidate = {
   environmentId: string | null;
   state?: WorkerSessionPlacementState;
   moveSourceEnvironmentId?: string;
+  workspaceRecoveryPending?: true;
 };

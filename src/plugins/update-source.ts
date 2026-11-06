@@ -119,7 +119,6 @@ export type UpdateInstalledPluginsParams = {
   skipIds?: Set<string>;
   skipDisabledPlugins?: boolean;
   syncOfficialPluginInstalls?: boolean;
-  disableOnFailure?: boolean;
   retainOnUnavailable?: boolean;
   timeoutMs?: number;
   /** Null removes the forward-work deadline while metadata remains bounded. */
@@ -409,18 +408,6 @@ function normalizeExactSemverVersion(value: string | undefined): string | undefi
     return undefined;
   }
   return trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
-}
-
-export function isTrustedSourceLinkedOfficialNpmUpdate(params: {
-  pluginId: string;
-  spec: string | undefined;
-  record: PluginInstallRecord;
-}): boolean {
-  const officialSpec =
-    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
-  const officialPackageName = resolveNpmSpecPackageName(officialSpec);
-  const requestedPackageName = resolveNpmSpecPackageName(params.spec);
-  return Boolean(officialPackageName && requestedPackageName === officialPackageName);
 }
 
 export function isTrustedSourceLinkedOfficialBridgeNpmInstall(params: {

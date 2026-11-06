@@ -46,6 +46,7 @@ export function createControlUiSessionRow(
       modelProvider: "openai",
       status: "done",
       totalTokens: 0,
+      workspaceReadDisabledReason: null,
       updatedAt,
     },
     options,
@@ -129,6 +130,7 @@ export function createControlUiSessionFixtures(
     records.set(key, {
       row: {
         sessionId: `session:${key}`,
+        workspaceReadDisabledReason: null,
         ...fixture,
         key,
         archivedAt,
@@ -420,7 +422,14 @@ export function createControlUiSessionFixtures(
     }
     return undefined;
   };
-  const materializeResponse = (params: unknown, response: unknown) => {
+  const materializeResponse = (method: string, params: unknown, response: unknown) => {
+    if (
+      method !== "sessions.create" &&
+      method !== "sessions.catalog.continue" &&
+      method !== "beam.owned.continue"
+    ) {
+      return;
+    }
     if (!isRecord(response)) {
       return;
     }

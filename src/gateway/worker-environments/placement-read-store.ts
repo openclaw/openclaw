@@ -63,6 +63,22 @@ export function createPlacementReadStore(params: {
       return { ...result, placement };
     },
     listAsync: () => read(),
+    async listSessionIdentitiesAsync() {
+      const identities = await runOpenClawStateWorkerOperation(context, (scope) =>
+        scope.execute({ type: "workerPlacements.readIdentities", input: {} }),
+      );
+      context.admission.assertCurrent();
+      const persistedIds = new Set(identities.map((identity) => identity.sessionId));
+      // Local placements can exist only in the replica, including released claims.
+      for (const id of owner.localClaimSessions) {
+        const placement = owner.placements.get(id)?.placement;
+        if (placement && !persistedIds.has(id)) {
+          const { sessionId, agentId, sessionKey } = placement;
+          identities.push({ sessionId, agentId, sessionKey });
+        }
+      }
+      return identities;
+    },
     async getPlacementMoveAsync(sessionId: string) {
       const id = required(sessionId, "move session id");
       const move = await runOpenClawStateWorkerOperation(context, (scope) =>

@@ -13,6 +13,10 @@
  * runs periodic remote revisions after warming every workspace; the other workspaces go idle.
  * Timed mode publishes revision zero before worker creation, matching the inherited startup
  * catalog retained alongside workspace revisions in a running Gateway.
+ * --refresh-rounds 10 replaces the duration deadline with an exact periodic refresh count,
+ * preserving startup, warmup, refresh semantics, spacing (including the final interval), and GC.
+ * --process-memory adds fresh main/descendant-isolate heap observations at periodic checkpoints.
+ * Reports are projected in memory; output contains no report environment, paths, or command lines.
  * Each workspace has a distinct plugin config and synthetic account per provider. Discovery
  * uses the public SDK TTL cache, with --discovery-models rows per provider/account. Run with
  * --runtime-plugin. Timing and allocation passes use the same workload; --snapshot captures
@@ -21,6 +25,7 @@
  * This exercises a real catalog worker, not a complete Gateway or its client workload.
  * --built-worker /path/to/build uses an already-built dist worker with the native stress
  * loader, excluding TypeScript transform caches from the worker heap. Build before running.
+ * --configured-models grows authored provider definitions; --models grows remote catalog rows.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -31,6 +36,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import workerThreads from "node:worker_threads";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { prepareModelCatalogWorkerContext } from "../../src/agents/prepared-model-catalog-fingerprints.js";
 import type {
   PreparedModelCatalogWorkerTask,
@@ -42,13 +48,16 @@ const { values } = parseArgs({
     output: { type: "string" },
     workspaces: { type: "string", default: "20" },
     models: { type: "string", default: "5000" },
+    "configured-models": { type: "string", default: "1" },
     "owner-dir": { type: "string" },
     snapshot: { type: "boolean", default: false },
     "built-worker": { type: "string" },
     "runtime-plugin": { type: "boolean", default: false },
     "idle-seconds": { type: "string", default: "0" },
     "duration-seconds": { type: "string", default: "0" },
+    "refresh-rounds": { type: "string", default: "0" },
     "refresh-seconds": { type: "string", default: "30" },
+    "process-memory": { type: "boolean", default: false },
     "active-workspaces": { type: "string" },
     providers: { type: "string", default: "1" },
     "discovery-models": { type: "string", default: "500" },
@@ -61,25 +70,31 @@ assert(values.output, "--output must name a new synthetic fixture directory");
 const root = path.resolve(values.output);
 assert(!fs.existsSync(root), "Refusing to reuse an existing fixture directory");
 const rows = Number(values.models);
+const configuredModels = Number(values["configured-models"]);
 const workspaces = Number(values.workspaces);
 const idleSeconds = Number(values["idle-seconds"]);
 const taskRounds = Number(values["task-rounds"]);
 const durationSeconds = Number(values["duration-seconds"]);
+const refreshRounds = Number(values["refresh-rounds"]);
 const refreshSeconds = Number(values["refresh-seconds"]);
+const periodicRefresh = durationSeconds > 0 || refreshRounds > 0;
 const activeWorkspaces = Number(
   values["active-workspaces"] ?? Math.max(1, Math.floor(workspaces / 2)),
 );
 const providers = Number(values.providers);
 const discoveryModels = Number(values["discovery-models"]);
-const teamShaped = durationSeconds > 0 || providers > 1;
+const teamShaped = periodicRefresh || providers > 1;
 const providerIds = Array.from({ length: providers }, (_, index) =>
   index === 0 ? "fixture-provider" : `fixture-provider-${index}`,
 );
 assert(Number.isSafeInteger(rows) && rows > 0);
+assert(Number.isSafeInteger(configuredModels) && configuredModels > 0);
 assert(Number.isSafeInteger(workspaces) && workspaces > 0);
 assert(Number.isSafeInteger(taskRounds) && taskRounds > 0);
 assert(Number.isSafeInteger(idleSeconds) && idleSeconds >= 0, "--idle-seconds must be nonnegative");
 assert(Number.isSafeInteger(durationSeconds) && durationSeconds >= 0);
+assert(Number.isSafeInteger(refreshRounds) && refreshRounds >= 0);
+assert(!durationSeconds || !refreshRounds, "Choose a duration or an exact refresh count");
 assert(Number.isSafeInteger(refreshSeconds) && refreshSeconds > 0);
 assert(
   Number.isSafeInteger(activeWorkspaces) && activeWorkspaces > 0 && activeWorkspaces <= workspaces,
@@ -87,8 +102,12 @@ assert(
 assert(Number.isSafeInteger(providers) && providers > 0);
 assert(Number.isSafeInteger(discoveryModels) && discoveryModels > 0);
 assert(
-  !durationSeconds || !values["measure-tasks"],
+  !periodicRefresh || !values["measure-tasks"],
   "Timed refreshes and --measure-tasks are separate modes",
+);
+assert(
+  !values["process-memory"] || (periodicRefresh && process.report && !process.versions.bun),
+  "--process-memory requires periodic refreshes on Node",
 );
 assert(providers === 1 || values["runtime-plugin"], "Multiple providers require --runtime-plugin");
 const output = path.join(root, "workers");
@@ -148,9 +167,7 @@ if (values["built-worker"]) {
 }
 await import("./worker-retained-heap-preload.js");
 const workerMetrics =
-  idleSeconds > 0 || durationSeconds > 0
-    ? await import("../../src/infra/worker-cpu.js")
-    : undefined;
+  idleSeconds > 0 || periodicRefresh ? await import("../../src/infra/worker-cpu.js") : undefined;
 workerMetrics?.setTrackedWorkerGcObserver(() => {});
 const { CatalogWorkerTaskPool } =
   await import("../../src/agents/prepared-model-catalog-worker.pool.js");
@@ -164,7 +181,7 @@ const { captureTemplateInstallSchemaVersionFacts } =
 const { prepareSharedAuthStoreOwnership } =
   await import("../../src/agents/auth-profiles/path-resolve.js");
 await prepareSharedAuthStoreOwnership(env);
-const startupCatalog = durationSeconds > 0 ? createRemoteCatalog(0) : undefined;
+const startupCatalog = periodicRefresh ? createRemoteCatalog(0) : undefined;
 if (startupCatalog) {
   const { captureRemoteModelCatalogStartupSnapshot, publishRemoteModelCatalogSnapshot } =
     await import("../../src/model-catalog/remote-overlay.js");
@@ -239,21 +256,21 @@ const config = {
       "fixture-provider": {
         baseUrl: "https://fixture.invalid/v1",
         api: "openai-completions" as const,
-        models: [
-          {
-            id: "fixture-model",
-            name: "Fixture model",
-            reasoning: false,
-            input: ["text" as const],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 8192,
-            maxTokens: 1024,
-          },
-        ],
+        models: Array.from({ length: configuredModels }, (_, index) => ({
+          id: index === 0 ? "fixture-model" : `fixture-model-${index}`,
+          name: index === 0 ? "Fixture model" : `Fixture model ${index}`,
+          reasoning: false,
+          input: ["text" as const],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 1024,
+        })),
       },
     },
   },
 };
+// Provider inventory does not select agent models. Empty request facts remain valid as it grows.
+assert.equal(collectConfiguredModelRefs(config).length, 0);
 fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
 const inputs = Array.from({ length: workspaces }, (_, index) => {
   const agentId = `synthetic-${index}`;
@@ -324,8 +341,71 @@ const requests: Array<{
   workspace: number;
   elapsedMs: number;
   entries: number;
+  configuredEntries: number;
+  runtimeModels: number;
   hash: string;
+  runtimeHash: string;
 }> = [];
+function sampleProcessMemory(phase: string, catalogThreadId: number) {
+  type MemoryReport = {
+    header: { threadId: number };
+    javascriptHeap: {
+      usedMemory: number;
+      totalMemory: number;
+      totalCommittedMemory: number;
+      memoryLimit: number;
+      externalMemory: number;
+      mallocedMemory: number;
+    };
+    workers: MemoryReport[];
+  };
+  const isolates: Array<{
+    threadId: number;
+    parentThreadId: number | null;
+    role: "main" | "catalog" | "unknown";
+    heapUsedBytes: number;
+    heapTotalBytes: number;
+    heapCommittedBytes: number;
+    heapLimitBytes: number;
+    externalBytes: number;
+    mallocedBytes: number;
+  }> = [];
+  const project = (report: MemoryReport, parentThreadId: number | null) => {
+    const { threadId } = report.header;
+    const heap = report.javascriptHeap;
+    isolates.push({
+      threadId,
+      parentThreadId,
+      role: threadId === 0 ? "main" : threadId === catalogThreadId ? "catalog" : "unknown",
+      heapUsedBytes: heap.usedMemory,
+      heapTotalBytes: heap.totalMemory,
+      heapCommittedBytes: heap.totalCommittedMemory,
+      heapLimitBytes: heap.memoryLimit,
+      externalBytes: heap.externalMemory,
+      mallocedBytes: heap.mallocedMemory,
+    });
+    for (const worker of report.workers) {
+      project(worker, threadId);
+    }
+  };
+  const before = process.memoryUsage();
+  const started = performance.now();
+  // Native reports interrupt descendant isolates for fresh statistics without forcing GC.
+  // Project immediately: the full report includes private process metadata and must never escape.
+  project(process.report.getReport() as MemoryReport, null);
+  const captureMs = performance.now() - started;
+  const after = process.memoryUsage();
+  console.log(
+    JSON.stringify({
+      phase: `${phase}-process-memory`,
+      commands,
+      captureMs,
+      before,
+      after,
+      isolates,
+    }),
+  );
+}
 async function sample(
   name: string,
   operation: "collect" | "snapshot" | "start" | "stop" = "collect",
@@ -341,6 +421,10 @@ async function sample(
     );
   assert(ready, "Missing catalog-worker instrumentation after completed task");
   const identity = JSON.parse(fs.readFileSync(path.join(output, ready), "utf8"));
+  const processMemory = values["process-memory"] && name.startsWith("refresh-");
+  if (processMemory && operation === "start") {
+    sampleProcessMemory(name, identity.threadId);
+  }
   const reply = identity.commandPath.replace(".command.json", `.${name}.json`);
   fs.writeFileSync(identity.commandPath + ".tmp", JSON.stringify({ id: name, operation }));
   fs.renameSync(identity.commandPath + ".tmp", identity.commandPath);
@@ -352,8 +436,19 @@ async function sample(
   const result = JSON.parse(fs.readFileSync(reply, "utf8"));
   assert(result.ok, JSON.stringify(result));
   console.log(
-    JSON.stringify({ phase: name, commands, workspaces, rows, hostLoad: os.loadavg(), ...result }),
+    JSON.stringify({
+      phase: name,
+      commands,
+      workspaces,
+      rows,
+      configuredModels,
+      hostLoad: os.loadavg(),
+      ...result,
+    }),
   );
+  if (processMemory && operation !== "start") {
+    sampleProcessMemory(name, identity.threadId);
+  }
 }
 function createRemoteCatalog(revision: number) {
   return {
@@ -404,7 +499,25 @@ async function runRevision(revision: number, count = workspaces, timed = false) 
     );
     const elapsedMs = performance.now() - started;
     assert(result.status === "ok" && result.kind === "catalog", JSON.stringify(result));
-    assert(result.snapshot.entries.some((entry) => entry.id === "fixture-model"));
+    const configuredEntries = result.snapshot.entries.filter(
+      (entry) => entry.provider === "fixture-provider" && /^fixture-model(?:-\d+)?$/.test(entry.id),
+    );
+    const configuredIds = new Set(configuredEntries.map((entry) => entry.id));
+    assert.equal(configuredEntries.length, configuredModels);
+    assert.equal(configuredIds.size, configuredModels);
+    assert.equal(result.configuredRuntimeModels.length, 0);
+    const runtimeById = new Map(
+      result.runtimeModels.get("fixture-provider")?.map((model) => [model.id, model]),
+    );
+    for (const model of config.models.providers["fixture-provider"].models) {
+      assert(configuredIds.has(model.id));
+      const runtimeModel = runtimeById.get(model.id);
+      assert(runtimeModel, `Missing runtime model ${model.id}`);
+      assert.equal(runtimeModel.api, config.models.providers["fixture-provider"].api);
+      assert.equal(runtimeModel.baseUrl, config.models.providers["fixture-provider"].baseUrl);
+      assert.equal(runtimeModel.contextWindow, model.contextWindow);
+      assert.equal(runtimeModel.maxTokens, model.maxTokens);
+    }
     if (values["runtime-plugin"]) {
       for (const provider of providerIds) {
         assert(
@@ -420,7 +533,15 @@ async function runRevision(revision: number, count = workspaces, timed = false) 
       workspace: index,
       elapsedMs,
       entries: result.snapshot.entries.length,
+      configuredEntries: configuredEntries.length,
+      runtimeModels: [...result.runtimeModels.values()].reduce(
+        (total, models) => total + models.length,
+        0,
+      ),
       hash: createHash("sha256").update(JSON.stringify(result.snapshot)).digest("hex"),
+      runtimeHash: createHash("sha256")
+        .update(JSON.stringify([...result.runtimeModels]))
+        .digest("hex"),
     });
     commands++;
     if (index === 0 && revision === 0) {
@@ -433,9 +554,7 @@ async function runRevision(revision: number, count = workspaces, timed = false) 
   if (!values["measure-tasks"] && !timed) {
     await sample(
       `revision-${revision}`,
-      values.snapshot && durationSeconds === 0 && revision === taskRounds - 1
-        ? "snapshot"
-        : "collect",
+      values.snapshot && !periodicRefresh && revision === taskRounds - 1 ? "snapshot" : "collect",
     );
   }
 }
@@ -446,7 +565,7 @@ try {
   if (values["measure-tasks"]) {
     await sample("tasks-stop", "stop");
   }
-  if (durationSeconds > 0) {
+  if (periodicRefresh) {
     await sample("refresh-start", "start");
     const started = performance.now();
     const sampleMemory = () =>
@@ -463,7 +582,11 @@ try {
     const timer = setInterval(sampleMemory, 30_000);
     let revision = taskRounds;
     try {
-      while (performance.now() - started < durationSeconds * 1000) {
+      while (
+        refreshRounds
+          ? revision < taskRounds + refreshRounds
+          : performance.now() - started < durationSeconds * 1000
+      ) {
         const roundStarted = performance.now();
         await runRevision(revision++, activeWorkspaces, true);
         await delay(
@@ -471,7 +594,9 @@ try {
             0,
             Math.min(
               refreshSeconds * 1000 - (performance.now() - roundStarted),
-              durationSeconds * 1000 - (performance.now() - started),
+              refreshRounds
+                ? Number.POSITIVE_INFINITY
+                : durationSeconds * 1000 - (performance.now() - started),
             ),
           ),
         );

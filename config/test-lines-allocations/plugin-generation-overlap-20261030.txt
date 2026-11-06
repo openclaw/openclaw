@@ -1,0 +1,2 @@
+# Exact net coverage for opt-in overlap, serialized defaults, rollback, retirement, restart, authority, caller migration, and failed-entry cleanup.
+1943

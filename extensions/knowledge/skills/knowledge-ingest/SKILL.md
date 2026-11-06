@@ -1,6 +1,6 @@
 ---
 name: knowledge-ingest
-description: Ingest documents, articles, conversations, or supplied text into Knowledge with retained originals, sourced claims, entity updates, timelines, and cross-links; also learn durable lessons from a set of conversations, transcripts, or past sessions (/learn), including the Learn from conversations and Learn from Memory scribes. Routes meetings to knowledge-meeting-ingest and short thoughts to knowledge-capture.
+description: Ingest documents, articles, conversations, or supplied text into Knowledge with retained originals, sourced claims, entity updates, source notes, and cross-links; also learn durable lessons from a set of conversations, transcripts, or past sessions (/learn), including the Learn from conversations and Learn from Memory scribes. Routes meetings to knowledge-meeting-ingest and short thoughts to knowledge-capture.
 ---
 
 # Ingest Skill
@@ -19,8 +19,8 @@ and enrichment and `knowledge-meeting-ingest` for meeting transcripts.
 
 - Every fact written to a page carries an inline source citation with date and
   provenance; unknown dates stay unknown.
-- Every identified entity mentioned with a Knowledge page gets a back-link from
-  its page to the page mentioning it, within the authorized ingestion scope.
+- Every identified entity the source says something substantive about gets a
+  source note from it, within the authorized ingestion scope.
 - Raw sources are preserved for provenance with `knowledge_attach`.
 - State sections are rewritten with current best understanding, never appended
   to. Preserve unrelated content, user assessments and contradictory evidence.
@@ -60,7 +60,7 @@ and enrichment and `knowledge-meeting-ingest` for meeting transcripts.
   third-party mentions; a mention or reaction is not a statement by that person.
   File durable material by subject and reuse existing pages; do not create a
   page per message or profile every channel member. A digest can orient the
-  reader, but apply the entity, assertion, timeline and linking phases below to
+  reader, but apply the entity, assertion, source-note and linking phases below to
   the underlying discussions too.
 
 ## Phases
@@ -89,17 +89,22 @@ and enrichment and `knowledge-meeting-ingest` for meeting transcripts.
    preferences/beliefs and events as appropriate, with source-page dependencies
    and exact evidence. Do not turn every summary sentence into a claim or promote
    the agent's analysis to source fact. Keep the source's qualifications.
-6. **Append to timeline.** Create/reuse a dated event claim for each material
+6. **Date the events.** Create/reuse a dated event claim for each material
    event, with all resolved relevant entity IDs, source dependency and citation.
-   Add a reverse-chronological dated entry on each entity page linking to the
-   source. One shared event claim can serve all participants; no copy per entity.
+   One shared event claim can serve all participants; no copy per entity. Entity
+   Timelines are derived from these records; write no Timeline entries on pages.
 7. **Create cross-reference links.** Use `knowledge_create_relationship` for
    evidenced relationships with labels/endpoints from the current ontology.
    Co-mention supports a prose reference, not an invented employment/ownership
    edge. There is no auto-link post-hook in Knowledge.
-8. **Back-link all entities.** Update each identified mentioned entity's page
-   with a contextual link back to the source page. Check existing entries first;
-   reruns do not append duplicates. Make the source page link to those entities.
+8. **Write source notes.** Give each entity the source says something
+   substantive about a `discusses` relationship (source → entity) whose body is
+   one sentence on what the source says about it
+   ([source notes](references/profiles.md#source-notes)). The note shows on the
+   entity's Timeline only when the source is dated by `occurred_at` or a
+   `source_event` claim. Reuse an existing
+   relationship between the pair; reruns add nothing. Make the source page link
+   to those entities.
 
 ## Learning from a set of sources
 
@@ -175,7 +180,7 @@ agent workspace.
 ## Test Before Bulk
 
 Test on 3–5 items first (or the whole batch if smaller). Read the actual outputs:
-substantive titles/analysis, entity context, citations, timelines and back-links.
+substantive titles/analysis, entity context, citations and source notes.
 Fix the approach before scaling. Use host throttling where needed. Knowledge
 publishes/indexes and handles local Git history; do not run gbrain sync or commit
 private vault files yourself.
@@ -187,7 +192,7 @@ links, associations, owners/dates and relationship endpoints. Read every changed
 page/claim/relationship for substantive correctness using compact defaults;
 request `includeEvidence: true` for cited passages and attribution review, and
 `metadataView: "full"` when domain fields matter. Verify exact quotes/locators,
-contextual entity back-links and connected assertions. Use compact connections
+source notes and connected assertions. Use compact connections
 for discovery or failed expectations, not duplicate structural confirmation.
 Test lookup and distinctive-keyword
 retrieval. Follow pagination; a preview is not full readback. For complete-source
@@ -204,6 +209,6 @@ A saved summary alone is not a completed multi-record ingestion.
 ## Output Format
 
 Report title, page ID/path/type, sources retained, entities created/updated/reused,
-claims/relationships and timeline/back-links created/reused, verification actually
+claims/relationships and source notes created/reused, verification actually
 performed, and any unresolved identity, conflict or incomplete work. Use partial
 when required outputs/checks are missing. No separate ingestion job is created.

@@ -81,8 +81,7 @@ export type TalkClientGatewayControlOptions = {
   controlSource?: "delegation" | "transcript";
   sessionTarget: PreparedTalkSessionTarget;
   connId: string;
-  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "logGateway" | "inputRecovery"> &
-    TalkRunCancelContext;
+  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "logGateway"> & TalkRunCancelContext;
   assertConnectionOpen?: () => void;
   runToolAgentConsult: ReusableTalkAgentConsult;
   runAgentConsult: LifecycleBoundTalkAgentConsult;

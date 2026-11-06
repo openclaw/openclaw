@@ -6,7 +6,6 @@ import type { ContextEngine } from "../../../context-engine/types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
-  isMainSessionRestartRecoveryInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../../sessions/input-provenance.js";
@@ -56,7 +55,10 @@ import {
   type SystemPromptUpdatePreparation,
 } from "./attempt-permission-prompt.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
-import type { EmbeddedAttemptSessionPreparationInput } from "./attempt-session-prepare-input.js";
+import type {
+  EmbeddedAttemptSessionPreparationInput,
+  SessionBoundaryAttempt,
+} from "./attempt-session-prepare-input.js";
 import { openSessionAfterProjectionRecovery } from "./attempt-session-projection-recovery.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
@@ -83,8 +85,6 @@ import {
 } from "./tool-loop-recovery.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
-
 export async function prepareEmbeddedAttemptAgentSession(input: {
   attempt: EmbeddedRunAttemptParams;
   activeContextEngineInfo?: ContextEngine["info"];
@@ -101,7 +101,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   runAbortSignal: AbortSignal;
   sessionAgentId: string;
   transcriptLifecycle: EmbeddedAttemptTranscriptLifecycle;
-  sessionManager: AttemptSessionManager;
+  sessionManager: ReturnType<typeof guardSessionManager>;
   prepareInitialUserTurnReplay?: InitialUserTurnReplayPreparation;
   prepareSystemPromptUpdate?: SystemPromptUpdatePreparation;
 }) {
@@ -277,21 +277,6 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   };
 }
 
-type SessionBoundaryAttempt = Pick<
-  EmbeddedRunAttemptParams,
-  | "config"
-  | "inputProvenance"
-  | "onUserMessagePersistenceInvalidated"
-  | "operation"
-  | "prompt"
-  | "promptCacheKey"
-  | "sessionId"
-  | "sessionKey"
-  | "skipPreparedUserTurnMessage"
-  | "suppressNextUserMessagePersistence"
-  | "userTurnTranscriptRecorder"
->;
-
 type CurrentUserTimestampOverride = NonNullable<LlmBoundaryOptions["currentUserTimestampOverride"]>;
 
 export async function prepareEmbeddedAttemptSessionBoundary(input: {
@@ -359,9 +344,9 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         const candidate = resolveOrphanRepairPlan({
           sessionManager,
           prompt: attempt.prompt,
-          preserveLeaf:
-            attempt.skipPreparedUserTurnMessage === true ||
-            isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
+          preserveLeaf: attempt.skipPreparedUserTurnMessage === true,
+          currentTurnPersisted: attempt.userTurnTranscriptRecorder?.hasPersisted() === true,
+          currentUserIdempotencyKey: currentUserTurnMessage?.idempotencyKey,
         });
         const reconciledCurrentUser = reconcilePrePersistedCurrentUserTurn({
           activeSession,
@@ -378,8 +363,13 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
           candidate.removeLeaf = false;
         }
         // Keep unanswered user input in history through failed internal continuations.
+        // A restart adds a separate system input to this same conversation.
+        const isRestartInput =
+          attempt.inputProvenance?.kind === "internal_system" &&
+          attempt.inputProvenance.sourceTool === "restart";
         const preserveUnansweredUser =
-          shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance) &&
+          (isRestartInput ||
+            shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance)) &&
           (!orphanProvenance || orphanProvenance.kind === "external_user");
         const foreignOrphan = candidate && foreignInputs?.ownsEntry(candidate.messageEntry.id);
         if (reconciledCurrentUser || preserveUnansweredUser || foreignOrphan) {
@@ -587,10 +577,9 @@ export async function prepareEmbeddedAttemptSessionManager(
       ? await openSessionAfterProjectionRecovery({
           open: openSessionManager,
           target: input.sessionTarget,
-          timeoutMs: attempt.timeoutMs,
+          attempt,
           signal: openSignal,
           assertCurrent: input.assertCurrent,
-          replyOperation: attempt.replyOperation,
         })
       : undefined;
   const unguardedSessionManager =
@@ -610,16 +599,19 @@ export async function prepareEmbeddedAttemptSessionManager(
       message: preparedUserTurnMessage,
       recorder: attempt.userTurnTranscriptRecorder,
       runId: attempt.runId,
+      fallbackReason: attempt.fallbackReason,
       signal: attempt.abortSignal,
       initial: initialReplay,
     }),
   );
   const prepareInitialUserTurnReplay: InitialUserTurnReplayPreparation | undefined =
-    preparedReplay &&
-    (async (signal) => {
-      const consume = await input.withOwnedTranscriptWrite(() => preparedReplay(signal));
-      return consume && ((onAdmitted) => input.withOwnedTranscriptWrite(() => consume(onAdmitted)));
-    });
+    typeof preparedReplay === "function"
+      ? async (signal) => {
+          const apply = await input.withOwnedTranscriptWrite(() => preparedReplay(signal));
+          return apply && ((admitted) => input.withOwnedTranscriptWrite(() => apply(admitted)));
+        }
+      : undefined;
+  attempt.inputAlreadyDelivered = preparedReplay === "already-delivered" ? true : undefined;
   const sessionManager = guardSessionManager(unguardedSessionManager, {
     agentId: input.sessionAgentId,
     runId: attempt.runId,

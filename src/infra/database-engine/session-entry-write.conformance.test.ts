@@ -16,7 +16,7 @@ import {
 } from "../../config/sessions/session-actor-worker.test-support.js";
 import type { SessionEntryWritePostimages } from "../../config/sessions/session-entry-write-postimage.js";
 import { readTranscriptContextVersionsInTransaction } from "../../config/sessions/session-transcript-context-versions.js";
-import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import { promptReport } from "../../config/sessions/system-prompt-report.test-support.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -414,7 +414,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
               sessionId: f.scope.sessionId,
               lifecycleRevision: before.entry!.lifecycleRevision ?? null,
               writerRunId: before.entry!.activeWriterRunId,
-              expectedState: buildRestartRecoveryExpectedState(before.entry!),
+              expectedState: buildSessionTranscriptTurnExpectedState(before.entry!),
             },
             reducers: [
               {
@@ -474,7 +474,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             target: f.target,
             commandId: "input",
             phaseId: "turn",
-            expectedState: buildRestartRecoveryExpectedState(before.entry!),
+            expectedState: buildSessionTranscriptTurnExpectedState(before.entry!),
             lifecycle: { updatedAt: 20, startedAt: 20 },
             turn: {
               agentId: "main",
