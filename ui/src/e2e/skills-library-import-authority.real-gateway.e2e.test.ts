@@ -280,7 +280,7 @@ async function revoke(fixture: Fixture, actor: "redirect" | "publication") {
 
 suite.define(() => {
   let authorityReport: ImportProofReport | undefined;
-  it.sequential("proves real candidate URL-import authority and effect boundaries", async (context) => {
+  it("proves real candidate URL-import authority and effect boundaries", async (context) => {
     if (
       process.env.GITHUB_ACTIONS !== "true" ||
       !process.env.PROOF_HEAD ||
@@ -779,7 +779,7 @@ suite.define(() => {
     });
   }, 240000);
   // Sequential cases preserve the candidate receipt before the independent required upgrade.
-  it.sequential("proves actual latest-stable copied-state upgrade", async (context) => {
+  it("proves actual latest-stable copied-state upgrade", async (context) => {
     const report = authorityReport;
     const publicDir = process.env.PROOF_PUBLIC_DIR;
     if (!report || !publicDir || process.env.GITHUB_ACTIONS !== "true") {
