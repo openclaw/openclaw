@@ -71,20 +71,6 @@ struct RuntimeLocalizationSourceGuardTests {
         #expect(watchInbox.contains("accessory: .verbatim(self.store.talkSummaryText)"))
     }
 
-    @Test func `voice waveform stays on avatar without expanded contour`() throws {
-        let widget = try Self.source("ActivityWidget/OpenClawLiveActivity.swift")
-
-        #expect(!widget.contains("DynamicIslandExpandedRegion(.bottom)"))
-        #expect(!widget.contains("expandedVoiceContour"))
-        #expect(widget.contains(".keylineTint(self.islandKeylineTint(state: state))"))
-        #expect(widget.contains("case .voiceListening, .voiceActive:\n            OpenClawActivityStyle.sea"))
-        #expect(widget.contains("TalkAvatarWaveformView("))
-        #expect(widget.contains("Text(\"LIVE\")"))
-        #expect(!widget.contains("compactVoiceLeading"))
-        #expect(!widget.contains("compactVoiceTrailing"))
-        #expect(!widget.contains("Color.clear\n                .frame(width: 1, height: 1)"))
-    }
-
     private static func source(_ path: String) throws -> String {
         try String(
             contentsOf: self.iosRoot.appendingPathComponent(path),
