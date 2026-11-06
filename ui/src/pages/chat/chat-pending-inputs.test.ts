@@ -31,6 +31,7 @@ import {
 import {
   applyChatPendingInputs,
   buildPendingInputItems,
+  buildPendingInputQueueItems,
   getChatPendingInputs,
 } from "./chat-pending-inputs.ts";
 import { readChatQueueForScope } from "./chat-queue.ts";
@@ -42,6 +43,7 @@ import { loadChatComposerState } from "./composer-draft-storage.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "./history-merge.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { prepareOutboxPayload } from "./outbox-payloads.ts";
+import { adoptStartedChatRun } from "./run-lifecycle.ts";
 import {
   applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
@@ -153,6 +155,24 @@ describe("server-owned pending input display", () => {
     expect(retained?.page.items).toEqual([]);
     flush();
     expect(rendered).toEqual([[], [input.id], []]);
+  });
+
+  it("releases an optimistic ACK run once the Gateway queues it behind an automation", () => {
+    const host = createTestPageState(makeChatHost(pendingScope));
+    adoptStartedChatRun(host, "run-queued", 100);
+    expect(host.chatRunId).toBe("run-queued");
+    const queued = { ...input, state: "queued" as const, queued: true as const };
+    applyChatPendingInputs(host, {
+      items: [{ ...queued, waitingFor: "automation" }],
+      total: 1,
+      queuedCount: 1,
+    });
+    // Follow-up custody is not progress; the queued turn's own lifecycle adopts it later.
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStreamStartedAt).toBeNull();
+    expect(
+      buildPendingInputQueueItems(getChatPendingInputs(host)?.queuedInputs ?? []),
+    ).toMatchObject([{ pendingRunId: "run-queued", serverQueued: true, waitingFor: "automation" }]);
   });
 
   it("keeps legacy interrupted custody out of the conversation", () => {

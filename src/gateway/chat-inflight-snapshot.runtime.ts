@@ -2,6 +2,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import {
   getRpcSourceIdentity,
   getRpcSourceStartedAt,
+  isRpcSourceParkedFollowup,
   resolveRpcSourceSessionProgressState,
   listRpcSourceEntries,
   type RpcSourceRef,
@@ -45,6 +46,8 @@ export function resolveInFlightRunSnapshot(
     if (
       !matchesScope(entry) ||
       !resolveRpcSourceSessionProgressState(entry) ||
+      // Follow-up custody waits for another owner; it has no run to restore yet.
+      isRpcSourceParkedFollowup(entry) ||
       entry.adapter.controlUiVisible === false ||
       entry.input.abortSignal.aborted ||
       entry.adapter.kind === "agent" ||

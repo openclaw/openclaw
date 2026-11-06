@@ -37,6 +37,7 @@ import {
   readChatSessionProjectionScope,
   reconcileChatInputCustody,
 } from "./history-merge.ts";
+import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import type { PendingInputStatus } from "./system-notice-kinds.ts";
 
 export function reconcileQueuedInputs(
@@ -105,6 +106,7 @@ export function buildPendingInputQueueItems(
       createdAt: input.acceptedAt,
       pendingRunId: input.runId,
       serverQueued: true,
+      waitingFor: input.waitingFor,
       sender: normalizeMessage(input.message).sender ?? undefined,
     }));
 }
@@ -233,6 +235,20 @@ export function reconcilePendingInputPage(
   receipts?: ChatInputReceipts,
 ): ChatPendingInputsPage {
   const { page: displayPage, acceptedRunIds } = reconcileChatInputCustody(state, page, receipts);
+  // A started ACK is adopted optimistically. Once the Gateway parks that input in
+  // follow-up custody behind another owner, it is queued, not working; its own
+  // lifecycle adopts it again when the queued turn actually starts.
+  const localRunId = state.chatRunId;
+  if (
+    localRunId &&
+    !state.chatStream &&
+    (displayPage.items.some((input) => input.queued && input.runId === localRunId) ||
+      receipts?.some(
+        (receipt) => receipt.runId === localRunId && receipt.state === "pending" && receipt.queued,
+      ))
+  ) {
+    reconcileChatRunLifecycle(state, { runId: localRunId, clearLocalRun: true });
+  }
   const settled = new Set([
     ...(receipts ?? [])
       .filter(

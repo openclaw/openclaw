@@ -83,7 +83,10 @@ export function logSessionStateChange(
   params: SessionRef & {
     state: SessionStateValue;
     reason?: string;
-    /** Message lifecycle owns its queue count; controller retirement only projects idle. */
+    /**
+     * Message lifecycle owns its queue count; controller retirement only projects idle.
+     * Defaults to consuming on idle; a finished message may consume while another run stays active.
+     */
     consumeQueuedTurn?: boolean;
   },
 ) {
@@ -104,10 +107,10 @@ export function logSessionStateChange(
   if (params.state === "processing" && prevState !== "processing") {
     state.activeQueuedTurn = state.queueDepth > 0;
   }
+  if (params.consumeQueuedTurn ?? params.state === "idle") {
+    state.queueDepth = Math.max(0, state.queueDepth - 1);
+  }
   if (params.state === "idle") {
-    if (params.consumeQueuedTurn !== false) {
-      state.queueDepth = Math.max(0, state.queueDepth - 1);
-    }
     state.activeQueuedTurn = false;
   }
   emitDiagnosticEvent({

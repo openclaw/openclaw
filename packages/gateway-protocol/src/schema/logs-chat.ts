@@ -87,6 +87,8 @@ export const ChatPendingInputsPageSchema = closedObject({
       acceptedAt: Type.Number(),
       state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
       queued: Type.Optional(Type.Literal(true)),
+      /** Queued behind a scheduled automation run that currently owns the session. */
+      waitingFor: Type.Optional(Type.Literal("automation")),
       cancelledByUser: Type.Optional(Type.Literal(true)),
       steerNow: Type.Optional(
         closedObject({

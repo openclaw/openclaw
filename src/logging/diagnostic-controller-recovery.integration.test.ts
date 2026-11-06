@@ -21,9 +21,11 @@ import {
   markDiagnosticEmbeddedRunStarted,
 } from "./diagnostic-run-activity.js";
 import { requestStuckSessionRecovery } from "./diagnostic-session-recovery-coordinator.js";
+import { peekDiagnosticSessionState } from "./diagnostic-session-state.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 import { logSessionStateChange, startGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
+import { createDiagnosticMessageLifecycle } from "./message-lifecycle.js";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -310,4 +312,26 @@ it("projects cleanup eligibility without releasing queued work before its writer
   await operation.ownerSettlement;
   await queued;
   expect(dispatch).toHaveBeenCalledOnce();
+});
+
+it("keeps a session processing while a message queued behind its active owner finishes dispatch", () => {
+  const ref = { sessionKey: "agent:main:queued-behind-owner", sessionId: "owner-session" };
+  // A scheduled run owns the session before the human input arrives.
+  const owner = createReplyOperation({ ...ref, resetTriggered: false });
+  owner.setPhase("running");
+  logSessionStateChange({ ...ref, state: "processing", reason: "reply_operation_started" });
+  const human = createDiagnosticMessageLifecycle({
+    ...ref,
+    enabled: true,
+    trackSessionState: true,
+    channel: "webchat",
+    source: "dispatch",
+  });
+  human.markProcessing();
+  expect(peekDiagnosticSessionState(ref)).toMatchObject({ state: "processing", queueDepth: 1 });
+  // Steering fell back to follow-up custody; only this message's dispatch is done.
+  human.markIdle("message_completed");
+  expect(peekDiagnosticSessionState(ref)).toMatchObject({ state: "processing", queueDepth: 0 });
+  owner.complete();
+  expect(peekDiagnosticSessionState(ref)).toMatchObject({ state: "idle", queueDepth: 0 });
 });

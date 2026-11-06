@@ -317,6 +317,9 @@ function ChatQueueItem(rowProps: {
     if (offline && queueItem.sendState !== "failed" && queueItem.sendState !== "held") {
       return t("chat.queue.states.waitingForReconnect");
     }
+    if (item().waitingFor === "automation") {
+      return t("chat.queue.states.waitingForAutomation");
+    }
     switch (queueItem.sendState) {
       case "waiting-model":
       case "waiting-idle":

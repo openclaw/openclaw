@@ -46,6 +46,8 @@ export function registerReplyPromotionTests() {
     ["collaborative-required", "required", undefined],
     ["collaborative-result-required", "result-required", undefined],
     ["hidden", "required", "input_visibility_mismatch"],
+    // Scheduled prose is audit-only; a human turn waits for its own visible answer.
+    ["scheduled", "required", "input_visibility_mismatch"],
     ["closed", "required", "injection_unavailable"],
     ["wrong-authority", "required", "tool_authority_mismatch"],
   ] as const)(
@@ -91,6 +93,9 @@ export function registerReplyPromotionTests() {
         registerAgentRunContext(runId, {
           isControlUiVisible: scenario !== "hidden",
           projectSessionMessages: scenario !== "hidden",
+          ...(scenario === "scheduled"
+            ? { cronRunsByJobId: new Map([["synthetic-job", { nextCheckEnabled: false }]]) }
+            : {}),
         });
         await withPreparedEmbeddedRunToolAuthority(
           { admittedRunContext, replyOperation: operation },
@@ -164,7 +169,9 @@ export function registerReplyPromotionTests() {
                 {
                   isInboundUserMessage: true,
                   // This control is ordinary steering, not a hidden question answer.
-                  ...(scenario === "hidden" ? { allowPendingUserInputAnswer: false as const } : {}),
+                  ...(scenario === "hidden" || scenario === "scheduled"
+                    ? { allowPendingUserInputAnswer: false as const }
+                    : {}),
                   terminalReplyExpectation: expectation,
                   ...(collaborative
                     ? {

@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import { ReplyRunAlreadyActiveError, type ReplyOperation } from "./session-controller.contracts.js";
 import {
   activeSessionOperations,
@@ -9,7 +10,7 @@ import {
   getSessionControllerEntryForOperation,
   hasReplyOperationExecutionStarted,
 } from "./session-controller.state.js";
-import { rpcSourcesByRunId } from "./session-controller.storage.js";
+import { backendRunIdsByOperation, rpcSourcesByRunId } from "./session-controller.storage.js";
 import type { SessionTarget } from "./session-controller.target.js";
 
 export function isSessionRunActive(sessionId: string): boolean {
@@ -44,6 +45,21 @@ export function isSessionRunActiveForKey(sessionKey: string): boolean {
   return Boolean(
     normalizedSessionKey &&
     findSessionControllerEntries(normalizedSessionKey).some((entry) => entry.active),
+  );
+}
+
+/** Presentation only: a scheduled automation invocation currently owns this logical key. */
+export function isSessionRunScheduledAutomation(sessionKey: string): boolean {
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
+  return Boolean(
+    normalizedSessionKey &&
+    findSessionControllerEntries(normalizedSessionKey).some(
+      (entry) =>
+        entry.active &&
+        [...(backendRunIdsByOperation.get(entry.active) ?? [])].some(
+          (runId) => readAutomationDisplayState(runId) !== "ordinary",
+        ),
+    ),
   );
 }
 
