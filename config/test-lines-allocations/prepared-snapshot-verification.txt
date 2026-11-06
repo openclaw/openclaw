@@ -1,2 +1,3 @@
-123
-# Real prepared-project cache normalization, safe diagnostics, and refusal before native image capture.
+181
+# Net new test lines: 140 cache-owner + 14 capture/refusal + 26 diagnostics + 1 provider fixture.
+# Covers real producer HOME compatibility/corruption and pre-capture/teardown safety.
