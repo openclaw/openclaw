@@ -227,7 +227,12 @@ Completed source classifications and durable census counts remain unchanged.
   independent equality, identity, restoration and malformed/unknown-marker checks.
   Candidate6/6 passed versus baseline8/8; two redundant expansions were removed,
   with no new source-classification credit. No actual history reload is claimed.
-- Batches113–115/117–118: causal qualification and repairs remain in progress.
+- Batch117: both premature-close negatives now inspect the recorded method
+  independently of RPC option arity. The same real-shaped three-argument close
+  canary passed both old negatives and failed both repaired negatives; temporary
+  calls were removed and the complete candidate passed33/33, retaining all19
+  declarations and eventual-close assertions.
+- Batches113–115/118: causal qualification and repairs remain in progress.
   Existing UI unit diagnostics identified four listeners retained after the
   annotation publication/Undo case; the ordinary root route does not run that
   per-case diagnostic. A separate first-case theme-style diagnostic is unchanged.
