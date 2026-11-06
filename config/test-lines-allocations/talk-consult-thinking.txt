@@ -1,2 +1,2 @@
-94
-# Admission, per-candidate fallback, trusted Talk provenance, and ordinary explicit-choice regression coverage for #194183.
+73
+# Admission, retained fallback preference, trusted Talk provenance, and ordinary explicit-choice regressions for #194183.

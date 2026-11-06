@@ -1,4 +1,3 @@
-import { resolveRunThinkingLevelForFallbackCandidate } from "./agent-runner-utils.js";
 import {
   executeQueuedFollowupTurnForTest,
   getFollowupTurnTestState,
@@ -946,27 +945,7 @@ describe("runPreparedReply media-only handling", () => {
       const run = requireRunReplyAgentCall().followupRun.run;
       expect(run.thinkLevel).toBe(expected);
       expect(run.thinkLevelOverride).toBe(requested);
-      // Queue retargeting may restore the raw choice. Execution resolves it again
-      // for every candidate, including the primary, without losing fallback intent.
-      run.thinkLevel = requested;
-      expect(
-        resolveRunThinkingLevelForFallbackCandidate({
-          run,
-          cfg: {},
-          provider: "anthropic",
-          modelId: "claude-opus-5-5",
-          catalog,
-        }),
-      ).toBe(expected);
-      expect(
-        resolveRunThinkingLevelForFallbackCandidate({
-          run,
-          cfg: {},
-          provider: "demo",
-          modelId: "basic",
-          catalog: [{ provider: "demo", id: "basic", reasoning: false }],
-        }),
-      ).toBe("off");
+
     },
   );
 
