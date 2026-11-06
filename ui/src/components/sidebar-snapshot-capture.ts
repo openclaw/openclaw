@@ -15,7 +15,7 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { hasSidebarListFilter } from "./session-data-events.ts";
 import { sidebarSessionBadgeFacts } from "./session-row-badge-presentation.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
-import { resolveSidebarOnline, sidebarOnlineOrder } from "./sidebar-online-state.ts";
+import { resolveSidebarOnline } from "./sidebar-online-state.ts";
 import {
   parseSidebarSnapshot,
   snapshotSections,
@@ -119,7 +119,7 @@ export function captureSidebarSnapshotModel(
   ) {
     return null;
   }
-  const online = sidebarOnlineOrder(host);
+  const online = resolveSidebarOnline(host);
   const plugins = [...zone.pluginTabs].map(([key, tab]) => ({
     key,
     pluginId: tab.pluginId,
