@@ -3,27 +3,37 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import { expect, it, vi } from "vitest";
-import * as codexAuth from "../../extensions/codex/src/app-server/auth-profile.js";
-import { CodexAppServerClient } from "../../extensions/codex/src/app-server/client.js";
-import { setManagedCodexPluginRoot } from "../../extensions/codex/src/app-server/managed-binary.js";
-import { createCodexNativeTestState } from "../../extensions/codex/src/app-server/native-app-server.test-support.js";
-import { isJsonObject, type JsonObject } from "../../extensions/codex/src/app-server/protocol.js";
-import * as shared from "../../extensions/codex/src/app-server/shared-client.js";
-import { CODEX_APP_SERVER_VERSION } from "../../extensions/codex/src/app-server/version.js";
-import { createCodexWebSearchProvider } from "../../extensions/codex/src/web-search-provider.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { reserveTestPortListener } from "../test-utils/port-claims.js";
-import { withToolsInvokeTestState } from "./tools-invoke-http.test-support.js";
-import { invokeGatewayTool } from "./tools-invoke-shared.js";
+import {
+  CODEX_APP_SERVER_VERSION,
+  loadCodexNativeSearchAuthorityTestFixture,
+  type JsonObject,
+} from "../../extensions/codex/test-api.js";
+import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../../src/config/sessions/session-accessor.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../src/config/sessions/session-sharing-store.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { withToolsInvokeTestState } from "../../src/gateway/tools-invoke-http.test-support.js";
+import { invokeGatewayTool } from "../../src/gateway/tools-invoke-shared.js";
+import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../src/plugins/runtime/gateway-request-scope.js";
+import { prepareUserProfileCatalog } from "../../src/state/user-profile-list.js";
+import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
+import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
 
 vi.unmock("node:child_process");
+
+const {
+  codexAuth,
+  shared,
+  CodexAppServerClient,
+  setManagedCodexPluginRoot,
+  createCodexNativeTestState,
+  isJsonObject,
+  createCodexWebSearchProvider,
+} = await loadCodexNativeSearchAuthorityTestFixture();
 
 const MODEL = "gpt-5.4";
 const DEFAULT_MODEL = "gpt-5.5";
@@ -85,7 +95,7 @@ it.skipIf(process.platform === "win32")(
           body?: JsonObject;
         }> = [];
         const upstreamErrors: unknown[] = [];
-        const clients = new Set<CodexAppServerClient>();
+        const clients = new Set<Awaited<ReturnType<typeof CodexAppServerClient.start>>>();
         let responses = 0;
         let waitBeforeAcquire: (() => Promise<void>) | undefined;
         let upstream:

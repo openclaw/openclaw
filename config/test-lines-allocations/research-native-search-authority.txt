@@ -1,2 +1,2 @@
-487
+504
 # Prove selected native search account/model, per-candidate profile-pin fallback, and current Gateway membership before credential reads, native startup, and HTTP effects.
