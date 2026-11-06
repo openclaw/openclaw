@@ -124,6 +124,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/http-session-control.incognito.test.ts",
   "src/gateway/internal-source-reply-persistence.test.ts",
   "src/gateway/link-understanding.product.test.ts",
+  "src/gateway/local-request-context.consent-posts.test.ts",
+  "src/gateway/local-request-context.own-session-posts.test.ts",
   "src/gateway/local-request-context.session-notify.test.ts",
   "src/gateway/local-request-context.session-tools-steering.test.ts",
   "src/gateway/local-request-context.session-tools.test.ts",

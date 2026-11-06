@@ -109,6 +109,15 @@ to start work is not a suggestion request.
 
 ## Listing and reading sessions
 
+The authenticated requesting human can discover independent sessions they created
+with `sessions_list({ relationship: "created" })` and read their history, search,
+and status. Creator access uses the Gateway's existing profile identity and
+creator authorization, not assignments, a supplied `creatorId`/`ownerId`, or spawn
+lineage. Creator reads supplement spawned-tree scope for same-agent sessions;
+explicit `self`, `agent`, and agent-to-agent denials still apply. This read access
+does not grant ordinary send, steer, or model-override access. Other sessions
+retain the configured visibility limits.
+
 `sessions_list` is a metadata inventory, not a transcript search. Rows include session key and ID, agent, kind, channel, title/label, sidebar group, current owner and original creator, stored project/workspace associations, visible parent/child links, archive/pin state, state version, model/token counts, and run status. Unknown associations remain absent; a stored worktree association does not prove that its checkout still exists.
 
 Check the row's `status` before replacing or steering existing work. `queued`
@@ -252,6 +261,43 @@ Use the shared `message` tool when you already have an explicit raw channel targ
 In Code Mode, the conversation tools reuse their exact Gateway output contracts. A single `exec` cell can list addresses, select a returned `conversationRef`, and call `conversations_send` or `conversations_turn`; normal tool policy and approvals still apply to the nested calls.
 
 ## Sending cross-session messages
+
+### Passive text posts
+
+Use `sessions_send` with `mode: "post"` and an explicit `sessionKey` to leave a
+persistent, source-attributed text note in another session created by the
+authenticated requesting human:
+
+```json
+{
+  "sessionKey": "agent:main:dashboard:example",
+  "mode": "post",
+  "message": "The requested comparison is ready for your next turn.",
+  "idempotencyKey": "comparison-ready-1"
+}
+```
+
+A post returns `status: "posted"`, `messageId`, the target session key and ID,
+source session key, and `replayed`. Reusing the same key from the same source
+session returns the original receipt without another visible message. If omitted,
+the tool call ID is the idempotency key.
+
+Posting does not start a model turn, notify or wake the recipient, steer or
+interrupt active work, subscribe to completion, or wait for a reply. The note is
+visible in history immediately and available to a subsequent turn, not the
+already-running turn. Posts accept text only; labels, attachments, and incognito
+targets are not supported. The Gateway rechecks current authority and the exact
+target session incarnation before committing. Ordinary send/steer behavior and
+permissions are unchanged. Posts honor the same explicit session-visibility and
+agent-to-agent denials; creator ownership does not override them.
+
+Passive posts use the same communication consent rules, including the existing
+same-session and authorized owned-task exemptions. Otherwise, **Never** on source
+sending or recipient receiving denies the note, and **Ask** waits for the existing
+one-message human approval. Consent and current authority are rechecked before the durable append;
+denial or withdrawal before that boundary leaves no note. Posts retain their
+thread/topic targeting and do not use the peer-turn
+`tools.sessions.allowThreadTargets` opt-in.
 
 ### Communication preferences
 
@@ -456,7 +502,7 @@ delivery records and does not resume these replies.
 
 A waited send that finishes without visible assistant text returns `status: "no_reply"`; no reply delivery remains pending. If the target delivered its final reply directly, the result says so and tells the caller not to resend. Otherwise, continue without waiting or send a new message if a response is required.
 
-Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel session key for inter-agent coordination so tool-routed messages do not appear inside an active human-facing thread. Set `tools.sessions.allowThreadTargets: true` to opt in to thread and topic targets; the target runs in that session, and anything it sends with the `message` tool lands in the thread.
+For ordinary `sessions_send` coordination (not passive posts), thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel session key for inter-agent coordination so tool-routed messages do not appear inside an active human-facing thread. Set `tools.sessions.allowThreadTargets: true` to opt in to thread and topic targets; the target runs in that session, and anything it sends with the `message` tool lands in the thread.
 
 Messages and delayed replies are marked as inter-session data in the receiving prompt (`[Inter-session message ... isUser=false]`) and in transcript provenance. The receiving agent should treat them as tool-routed data, not as a direct end-user-authored instruction.
 

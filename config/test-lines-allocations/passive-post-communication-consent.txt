@@ -1,0 +1,3 @@
+# Production-path passive-post Never/Ask approval, live consent withdrawal, and thread-targeting controls.
+# Dedicated consent fixture 375 lines plus 12 net shared-fixture support lines.
+387

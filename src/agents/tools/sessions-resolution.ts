@@ -22,6 +22,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
+import { resolveGatewayToolOperatorSelection } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller as GatewayCaller,
@@ -257,6 +258,10 @@ export async function resolveSessionReference(params: {
   callGateway?: GatewayCaller;
 }): Promise<SessionReferenceResolution> {
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
+  const restrictToSpawned =
+    params.restrictToSpawned &&
+    (params.action === "send" ||
+      !resolveGatewayToolOperatorSelection().operatorAuthority?.profileId);
   const failedLookup = (failure: SessionOwnershipLookupFailure): SessionReferenceResolution => {
     logSessionOwnershipLookupFailure({
       requesterSessionKey: params.requesterInternalKey ?? "unknown",
@@ -290,7 +295,7 @@ export async function resolveSessionReference(params: {
                 ? (parseAgentSessionKey(raw)?.agentId ?? params.keyAgentId ?? params.agentId)
                 : params.agentId,
             requesterInternalKey: params.requesterInternalKey,
-            restrictToSpawned: params.restrictToSpawned,
+            restrictToSpawned,
           }),
           gatewayCall,
         );
@@ -304,7 +309,8 @@ export async function resolveSessionReference(params: {
               mainKey: params.mainKey,
             }),
             resolvedViaSessionId: kind === "sessionId",
-            requesterOwned: params.restrictToSpawned,
+            // Broad creator discovery does not establish spawned-session ownership.
+            requesterOwned: restrictToSpawned,
           };
         }
       } catch (error) {

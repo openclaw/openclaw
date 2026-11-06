@@ -22,6 +22,7 @@ import {
   readGatewayRequestMutationAuthority,
 } from "./session-mutation-guards.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
+import { handleSessionPost } from "./sessions-post.js";
 import { isAgentMainSessionKey, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -231,6 +232,7 @@ async function handleSessionSend(
 }
 
 export const sessionMessagingHandlers: GatewayRequestHandlers = {
+  "sessions.post": handleSessionPost,
   "sessions.send": (options) => handleSessionSend("sessions.send", options),
   "sessions.steer": (options) => handleSessionSend("sessions.steer", options),
 };

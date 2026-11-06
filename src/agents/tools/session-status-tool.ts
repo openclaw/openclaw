@@ -276,6 +276,7 @@ export function createSessionStatusTool(opts?: {
           (await resolveSessionToolAccess({
             ...target,
             action: "status",
+            allowCreatorRead: params.model === undefined,
             requesterAgentId,
             requesterSessionKey: visibilityRequesterKey,
             mainSessionKey,

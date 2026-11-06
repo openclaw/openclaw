@@ -1,0 +1,4 @@
+# PR 192948: creator-scoped reads/posts, foreign-principal denial, and pending policy/target revocation.
+# 718-line integration suite plus 18 net fixture-support lines versus the PR base.
+# Includes target-sharing regression/control and post-admission policy-withdrawal proof.
+736

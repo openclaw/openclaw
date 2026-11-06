@@ -10,6 +10,7 @@ import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import type { SessionTranscriptTurnPersistOptions } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
@@ -36,6 +37,8 @@ export type GatewayAssistantInjection = {
   message: string;
   label?: string;
   idempotencyKey?: string;
+  expectedSessionId?: string;
+  inputProvenance?: InputProvenance;
   humanMentions?: readonly HumanMention[];
   /** Keep host-authored text as written instead of parsing model delivery directives. */
   literal?: true;
@@ -96,6 +99,15 @@ export async function injectGatewayAssistantMessage(
     return err(errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
   }
 
+  if (params.expectedSessionId && sessionId !== params.expectedSessionId) {
+    retained?.release();
+    return err(
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "Session changed before posting. Resolve it again and retry.",
+      ),
+    );
+  }
   let appended: Awaited<ReturnType<typeof appendInjectedAssistantMessageToTranscript>>;
   try {
     const admission = await beginSessionEffect({
@@ -138,6 +150,7 @@ export async function injectGatewayAssistantMessage(
           // Authority can end while the write waits for its target or queue.
           ...(sessionMutationCommitGuard ? { assertCurrent: sessionMutationCommitGuard } : {}),
           onMessageCommitted: params.onMessageCommitted,
+          inputProvenance: params.inputProvenance,
           sessionId,
           storePath,
           agentId,

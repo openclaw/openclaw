@@ -3,6 +3,7 @@ import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-cl
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isGatewayTransportError } from "../../gateway/transport-error.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { createSessionVisibilityDecisionChecker } from "../../plugin-sdk/session-visibility-internal.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -30,7 +31,10 @@ import {
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
 import {
-  createSessionVisibilityRowChecker,
+  hasSessionToolRequesterProfile,
+  resolveSessionToolCreatorReadAccess,
+} from "./sessions-access.js";
+import {
   formatSessionToolAccessDenial,
   isSessionToolMainAlias,
   resolveDisplaySessionKey,
@@ -164,7 +168,7 @@ async function listVisibleSearchSessions(params: {
   effectiveRequesterAgentId?: string;
   effectiveRequesterKey: string;
   gatewayCall: GatewayCaller;
-  rowGuard: Pick<ReturnType<typeof createSessionVisibilityRowChecker>, "check">;
+  rowGuard: Pick<ReturnType<typeof createSessionVisibilityDecisionChecker>, "check">;
   restrictToSpawned: boolean;
 }): Promise<SearchSessionCandidate[]> {
   const candidates = new Map<string, SearchSessionCandidate>();
@@ -195,6 +199,7 @@ async function listVisibleSearchSessions(params: {
             ownerSessionKey?: unknown;
             parentSessionKey?: unknown;
             spawnedBy?: unknown;
+            createdActor?: unknown;
             childOwnerSessionKeys?: string[];
           }>;
           hasMore?: boolean;
@@ -208,7 +213,9 @@ async function listVisibleSearchSessions(params: {
             includeGlobal: !params.restrictToSpawned,
             includeUnknown: false,
             ...(agentId ? { agentId } : {}),
-            ...(params.restrictToSpawned ? { spawnedBy: params.effectiveRequesterKey } : {}),
+            ...(params.restrictToSpawned && !hasSessionToolRequesterProfile()
+              ? { spawnedBy: params.effectiveRequesterKey }
+              : {}),
           },
         });
         for (const row of Array.isArray(page.sessions) ? page.sessions : []) {
@@ -231,11 +238,16 @@ async function listVisibleSearchSessions(params: {
               : {}),
             ...(typeof row.spawnedBy === "string"
               ? { spawnedBy: row.spawnedBy }
-              : params.restrictToSpawned
+              : params.restrictToSpawned && !hasSessionToolRequesterProfile()
                 ? { spawnedBy: params.effectiveRequesterKey }
                 : {}),
           };
-          if (params.rowGuard.check(visibilityRow).allowed) {
+          if (
+            resolveSessionToolCreatorReadAccess(
+              params.rowGuard.check(visibilityRow),
+              row.createdActor,
+            ).allowed
+          ) {
             const id = candidateId(visibilityRow);
             candidates.set(id, {
               key: visibilityRow.key,
@@ -255,7 +267,7 @@ async function listVisibleSearchSessions(params: {
     }
   };
   await listPages();
-  if (!params.restrictToSpawned) {
+  if (!params.restrictToSpawned || hasSessionToolRequesterProfile()) {
     // Unscoped keys cannot encode a foreign owner for a follow-up sessions_history call. Only the
     // requester's agent-scoped listing may contribute them; combined rows supply scoped keys.
     await listPages(params.unscopedAgentId);
@@ -408,7 +420,7 @@ export function createSessionsSearchTool(opts?: {
         };
       }
 
-      const rowGuard = createSessionVisibilityRowChecker({
+      const rowGuard = createSessionVisibilityDecisionChecker({
         action: "history",
         defaultAgentId: requesterAgentId,
         requesterAgentId,
@@ -424,6 +436,7 @@ export function createSessionsSearchTool(opts?: {
             ? `agent:${agentId}:${key}`
             : key;
         const access = await resolveSessionToolAccess({
+          allowCreatorRead: true,
           action: "history",
           displayAction: "search",
           requesterAgentId,

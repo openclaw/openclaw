@@ -2463,6 +2463,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/http-utils.request-context.test.ts",
   "src/gateway/internal-source-reply-persistence.test.ts",
   "src/gateway/link-understanding.product.test.ts",
+  "src/gateway/local-request-context.own-session-posts.test.ts",
   "src/gateway/local-request-context.session-tools.test.ts",
   "src/gateway/local-request-context.test.ts",
   "src/gateway/managed-image-attachments.authority.test.ts",

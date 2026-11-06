@@ -53,11 +53,12 @@ export function readSessionsSendMode(params: Record<string, unknown>) {
   if (
     mode !== undefined &&
     mode !== "notify" &&
+    mode !== "post" &&
     mode !== "steer" &&
     mode !== "followup" &&
     mode !== "resume"
   ) {
-    throw new ToolInputError("mode must be notify, steer, followup, or resume");
+    throw new ToolInputError("mode must be post, notify, steer, followup, or resume");
   }
   return mode;
 }

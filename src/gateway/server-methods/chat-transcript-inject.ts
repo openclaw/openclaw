@@ -10,6 +10,7 @@ import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
   ASSISTANT_DISPLAY_CONTENT_FIELD,
   projectAssistantDisplayContent,
@@ -69,6 +70,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
+  inputProvenance?: InputProvenance;
   stopReason?: "stop" | "aborted";
   /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
   abortMeta?: {
@@ -120,6 +122,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       : {}),
   };
   const messageBody: AppendMessageArg & Record<string, unknown> = {
+    ...(params.inputProvenance ? { inputProvenance: params.inputProvenance } : {}),
     role: "assistant",
     content: retainAssistantModelContent(displayContent),
     [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent,

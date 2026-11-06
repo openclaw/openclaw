@@ -461,6 +461,7 @@ export function createSessionsHistoryTool(opts?: {
           ? `agent:${targetAgentId}:${resolvedKey}`
           : resolvedKey;
       const access = await resolveSessionToolAccess({
+        allowCreatorRead: true,
         action: "history",
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,

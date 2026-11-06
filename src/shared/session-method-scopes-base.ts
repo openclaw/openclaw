@@ -81,6 +81,7 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "sessions.patch",
   "sessions.patchMany",
   "sessions.fork",
+  "sessions.post",
   "sessions.send",
   "sessions.steer",
   "sessions.processes.stop",

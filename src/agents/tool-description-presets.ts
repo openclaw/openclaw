@@ -104,6 +104,7 @@ export function describeSessionsSearchTool(options?: SessionLinkDescriptionOptio
 /** Describes the sessions_send tool for model-facing instructions. */
 export function describeSessionsSendTool(options?: { allowThreadTargets?: boolean }): string {
   return [
+    "mode:post appends a persistent text-only note to a session created by the authenticated requesting human. It returns a message receipt without starting, steering, interrupting, or waiting for a turn; a busy recipient sees it only in later context. Use an explicit sessionKey and an optional stable idempotencyKey for retries.",
     "Send a message to a permitted session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. Explicit per-agent send destinations can permit messaging without transcript access.",
     "A session identifies model context, not an external address. When a new turn starts, its reply reaches you once: inline when available, otherwise as a later inter-session input. Continue with another sessions_send; post to channels with message.",
     SESSIONS_SEND_RESULT_GUIDANCE,
