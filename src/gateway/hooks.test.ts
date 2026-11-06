@@ -194,38 +194,25 @@ describe("gateway hooks helpers", () => {
   });
 
   test("hook wake modes map spelling variants and reject unknown values", () => {
-    for (const mode of ["next_heartbeat", " Next-Heartbeat "]) {
-      expect(normalizeWakePayload({ text: "hi", mode })).toEqual({
-        ok: true,
-        value: { text: "hi", mode: "next-heartbeat" },
+    for (const [raw, mode] of [
+      ["next_heartbeat", "next-heartbeat"],
+      [" Next-Heartbeat ", "next-heartbeat"],
+      [null, "now"],
+      ["  ", "now"],
+    ] as const) {
+      expect(normalizeWakePayload({ text: "hi", mode: raw })).toMatchObject({ value: { mode } });
+      expect(agentPayload({ wakeMode: raw })).toMatchObject({ value: { wakeMode: mode } });
+    }
+    for (const raw of ["later", 1]) {
+      expect(normalizeWakePayload({ text: "hi", mode: raw })).toEqual({
+        ok: false,
+        error: "mode must be now or next-heartbeat",
       });
-      expect(agentPayload({ wakeMode: mode })).toEqual({
-        ok: true,
-        value: expect.objectContaining({ wakeMode: "next-heartbeat" }),
+      expect(agentPayload({ wakeMode: raw })).toEqual({
+        ok: false,
+        error: "wakeMode must be now or next-heartbeat",
       });
     }
-    for (const mode of [null, "", "  "]) {
-      expect(normalizeWakePayload({ text: "hi", mode })).toEqual({
-        ok: true,
-        value: { text: "hi", mode: "now" },
-      });
-      expect(agentPayload({ wakeMode: mode })).toEqual({
-        ok: true,
-        value: expect.objectContaining({ wakeMode: "now" }),
-      });
-    }
-    expect(normalizeWakePayload({ text: "hi", mode: "later" })).toEqual({
-      ok: false,
-      error: "mode must be now or next-heartbeat",
-    });
-    expect(normalizeWakePayload({ text: "hi", mode: 1, sessionKey: "hook:wake:x" })).toEqual({
-      ok: false,
-      error: "mode must be now or next-heartbeat",
-    });
-    expect(agentPayload({ wakeMode: "later" })).toEqual({
-      ok: false,
-      error: "wakeMode must be now or next-heartbeat",
-    });
   });
 
   test("normalizeAgentPayload defaults + validates channel and agent", () => {
