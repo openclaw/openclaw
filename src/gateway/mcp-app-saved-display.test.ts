@@ -49,7 +49,7 @@ describe("saved MCP App display", () => {
   });
 
   it.each(["incognito", "durable"] as const)(
-    "restores an expired %s App offline without exposing private display data to chat or model context",
+    "restores a maximum-size expired %s App offline without exposing private display data to chat or model context",
     async (storage) => {
       const env = { OPENCLAW_STATE_DIR: fixture.path(storage) };
       const scope = {
@@ -121,7 +121,10 @@ describe("saved MCP App display", () => {
       };
       await consume(async () => {
         const callTool = vi.fn();
-        const html = "<main>Saved diagram</main>";
+        // Escaped HTML plus maximum admitted tool data exceeds the ordinary
+        // 8 MiB serialized message page even though the display is valid.
+        const markup = "<main>Saved diagram</main>";
+        const html = markup + '"'.repeat(2 * 1024 * 1024 - Buffer.byteLength(markup));
         const readResource = vi.fn(async () => ({
           contents: [{ mimeType: "text/html;profile=mcp-app", text: html }],
         }));
@@ -137,8 +140,12 @@ describe("saved MCP App display", () => {
         });
         const toolResult = {
           content: [{ type: "text" as const, text: "created once" }],
-          _meta: { checkpoint: "private-synthetic-checkpoint" },
+          _meta: { checkpoint: "private-synthetic-checkpoint", padding: "" },
         };
+        toolResult._meta.padding = "p".repeat(
+          4 * 1024 * 1024 -
+            Buffer.byteLength(JSON.stringify({ toolInput: { city: "Paris" }, toolResult })),
+        );
         const descriptor = await fetchMcpAppView({
           runtime,
           agentId: "main",
@@ -185,6 +192,9 @@ describe("saved MCP App display", () => {
             data: { html, toolResult },
           },
         ]);
+        expect(Buffer.byteLength(JSON.stringify(reopened.getEntries()))).toBeGreaterThan(
+          8 * 1024 * 1024,
+        );
         const lease = getMcpAppViewLease(descriptor.viewId, runtime);
         assert(lease);
         lease.expiresAtMs = Date.now() - 1;
