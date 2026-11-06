@@ -424,6 +424,11 @@ Signal exec and plugin approval prompts use the top-level `approvals.exec` and `
 - `👎` denies.
 - Use `/approve <id> allow-always` when a request offers persistent approval.
 
+Approval responses and supported inspection/interrupt commands can be handled while
+an earlier turn is waiting. Ordinary messages and session-mutating commands keep
+their conversation order. Approval decisions still require the configured sender
+and approval authorization.
+
 Approval reaction resolution requires explicit Signal approvers from `channels.signal.allowFrom`, `channels.signal.defaultTo`, or the matching account-level fields. Direct same-chat exec approval prompts can still suppress the duplicate local `/approve` fallback without explicit approvers; no-approver group approvals keep the local fallback visible.
 
 <a id="question-reactions" />

@@ -84,7 +84,7 @@ function resolveSignalInboundConversationKey(
   return conversationId ? `signal:${accountId}:${conversationId}` : null;
 }
 
-function isSignalActiveRunControlText(text: string): boolean {
+export function isSignalActiveRunControlText(text: string): boolean {
   if (isAbortRequestText(text)) {
     return true;
   }

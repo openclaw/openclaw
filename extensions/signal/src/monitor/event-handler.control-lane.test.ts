@@ -239,6 +239,15 @@ describe("Signal active-run control lane", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(4);
   });
 
+  it("marks authorized approval text as a command for core active-run admission", async () => {
+    await createHandler(0)(signalText("/approve abc12345 allow-once", 1));
+    expect(dispatchMock.mock.calls[0]?.[0].ctx.CommandTurn).toMatchObject({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+    });
+  });
+
   it.each([
     { debounceMs: 5, text: "stop" },
     { debounceMs: 5, text: "/approve abc12345 allow-once" },
