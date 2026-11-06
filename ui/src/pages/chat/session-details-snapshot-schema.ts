@@ -2,6 +2,8 @@ import { isSessionParticipantIdentity } from "../../../../packages/gateway-proto
 import * as json from "../../lib/snapshot-json.ts";
 
 const nonnegative = json.refine(json.number, (value) => value >= 0);
+const optionalNonnegative = json.optional(nonnegative);
+const optionalText = json.optional(json.text);
 const sessionKeySchema = json.refine(json.text, (value) => value.length > 0);
 const subagentStatus = json.enumeration([
   "queued",
@@ -20,18 +22,16 @@ export const detailsSnapshotSchema = json.optional(
         createdActor: json.optional(
           json.object({
             type: json.enumeration(["human", "agent", "system"]),
-            id: json.optional(json.text),
-            label: json.optional(json.text),
-            avatarUrl: json.optional(json.text),
+            id: optionalText,
+            label: optionalText,
+            avatarUrl: optionalText,
             identity: json.optional(json.checked(isSessionParticipantIdentity)),
           }),
         ),
-        participantCount: json.optional(nonnegative),
+        participantCount: optionalNonnegative,
       }),
     ),
-    environment: json.optional(
-      json.object({ branch: json.optional(json.text), worktree: json.boolean }),
-    ),
+    environment: json.optional(json.object({ branch: optionalText, worktree: json.boolean })),
     progress: json.optional(
       json.object({
         revision: nonnegative,
@@ -47,22 +47,22 @@ export const detailsSnapshotSchema = json.optional(
             "timeout",
           ]),
         ),
-        startedAt: json.optional(nonnegative),
-        endedAt: json.optional(nonnegative),
+        startedAt: optionalNonnegative,
+        endedAt: optionalNonnegative,
         hasActiveRun: json.optional(json.boolean),
         runtime: json.object({
           known: json.optional(json.boolean),
           connected: json.optional(json.boolean),
           hasActiveSubagentRun: json.optional(json.boolean),
-          lastRunError: json.optional(json.text),
-          childError: json.optional(json.text),
+          lastRunError: optionalText,
+          childError: optionalText,
           children: json.optional(
             json.object({
               running: nonnegative,
               queued: nonnegative,
               waiting: nonnegative,
               failed: nonnegative,
-              stopped: json.optional(nonnegative),
+              stopped: optionalNonnegative,
             }),
           ),
         }),
@@ -77,12 +77,12 @@ export const detailsSnapshotSchema = json.optional(
             label: json.text,
             status: subagentStatus,
             listed: json.optional(json.boolean),
-            activity: json.optional(json.text),
+            activity: optionalText,
             progress: json.optional(json.object({ completed: nonnegative, total: nonnegative })),
             session: json.optional(
               json.object({
-                startedAt: json.optional(nonnegative),
-                endedAt: json.optional(nonnegative),
+                startedAt: optionalNonnegative,
+                endedAt: optionalNonnegative,
               }),
             ),
           }),
@@ -108,14 +108,14 @@ export const detailsSnapshotSchema = json.optional(
             autoDisabled: json.optional(json.boolean),
             running: json.optional(json.boolean),
             state: json.text,
-            timezone: json.optional(json.text),
+            timezone: optionalText,
           }),
           10,
         ),
         more: json.boolean,
       }),
     ),
-    outputs: json.optional(nonnegative),
+    outputs: optionalNonnegative,
     processes: json.optional(
       json.object({
         total: nonnegative,

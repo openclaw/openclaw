@@ -197,21 +197,21 @@ export function ChatDetailsBackground(
     roster().toSorted((a, b) => ORDER[subagentState(a)] - ORDER[subagentState(b)]),
   );
   const unlisted = createMemo(() => subagents().filter((row) => !row.listed));
-  const desktopPresentation = createMemo(() => props.desktopSubagents);
   const collection = createMemo(() => roster().filter((row) => row.listed));
-  const displayRows = createMemo(() => [...collection(), ...unlisted()]);
   const liveSummary = createMemo(() =>
-    desktopPresentation() && activityReady() ? projectDetailsSubagents(displayRows()) : undefined,
+    props.desktopSubagents && activityReady()
+      ? projectDetailsSubagents([...collection(), ...unlisted()])
+      : undefined,
   );
   const summary = () =>
-    liveSummary() ?? (desktopPresentation() ? props.details.cachedDetails?.subagents : undefined);
+    liveSummary() ?? (props.desktopSubagents ? props.details.cachedDetails?.subagents : undefined);
   const cachedActivity = createMemo(() =>
-    !activityReady() && desktopPresentation()
+    !activityReady() && props.desktopSubagents
       ? summary()?.rows.filter((row) => row.listed === false)
       : undefined,
   );
   const recordSubagents = (rows: readonly ChatSubagentActivityRow[]) => {
-    if (!desktopPresentation() || !activityReady()) return;
+    if (!props.desktopSubagents || !activityReady()) return;
     const ordinary = rows.filter((row) => !row.listed);
     props.details.onDetailsSnapshot?.({
       subagents: projectDetailsSubagents(
@@ -220,7 +220,7 @@ export function ChatDetailsBackground(
     });
   };
   const desktopSubagents = createMemo<ChatDetailsSubagentsProps | undefined>(() => {
-    const presentation = desktopPresentation();
+    const presentation = props.desktopSubagents;
     const snapshot = props.details;
     const openChild = snapshot.onOpenSubagent;
     const openCollection = snapshot.onOpenSubagents;
@@ -272,7 +272,7 @@ export function ChatDetailsBackground(
           when={desktopSubagents()}
           fallback={
             <BackgroundGroup
-              desktop={desktopPresentation()}
+              desktop={props.desktopSubagents}
               presented={props.presented}
               kind="subagents"
               title={t("chat.sessionDetails.subagents")}
@@ -301,11 +301,11 @@ export function ChatDetailsBackground(
             <ChatDetailsDesktopSection
               section="subagents"
               title={t("chat.sessionDetails.subagents")}
-              expanded={desktopPresentation()!.expanded}
+              expanded={props.desktopSubagents!.expanded}
               presented={props.presented}
-              onExpandedChange={desktopPresentation()!.onExpandedChange}
+              onExpandedChange={props.desktopSubagents!.onExpandedChange}
               metadata={
-                <Show when={!desktopPresentation()!.expanded}>
+                <Show when={!props.desktopSubagents!.expanded}>
                   <ChatDetailsSubagents {...data()} collapsed />
                 </Show>
               }
@@ -315,7 +315,7 @@ export function ChatDetailsBackground(
               <Show
                 when={
                   props.presented &&
-                  desktopPresentation()!.expanded &&
+                  props.desktopSubagents!.expanded &&
                   (unlisted().length > 0 || (cachedActivity()?.length ?? 0) > 0)
                 }
               >
