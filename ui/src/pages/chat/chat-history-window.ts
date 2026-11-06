@@ -52,31 +52,27 @@ function admitResidentLiveSources(
   if (!initialPagination.segments?.length) {
     return initialPagination;
   }
-  const sourceEntries = projection.entries.map((entry) => ({
-    entry,
-    source: nativeHistoryMessageSourceIdentity(entry.message),
-  }));
+  const liveSources = new Set<string>();
+  const entrySources = projection.entries.map((entry) => {
+    const source = nativeHistoryMessageSourceIdentity(entry.message);
+    if (source && (entry.live || entry.pending)) {
+      liveSources.add(source);
+    }
+    return source;
+  });
   // A source can gain fragments or replace its body without changing its name.
   // Revoke every overlapping packet, without turning flag-only changes into repartitioning.
-  const pagination = invalidateChatHistoryPacketSources(
-    initialPagination,
-    new Set(
-      sourceEntries.flatMap(({ entry, source }) =>
-        source && (entry.live || entry.pending) ? [source] : [],
-      ),
-    ),
-  );
+  const pagination = invalidateChatHistoryPacketSources(initialPagination, liveSources);
   const segments = [...pagination.segments!];
   const owners = new Map(
     segments.flatMap((segment, index) => segment.sources.map((source) => [source, index] as const)),
   );
-  const firstHeld = sourceEntries.findIndex(({ source }) => source !== null && owners.has(source));
-  const lastHeld = sourceEntries.findLastIndex(
-    ({ source }) => source !== null && owners.has(source),
-  );
+  const firstHeld = entrySources.findIndex((source) => source !== null && owners.has(source));
+  const lastHeld = entrySources.findLastIndex((source) => source !== null && owners.has(source));
   let previousSource: string | null = null;
   let changed = false;
-  for (const [index, { entry, source }] of sourceEntries.entries()) {
+  for (const [index, entry] of projection.entries.entries()) {
+    const source = entrySources[index];
     if (source && owners.has(source)) {
       previousSource = source;
       continue;
