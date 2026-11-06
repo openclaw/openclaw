@@ -1,2 +1,2 @@
-# Preserve row selection and off-window descriptors; scope catalog idle to the live connection.
-45
+# Preserve row selection and off-window descriptors.
+39

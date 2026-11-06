@@ -19,12 +19,12 @@ import {
 import { checkUpdateStatus, resolveNpmChannelTag } from "./update-check.js";
 import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
 import { createDevGitStatus } from "./update-startup-git.test-support.js";
+import { createGatewayUpdateCheck } from "./update-startup-scheduler.js";
 import {
   containingObject,
   matchingObject,
   idleActiveWorkInspectors,
 } from "./update-startup-suite.test-support.js";
-import { createGatewayUpdateCheck } from "./update-startup.js";
 import {
   getUpdateAvailable,
   getUpdateSchedule,
