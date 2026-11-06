@@ -13,7 +13,7 @@
 
 import MarkdownIt, { type MarkdownIt as MarkdownItParser } from "markdown-it";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { isMap, isScalar, LineCounter, parseDocument } from "yaml";
+import { isMap, isScalar, LineCounter, parseDocument, stringify } from "yaml";
 import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
 import { slugify } from "./slug.js";
 
@@ -94,12 +94,16 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
       const source = expectDefined(frontmatter.at(keyLine - 1), "frontmatter key source line");
       const match = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(source);
       if (match !== null) {
+        const capture = expectDefined(match[2], "frontmatter value capture").trim();
         entries.push({
           key: expectDefined(match[1], "frontmatter key capture"),
           value:
             isScalar(value) && typeof value.value === "string"
               ? value.value
-              : unquote(expectDefined(match[2], "frontmatter value capture").trim()),
+              : // block collections start below the key line, so this capture is empty
+                capture === "" && !isScalar(value)
+                ? stringify(value).trimEnd()
+                : unquote(capture),
           line: keyLine + 1,
         });
       }
@@ -111,11 +115,32 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
     const m = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(line);
     if (m !== null) {
       const key = expectDefined(m[1], "frontmatter key capture");
-      const value = expectDefined(m[2], "frontmatter value capture");
-      entries.push({ key, value: unquote(value.trim()), line: offset + 2 });
+      const capture = expectDefined(m[2], "frontmatter value capture").trim();
+      const value =
+        capture === "" || BLOCK_SCALAR_HEADER_RE.test(capture)
+          ? (readIndentedValue(frontmatter, offset) ?? unquote(capture))
+          : unquote(capture);
+      entries.push({ key, value, line: offset + 2 });
     }
   }
   return { entries, endLine: closeIndex };
+}
+
+const BLOCK_SCALAR_HEADER_RE = /^[|>](?:[+-]?\d*|\d*[+-]?)\s*(?:#.*)?$/;
+
+// Reparse the key line plus its indented continuation: unquote("|") parses to
+// "", dropping block scalars and block collections when the document has errors.
+function readIndentedValue(lines: readonly string[], keyIndex: number): string | undefined {
+  const rest = lines.slice(keyIndex + 1);
+  const stop = rest.findIndex((next) => next !== "" && !/^\s/.test(next));
+  const tail = stop === -1 ? rest : rest.slice(0, stop);
+  const doc = parseDocument(`${lines[keyIndex]}\n${tail.join("\n")}\n`, { prettyErrors: false });
+  const value =
+    doc.errors.length === 0 && isMap(doc.contents) ? doc.contents.items[0]?.value : null;
+  if (isScalar(value)) {
+    return typeof value.value === "string" ? value.value : "";
+  }
+  return value === null || value === undefined ? undefined : stringify(value).trimEnd();
 }
 
 function unquote(value: string): string {

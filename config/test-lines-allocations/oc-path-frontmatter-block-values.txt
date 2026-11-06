@@ -1,0 +1,2 @@
+# Block-style frontmatter values must read as their content, not an empty string.
+23

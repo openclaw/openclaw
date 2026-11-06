@@ -33,6 +33,29 @@ describe("parseMd — frontmatter", () => {
     ]);
     expect(ast.raw).toBe(raw);
   });
+
+  it("reads block-style structured values instead of an empty string", () => {
+    const raw = "---\nauthors:\n  - alice\n  - bob\nmeta:\n  a: 1\n  b: 2\nflow: {a: 1}\n---\n";
+    const ast = parseMd(raw);
+    expect(ast.frontmatter).toEqual([
+      { key: "authors", value: "- alice\n- bob", line: 2 },
+      { key: "meta", value: "a: 1\nb: 2", line: 5 },
+      { key: "flow", value: "{a: 1}", line: 8 },
+    ]);
+    expect(ast.raw).toBe(raw);
+  });
+
+  it("keeps block values when malformed siblings force the tolerant line reader", () => {
+    const raw =
+      "---\nsummary: |\n  line one\n  line two\nauthors:\n  - alice\nbroken: [unclosed\n---\n";
+    const ast = parseMd(raw);
+    expect(ast.frontmatter).toEqual([
+      { key: "summary", value: "line one\nline two\n", line: 2 },
+      { key: "authors", value: "- alice", line: 5 },
+      { key: "broken", value: "[unclosed", line: 7 },
+    ]);
+    expect(ast.raw).toBe(raw);
+  });
 });
 
 describe("parseMd — byte-fidelity", () => {
