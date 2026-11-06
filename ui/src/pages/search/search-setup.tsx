@@ -4,6 +4,10 @@ import type { WebSearchStatusResult } from "../../../../packages/gateway-protoco
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
+import {
+  flattenConfigLeafFields,
+  type ConfigLeafField,
+} from "../../components/config-form.leaf-fields.ts";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { ConfigNode } from "../../components/config-form.node.tsx";
 import { hintForPath, pathKey } from "../../components/config-form.shared.ts";
@@ -19,10 +23,6 @@ import {
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginCredentialEditor } from "../plugins/credential-editor.tsx";
-import {
-  flattenPluginSettingsFields,
-  type PluginSettingsField,
-} from "../plugins/settings-editor.tsx";
 import { pluginConfigSchema } from "../plugins/settings-model.ts";
 import { isProviderReady, readConfigValue } from "./search-config.ts";
 
@@ -45,7 +45,7 @@ function searchConfigFields(
     unsupported: Set<string>;
     patch: (path: Array<string | number>, value: unknown) => Promise<boolean>;
   },
-): PluginSettingsField[] {
+): ConfigLeafField[] {
   if (!object.schema) {
     return [];
   }
@@ -63,10 +63,10 @@ function searchConfigFields(
     secretFields: props.secretFields,
     onPatch: (path, value) => void object.patch(path, value),
     onRemove: (path) => void object.patch(path, undefined),
-  }).fields.flatMap((field) => flattenPluginSettingsFields(field, String(field.path.at(-1))));
+  }).fields.flatMap((field) => flattenConfigLeafFields(field, String(field.path.at(-1))));
 }
 
-function SearchConfigField(props: { field: PluginSettingsField; nested?: boolean }) {
+function SearchConfigField(props: { field: ConfigLeafField; nested?: boolean }) {
   return (
     <SettingsRow
       title={props.field.label}
