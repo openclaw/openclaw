@@ -2,7 +2,7 @@ name: Android OpenClaw ID native packaging
 
 on:
   push:
-    branches: [main]
+    branches: [main, openclaw-517/node-android]
     paths: &android_iroh_paths
       - ".github/workflows/android-iroh-native.yml"
       - "apps/android/**"
