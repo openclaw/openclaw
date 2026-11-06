@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { createEngineActionTiming } from "./control-ui-engine-action-timing.ts";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { frames, prepareChat } from "./control-ui-interaction-navigation.ts";
 
@@ -202,6 +203,97 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
     online: true,
   }));
   return [
+    ...[0, 50, 100, 200].flatMap((pluginCommands) =>
+      (["open", "reopen", "filter", "series"] as const).map((action): EngineScenario =>
+        Object.assign({}, base, {
+          id: `chat-actions-slash-${action}-${pluginCommands}`,
+          expected: `Isolated slash ${action} with ${pluginCommands} plugin commands plus the built-in catalog.`,
+          fixtureOverrides: () => ({
+            methodResponses: {
+              "commands.list": {
+                commands: Array.from({ length: pluginCommands }, (_, index) => ({
+                  name: `review-${String(index).padStart(3, "0")}`,
+                  description: `Review synthetic deployment ${index} and summarize its validation report.`,
+                  category: "tools",
+                  acceptsArgs: true,
+                  scope: "both",
+                  source: "plugin",
+                  textAliases: [`/review-${String(index).padStart(3, "0")}`],
+                })),
+              },
+            },
+          }),
+          prepare: async (page) => {
+            await prepareChat(page);
+            const input = page.locator(composer);
+            await input.focus();
+            if (action !== "open" && action !== "series") {
+              await input.pressSequentially("/");
+              await page.locator(`${pane} .slash-menu [role=option]`).first().waitFor();
+              await page
+                .locator(`${pane} .slash-menu [aria-busy=true]`)
+                .waitFor({ state: "hidden" });
+              if (action === "reopen") {
+                await input.fill("");
+                await page.locator(`${pane} .slash-menu`).waitFor({ state: "hidden" });
+              }
+            }
+          },
+          run: async (page) => {
+            const input = page.locator(composer);
+            if (action === "series") {
+              const evidence: Record<string, number> = {};
+              for (const phase of ["open", "reopen", "filter"] as const) {
+                const timing = await page.evaluateHandle(createEngineActionTiming, false);
+                await timing.evaluate((value) => value.start());
+                await input.pressSequentially(phase === "filter" ? "c" : "/");
+                const menu = page.locator(`${pane} .slash-menu`);
+                await menu.getByRole("option").first().waitFor();
+                await menu.locator("[aria-busy=true]").waitFor({ state: "hidden" });
+                await frames(page);
+                await timing.evaluate((value) => value.endScenario());
+                const measured = await timing.evaluate((value) => value.finish());
+                await timing.dispose();
+                if (measured.applicationMs === null) {
+                  throw new Error("Missing native slash action");
+                }
+                evidence[`${phase}ApplicationMs`] = measured.applicationMs;
+                evidence[`${phase}Options`] = await menu.getByRole("option").count();
+                if (phase === "open") {
+                  await input.fill("");
+                  await menu.waitFor({ state: "hidden" });
+                }
+              }
+              return evidence;
+            }
+            await input.pressSequentially(action === "filter" ? "c" : "/");
+            const menu = page.locator(`${pane} .slash-menu`);
+            await menu.getByRole("option").first().waitFor();
+            await menu.locator("[aria-busy=true]").waitFor({ state: "hidden" });
+            return menu.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              const option = element.querySelector<HTMLElement>("[role=option]")!;
+              const style = getComputedStyle(option);
+              return {
+                renderedOptions: element.querySelectorAll("[role=option]").length,
+                menuElements: element.querySelectorAll("*").length,
+                menuHeight: rect.height,
+                menuTop: rect.top,
+                optionHeight: option.getBoundingClientRect().height,
+                optionTop: option.getBoundingClientRect().top - rect.top,
+                groupHeight: element
+                  .querySelector(".slash-menu-group__label")!
+                  .getBoundingClientRect().height,
+                optionFontSize: Number.parseFloat(style.fontSize),
+                optionPaddingTop: Number.parseFloat(style.paddingTop),
+                optionPaddingLeft: Number.parseFloat(style.paddingLeft),
+                optionSetSize: Number(option.getAttribute("aria-setsize")),
+              };
+            });
+          },
+        } satisfies Partial<EngineScenario>),
+      ),
+    ),
     {
       ...base,
       id: "chat-actions-slash",
