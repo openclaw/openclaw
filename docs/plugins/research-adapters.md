@@ -70,6 +70,5 @@ response alone. A create without a recorded remote receipt or definitive not-sen
 outcome is indeterminate: there is no automatic submission retry without documented
 provider idempotency.
 
-See [Deep Research](/tools/deep-research) for user-facing behavior and qualification
-limits. No consumer OAuth, Codex managed-research RPC, or cross-auth-mode proof
-is implied by this contract.
+No consumer OAuth, Codex managed-research RPC, or cross-auth-mode proof is implied
+by this contract.

@@ -74,6 +74,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "update.channel": "Update Channel",
   "update.checkOnStart": "Update Check on Start",
   "update.auto.enabled": "Auto Update Enabled",
+  "update.auto.schedule": "Automatic Update Schedule",
   telemetry: "Telemetry",
   ...TELEMETRY_FIELD_LABELS,
   surfaces: "Surface Policies",

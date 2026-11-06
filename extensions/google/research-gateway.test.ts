@@ -142,6 +142,7 @@ describe("registered Google managed-research RPC", () => {
       expect(await entry.request({ version: 1, action: "describe" })).toMatchObject({
         ok: false,
         state: "blocked",
+        reason: expect.stringContaining("not explicitly enabled"),
       });
     }
     const entry = await fixture({ enabled: true, profileId: "google:research" });
@@ -151,7 +152,17 @@ describe("registered Google managed-research RPC", () => {
     });
     expect(await entry.request({ version: 2, action: "start", question: "River" })).toMatchObject({
       ok: false,
+      reason: expect.stringContaining("request version 1"),
     });
+    const otherProfile = { interactionId: "owned-interaction", profileId: "google:other" };
+    expect(await entry.request({ version: 1, action: "poll", handle: otherProfile })).toMatchObject(
+      {
+        ok: false,
+        state: "blocked",
+        handle: otherProfile,
+        reason: expect.stringContaining("cannot switch profiles"),
+      },
+    );
     expect(await entry.request({ version: 1, action: "describe" })).toMatchObject({
       ok: true,
       value: { kind: "managed-research", authModes: ["api-key"] },

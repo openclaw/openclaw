@@ -19,6 +19,7 @@ import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./c
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import type { CodexUsageProjection } from "./event-projector-usage.js";
+import type { CodexInferenceStreamParams } from "./inference-context.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-metadata.js";
 import { readCodexAppServerConfigOptions, resolveCodexPrivateLauncher } from "./launch-args.js";
 import { readModelListResult, type CodexAppServerModel } from "./models.js";
@@ -109,6 +110,7 @@ type CodexBoundedTurnParams = {
   authRequirement?: CodexAppServerAuthRequirement;
   timeoutMs: number;
   thinkLevel?: Parameters<typeof resolveCodexAppServerReasoningEffort>[0]["thinkLevel"];
+  streamParams?: CodexInferenceStreamParams;
   signal?: AbortSignal;
   assertCurrent?: () => void;
   agentDir?: string;
@@ -305,7 +307,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       : undefined;
     if (params.requireInferenceRoute && !inference) {
       throw new Error(
-        "Prepared Codex API route requires an owned inference relay; no direct fallback was attempted.",
+        "Prepared Codex request requires an owned inference relay; no direct fallback was attempted.",
       );
     }
     threadConfig = inference?.config ?? threadConfig;
@@ -366,6 +368,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       },
       retainPrefix: false,
       denyToolCalls: params.requireNoExternalCapabilities,
+      streamParams: params.streamParams,
     });
     releaseInferenceContext = registration?.release;
     params.assertCurrent?.();

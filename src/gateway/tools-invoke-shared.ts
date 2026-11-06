@@ -223,6 +223,8 @@ type InvokeGatewayToolParams = {
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
   /** Host-minted authority from the calling connection; never derived from wire params. */
   operatorRoleActor?: NonNullable<GatewayClient["internal"]>["operatorRoleActor"];
+  /** Original authenticated HTTP principal or the enclosing RPC scope's principal. */
+  openclawIdPrincipal?: NonNullable<GatewayClient["internal"]>["openclawIdPrincipal"];
   operatorScopes?: readonly string[];
   approvalReviewerDeviceId?: string;
   senderIsOwner?: boolean;
@@ -332,6 +334,7 @@ async function invokeGatewayToolWithSignal(
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     operatorRoleActor: params.operatorRoleActor,
+    openclawIdPrincipal: params.openclawIdPrincipal ?? sourceClient?.internal?.openclawIdPrincipal,
     scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
   });
   const sessionEntry = params.preparedSession

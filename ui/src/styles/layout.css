@@ -707,7 +707,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border: 0;
   border-radius: var(--radius-md);
   background: var(--sidebar-rail-action-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
   text-decoration: none;
 }
 
@@ -718,7 +718,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .header-new-session:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-hover-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
 }
 
 .header-new-session:focus-visible {
