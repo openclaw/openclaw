@@ -222,6 +222,16 @@ describe("public session document", () => {
     expect(unavailableMain.textContent).not.toContain("Public · Read-only");
     expect(unavailableMain.querySelector(".colophon")).toBeNull();
     expect(unavailable).not.toContain('http-equiv="refresh"');
+    // Access interstitials center their status; the reader keeps its own flow.
+    expect(unavailableMain.hasAttribute("data-public-unavailable")).toBe(true);
+    const readerMain = JSDOM.fragment(html).querySelector("main")!;
+    expect(readerMain.hasAttribute("data-public-unavailable")).toBe(false);
+    // The crisp wordmark is inline and theme-aware, never the small mark beside text.
+    for (const main of [readerMain, unavailableMain]) {
+      const brand = main.querySelector(".topbar .brand")!;
+      expect(brand.querySelector("svg.wordmark")?.getAttribute("aria-label")).toBe("OpenClaw");
+      expect(brand.querySelector(".mark")).toBeNull();
+    }
   });
   it("publishes only user and assistant conversation text without internal input or metadata", () => {
     const token = `sk-${"a".repeat(48)}`;
