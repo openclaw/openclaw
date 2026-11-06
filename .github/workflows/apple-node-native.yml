@@ -61,7 +61,7 @@ jobs:
           test ! -e crates/openclaw-iroh-ffi/dist/apple/OpenClawIrohFFI.xcframework
           swift test --package-path apps/shared/OpenClawKit --filter OpenClawIDNode
 
-      - name: Install pinned Rust and Apple targets on CI only
+      - name: Install pinned Rust and macOS targets on CI only
         run: |
           set -euo pipefail
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -69,15 +69,18 @@ jobs:
           if ! command -v rustup >/dev/null; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
           fi
-          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target aarch64-apple-darwin,x86_64-apple-darwin
 
-      - name: Build same-revision bindings and XCFramework
+      - name: Build same-revision bindings and macOS XCFramework
         working-directory: crates/openclaw-iroh-ffi
+        env:
+          # iOS native slices remain blocked by the upstream netdev/libc mismatch.
+          OPENCLAW_IROH_APPLE_PLATFORMS: macos
         run: |
           scripts/generate-bindings.sh
           git diff --exit-code -- generated
           test -z "$(git ls-files --others --exclude-standard generated)"
-          MACOSX_DEPLOYMENT_TARGET=15.0 IPHONEOS_DEPLOYMENT_TARGET=18.0 scripts/build-apple.sh
+          scripts/build-apple.sh
 
       - name: Test native Swift package and opted-in adapter
         env:
