@@ -137,6 +137,7 @@ export function createGatewayChatUserTurnController(params: {
     text: request.rawMessage,
     requesterOrigin,
     ...(request.workContext ? { workContext: request.workContext } : {}),
+    ...(request.appContext ? { appContext: request.appContext } : {}),
     ...(request.mentions ? { mentions: request.mentions } : {}),
     timestamp: session.now,
     idempotencyKey: sourceId,

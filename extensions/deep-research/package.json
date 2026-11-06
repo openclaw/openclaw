@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/deep-research",
+  "version": "2026.11.1",
+  "private": true,
+  "description": "Bounded, evidence-backed research through portable models and managed services",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

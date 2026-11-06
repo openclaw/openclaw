@@ -1,5 +1,86 @@
 # Team-scale Control UI cold-load benchmark
 
+## Firefox census
+
+The engines harness also accepts `--engines chromium,firefox`. Install the exact
+Firefox revision from the repository's Playwright dependency with
+`pnpm --dir ui exec playwright install firefox`. Use `PLAYWRIGHT_BROWSERS_PATH`
+for an existing approved browser-cache location. Do not substitute system Firefox.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium,firefox --pages --page-phases visit --viewport both \
+  --output .artifacts/firefox/routes
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium,firefox --viewport both \
+  --steps cold-boot,warm-boot,chat-typing,sidebar-toggle,sidebar-open,sidebar-close,session-switch,model-picker-first-open-search,cron-menu-open,sessions-search,streaming-645-deltas,large-transcript-open,large-transcript-fast-scroll,transcript-scroll-top \
+  --output .artifacts/firefox/interactions
+```
+
+These one-pair runs are screens, not performance evidence. Confirm any failure
+or engine/Chromium ratio above 1.3 with `--pairs 10 --configurations default,control`
+on the affected steps. The identical `control` configuration supplies the A/A
+check; positions and directions rotate. Split compound actions before attributing
+a gap. Fix validation requires 20 rotated pairs plus A/A and unchanged engines
+within the campaign's acceptance band.
+
+Firefox retains the same browser-local application elapsed clock and boot/route
+readiness milestones. These measure neither CPU nor paint. CPU counters, native
+traces, throttling, forced GC, and heap snapshots are unavailable in this harness;
+their options fail explicitly rather than falling back to a different clock.
+The page observer detects Layout Instability and Long Tasks support at runtime
+and records unavailable metrics as `null`, never zero. Mobile Firefox cells use
+the same narrow viewport and touch settings, but omit Playwright's unsupported
+`isMobile` emulation. Hidden-tab scenarios are skipped where native visibility
+cannot be controlled.
+
+Desktop `transcript-scroll-top` uses repeated sub-page native wheel gestures and
+reports `wheelEvents` with its result. Firefox deliberately caps a single wheel
+event to one page, so an arbitrarily large delta is not a portable jump-to-top.
+The measured journey includes the driver gaps between gestures; it is not
+single-wheel latency. Mobile retains the programmatic scrollport jump because
+Playwright's mobile WebKit driver does not support wheel input.
+
+## Native browser work and composited layers
+
+Use the same production route and interaction scenarios with `--native-audit`
+to collect Chromium native work, V8 samples, and a before/after `LayerTree`
+inventory. Run each selection at 1× and 6×; keep these diagnostic captures
+separate from uninstrumented timing comparisons.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --pages --page-phases visit,action --engines chromium --viewport both \
+  --native-audit --cpu-throttle 1 --output .artifacts/native-time/routes-1x
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --steps native-composer-keystroke,native-composer-hover \
+  --engines chromium --viewport both --native-audit --cpu-throttle 6 \
+  --output .artifacts/native-time/input-6x
+```
+
+Each observation reports exclusive style, layout, pre-paint, paint, layerization,
+commit, HTML/CSS parsing, script compilation, and GC intervals. Nested categories
+are counted once per thread. Renderer-main and other renderer threads remain
+separate. Wall durations are elapsed trace time; thread CPU is reported only
+when every overlapping event has a usable thread clock. Missing clocks are
+`null`, not zero or wall time scaled into CPU.
+
+The `(program)` breakdown intersects sample intervals with native trace slices
+on the same monotonic clock, excluding the initial profiler-start interval just
+as the CPU census does. This is correlation of sampled elapsed time, not a
+causal attribution of OS CPU. Unmatched time remains explicitly unexplained.
+Raw trace/profile data is retained in `*.native.json`; observation summaries
+also include event names for investigating unclassified work.
+
+Layer inventories include compositing reasons and computed promotion-related
+styles. The RGBA estimate is content-layer width × height × four, excluding
+scale, tiles, buffers, and GPU overhead; it is not measured GPU memory. A
+discarded screenshot requests the initial inventory on idle headless pages.
+Paint clips use layer-local coordinates and can overlap. Some Chromium builds
+update layer paint counters without emitting `layerPainted`: zero events do
+not prove no repaint. Trace `Paint` clips are recording bounds, not raster
+invalidations or proof that every pixel in that rectangle changed.
+
 ## Cross-flow CPU census
 
 Use the cross-engine harness's Chromium-only `--cpu-profile` mode to find small
@@ -920,6 +1001,32 @@ composer input, and excludes reload and report serialization. These are sampled
 allocation estimates, not retained heap sizes or exact array counts. Collect
 timings in separate runs without allocation sampling.
 
+The cross-engine harness also accepts `--allocations --engines chromium` for any
+of its existing scenarios. It writes a source-mapped `*.heapprofile` and
+`observations.json` includes estimated bytes ranked by allocating function, file,
+and owner. `functions` counts each sample at its leaf once;
+`sourceFunctions`, file, and owner tables attribute native leaves to their nearest
+source-bearing caller without double-counting. Missing stack nodes retain an
+explicit unattributed byte count. Automation and unmapped
+frames remain visible. This samples the main isolate, not other renderer threads
+or native allocations, and includes objects collected by both kinds of GC.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium --viewport desktop --allocations \
+  --steps chat-typing,streaming-645-deltas,session-switch,settings-sections,sidebar-toggle,model-picker-search,transcript-scroll-top \
+  --output .artifacts/allocations
+```
+
+`chat-typing` enters 26 characters, `streaming-645-deltas` delivers 645 deltas
+while periodically typing, `session-switch` and `sidebar-toggle` each make a
+round trip, and `settings-sections` visits three warm routes. Normalize allocated
+bytes by those action counts; streaming bytes per delta include concurrent
+typing and fixture delivery. Run `--native-audit` separately at 1× and 6× to
+investigate GC: allocation sampling changes allocation/GC behavior and cannot
+establish a timing improvement. These synthetic flows measure renderer work,
+not live Gateway/provider latency.
+
 For concurrent paired comparisons, use separate processes and bundle directories
 with the same `--fixture-now-ms` and a future `--live-start-at-ms`, `--runs 1`, and
 distinct `--port` / `--sandbox-port` values. The start barrier supports either
@@ -951,7 +1058,28 @@ node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
   --output .artifacts/streaming-profile
 ```
 
-This workload delivers the 645-delta Markdown reply at 150 deltas/s in bursts
+To isolate the first answer token, select `--steps streaming-onset` in that
+companion. It starts from a settled active run over 2,000 rich history messages;
+`streaming-onset-short` uses 400. Onset delivers one nonempty answer delta.
+`streaming-working-preparation` instead starts from the same settled history
+without an active run, then delivers an empty first delta and ends at the new
+working-indicator mutation. This measures preparation before the answer token,
+including adoption of the run, separately from onset. It does not measure sending
+a user message. Both phases retain the pre-action transcript rows for comparison.
+The browser-local `applicationMs` ends at the matching transcript mutation;
+`eventToFrameMs` includes two subsequent animation frames, not paint. Chromium
+thread CPU includes the complete action and settlement. Use separate traced
+runs for native task attribution and untraced rotated comparisons with an
+unchanged bundle control for timing claims.
+
+For qualification, select
+`--steps streaming-onset,streaming-working-preparation,streaming-mixed-fast,session-switch,chat-typing`
+with `--compare-bundle-dir <head> --control-bundle-dir <base> --pairs 20
+--engines chromium,webkit --viewport desktop`. The control repeats the base in
+each rotated triplet. `session-switch` shows both retained 400-message transcripts
+in turn; `chat-typing` checks 26 native typed characters without sending a message.
+
+`streaming-mixed-fast` delivers the 645-delta Markdown reply at 150 deltas/s in bursts
 of five, with reasoning, 24 tool calls and results, and an image arriving midway.
 It requires `--viewport desktop`: mobile's modal navigation drawer prevents
 simultaneous composer and sidebar input.

@@ -147,6 +147,8 @@ export function Agents(props: AgentsProps) {
           ? "agents.unpinFromSwitcher"
           : "agents.pinToSwitcher",
       )}
+      deleteDisabled={!props.access.canDeleteAgent}
+      onDelete={props.onDeleteAgent}
       showPhoneActions={phone()}
       createLabel={t("custodian.newAgent")}
       createDisabled={rosterPending() || !props.access.canCreateAgent}

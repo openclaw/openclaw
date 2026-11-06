@@ -178,7 +178,7 @@ describe("renderChatComposer context usage", () => {
 
   it.each([false, true])(
     "does not borrow the default model's capacity when session capacity is unknown (plan usage: %s)",
-    (withPlanUsage) => {
+    async (withPlanUsage) => {
       const session = sessionRow({
         modelProvider: "openai",
         model: "selected-model",
@@ -206,7 +206,7 @@ describe("renderChatComposer context usage", () => {
       const ring = contextRingFor(container);
       if (withPlanUsage) {
         expect(ring?.getAttribute("aria-label")).toBe("Usage remaining");
-        expect(part(container, "limit")?.textContent).toContain("72%");
+        await waitForSolid(() => expect(part(container, "limit")?.textContent).toContain("72%"));
       } else {
         expect(ring).toBeNull();
       }
@@ -242,7 +242,7 @@ describe("renderChatComposer context usage", () => {
     },
   );
 
-  it("deduplicates provider aliases and hides cost estimates for subscriptions", () => {
+  it("deduplicates provider aliases and hides cost estimates for subscriptions", async () => {
     const resetAt = Date.now() + 2 * 3_600_000 + 45_000;
     const windows: [string, number, number?][] = [
       ["5h", 21.6, resetAt],
@@ -270,6 +270,9 @@ describe("renderChatComposer context usage", () => {
 
     expect(container.querySelectorAll(".context-usage__tray")).toHaveLength(1);
     expect(part(container, "plan-badge")?.textContent).toBe("Max (20x)");
+    await waitForSolid(() =>
+      expect(container.querySelectorAll('[role="progressbar"]')).toHaveLength(4),
+    );
     const limits = [...container.querySelectorAll(".context-usage__limit")];
     expect(textContents(container, ".context-usage__limit-label")).toEqual([
       "5-hour",
@@ -298,7 +301,7 @@ describe("renderChatComposer context usage", () => {
     expect(part(container, "stats")?.textContent).not.toContain("Cost");
   });
 
-  it("keeps distinct subscription accounts separate when selecting a provider", () => {
+  it("keeps distinct subscription accounts separate when selecting a provider", async () => {
     const providers = ["anthropic", "claude-cli"].map((id, index) =>
       planProvider(id, "Claude", [["5h", 10]], {
         usage: {
@@ -315,11 +318,13 @@ describe("renderChatComposer context usage", () => {
       expect(textContents(container, ".context-usage__account")).toEqual([
         ["work@example.com", "personal@example.com"][index],
       ]);
-      expect(textContents(container, ".context-usage__limit-value")).toEqual(["10%"]);
+      await waitForSolid(() =>
+        expect(textContents(container, ".context-usage__limit-value")).toEqual(["10%"]),
+      );
     }
   });
 
-  it("omits empty or invalid subscription quotas and clamps displayed window usage", () => {
+  it("omits empty or invalid subscription quotas and clamps displayed window usage", async () => {
     const providers = [
       planProvider("anthropic", "Claude", []),
       planProvider("openrouter", "Claude", [], {
@@ -341,8 +346,10 @@ describe("renderChatComposer context usage", () => {
         session: { modelProvider },
         providerUsage: planUsage(providers),
       });
-      expect(textContents(container, ".context-usage__limit-value")).toEqual(
-        modelProvider === "openai" ? ["100%", "33%", "0%"] : [],
+      await waitForSolid(() =>
+        expect(textContents(container, ".context-usage__limit-value")).toEqual(
+          modelProvider === "openai" ? ["100%", "33%", "0%"] : [],
+        ),
       );
       expect(textContents(container, ".context-usage__limit-label")).toEqual(
         modelProvider === "openai" ? ["Weekly", "Fractional", "Negative"] : [],
@@ -382,7 +389,7 @@ describe("renderChatComposer context usage", () => {
     expect(providerNames(renderComposer(composerProps as never))).toEqual(["codex"]);
   });
 
-  it("selects the authoritative account regardless of response order", () => {
+  it("selects the authoritative account regardless of response order", async () => {
     const first = planProvider("openai", "OpenAI", [["Week", 10]], {
       usage: { authProfileId: "openai:one", accountEmail: "first@example.test" },
     });
@@ -399,7 +406,7 @@ describe("renderChatComposer context usage", () => {
         providerUsage: planUsage(providers),
       });
       expect(container.textContent).toContain("second@example.test");
-      expect(container.textContent).toContain("80%");
+      await waitForSolid(() => expect(container.textContent).toContain("80%"));
       expect(container.textContent).not.toContain("first@example.test");
     }
   });

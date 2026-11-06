@@ -124,10 +124,16 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     this.resumeCatalogRead();
     const state = this.state;
     const load = state && getChatHistoryLoadState(state);
-    const resumed =
+    if (
       state &&
-      (load?.phase === "pending-presentation" || load?.phase === "pending-connection") &&
-      resumePendingChatHistoryLoad(state);
+      load?.phase === "failed" &&
+      load.retryable &&
+      chatHistoryRequests(state).subscriptionError
+    ) {
+      // An approval upgrade can fail while its weaker base subscription remains.
+      void syncSelectedSessionMessageSubscription(state, { force: true });
+    }
+    const resumed = state && resumePendingChatHistoryLoad(state);
     if (state && resumed) {
       this.deferSessionHydrationUntilTranscript(
         state.sessionKey,
@@ -151,7 +157,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     }
     this.reconcileWaitingApprovalSnapshot();
     if (chatHistoryRequests(state).subscriptionError) {
-      void syncSelectedSessionMessageSubscription(state);
+      void syncSelectedSessionMessageSubscription(state, { force: true });
     }
     const historyLoad = getChatHistoryLoadState(state);
     const startup = historyLoad.phase === "failed" && historyLoad.startup;
