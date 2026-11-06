@@ -164,7 +164,7 @@ describe.skipIf(process.platform !== "linux")("isolated ClawHub pack process bou
     expect(result.calls[1]!.args[4]).toMatch(
       /^clawhub-pack-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/,
     );
-    expect(existsSync(run.args[1])).toBe(false);
+    expect(existsSync(run.args[1]!)).toBe(false);
     expect(result.stdout).toContain('[isolated pack] "::error::untrusted workflow command');
     expect(result.stdout.split("\n").some((line) => line.startsWith("::"))).toBe(false);
     expect(result.stdout).not.toContain("\r");
@@ -259,7 +259,7 @@ describe.skipIf(process.platform !== "linux")("isolated ClawHub pack process bou
       expect(result.status, result.stderr).toBe(expectedStatus);
       const args = JSON.parse(readFileSync(argsPath, "utf8")) as string[];
       expect(args.slice(2)).toEqual(["rm", "--force", "clawhub-pack-12345-2-0"]);
-      expect(existsSync(args[1])).toBe(false);
+      expect(existsSync(args[1]!)).toBe(false);
     },
   );
 });
