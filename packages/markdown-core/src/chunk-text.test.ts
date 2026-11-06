@@ -15,7 +15,9 @@ it("preserves nonempty text when the limit is NaN instead of dropping it", () =>
   // not [{ start: 0, end: NaN }] which slices to an empty string.
   expect(chunkTextRanges(text, { limit: Number.NaN })).toEqual([{ start: 0, end: text.length }]);
   // A recalled nonempty chunk must not be empty when sliced back out.
-  expect(chunkTextRanges(text, { limit: Number.NaN }).map(({ start, end }) => text.slice(start, end))).toEqual([text]);
+  expect(
+    chunkTextRanges(text, { limit: Number.NaN }).map(({ start, end }) => text.slice(start, end)),
+  ).toEqual([text]);
 });
 
 it("keeps grapheme boundaries and surrogate-safe progress in each chunking mode", () => {
