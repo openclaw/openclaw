@@ -340,8 +340,9 @@ export function createSlashMenu() {
     const argOptions = host.resolveArgOptions(cmd);
     if (argOptions.length > 0) {
       // A draft commit can synchronously render; publish the complete mode first.
-      openSlashArgumentMenu(state, cmd, argOptions, `/${cmd.name} `);
-      host.commitDraft(`/${cmd.name} `);
+      const draft = `/${cmd.name} `;
+      openSlashArgumentMenu(state, cmd, argOptions, draft);
+      host.commitDraft(draft);
       return;
     }
     if (completeOnly) {
