@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Loading, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import "../../../components/tooltip.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
@@ -20,18 +21,14 @@ export function AttachmentRemove(props: {
   class?: string;
 }) {
   return (
-    <openclaw-tooltip prop:content={props.label}>
-      <button
-        ref={[props.buttonRef]}
-        class={props.class ?? "chat-attachment-remove"}
-        type="button"
-        aria-label={props.label}
-        disabled={props.disabled}
-        onClick={(event) => props.onClick(event)}
-      >
-        <Icon name="x" />
-      </button>
-    </openclaw-tooltip>
+    <IconButton
+      ref={(element: HTMLButtonElement) => props.buttonRef?.(element)}
+      class={props.class ?? "chat-attachment-remove"}
+      icon="x"
+      label={props.label}
+      disabled={props.disabled}
+      onClick={(event) => props.onClick(event)}
+    />
   );
 }
 

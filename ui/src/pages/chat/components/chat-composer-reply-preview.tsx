@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatReplyTarget } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -64,15 +65,13 @@ export function ComposerReplyPreview(view: {
         {truncateUtf16Safe(view.target.text, 120)}
         {view.target.text.length > 120 ? "..." : ""}
       </span>
-      <button
-        type="button"
+      <IconButton
+        size={28}
         class="chat-reply-preview__dismiss composer-context-strip__dismiss"
+        icon="x"
+        label={t("chat.composer.cancelReply")}
         onClick={() => view.composer.onClearReply?.()}
-        aria-label={t("chat.composer.cancelReply")}
-        title={t("chat.composer.cancelReply")}
-      >
-        <Icon name="x" />
-      </button>
+      />
     </div>
   );
 }

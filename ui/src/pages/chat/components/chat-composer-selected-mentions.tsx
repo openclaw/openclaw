@@ -1,5 +1,6 @@
 import { createMemo, For, onSettled, Show, type Accessor } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -166,16 +167,13 @@ export function SelectedHumanMentions(props: {
             hidden
           />
         </span>
-        <button
-          type="button"
+        <IconButton
+          size={28}
           class="chat-reply-preview__dismiss composer-context-strip__dismiss"
-          aria-label={t("chat.mentions.remove")}
+          icon="x"
+          label={t("chat.mentions.remove")}
           onClick={() => props.onRemove()}
-        >
-          <ComposerContent>
-            <Icon name="x" />
-          </ComposerContent>
-        </button>
+        />
       </div>
     </Show>
   );
