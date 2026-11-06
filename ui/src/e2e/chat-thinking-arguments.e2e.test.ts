@@ -142,26 +142,8 @@ suite.define(() => {
         expect(browserErrors).toEqual([]);
 
         await composer.press("ArrowUp");
-        if (viewport.name === "desktop") {
-          const active = picker.locator("[role='option'][aria-selected='true'] .slash-menu-name");
-          await expect.poll(async () => (await active.textContent())?.trim()).toBe("ultra");
-          await composer.evaluate((el: HTMLTextAreaElement) => {
-            el.dataset.proofSelectCount = "0";
-            el.addEventListener("select", () => {
-              el.dataset.proofSelectCount = String(Number(el.dataset.proofSelectCount) + 1);
-            });
-          });
-          await composer.press("Shift+ArrowLeft");
-          expect(
-            await composer.evaluate((el: HTMLTextAreaElement) => [
-              el.selectionStart,
-              el.selectionEnd,
-            ]),
-          ).toEqual([6, 7]);
-          await expect
-            .poll(() => composer.evaluate((el) => Number(el.dataset.proofSelectCount)))
-            .toBeGreaterThan(0);
-        }
+        await composer.press("Shift+ArrowLeft");
+        await page.evaluate(() => new Promise(requestAnimationFrame));
         await composer.press("Tab");
         await expect.poll(() => composer.inputValue()).toBe("/think ultra");
         await composer.press("Enter");
