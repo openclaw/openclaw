@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/command-auth-native";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { SignalIngressLifecycle } from "../signal-ingress.js";
+import type { SignalIngressLifecycle } from "./event-handler.types.js";
 
 export type SignalInboundEntry = {
   /** Admission and buffered dispatch share this receipt-time snapshot. */

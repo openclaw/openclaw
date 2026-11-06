@@ -6,8 +6,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SignalIngressLifecycle } from "../signal-ingress.js";
 import type { SignalInboundEntry } from "./event-handler.control-lane.js";
+import type { SignalIngressLifecycle } from "./event-handler.types.js";
 
 const { dispatchMock, recordMock, receiptMock, typingMock, fixture } = vi.hoisted(() => ({
   fixture: { realSession: false },

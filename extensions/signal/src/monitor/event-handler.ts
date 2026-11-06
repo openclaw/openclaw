@@ -83,7 +83,6 @@ import { resolveSignalReactionLevel } from "../reaction-level.js";
 import { registerSignalReplyContext } from "../reply-authors.js";
 import { sendReactionSignal, type SignalReactionOpts } from "../send-reactions.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
-import type { SignalIngressLifecycle } from "../signal-ingress.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import {
   createSignalPendingInboundRegistry,
@@ -91,7 +90,7 @@ import {
   resolveSignalInboundDebounceKey,
   type SignalInboundEntry,
 } from "./event-handler.control-lane.js";
-import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
+import type * as SignalEvent from "./event-handler.types.js";
 import { resolveSignalInboundRoute, resolveSignalQuoteContext } from "./inbound-context.js";
 import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
 import {
@@ -120,7 +119,7 @@ async function finalizeSignalStatusReaction(params: {
   await params.controller.restoreInitial();
 }
 
-export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
+export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDeps) {
   const readConfig = createRuntimeConfigReader(deps.cfg);
   const groupsConfigPath = resolveChannelGroupsConfigPath({
     cfg: deps.cfg,
@@ -567,7 +566,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
   async function flushSignalInboundEntries(
     entries: SignalInboundEntry[],
-    lifecycle: SignalIngressLifecycle,
+    lifecycle: SignalEvent.SignalIngressLifecycle,
     settle: () => Promise<void>,
   ): Promise<void> {
     const last = entries.at(-1);
@@ -702,18 +701,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
   return async (
     event: SignalSseEvent,
-    turnAdoptionLifecycle?: SignalIngressLifecycle,
-    preparedPayload?: SignalReceivePayload,
+    turnAdoptionLifecycle?: SignalEvent.SignalIngressLifecycle,
+    preparedPayload?: SignalEvent.SignalReceivePayload,
   ): Promise<{ kind: "deferred" } | { kind: "failed-retryable"; error: unknown } | void> => {
     if (event.event !== "receive" || !event.data) {
       return;
     }
 
     const cfg = readConfig();
-    let payload: SignalReceivePayload | null = preparedPayload ?? null;
+    let payload: SignalEvent.SignalReceivePayload | null = preparedPayload ?? null;
     if (!preparedPayload) {
       try {
-        payload = JSON.parse(event.data) as SignalReceivePayload;
+        payload = JSON.parse(event.data) as SignalEvent.SignalReceivePayload;
       } catch {
         deps.runtime.error?.("failed to parse event: invalid JSON");
         return;

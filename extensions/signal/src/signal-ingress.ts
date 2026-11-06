@@ -4,7 +4,6 @@ import {
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
-  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -14,7 +13,10 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalSseEvent } from "./client-adapter.js";
 import { isSignalActiveRunControlText } from "./monitor/event-handler.control-lane.js";
-import type { SignalReceivePayload } from "./monitor/event-handler.types.js";
+import type {
+  SignalIngressLifecycle,
+  SignalReceivePayload,
+} from "./monitor/event-handler.types.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
 const SIGNAL_INGRESS_DRAIN_INTERVAL_MS = 1_000;
@@ -47,8 +49,6 @@ type SignalIngressPayload = {
 };
 
 type SignalIngressBody = Omit<SignalIngressPayload, "version">;
-
-export type SignalIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
 type SignalIngressDispatch = (
   event: SignalSseEvent,
