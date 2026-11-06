@@ -430,6 +430,8 @@ describe("production lint suppressions", () => {
         "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",
         // Session commands relay the owner's original error so the display boundary can format it.
         "ui/src/pages/sessions/view.tsx|typescript/only-throw-error|1",
+        // Pinned WebKit Inspector is the only API that includes detached CSS animations.
+        "ui/src/test-helpers/control-ui-webkit-animations.ts|no-underscore-dangle|1",
       ].filter((entry) => fs.existsSync(path.join(repoRoot, entry.split("|", 1)[0]!))),
     );
   });
