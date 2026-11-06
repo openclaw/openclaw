@@ -311,7 +311,7 @@ it.each([
     expect(
       plan.core_type_matrix.include
         .flatMap((row) => JSON.parse(row.type_graph_names_json!))
-        .toSorted(),
+        .toSorted((a: string, b: string) => a.localeCompare(b)),
     ).toEqual(
       runnerProfile === "hybrid"
         ? stripes.map((stripe) => `core-test-${coreGraphNames[stripe - 1]}`).toSorted()
