@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { sendDurableMessageBatchCore } from "../../channels/message/send.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -22,7 +23,14 @@ import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadat
 import { finalizePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bootstrapOutboundChannelPluginAsync } from "./channel-bootstrap.runtime.js";
+import { runOutboundDeliveryInternal } from "./deliver-queue.js";
+import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { drainPendingDeliveriesCore } from "./delivery-queue-recovery.js";
+import { loadPendingDelivery } from "./delivery-queue-storage.js";
+import { createRecoveryLog } from "./delivery-queue.test-helpers.js";
 
 afterEach(() => {
   resetPluginLoaderTestStateForTest();
@@ -30,10 +38,20 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-function createFixture({ global = false, deferInstall = false } = {}) {
+function createFixture({
+  global = false,
+  deferInstall = false,
+  accountCustody = false,
+  stateDir: providedStateDir,
+}: {
+  global?: boolean;
+  deferInstall?: boolean;
+  accountCustody?: boolean;
+  stateDir?: string;
+} = {}) {
   useNoBundledPlugins();
   const root = makePluginLoaderTempDir();
-  const stateDir = path.join(root, "state");
+  const stateDir = providedStateDir ?? path.join(root, "state");
   vi.stubEnv("OPENCLAW_HOME", path.join(root, "home"));
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const id = "bootstrap-lifecycle";
@@ -52,10 +70,26 @@ function createFixture({ global = false, deferInstall = false } = {}) {
           id: "${id}",
           meta: { id: "${id}", label: "Fixture", selectionLabel: "Fixture", docsPath: "/fixture", blurb: "Fixture" },
           capabilities: { chatTypes: ["direct"] },
-          config: { listAccountIds: () => ["default"], resolveAccount: () => ({}) },
+          config: {
+            listAccountIds: () => ${accountCustody ? '["a", "b"]' : '["default"]'},
+            resolveAccount: () => ({}),
+            ${accountCustody ? `defaultAccountId: (cfg) => cfg.channels?.["${id}"]?.defaultAccount ?? "a",` : ""}
+          },
           outbound: {
             deliveryMode: "direct",
-            async sendText() { record("sent:${label}"); return { channel: "${id}", messageId: "${label}" }; },
+            async sendText(ctx) {
+              ${
+                accountCustody
+                  ? `
+                const account = ctx.accountId ?? ctx.cfg.channels?.["${id}"]?.defaultAccount ?? "a";
+                record("account:" + account);
+                await ctx.onPlatformSendDispatch?.();
+              `
+                  : ""
+              }
+              record("sent:${label}");
+              return { channel: "${id}", messageId: "${label}" };
+            },
           },
         } });`,
     });
@@ -96,6 +130,61 @@ function sender(registry: PluginRegistry | undefined) {
 }
 
 describe("outbound bootstrap lifetime", () => {
+  it.each(["warm", "cold"])(
+    "retains the %s sender account across durable recovery",
+    async (mode) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+        const fixture = createFixture({ accountCustody: true, stateDir });
+        await using lifetime = createPluginCache();
+        await withPluginCache(lifetime, async () => {
+          if (mode === "warm") {
+            setActivePluginRegistry(
+              expectDefined(
+                await bootstrapOutboundChannelPluginAsync(fixture.params),
+                "fixture registry",
+              ),
+            );
+          }
+          const rootRegistry = getActivePluginRegistry();
+          const id = "sender-custody";
+          const result = await sendDurableMessageBatchCore({
+            cfg: fixture.config,
+            channel: fixture.plugin.id,
+            to: "recipient",
+            payloads: [{ text: "queued reply" }],
+            deliveryIntentId: id,
+            onPlatformSendDispatch: async () => {
+              throw new PlatformMessageNotDispatchedError("sender preparation unavailable", {
+                cause: new Error("temporary sender outage"),
+              });
+            },
+          });
+          expect(result.status).toBe("failed");
+          const queued = await loadPendingDelivery(id, stateDir);
+          expect(queued).not.toBeNull();
+          await drainPendingDeliveriesCore({
+            cfg: {
+              ...fixture.config,
+              channels: { [fixture.plugin.id]: { enabled: true, defaultAccount: "b" } },
+            },
+            stateDir,
+            log: createRecoveryLog(),
+            drainKey: "account-custody",
+            logLabel: "account custody recovery",
+            selectEntry: () => ({ match: true, bypassBackoff: true }),
+            deliver: runOutboundDeliveryInternal,
+          });
+          expect(fixture.events().filter((event) => event.startsWith("account:"))).toEqual([
+            "account:a",
+          ]);
+          expect(queued?.accountId).toBe("a");
+          expect(await loadPendingDelivery(id, stateDir)).toBeNull();
+          expect(getActivePluginRegistry()).toBe(rootRegistry);
+        });
+      });
+    },
+  );
+
   it("sends through a fresh instance after replacing the plugin cache", async () => {
     const bootstrap = bootstrapOutboundChannelPluginAsync;
     const fixture = createFixture();

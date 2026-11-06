@@ -236,6 +236,7 @@ describe("post-core plugin persistence cancellation", () => {
       await cleanupGatewayRetiredPluginArtifacts({
         log,
         startupInstallPaths: [],
+        startupConfig: {},
         signal: new AbortController().signal,
         assertCurrent: () => {},
       });

@@ -776,4 +776,16 @@ describe("opencode-go provider plugin", () => {
       baseUrl: "https://opencode.ai/zen/go",
     });
   });
+  it("keeps endpoint outages separate from authentication refusals", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const outage = "Upstream request failed: Endpoint is unavailable.";
+    for (const [status, errorMessage, expected] of [
+      [403, outage, "server_error"],
+      [403, "Invalid API key", undefined],
+      [403, "You do not have permission to use this model", undefined],
+      [401, outage, undefined],
+    ] as const) {
+      expect(provider.classifyFailoverReason?.({ status, errorMessage })).toBe(expected);
+    }
+  });
 });

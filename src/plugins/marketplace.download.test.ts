@@ -367,4 +367,49 @@ describe("marketplace archive downloads", () => {
         : "https://user:pass@example.com/frontend-design.tgz",
     );
   });
+  it("reports HTTP failures without waiting for a capture tee", async () => {
+    await withArchiveMarketplace(async (install) => {
+      const cancel = vi.fn();
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1]));
+          },
+          cancel,
+        }),
+        { status: 503 },
+      );
+      const capture = response.clone();
+      let entered!: () => void;
+      const cancellationEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const body = response.body!;
+      const cancelBody = body.cancel.bind(body);
+      vi.spyOn(body, "cancel").mockImplementation((reason) => {
+        entered();
+        return cancelBody(reason);
+      });
+      const release = vi.fn(async () => {
+        await capture.body?.cancel();
+      });
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, finalUrl: archiveUrl, release });
+      const pending = install();
+      try {
+        await cancellationEntered;
+        const result = await Promise.race([
+          pending,
+          new Promise<undefined>((resolve) => {
+            setImmediate(() => resolve(undefined));
+          }),
+        ]);
+        expect(result).toEqual({ ok: false, error: expect.stringContaining("HTTP 503") });
+        expect(release).toHaveBeenCalledTimes(1);
+        expect(cancel).toHaveBeenCalledTimes(1);
+      } finally {
+        await capture.body?.cancel();
+        await pending;
+      }
+    });
+  });
 });

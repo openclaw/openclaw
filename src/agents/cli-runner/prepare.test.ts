@@ -498,7 +498,7 @@ describe("prepareCliRunContext", () => {
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
       bindMcpLoopbackClientGrantAdmission: vi.fn(() => true),
-      revokeMcpLoopbackClientGrant: vi.fn(() => true),
+      revokeMintedMcpLoopbackClientGrant: vi.fn(() => true),
       resolveMcpLoopbackPolicyTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
@@ -1296,7 +1296,7 @@ describe("prepareCliRunContext", () => {
         ?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
       throw new Error("Gemini auth profile was selected but no credential material was found");
     });
-    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+    const revokeMintedMcpLoopbackClientGrant = vi.fn(() => true);
     setRawCliBackendForPrepareTest({
       id: "google-gemini-cli",
       pluginId: "google",
@@ -1307,7 +1307,7 @@ describe("prepareCliRunContext", () => {
     });
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
-      revokeMcpLoopbackClientGrant,
+      revokeMintedMcpLoopbackClientGrant,
     });
 
     await expect(
@@ -1321,7 +1321,9 @@ describe("prepareCliRunContext", () => {
 
     expect(generatedSystemSettingsPath).toBeTruthy();
     expect(fs.existsSync(generatedSystemSettingsPath ?? "")).toBe(false);
-    expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
+    expect(revokeMintedMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ token: "loopback-token" }),
+    );
   });
 
   it("cleans prepared MCP and skills plugin dirs when mid-prepare reference lookup fails", async () => {
@@ -1332,7 +1334,7 @@ describe("prepareCliRunContext", () => {
     const skillsCleanup = vi.fn(async () => {
       fs.rmSync(skillsPluginDir, { recursive: true, force: true });
     });
-    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+    const revokeMintedMcpLoopbackClientGrant = vi.fn(() => true);
     fs.mkdirSync(tempRoot, { recursive: true });
     fs.mkdirSync(skillsPluginDir, { recursive: true });
     setTestEnvValue("TMPDIR", tempRoot);
@@ -1341,7 +1343,7 @@ describe("prepareCliRunContext", () => {
     const getActiveMcpLoopbackRuntime = vi.fn(createLoopbackRuntime);
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
-      revokeMcpLoopbackClientGrant,
+      revokeMintedMcpLoopbackClientGrant,
       prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
         args: ["--plugin-dir", skillsPluginDir],
         cleanup: skillsCleanup,
@@ -1360,7 +1362,9 @@ describe("prepareCliRunContext", () => {
       ).rejects.toThrow("reference path lookup failed");
 
       expect(skillsCleanup).toHaveBeenCalledOnce();
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
+      expect(revokeMintedMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ token: "loopback-token" }),
+      );
       expect(fs.existsSync(skillsPluginDir)).toBe(false);
       expect(
         fs.readdirSync(tempRoot).filter((entry) => entry.startsWith("openclaw-cli-mcp-")),
@@ -2442,7 +2446,7 @@ describe("prepareCliRunContext", () => {
     }));
     const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
-    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+    const revokeMintedMcpLoopbackClientGrant = vi.fn(() => true);
     const resolveMcpLoopbackScopedTools = vi.fn((_scope: McpProjectionParams) => ({
       agentId: "main",
       tools: [
@@ -2470,7 +2474,7 @@ describe("prepareCliRunContext", () => {
       activateMcpLoopbackClientGrantCapture,
       deactivateMcpLoopbackClientGrantCapture,
       mintMcpLoopbackClientGrant,
-      revokeMcpLoopbackClientGrant,
+      revokeMintedMcpLoopbackClientGrant,
       resolveMcpLoopbackScopedTools,
     });
     setRawCliBackendForPrepareTest({
@@ -4226,7 +4230,7 @@ describe("prepareCliRunContext", () => {
     const { dir } = fixture.session;
     const skill = createWeatherSkillFixture(dir, true);
     const preparedExecutionCleanup = vi.fn(async () => undefined);
-    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+    const revokeMintedMcpLoopbackClientGrant = vi.fn(() => true);
     setCliBackendForPrepareTest({
       id: "claude-cli",
       pluginId: "anthropic",
@@ -4236,7 +4240,7 @@ describe("prepareCliRunContext", () => {
     setCliRunnerPrepareTestDeps({
       prepareClaudeCliSkillsPlugin,
       getActiveMcpLoopbackRuntime: vi.fn(createLoopbackRuntime),
-      revokeMcpLoopbackClientGrant,
+      revokeMintedMcpLoopbackClientGrant,
     });
 
     const context = await fixture.prepare({
@@ -4264,7 +4268,9 @@ describe("prepareCliRunContext", () => {
       await context.preparedBackend.cleanup?.();
       expect(fs.existsSync(skillPath)).toBe(true);
       expect(preparedExecutionCleanup).toHaveBeenCalledOnce();
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
+      expect(revokeMintedMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ token: "loopback-token" }),
+      );
 
       const nextTurn = await fixture.prepare({
         provider: "claude-cli",
@@ -4282,7 +4288,7 @@ describe("prepareCliRunContext", () => {
       expect(fs.existsSync(unusedPluginDir ?? "")).toBe(false);
       expect(fs.existsSync(skillPath)).toBe(true);
       expect(preparedExecutionCleanup).toHaveBeenCalledTimes(2);
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledTimes(2);
+      expect(revokeMintedMcpLoopbackClientGrant).toHaveBeenCalledTimes(2);
     } finally {
       await releaseSkills?.();
     }

@@ -19,7 +19,11 @@ import * as mediaCapabilityModule from "../../media/read-capability.js";
 import type { PluginHookHandlerMap } from "../../plugins/hook-types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -303,7 +307,15 @@ function setTestPlugin(
   plugin: Pick<ChannelPlugin, "id"> & Partial<ChannelPlugin>,
   pluginId = plugin.id,
 ) {
-  setActivePluginRegistry(createTestRegistry([{ pluginId, source: "test", plugin }]));
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId,
+        source: "test",
+        plugin: { ...createChannelTestPluginBase({ id: plugin.id }), ...plugin },
+      },
+    ]),
+  );
 }
 
 function createTestOutbound(

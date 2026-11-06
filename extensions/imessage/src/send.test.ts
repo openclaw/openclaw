@@ -2107,5 +2107,71 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.messageId).toBe("ok");
     expect(result.guid).toBeUndefined();
   });
+  it.each(["-1712", "-1743"])(
+    "reports Automation failure %s without retrying the send",
+    async (errorCode) => {
+      const cliPath = openClawState.path("fake-attachment-cli");
+      const logPath = openClawState.path("attachment-cli-argv.jsonl");
+      const dbPath = openClawState.path("unused-chat.db");
+      const mediaPath = createOutboundMediaFile("fixture.pdf", Buffer.from("%PDF-1.4\nsynthetic"));
+      const detail = "Messages automation failed with AppleScript error " + errorCode + ".";
+      const response = { success: false, error: detail };
+      const { registerIMessageSendStatus } = await import("./send-status.js");
+      const { getIMessageRuntime } = await import("./runtime.js");
+      const patches: unknown[] = [];
+      const lease = registerIMessageSendStatus({
+        accountId: "default",
+        channelRuntime: getIMessageRuntime().channel,
+        abortSignal: new AbortController().signal,
+        getStatus: () => ({ accountId: "default" }),
+        setStatus: (next) => patches.push(next),
+      });
+      try {
+        fs.writeFileSync(
+          cliPath,
+          [
+            "#!" + process.execPath,
+            'const fs = require("node:fs");',
+            `fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");`,
+            `process.stdout.write(${JSON.stringify(JSON.stringify(response) + "\n")});`,
+          ].join("\n"),
+          { mode: 0o755 },
+        );
+        const createRpc = vi.fn(async () => createClient({ guid: "unexpected-rpc" }));
+        const sending = sendMessageIMessage("chat_guid:fixture-chat", "", {
+          config: { channels: { imessage: { accounts: { default: { cliPath, dbPath } } } } },
+          mediaUrl: mediaPath,
+          resolveAttachmentImpl: async () => ({ path: mediaPath, contentType: "application/pdf" }),
+          createClient: createRpc,
+        });
+        await expect(sending).rejects.toThrow(detail);
+        expect(createRpc).not.toHaveBeenCalled();
+        expect(patches).toMatchObject([
+          { accountId: "default", lastError: expect.stringContaining("Automation") },
+        ]);
+        const calls = fs
+          .readFileSync(logPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(calls).toEqual([
+          [
+            "send-attachment",
+            "--chat",
+            "fixture-chat",
+            "--file",
+            mediaPath,
+            "--transport",
+            "auto",
+            "--db",
+            dbPath,
+            "--json",
+          ],
+        ]);
+      } finally {
+        lease?.dispose();
+      }
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

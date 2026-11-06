@@ -2063,6 +2063,65 @@ describe("TelegramPollingSession", () => {
     expect(cleanup).toHaveBeenCalledBefore(createWorker);
     expect(bot.stop).toHaveBeenCalledOnce();
   });
+  it("settles aborted grammY initialization during network retry backoff without starting ingress", async () => {
+    vi.useFakeTimers();
+    const abort = new AbortController();
+    const transport = makeTelegramTransport();
+    const fetch = vi.fn(async () => {
+      throw new TypeError("offline Telegram fixture");
+    });
+    const bot = new Bot("tok", {
+      client: {
+        fetch: asTelegramClientFetch(
+          createTelegramClientFetch({
+            fetchImpl: asTelegramClientFetch(fetch),
+            shutdownSignal: abort.signal,
+          }),
+        ),
+      },
+    });
+    vi.spyOn(bot.api, "deleteWebhook").mockResolvedValue(true);
+    createTelegramBotMock.mockReturnValueOnce(bot);
+    const createWorker = vi.fn(() => makeWorker());
+    const setStatus = vi.fn();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      telegramTransport: transport,
+      setStatus,
+      ingress: { createWorker },
+    });
+    let settled = false;
+    const runPromise = session.runUntilAbort().then(() => {
+      settled = true;
+    });
+    try {
+      // grammY retries HttpError once immediately, then waits 100 ms. Keep
+      // that real dependency delay pending while the account is canceled.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(1);
+      expect(settled).toBe(false);
+      expect(bot.isInited()).toBe(false);
+      expect(transport.close).not.toHaveBeenCalled();
+
+      abort.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+      expect(createWorker).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(transport.close).toHaveBeenCalledOnce();
+      expect(statusPatches(setStatus).at(-1)).toEqual({ mode: "polling", connected: false });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      abort.abort();
+      // Also settle the broken-base negative control without leaving a retry
+      // timer or an unobserved session behind after its assertion fails.
+      vi.spyOn(bot.api, "getMe").mockRejectedValue(new Error("test cleanup"));
+      await vi.advanceTimersByTimeAsync(100);
+      await runPromise;
+      vi.useRealTimers();
+    }
+  });
 });
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

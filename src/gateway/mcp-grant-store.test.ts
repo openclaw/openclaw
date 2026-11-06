@@ -18,9 +18,27 @@ import {
   revokeAttachGrant,
   revokeAttachGrantsForSession,
   revokeMcpLoopbackClientGrant,
+  revokeMintedMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrantsForRuntime,
   transferMcpLoopbackClientGrant,
 } from "./mcp-grant-store.js";
+
+const grantParams = (token: string, captureKey: string, runtimeOwnerToken = "runtime-one") => ({
+  token,
+  captureKey,
+  runtimeOwnerToken,
+});
+type ClientParams = Parameters<typeof mintMcpLoopbackClientGrant>[0];
+function mintClient({
+  context,
+  ...params
+}: Partial<Omit<ClientParams, "context">> & { context?: Partial<ClientParams["context"]> } = {}) {
+  return mintMcpLoopbackClientGrant({
+    context: { sessionKey: "agent:main:first", senderIsOwner: false, ...context },
+    runtimeOwnerToken: "runtime-one",
+    ...params,
+  });
+}
 
 const T0 = 1_000_000_000_000;
 const admissions: PreparedAgentRunAdmission[] = [];
@@ -547,5 +565,87 @@ describe("mcp-grant-store", () => {
         runtimeOwnerToken: "  ",
       }),
     ).toThrow(/runtimeOwnerToken is required/);
+  });
+  it("revokes the minted turn through admission, capture and warm bearer replacement", async () => {
+    const stable = mintClient();
+    const next = mintClient({ context: { nativeCronCreatorToolAllowlist: [] } });
+    expect(next).not.toHaveProperty("owner");
+    expect(
+      bindMcpLoopbackClientGrantAdmission({
+        token: next.token,
+        runtimeOwnerToken: "runtime-one",
+        admittedRunContext: await admitted("run-minted-owner"),
+      }),
+    ).toBe(true);
+    const sourceCapture = activateMcpLoopbackClientGrantCapture(
+      grantParams(next.token, "source-capture"),
+    );
+    expect(sourceCapture).toBeTruthy();
+    expect(sourceCapture && sourceCapture.captureNativeToolAuthority(["read"])).toBe(true);
+    expect(deactivateMcpLoopbackClientGrantCapture(grantParams(next.token, "source-capture"))).toBe(
+      true,
+    );
+    expect(
+      transferMcpLoopbackClientGrant({
+        sourceToken: next.token,
+        targetToken: stable.token,
+        runtimeOwnerToken: "runtime-one",
+      }),
+    ).toBe(true);
+    const params = grantParams(stable.token, "process-capture");
+    const processCapture = activateMcpLoopbackClientGrantCapture(params);
+    expect(processCapture).toBeTruthy();
+    expect(processCapture && processCapture.captureNativeToolAuthority([])).toBe(true);
+    const retained = resolveMcpLoopbackClientGrant(params);
+    expect(retained?.isCurrent()).toBe(true);
+    expect(deactivateMcpLoopbackClientGrantCapture(params)).toBe(true);
+    const events: Array<{ token: string; runtimeOwnerToken: string }> = [];
+    const unregister = registerMcpLoopbackClientGrantRevocationListener((event) =>
+      events.push(event),
+    );
+    try {
+      expect(revokeMintedMcpLoopbackClientGrant(next)).toBe(true);
+      expect(revokeMintedMcpLoopbackClientGrant(next)).toBe(false);
+      expect(activateMcpLoopbackClientGrantCapture(params)).toBe(false);
+      expect(retained?.isCurrent()).toBe(false);
+      expect(events).toEqual([{ token: stable.token, runtimeOwnerToken: "runtime-one" }]);
+    } finally {
+      unregister();
+    }
+  });
+  it("fences delayed minted cleanup from successor turns and sibling grants", async () => {
+    const first = mintClient({ admittedRunContext: await admitted("run-minted-first") });
+    const second = mintClient({ admittedRunContext: await admitted("run-minted-second") });
+    const third = mintClient({ admittedRunContext: await admitted("run-minted-third") });
+    const sibling = mintClient({ context: { sessionKey: "agent:main:sibling" } });
+    const otherRuntime = mintClient({ runtimeOwnerToken: "runtime-two" });
+    const transfer = (sourceToken: string) =>
+      transferMcpLoopbackClientGrant({
+        sourceToken,
+        targetToken: first.token,
+        runtimeOwnerToken: "runtime-one",
+      });
+    const params = grantParams(first.token, "same-process-capture");
+    expect(transfer(second.token)).toBe(true);
+    expect(activateMcpLoopbackClientGrantCapture(params)).toBeTruthy();
+    const secondRow = resolveMcpLoopbackClientGrant(params);
+    expect(revokeMintedMcpLoopbackClientGrant(first)).toBe(false);
+    expect(secondRow?.isCurrent()).toBe(true);
+
+    expect(transfer(third.token)).toBe(true);
+    expect(activateMcpLoopbackClientGrantCapture(params)).toBeTruthy();
+    const thirdRow = resolveMcpLoopbackClientGrant(params);
+    expect(secondRow?.isCurrent()).toBe(false);
+    expect(revokeMintedMcpLoopbackClientGrant(first)).toBe(false);
+    expect(revokeMintedMcpLoopbackClientGrant(second)).toBe(false);
+    expect(revokeMintedMcpLoopbackClientGrant(second)).toBe(false);
+    expect(thirdRow?.isCurrent()).toBe(true);
+    expect(revokeMintedMcpLoopbackClientGrant(third)).toBe(true);
+    expect(revokeMintedMcpLoopbackClientGrant(third)).toBe(false);
+    expect(activateMcpLoopbackClientGrantCapture(params)).toBe(false);
+    expect(thirdRow?.isCurrent()).toBe(false);
+    // Siblings remain present even after every predecessor cleanup has run.
+    expect(revokeMcpLoopbackClientGrant(sibling.token)).toBe(true);
+    expect(revokeMcpLoopbackClientGrant(otherRuntime.token)).toBe(true);
   });
 });

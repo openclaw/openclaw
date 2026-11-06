@@ -9,6 +9,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasAnyMatrixAuthAsync } from "../../auth-presence.js";
+import { matrixSetupPlugin } from "../channel.setup.js";
 import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import { resolveConfiguredMatrixBotUserIds } from "./accounts.js";
@@ -370,5 +371,24 @@ describe("matrix credentials storage", () => {
         accessToken: "tok-123",
       }),
     ).toBe(true);
+  });
+  it("clears only the account removed through channels remove", async () => {
+    // The CLI resolves the setup plugin, whose removal hook reads process.env.
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    await saveMatrixCredentials(auth, {}, "default");
+    await saveMatrixCredentials(auth, {}, "ops");
+
+    await matrixSetupPlugin.lifecycle?.onAccountRemoved?.({
+      prevCfg: {},
+      accountId: "ops",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+
+    expect(loadMatrixCredentials({}, "ops")).toBeNull();
+    expect(openMatrixCredentialsStore({}).lookup("account:ops")).toMatchObject({
+      kind: "revoked",
+      accountId: "ops",
+    });
+    expect(loadMatrixCredentials({}, "default")).not.toBeNull();
   });
 });

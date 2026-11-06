@@ -106,6 +106,7 @@ describe("restricted CLI tool preparation", () => {
       mintMcpLoopbackClientGrant: mintGrant,
       bindMcpLoopbackClientGrantAdmission: () => true,
       revokeMcpLoopbackClientGrant: () => true,
+      revokeMintedMcpLoopbackClientGrant: () => true,
       resolveMcpLoopbackPolicyTools,
       resolveMcpLoopbackScopedTools,
       resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),

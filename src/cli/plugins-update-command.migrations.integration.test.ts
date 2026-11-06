@@ -163,7 +163,9 @@ describe("installed plugin update config migration", () => {
                     ? { listener: { port: 57597, host: "${LISTENER_HOST}" } }
                     : { oldPort: 57597 }),
                   label: "kept",
-                  ...(scenario === "env-reference" ? { oldHost: "${LISTENER_HOST}" } : {}),
+                  ...(scenario === "env-reference" || scenario === "include"
+                    ? { oldHost: "${LISTENER_HOST}" }
+                    : {}),
                 },
               },
             },
@@ -705,7 +707,9 @@ describe("installed plugin update config migration", () => {
           ...(inactive || pendingState ? { oldPort: 57597 } : {}),
           listener: {
             port: 57597,
-            ...(scenario === "env-reference" || ready ? { host: "${LISTENER_HOST}" } : {}),
+            ...(scenario === "env-reference" || scenario === "include" || ready
+              ? { host: "${LISTENER_HOST}" }
+              : {}),
           },
           label: "kept",
         });

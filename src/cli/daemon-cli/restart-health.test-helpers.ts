@@ -170,7 +170,7 @@ vi.mock("../../utils.js", async () => {
 const originalPlatform = process.platform;
 
 export function makeGatewayService(
-  runtime: { status: "running"; pid: number } | { status: "stopped" },
+  runtime: { status: "running"; pid: number } | { status: "stopped" | "unknown" },
 ): GatewayService {
   return {
     readRuntime: vi.fn(async () => runtime),

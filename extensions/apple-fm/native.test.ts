@@ -137,4 +137,15 @@ describe("Apple Foundation Models helper lifecycle", () => {
     );
     await expect(native.run({ messages: [] })).rejects.toThrow();
   });
+  it("retries source discovery after a missing asset is repaired", async () => {
+    const pluginRoot = path.join(directory, "plugin");
+    const source = path.join(pluginRoot, "assets", "AppleFoundationModels.swift");
+    const recovering = createAppleFmNative(pluginRoot);
+    await expect(recovering.probe()).rejects.toMatchObject({ code: "ENOENT" });
+    expect(runCommandBuffered).not.toHaveBeenCalled();
+
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, "synthetic Swift source");
+    await expect(recovering.prepare()).resolves.toEqual(facts);
+  });
 });
