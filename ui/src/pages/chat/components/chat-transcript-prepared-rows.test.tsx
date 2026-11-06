@@ -522,6 +522,7 @@ it("keeps reverse medium preparation through size compensation while the tail st
   await view.scrollTo(120.5);
   const first = transcriptRows(view.container)[0]!;
   const beforeResize = view.container.scrollTop;
+  first.style.height = "500px";
   emitTranscriptResize(first, 800, 500);
   await settle();
   const rendered = view.renderRow.mock.calls.length;
@@ -670,7 +671,7 @@ it("releases initial viewport rows when the tail grows before reader navigation"
   const tail = view.container.querySelector<HTMLElement>('[data-virtual-row-key="fragment:255"]');
   expect(tail).not.toBeNull();
   expect(transcriptRows(view.container).length).toBeGreaterThan(1);
-
+  tail!.style.height = "900px";
   emitTranscriptResize(tail!, 800, 900);
   await settle();
   await view.frame(32);

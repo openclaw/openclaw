@@ -21,6 +21,10 @@ export type ChatComposerSnapshot = Pick<
     "thinkingLevel" | "thinkingLevels" | "thinkingDefault" | "permissionMode"
   > & {
     defaultPermissionMode?: GatewaySessionRow["permissionMode"];
+    contextWindowDisplay?: Pick<
+      GatewaySessionRow,
+      "contextWindow" | "contextWindowDefault" | "contextWindows"
+    >;
     speed?: ChatFastModePresentation;
   };
 

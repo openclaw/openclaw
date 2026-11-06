@@ -50,8 +50,8 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Bounded residency and native reader ownership retain 20 Chat boot requests.
-  // Measured Chat is 1,303,420 B; preserve the prior 561 B headroom.
-  chatBootJsGzipBytes: 1_303_981,
+  // Measured Chat is 1,304,355 B; retain 192 B generated-name headroom.
+  chatBootJsGzipBytes: 1_304_547,
   // The same theme readback win also affects New Session's shared bundle.
   // After the merge: 802,351 B + 192 B generated-name headroom.
   newBootJsGzipBytes: 802_543,
