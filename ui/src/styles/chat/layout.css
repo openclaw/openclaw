@@ -2244,7 +2244,6 @@ button.chat-pr__diff {
 }
 
 .chat-pr__checks-pill:focus-visible,
-.chat-ci__automation-checkbox:focus-visible,
 .chat-ci__automation-retry:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

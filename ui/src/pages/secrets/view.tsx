@@ -1,5 +1,6 @@
 import { createMemo, For, Loading, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
@@ -16,10 +17,9 @@ import {
 import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { SecretsStoreState } from "../../lib/secrets-store/index.ts";
-import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import "../../styles/secrets-store.css";
+import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import type { SecretsPageState } from "./state.ts";
-import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 type SecretsStoreViewProps = {
   state: SecretsPageState;

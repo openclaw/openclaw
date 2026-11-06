@@ -1,7 +1,8 @@
 import { createMemo, createSignal, For, latest, Loading, onSettled } from "solid-js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
@@ -13,7 +14,6 @@ import { resolvePaletteSessionSettings, type SettingsOptions } from "./palette-s
 import { createPresentationAction } from "./submission-action.ts";
 import { repositoryIssueText } from "./submit-gates.ts";
 import { AgentSelect, RequiredSessionPlacement } from "./target-controls-view.tsx";
-import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 type SettingsProjection = ReturnType<typeof resolvePaletteSessionSettings>;
 type FocusTarget = "back" | "search" | "workspace";

@@ -5,6 +5,7 @@ import type { ChannelsPairingAccount, ChannelsPairingRequest } from "../../api/t
 import { Picker } from "../../components/select-picker.ts";
 import "../../components/modal-dialog.tsx";
 import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import {
@@ -20,7 +21,6 @@ import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ChannelRefresh } from "./view.shared.tsx";
 import type { ChannelsProps } from "./view.types.ts";
-import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 function accountName(account: Pick<ChannelsPairingAccount, "accountLabel" | "accountId">): string {
   return account.accountLabel || account.accountId;

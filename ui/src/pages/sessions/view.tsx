@@ -1,6 +1,7 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createDeferred, createMemo, Errored, isPending, Loading, Repeat, Show } from "solid-js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ContextNewSessionAction } from "../../components/solid/new-session-link.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
@@ -20,9 +21,8 @@ import { sessionsTableColumnCount } from "./session-row.tsx";
 import { SessionWindow, type SessionEntry } from "./session-window.tsx";
 import { SessionsAdvancedFilters } from "./sessions-filters.tsx";
 import { TranscriptSearchForm, TranscriptSearchResults } from "./transcript-search-view.tsx";
-import type { SessionsProps } from "./view-types.ts";
 import "../../styles/sessions.css";
-import { Checkbox } from "../../components/solid/checkbox.tsx";
+import type { SessionsProps } from "./view-types.ts";
 
 registerSessionMenuEnglish();
 

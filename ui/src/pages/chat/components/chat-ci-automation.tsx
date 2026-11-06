@@ -1,5 +1,6 @@
 import { For, Show, type Element } from "solid-js";
 import type { CronJob } from "../../../api/types.ts";
+import { Checkbox } from "../../../components/solid/checkbox.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuControls } from "../../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../../components/solid/settings-ui.tsx";
@@ -10,7 +11,6 @@ import type {
   CiAutomationOptions,
 } from "../../../lib/session-pr-automation-spec.ts";
 import type { CiAutomationJobs } from "../../../lib/session-pr-automation.ts";
-import { Checkbox } from "../../../components/solid/checkbox.tsx";
 
 registerEnglishCatalog(registerChatCiEnglish);
 

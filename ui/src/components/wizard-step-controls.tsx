@@ -10,10 +10,10 @@ import { handleCopyButton } from "./copy-button-state.ts";
 import { Picker, type PickerParams } from "./select-picker.ts";
 import { SensitiveInput } from "./sensitive-input.tsx";
 import { ChannelPicker, type ChannelPickerOption } from "./solid/channel-picker.tsx";
-import { Icon } from "./solid/icon.tsx";
-import { ModelSetupSignIn } from "./wizard-sign-in.tsx";
-import "../styles/wizard-step-controls.css";
 import { Checkbox } from "./solid/checkbox.tsx";
+import { Icon } from "./solid/icon.tsx";
+import "../styles/wizard-step-controls.css";
+import { ModelSetupSignIn } from "./wizard-sign-in.tsx";
 
 registerEnglishCatalog(registerModelSetupEnglish);
 

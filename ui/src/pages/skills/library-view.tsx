@@ -3,6 +3,7 @@ import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import "../../components/modal-dialog.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
@@ -18,7 +19,6 @@ import { LibraryDialog } from "./library-dialog.tsx";
 import { libraryFileText } from "./library-file-text.ts";
 import type { LibraryDetailOutcome, SkillLibraryModel } from "./library-state.ts";
 import { SkillLibraryToolbar } from "./library-toolbar.tsx";
-import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 export function SkillLibrary(props: {
   library: SkillLibraryModel;

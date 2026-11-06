@@ -7,8 +7,8 @@ import type {
   ConfirmDialogChoiceOptions,
   ConfirmDialogOptions,
 } from "./confirm-dialog-types.ts";
-import { DialogHeader } from "./solid/dialog-header.tsx";
 import { Checkbox } from "./solid/checkbox.tsx";
+import { DialogHeader } from "./solid/dialog-header.tsx";
 
 export type ConfirmDialogViewOptions = ConfirmDialogOptions & Partial<ConfirmDialogChoiceOptions>;
 

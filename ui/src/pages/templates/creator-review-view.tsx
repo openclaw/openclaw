@@ -10,12 +10,12 @@ import {
   type Accessor,
 } from "solid-js";
 import "../../components/modal-dialog.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { TemplateCreator } from "./creator-publication.ts";
-import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 type CreatorView = SourceProjection<TemplateCreator, TemplateCreator>;
 

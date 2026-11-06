@@ -11,6 +11,7 @@ import {
 } from "../../../../src/shared/session-goal-display.js";
 import type { AgentIdentityResult, GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { sessionIconMask } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import {
@@ -38,9 +39,8 @@ import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/s
 import type { JSX as SolidJSX } from "../../types/solid-elements.js";
 import { CategoryCell } from "./category-cell.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
-import type { SessionsProps } from "./view-types.ts";
 import "../../components/tooltip.ts";
-import { Checkbox } from "../../components/solid/checkbox.tsx";
+import type { SessionsProps } from "./view-types.ts";
 
 const SESSION_RUN_STATUS_LABELS = {
   queued: "sessionsView.statusQueued",

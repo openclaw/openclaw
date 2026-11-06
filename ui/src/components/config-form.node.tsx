@@ -31,8 +31,8 @@ import {
   resolveConfigFieldMeta,
 } from "./config-form.search.ts";
 import { hintForPath, pathKey, schemaType, type JsonSchema } from "./config-form.shared.ts";
-import { SettingsToggle, SettingsToggleRow } from "./solid/settings-ui.tsx";
 import { Checkbox } from "./solid/checkbox.tsx";
+import { SettingsToggle, SettingsToggleRow } from "./solid/settings-ui.tsx";
 
 // Past this a segmented control stops fitting the control column at a readable size.
 const SEGMENTED_MAX_OPTIONS = 3;
