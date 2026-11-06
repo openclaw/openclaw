@@ -1,2 +1,0 @@
-# Address composition Enter/Escape, legacy keycode, and input-local WebKit cleanup controls.
-64
