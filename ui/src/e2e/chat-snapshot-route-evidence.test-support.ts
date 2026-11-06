@@ -85,12 +85,16 @@ export function captureSnapshotRouteEvidence(sessionPathParam: string): void {
     };
   }
 
+  // oxlint-disable-next-line typescript/unbound-method -- The wrapper preserves the caller's receiver with apply.
   const send = WebSocket.prototype.send;
   WebSocket.prototype.send = function (this: WebSocket, ...args) {
     record("mock.request", () => {
-      const frame = JSON.parse(String(args[0]));
+      if (typeof args[0] !== "string") {
+        return undefined;
+      }
+      const frame = JSON.parse(args[0]);
       if (!methods.has(frame.method)) {
-        return;
+        return undefined;
       }
       const key = requestKey(frame.params);
       requests.set(frame.id, { method: frame.method, key });
@@ -101,6 +105,7 @@ export function captureSnapshotRouteEvidence(sessionPathParam: string): void {
     });
     return send.apply(this, args);
   };
+  // oxlint-disable-next-line typescript/unbound-method -- The wrapper preserves the caller's receiver with call.
   const dispatch = WebSocket.prototype.dispatchEvent;
   WebSocket.prototype.dispatchEvent = function (this: WebSocket, event) {
     const result = dispatch.call(this, event);
@@ -109,7 +114,7 @@ export function captureSnapshotRouteEvidence(sessionPathParam: string): void {
         const frame = JSON.parse(String(event.data));
         const request = requests.get(frame.id);
         if (!request || frame.type !== "res") {
-          return;
+          return undefined;
         }
         requests.delete(frame.id);
         return { id: frame.id, ...request, ok: frame.ok, reply: identity(frame.payload) };
@@ -138,7 +143,7 @@ export function captureSnapshotRouteEvidence(sessionPathParam: string): void {
       const original = context[method];
       Object.defineProperty(context, method, {
         ...Object.getOwnPropertyDescriptor(context, method),
-        value: function (this: ApplicationContext, ...args: Parameters<typeof original>) {
+        value(this: ApplicationContext, ...args: Parameters<typeof original>) {
           record("navigation." + method, () => ({
             routeId: args[0],
             pathname: args[1]?.pathname,
@@ -154,6 +159,7 @@ export function captureSnapshotRouteEvidence(sessionPathParam: string): void {
         return;
       }
       clients.add(client);
+      // oxlint-disable-next-line typescript/unbound-method -- The wrapper preserves the caller's receiver with apply.
       const request = client.request;
       client.request = function <T>(this: typeof client, ...args: Parameters<typeof request>) {
         const [method, params] = args;
@@ -246,17 +252,18 @@ export function captureSnapshotRouteEvidence(sessionPathParam: string): void {
           result,
           (data) =>
             record("route.admission", () => {
-              const result = routeData(data);
+              const admission = routeData(data);
               return {
                 owner: "loader",
                 decision:
-                  options.signal.aborted || result.kind !== "session" ? "rejected" : "accepted",
+                  options.signal.aborted || admission.kind !== "session" ? "rejected" : "accepted",
                 reason: options.signal.aborted
                   ? "aborted"
-                  : (("cache" in result ? result.cache : result.kind) ?? "redirect-or-not-found"),
+                  : (("cache" in admission ? admission.cache : admission.kind) ??
+                    "redirect-or-not-found"),
                 reference,
                 requestedKey,
-                result,
+                result: admission,
               };
             }),
           (error) =>
@@ -283,7 +290,7 @@ export function captureSnapshotRouteEvidence(sessionPathParam: string): void {
           }));
           const serialized = JSON.stringify(matches);
           if (serialized === previous) {
-            return;
+            return undefined;
           }
           previous = serialized;
           return { matches };
