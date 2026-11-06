@@ -23,11 +23,11 @@ import {
   trackSessionControllerSourceWork,
 } from "./session-controller.mailbox.js";
 import { createReplyOperation } from "./session-controller.operation.js";
+import type { SessionStopSource } from "./session-controller.stop-source.types.js";
 import {
   captureSessionControllerStop,
   captureSessionControllerStopCandidates,
   stopSession,
-  type SessionStopSource,
 } from "./session-controller.stop.js";
 import { waitForReplyRunSuccessorAdmission } from "./session-controller.wait.js";
 import { trackUserStop } from "./session-run-stopped.js";

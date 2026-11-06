@@ -32,6 +32,7 @@ import {
   type SessionControllerStopEffect,
   type SessionControllerStopRunEffect,
 } from "./session-controller.stop-capture.js";
+import type { SessionStopSource } from "./session-controller.stop-source.types.js";
 import { rpcSourcesByRunId } from "./session-controller.storage.js";
 import {
   trackUserStop,
@@ -59,18 +60,6 @@ export type SessionControllerStopResult = {
   finalizing: number;
   localModelMayStillBeFinishing?: true;
 };
-
-export type SessionStopSource =
-  | "channel-user"
-  | "client-session"
-  | "client-run"
-  | "talk"
-  | "mutation"
-  | "interrupt"
-  | "restart"
-  | "watchdog"
-  | "operator-revocation"
-  | "supersede";
 
 type SessionStopPolicy = Readonly<{
   cancelQueued: boolean;

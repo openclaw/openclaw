@@ -15,7 +15,7 @@ import {
   listOperationBackendRunIds,
 } from "./session-controller.state.js";
 import type { SessionControllerStopRunEffect } from "./session-controller.stop-capture.js";
-import type { SessionStopSource } from "./session-controller.stop.js";
+import type { SessionStopSource } from "./session-controller.stop-source.types.js";
 
 const log = createSubsystemLogger("sessions/stop");
 const sessionAccessorLoader = createLazyImportLoader(
