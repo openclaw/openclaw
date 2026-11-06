@@ -7,6 +7,7 @@ import { loadOwnerDeviceSigner } from "./device-key.ts";
 import { approverOf, devicesApprovedBy, signOwnerDeviceRevocation } from "./owner-devices.ts";
 import type { OpenClawIdOwnerDevice, OpenClawIdPeopleLink } from "./types.ts";
 
+// mock-isolation: the owner device key comes from each test instead of browser storage.
 vi.mock("./device-key.ts", () => ({ loadOwnerDeviceSigner: vi.fn() }));
 
 // A listed owner device `name`, approved by the device `approvedBy` (or the kit: "root").
