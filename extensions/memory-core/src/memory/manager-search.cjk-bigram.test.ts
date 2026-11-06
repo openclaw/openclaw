@@ -244,16 +244,32 @@ describe("memory keyword search CJK bigram companion index", () => {
     );
   });
 
-  it.skipIf(!hasTrigram)("drops the companion index when the option is off", async () => {
-    await withSearch(
-      [{ id: "han", text: "記憶體設定" }],
-      async (_search, db) => {
-        const present = db
-          .prepare("SELECT 1 AS ok FROM sqlite_schema WHERE type = 'table' AND name = ?")
-          .get("memory_index_chunks_cjk_fts");
-        expect(present).toBeUndefined();
-      },
-      { cjkBigram: false },
-    );
-  });
+  it.skipIf(!hasTrigram)(
+    "drops the companion index when the option transitions to off",
+    async () => {
+      await withSearch(
+        [{ id: "han", text: "記憶體設定" }],
+        async (_search, db) => {
+          const presentBefore = db
+            .prepare("SELECT 1 AS ok FROM sqlite_schema WHERE type = 'table' AND name = ?")
+            .get("memory_index_chunks_cjk_fts");
+          expect(presentBefore).toEqual({ ok: 1 });
+
+          ensureMemoryIndexSchema({
+            db,
+            cacheEnabled: false,
+            ftsEnabled: true,
+            ftsTokenizer: "trigram",
+            cjkBigramFts: false,
+          });
+
+          const presentAfter = db
+            .prepare("SELECT 1 AS ok FROM sqlite_schema WHERE type = 'table' AND name = ?")
+            .get("memory_index_chunks_cjk_fts");
+          expect(presentAfter).toBeUndefined();
+        },
+        { cjkBigram: true },
+      );
+    },
+  );
 });
