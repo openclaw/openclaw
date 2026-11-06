@@ -4,7 +4,7 @@ import { TranscriptInitialRange } from "./chat-transcript-initial-range.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
-it("keeps following rows during a viewport-sized jump past shorter-than-estimated rows", () => {
+it.each([-1000, 1000])("keeps both neighbours during a %ipx jump past estimated rows", (delta) => {
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
     count: 20,
     initialRect: { width: 800, height: 300 },
@@ -26,11 +26,12 @@ it("keeps following rows during a viewport-sized jump past shorter-than-estimate
     () => false,
   );
   onTestFinished(() => range.disconnect());
-  range.recordReaderMovement(1000);
+  range.recordReaderMovement(delta);
 
   // A collapsed work summary can shrink from its 120px estimate to 32.5px.
-  // Keep the adjacent row available to fill the arriving viewport immediately.
+  // Both sides must remain available as the arriving window's estimates shrink.
   const indexes = range.extract({ startIndex: 10, endIndex: 12, count: 20, overscan: 1 });
+  expect(indexes).toContain(9);
   expect(indexes).toContain(13);
 });
 
