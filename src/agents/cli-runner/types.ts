@@ -19,8 +19,8 @@ import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { AdmittedRunContext } from "../admitted-run-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
-import type { CliSessionReuseResult } from "../cli-session.js";
-import type { AgentRunExecutionContext } from "../command/shared-types.js";
+import type { resolveCliSessionReuse } from "../cli-session.js";
+import type { AgentRunExecutionContext } from "../command/execution-context.types.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type { RunEmbeddedAgentParams } from "../embedded-agent-runner/run/params.js";
@@ -142,6 +142,7 @@ export type RunCliAgentParams = Pick<
   /** Exact native plus canonical OpenClaw surface for a selectable CLI backend. */
   cliToolAvailability?: {
     native: string[];
+    discovery?: readonly string[];
     openClaw: string[];
   };
   /** Caller-owned authority for credential use; cancellation alone is not authorization. */
@@ -173,6 +174,8 @@ export type CliSecretInput = SpawnSecretInput & {
 };
 
 type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> & {
+  /** Per-run resets happen before prepared overlays; they are not credential exclusions. */
+  resetEnv?: readonly string[];
   /** Exact process cleanup retained across attempt copies and natural registry removal. */
   closeLiveSession?: (
     reason: import("../../plugins/cli-backend.types.js").CliBackendLiveSessionCloseReason,
@@ -181,6 +184,8 @@ type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> 
   claimLiveSessionResources?: () => (() => Promise<void>) | undefined;
   /** Private child-only credential transport; never serialized into env or public plugin state. */
   secretInput?: CliSecretInput;
+  /** Check saved-account presence only at process launch and initial input. */
+  prepareCredentialUse?: () => Promise<void>;
   /** Gateway-owned capture fence for this prepared bundle-MCP client. */
   mcpClientGrantCapture?: {
     /** Fresh bearer minted for this prepared turn. */
@@ -197,7 +202,7 @@ type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> 
 
 /** Reusable CLI session id, soft content drift, or hard invalidation. */
 export type CliReusableSession =
-  | CliSessionReuseResult
+  | ReturnType<typeof resolveCliSessionReuse>
   | {
       mode: "invalidate";
       invalidatedReason: "system-prompt" | "missing-transcript" | "orphaned-tool-use";
@@ -247,10 +252,17 @@ export type PreparedCliRunContext = {
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
-  claudeSkillsPluginArgs: string[];
-  /** Host-held, policy-selected personal Workshop tool for the paired-node adapter. */
+  /** Native skill plugin launch args and its Skill command map, for usage receipts. */
+  claudeSkillsPlugin: Pick<
+    import("./claude-skills-plugin.js").ClaudeCliSkillsPlugin,
+    "args" | "skillCommands"
+  >;
+  /** Host-held, policy-selected skill_library tool for the paired-node "workshop" slot. */
   nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;
+  /** Only the exact resumed native session may receive these newly committed conversation rows. */
+  resumeContext?: string;
+  transcriptCursor?: CliSessionBinding["transcriptCursor"];
   /** Live owner of the transcript account-coverage checkpoint, independent of native continuity. */
   cliHistoryWriter?: import("../../config/sessions/cli-history-boundary.js").CliExecutionHistoryWriter;
   authEpoch?: string;

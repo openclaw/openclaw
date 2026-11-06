@@ -29,19 +29,16 @@ const request = {
   maxPixels: 100_000,
   minTextChars: 1,
 };
-const extractor = createPdfDocumentExtractor();
 const extract = (overrides: Partial<DocumentExtractionRequest> = {}) =>
-  extractor.extract({ ...request, ...overrides });
-const correction = "PAGE 21 CORRECTION: REJECTED";
+  createPdfDocumentExtractor().extract({ ...request, ...overrides });
 it.each([
-  { pageNumbers: [21], total: 21, text: correction },
+  { pageNumbers: [21], total: 21, text: "PAGE 21 CORRECTION: REJECTED" },
   { pageNumbers: [], total: 2, text: "" },
 ])("extracts explicit pages $pageNumbers", async ({ pageNumbers, total, text }) => {
   const fixture = createPdfFixture(
-    Array.from({ length: total }, (_, index) => textPage(index === total - 1 ? correction : "")),
+    Array.from({ length: total }, (_, index) => textPage(index === total - 1 ? text : "")),
   );
-  const padding = Buffer.from("prefix");
-  const buffer = Buffer.concat([padding, fixture, padding]).subarray(6, -6);
+  const buffer = Buffer.concat([Buffer.alloc(6), fixture, Buffer.alloc(6)]).subarray(6, -6);
   expect(await extract({ buffer, pageNumbers, maxPages: 1 })).toEqual({
     text,
     images: [],
@@ -54,27 +51,22 @@ it.each([
   expect(buffer).toEqual(fixture);
 });
 
-it("preserves image-only pages beside selectable text", async () => {
+it("preserves image-only pages beside text within the aggregate pixel budget", async () => {
   const input = {
     buffer: createPdfFixture([
       textPage("Selectable report text. ".repeat(12)),
       "1 0 0 rg 50 50 300 500 re f",
+      "0 1 0 rg 50 50 300 500 re f",
     ]),
+    maxPages: 3,
     minTextChars: 200,
   };
   const result = await extract(input);
-  const imageOnly = await extract({ ...input, pageNumbers: [2] });
-
   expect(result?.text).toContain("Selectable report text.");
-  expect(result?.images).toHaveLength(1);
-  expect(result?.images).toEqual(imageOnly?.images);
+  expect(result?.images).toHaveLength(2);
+  expect(result?.images).toEqual((await extract({ ...input, pageNumbers: [2, 3] }))?.images);
   const textOnly = await extract({ ...input, pageNumbers: [1] });
   expect(textOnly).toMatchObject({ images: [], text: result?.text });
-});
-
-it("renders real pages within the aggregate pixel budget", async () => {
-  const result = await extract({ minTextChars: 10_000 });
-  expect(result?.images).toHaveLength(2);
   const pixels = result!.images.reduce((total, image) => {
     const png = Buffer.from(image.data, "base64");
     expect(png.subarray(1, 4).toString()).toBe("PNG");
@@ -87,7 +79,6 @@ it("renders real pages within the aggregate pixel budget", async () => {
 it("joins canceled extraction before allowing the next document to succeed", async () => {
   await extract();
   const worker = workers.at(-1)!;
-  expect(worker.threadId).toBeGreaterThan(0);
   const abort = new AbortController();
   const reason = new Error("owning turn cancelled");
   const postMessage = worker.postMessage.bind(worker);

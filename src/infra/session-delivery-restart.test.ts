@@ -2,15 +2,13 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
+import { makeConfiguredModel } from "../agents/test-helpers/provider-model-fixture.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deliverQueuedSessionDelivery } from "../gateway/server-restart-sentinel.js";
-import {
-  completeSessionDelivery,
-  enqueueSessionDelivery,
-  loadPendingSessionDelivery,
-} from "../infra/session-delivery-queue-storage.js";
+import { loadPendingSessionDelivery } from "../infra/session-delivery-queue-storage.js";
+import { enqueueUnclaimedSessionDeliveryFixture as enqueueSessionDelivery } from "../infra/session-delivery-queue.test-helpers.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -31,7 +29,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("keeps recovered system events and agent turns on the ordinary execution budget", async () => {
+it("keeps legacy queued inference inert without changing its persisted payload", async () => {
   await withOpenClawTestState(
     { label: "restart-continuation-budget", env: { OPENCLAW_TEST_FAST: "0" } },
     async (state) => {
@@ -51,15 +49,11 @@ it("keeps recovered system events and agent turns on the ordinary execution budg
               baseUrl: "https://openai.example.test/v1",
               apiKey: "synthetic-fixture-key",
               models: [
-                {
-                  id: "gpt-5.4",
+                makeConfiguredModel({
                   name: "Recovery fixture model",
                   reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128_000,
                   maxTokens: 8_192,
-                },
+                }),
               ],
             },
           },
@@ -107,15 +101,8 @@ it("keeps recovered system events and agent turns on the ordinary execution budg
           "queued recovery",
         );
         await deliverQueuedSessionDelivery({ deps: {}, queueContext, entry });
-        expect(model).toHaveBeenCalledOnce();
-        const turn = expectDefined(model.mock.calls[0]?.[0], "recovered turn");
-        expect(turn.trigger).toBe("event");
-        expect(turn.prompt).toContain(message);
-        expect(turn.timeoutMs).toBe(172_800_000);
-        expect(await loadPendingSessionDelivery(id, queueContext)).toMatchObject({
-          deliveryStartedAt: expect.any(Number),
-        });
-        await completeSessionDelivery(id, queueContext);
+        expect(model).not.toHaveBeenCalled();
+        expect(await loadPendingSessionDelivery(id, queueContext)).toEqual(entry);
       }
     },
   );

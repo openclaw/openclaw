@@ -12,7 +12,8 @@ export type AgentSelectOptions = {
   disabled: boolean;
   variant?: "default" | "compact";
   onSelect: (agentId: string) => void;
-  onOpenChange: (open: boolean) => void;
+  identityTargetsRef: (read: () => readonly string[]) => void;
+  onIdentityTargetsChange: () => void;
 };
 
 export type NewSessionPlaceControlsOptions = {

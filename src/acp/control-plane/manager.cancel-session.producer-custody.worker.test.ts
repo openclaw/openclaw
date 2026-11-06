@@ -6,6 +6,7 @@ import { resolveSessionStorePathForAcp } from "../runtime/session-meta-store.js"
 import { withAcpCancellationFixture } from "./manager.cancel-session.worker.test-support.js";
 import {
   createGate,
+  holdEnsure,
   startTurn,
   untilAborted,
 } from "./manager.cancellation-locator.test-support.js";
@@ -170,11 +171,7 @@ it("joins filtered cancellation to backend preparation cleanup", async ({ signal
   await withAcpCancellationFixture(async (f) => {
     const preparation = createGate("Turn ended before backend preparation");
     const selected = invocation(f, "preparing-id", "must not reach model");
-    const ensureSession = f.ensureSession.getMockImplementation()!;
-    f.ensureSession.mockImplementationOnce(async (input) => {
-      await preparation.wait();
-      return await ensureSession(input);
-    });
+    holdEnsure(f, preparation, "retained-runtime");
     const turn = selected.start();
     const turnResult = Promise.allSettled([turn]);
     let cancellation: Promise<void> | undefined;

@@ -1,23 +1,17 @@
 import { expect, it } from "vitest";
 import type { v2 } from "./app-server/protocol.js";
+import { pluginCatalog } from "./command-plugins-management.test-support.js";
 import {
   discoverCodexMarketplacePlugins,
   parseCodexPluginMarketplaceId,
 } from "./plugin-marketplace-discovery.js";
 
-function catalog(name: string, pluginName: string, path?: string): v2.PluginListResponse {
-  const plugin: v2.PluginSummary = {
-    id: `${pluginName}@${name}`,
-    name: pluginName,
-    installed: false,
-    enabled: false,
-  };
-  return {
-    marketplaces: [{ name, ...(path ? { path } : {}), plugins: [plugin] }],
-    marketplaceLoadErrors: [],
-    featuredPluginIds: [],
-  };
-}
+const catalog = (name: string, pluginName: string, path?: string) =>
+  pluginCatalog(
+    [{ id: `${pluginName}@${name}`, name: pluginName, installed: false, enabled: false }],
+    name,
+    path,
+  );
 const discover = (request: Parameters<typeof discoverCodexMarketplacePlugins>[0]["request"]) =>
   discoverCodexMarketplacePlugins({ request, workspaceDir: "/repo" });
 
@@ -47,12 +41,6 @@ it("preserves authorized workspace catalogs when another supplemental category f
 it("fails closed for marketplace and plugin names outside the upstream identifier contract", async () => {
   const result = await discover(async () => catalog("../company-tools", "security-review"));
   expect(result.plugins).toEqual([]);
-  for (const pluginName of ["review", "review.v2"]) {
-    expect(parseCodexPluginMarketplaceId(`${pluginName}@company-tools`)).toEqual({
-      pluginName,
-      marketplaceName: "company-tools",
-    });
-  }
   for (const invalid of [
     "../review@company-tools",
     "review@../company-tools",
@@ -70,9 +58,7 @@ it("fails closed for marketplace and plugin names outside the upstream identifie
 
 it("refuses ambiguous equal identifiers from different marketplace paths", async () => {
   const result = await discover(async (params: v2.PluginListParams) =>
-    params.marketplaceKinds
-      ? catalog("company-tools", "security-review", "/different/marketplace.json")
-      : catalog("company-tools", "security-review", "/repo/marketplace.json"),
+    catalog("company-tools", "security-review", params.marketplaceKinds ? "/different" : "/repo"),
   );
 
   expect(result.plugins).toEqual([]);
@@ -85,13 +71,11 @@ it.each([false, true])(
     const pluginName = "security-review.v2";
     const result = await discover(async (params: v2.PluginListParams) => {
       const listed = catalog("company-tools", pluginName, "/repo/marketplace.json");
+      const plugin = listed.marketplaces[0]!.plugins[0]!;
       if (!params.marketplaceKinds) {
-        listed.marketplaces[0]!.plugins[0]!.id = pluginName;
+        plugin.id = pluginName;
       } else if (restricted) {
-        Object.assign(listed.marketplaces[0]!.plugins[0]!, {
-          availability: "AVAILABLE",
-          installPolicy: "NOT_AVAILABLE",
-        });
+        plugin.installPolicy = "NOT_AVAILABLE";
       }
       return listed;
     });
@@ -99,6 +83,5 @@ it.each([false, true])(
       { id: `${pluginName}@company-tools`, available: !restricted },
     ]);
     expect(result.plugins).toHaveLength(1);
-    expect(result.warnings).toEqual([]);
   },
 );

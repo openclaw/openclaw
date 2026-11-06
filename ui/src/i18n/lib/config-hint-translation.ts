@@ -1,10 +1,8 @@
-import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
-
-export type ConfigHintTranslationField = "label" | "help";
+import { fnv1aUtf16 } from "../../../../src/shared/fnv1a.js";
 
 export function configHintTranslationKey(
   hintPath: string,
-  field: ConfigHintTranslationField,
+  field: "label" | "help",
   sourceText: string,
 ): string {
   const prefix = `configHints.${encodeURIComponent(hintPath).replaceAll(".", "%2E")}.${field}.`;

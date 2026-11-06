@@ -4,6 +4,13 @@ Use this before selecting backports for any OpenClaw release line: regular
 beta/stable, extended-stable, or a release-repair branch. It is an audit before the candidate is
 mutated, not a title search and not permission to expand a frozen release.
 
+## Start from the shared ledger
+
+Start with [shared candidates and assessments](hotfix-ledger-management.md),
+including carry-forward and sibling-release evidence; sync new findings and
+decisions back. Empty/incomplete records do not replace the pinned inventory
+or P0/P1 discovery below. Use local evidence when access is unavailable.
+
 ## Freeze the Audit
 
 1. Pin the exact maintenance-line baseline and the exact `origin/main` SHA.
@@ -26,8 +33,10 @@ bounds and pinned SHAs, baseline identity, total/equivalent/non-equivalent
 counts, filters, every candidate decision, applicability result, exclusions,
 dependency groups, and carry-forward blocked items. Security rows in public
 evidence must remain opaque; retain private identifiers only in the approved
-security record. The next accepted audit uses this ledger's `scan_end` as its
-cursor.
+security record. Keep scan bounds, counts, and the full commit inventory in the
+existing staging evidence, linked from the service assessments; they need not
+be separate API fields or one hotfix record per unrelated commit. The next
+accepted audit uses that evidence's `scan_end` as its cursor.
 
 ## Reconcile Stable-Maturity Issues
 
@@ -178,7 +187,10 @@ substitute convenient dependency bumps for a complete candidate audit. A
 backport is a cherry-pick of a merged `main` commit onto the release branch;
 never re-cut the candidate from newer `main` to absorb one unless Peter
 explicitly asks for it in that release. After dispatch, only confirmed release
-blockers qualify, each named in the handoff record.
+blockers qualify, each named in the handoff record, unless the operator explicitly
+reopens intake under the [owner lifecycle](release-owner.md#prepare-and-admit-hotfixes).
+That decision invalidates affected evidence; it never authorizes publication of
+untested changes.
 
 Before changing release refs, present the complete categorized ledger and the
 proposed set for maintainer approval. After approval, backport with provenance,
@@ -186,3 +198,34 @@ update the ledger, run focused proof plus the release-appropriate validation,
 and keep the final branch/tag/version/SHA identity in that record. Dispatch npm
 preflight only after the canonical release branch or tag has that exact final
 version and SHA.
+
+## Port with Bounded Workers
+
+Read-only audit lanes may fan out. Porting lanes write to the release candidate
+and share one host, so run at most eight concurrent writing workers, and do not
+launch or resume workers close to a session usage limit. A worker does not
+spawn its own agents unless its brief allows it. A 17-lane porting wave on
+2026.10.8 saturated the Mac and lost 16 lanes mid-port when the session limit
+hit. The lead keeps a watcher on every worker and never ends a turn waiting on
+one; once the required fixes and P0s are integrated, push and dispatch
+validation, and add stragglers in a later cycle.
+
+Every porting brief contains these steps for each pick, in order:
+
+1. Run the companion audit for the pick (`pnpm release:backport-companions`
+   above) and `git log <pinned-main-sha> --grep '#<PR>'`. List each later
+   follow-up and its disposition in the commit body. Missing follow-ups caused
+   most 2026.10.8 validation failures, including a macOS regression found only
+   after tagging.
+2. Confirm the defect exists on the baseline (`git show <baseline>:<path>`)
+   before porting.
+3. Cherry-pick with `-x`, resolve conflicts, and note any adaptation as
+   `Release adaptation:` in the commit body.
+4. Run targeted tests and typechecks for the touched owners only. Wrap every
+   local command in `timeout`; full local gates are not a worker's job.
+5. Commit, then append the pick's result to the lane report before the next
+   pick. Time-box a pick to about 40 minutes and report it as blocked rather
+   than continuing past that.
+
+Reuse the lead checkout's dependencies instead of a fresh install per lane when
+the lockfile matches.

@@ -2,6 +2,8 @@ import type {
   BackupDatabaseDiscoveryInput,
   BackupDatabaseDiscoveryReply,
 } from "./backup-database-discovery.types.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
+import { getPostgresPool } from "./postgres-sync/pool.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -9,6 +11,9 @@ import { WorkerTaskPool } from "./worker-task-pool.js";
 
 /** Plugin discovery may read shared state, so PostgreSQL discovery belongs in a worker. */
 export async function preparePostgresBackupDiscovery(input: BackupDatabaseDiscoveryInput) {
+  if (Object.values(resolveDatabaseFamilyEngines(input.config)).includes("postgres")) {
+    getPostgresPool();
+  }
   const pool = new WorkerTaskPool<BackupDatabaseDiscoveryInput, BackupDatabaseDiscoveryReply>({
     workerUrl: captureRuntimeWorkerSource(
       resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.backupDatabaseDiscovery),

@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isConfigMachineOutput } from "../config-output-mode.js";
 import { createCronOutputCommand, isCronMachineOutput } from "../cron-cli/output-mode.js";
 import { isDevicesMachineOutput } from "../devices-output-mode.js";
-import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 import {
   isJsonOutputModeActive,
   withConsoleLogsRoutedToStderrForJson,
@@ -44,15 +45,26 @@ function makeProgram(args: readonly string[], positional = false) {
   return program;
 }
 
-async function parseFailure(
+async function expectParseFailure(
   program: Command,
-  check: (error: unknown) => void,
+  message: string | false,
   machineOutput?: boolean,
 ) {
   return withConsoleLogsRoutedToStderrForJson(
     process.argv,
     async () => {
-      check(await program.parseAsync(process.argv).catch((cause: unknown) => cause));
+      const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+      expect(isJsonOutputModeActive(process.argv)).toBe(message !== false);
+      if (message === false) {
+        expect(error).toBeInstanceOf(CommanderError);
+        expect(error).not.toBeInstanceOf(ExpectedCliError);
+      } else {
+        expect(error).toBeInstanceOf(ExpectedCliError);
+        expect(formatCliJsonFailure(error)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message: expect.stringContaining(message) },
+        });
+      }
     },
     { machineOutput, restoreChanges: true },
   );
@@ -149,18 +161,7 @@ describe("formatCliParseErrorOutput", () => {
         command.argument(required);
       }
       command.action(() => {});
-      await parseFailure(
-        program,
-        (error) => {
-          expect(error).toBeInstanceOf(ExpectedCliError);
-          expect(isJsonOutputModeActive(process.argv)).toBe(true);
-          expect(formatCliJsonFailure(error)).toEqual({
-            ok: false,
-            error: { type: "cli_error", message: expect.stringContaining(message) },
-          });
-        },
-        machineOutput(process.argv),
-      );
+      await expectParseFailure(program, message, machineOutput(process.argv));
     },
   );
 
@@ -174,17 +175,7 @@ describe("formatCliParseErrorOutput", () => {
       })
       .action(() => {});
 
-    await parseFailure(
-      program,
-      (error) => {
-        expect(error).toBeInstanceOf(ExpectedCliError);
-        expect(isJsonOutputModeActive(process.argv)).toBe(true);
-        expect((error as ExpectedCliError).message).toContain(
-          "--limit must be a positive integer.",
-        );
-      },
-      true,
-    );
+    await expectParseFailure(program, "--limit must be a positive integer.", true);
   });
 
   it.each(["config set gateway.port --json", "skills verify --card"])(
@@ -205,11 +196,7 @@ describe("formatCliParseErrorOutput", () => {
       }
       command.action(() => {});
 
-      await parseFailure(program, (error) => {
-        expect(error).toBeInstanceOf(CommanderError);
-        expect(error).not.toBeInstanceOf(ExpectedCliError);
-        expect(isJsonOutputModeActive(process.argv)).toBe(false);
-      });
+      await expectParseFailure(program, false);
     },
   );
 

@@ -6,11 +6,16 @@ import { installVitestWorkerDescriptor } from "./vitest-worker-descriptor.mts";
 if (import.meta.main) {
   void (async () => {
     try {
-      const [directory, cli, ...args] = process.argv.slice(2);
+      const [directory, ...args] = process.argv.slice(2);
+      const preset = args[0] === "--worker-preset=runtime" ? "runtime" : "full";
+      if (preset === "runtime") {
+        args.shift();
+      }
+      const cli = args.shift();
       if (!directory || !cli) {
         throw new Error("Compiled subprocess bootstrap requires a directory and test CLI");
       }
-      installVitestWorkerDescriptor({ directory });
+      installVitestWorkerDescriptor({ directory, preset });
       const cliUrl = pathToFileURL(cli);
       process.argv = [process.argv[0]!, fileURLToPath(cliUrl), ...args];
       await import(cliUrl.href);

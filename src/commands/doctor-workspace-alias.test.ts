@@ -120,7 +120,7 @@ it("shares one private snapshot across alias findings and rereads committed repa
   }
   const entries = aliases.map(({ alias }, i) => ["agent-" + i, { workspace: alias }]);
   const cfg: OpenClawConfig = { agents: { entries: Object.fromEntries(entries) } };
-  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+  const prepare = vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync");
   const inspect = async () => {
     closeOpenClawStateDatabaseForTest();
     prepare.mockClear();
@@ -128,7 +128,7 @@ it("shares one private snapshot across alias findings and rereads committed repa
       collectRepointedWorkspaceAliasFindings(cfg),
     );
     expect(prepare).toHaveBeenCalledOnce();
-    const location = prepare.mock.results[0]?.value.location;
+    const location = (await prepare.mock.results[0]!.value.result).location;
     expect(fs.existsSync(location)).toBe(false);
     return { findings, location };
   };

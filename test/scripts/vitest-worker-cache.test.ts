@@ -14,16 +14,16 @@ import {
   createVitestWorkerCache,
   retainVitestWorkerArtifacts,
 } from "../../scripts/lib/vitest-worker-cache.mts";
+import type { VitestWorkerPreset } from "../../scripts/lib/vitest-worker-descriptor.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeWorkerFixtureManifest } from "./fixtures/vitest-worker-compiler.mjs";
 import { writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
-function fixture() {
-  const root = roots.make("vitest-worker-cache-");
-  const directory = path.join(root, ".artifacts/vitest-workers/run-cache-0");
-  const cached = path.join(root, ".artifacts/vitest-worker-cache/run-cache-0");
+function fixture(slot = "run-cache-0", root = roots.make("vitest-worker-cache-")) {
+  const directory = path.join(root, ".artifacts/vitest-workers", slot);
+  const cached = path.join(root, ".artifacts/vitest-worker-cache", slot);
   const read = (name: string) => fs.readFileSync(path.join(root, name), "utf8");
   const write = (name: string, bytes: string) => writeFixture(root, name, bytes);
   const sources = {
@@ -43,8 +43,8 @@ function fixture() {
     fs.writeFileSync(path.join(directory, "package.json"), '{"type":"module"}\n');
   };
   reserve();
-  const cache = async () => {
-    const result = await createVitestWorkerCache(root, directory);
+  const cache = async (preset?: VitestWorkerPreset) => {
+    const result = await createVitestWorkerCache(root, directory, preset);
     expect(result, "a reserved local cache slot must be eligible").toBeDefined();
     return result!;
   };
@@ -76,8 +76,8 @@ function fixture() {
     write,
     cache,
     prepare,
-    async compile() {
-      const owner = await cache();
+    async compile(preset?: VitestWorkerPreset) {
+      const owner = await cache(preset);
       expect(await owner.restore()).toBeUndefined();
       const manifest = prepare();
       manifest.cacheSignature = await owner.seal(manifest);
@@ -87,12 +87,12 @@ function fixture() {
       await verifyVitestWorkerArtifacts(directory, manifest);
       expect(await retainVitestWorkerArtifacts(root, directory, manifest)).toBe(expected);
     },
-    async seed(): Promise<VitestWorkerManifest> {
-      const manifest = await this.compile();
+    async seed(preset?: VitestWorkerPreset): Promise<VitestWorkerManifest> {
+      const manifest = await this.compile(preset);
       await this.retain(manifest);
       return manifest;
     },
-    restore: async () => (await cache()).restore(),
+    restore: async (preset?: VitestWorkerPreset) => (await cache(preset)).restore(),
     nextInvocation() {
       fs.rmSync(directory, { recursive: true });
       reserve();
@@ -167,6 +167,37 @@ it("restores identical executable bytes into the same reserved generation path",
     expect(JSON.parse(direct.stdout).value).toBe("first");
   }
   expect(f.observe()).toEqual(expected);
+});
+
+it("leaves incompatible preset generations available for their original borrower", async () => {
+  for (const preset of ["full", "runtime"] as const) {
+    const f = fixture();
+    await f.seed(preset);
+    f.nextInvocation();
+    expect(await f.restore(preset === "full" ? "runtime" : "full")).toBeUndefined();
+    f.expectAbsent("dist");
+
+    const restored = await f.restore(preset === "full" ? undefined : preset);
+    expect(restored).toBeDefined();
+    expect(f.observe()).toEqual({ value: "first", generation: pathToFileURL(f.directory).href });
+  }
+});
+
+it("retains full and runtime generations independently at their original executable paths", async () => {
+  const full = fixture();
+  await full.seed();
+  full.nextInvocation();
+  const runtime = fixture("run-cache-runtime-0", full.root);
+  await runtime.seed("runtime");
+  runtime.nextInvocation();
+
+  for (const [f, preset] of [
+    [full, "full"],
+    [runtime, "runtime"],
+  ] as const) {
+    expect(await f.restore(preset)).toBeDefined();
+    expect(f.observe()).toEqual({ value: "first", generation: pathToFileURL(f.directory).href });
+  }
 });
 
 it("observes resolution changes made while checking cached output bytes", async () => {

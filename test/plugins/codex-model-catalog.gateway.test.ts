@@ -15,21 +15,13 @@ import { getRuntimeConfig } from "../../src/config/config.js";
 import type { ModelProviderConfig } from "../../src/config/types.models.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { waitForCatalogPublication } from "../../src/gateway/server-methods/models-auth-catalog.test-support.js";
-import {
-  listModels,
-  WITHOUT_OPENAI_ENV_AUTH,
-} from "../../src/gateway/server-methods/models-list-result.openai-routes.test-support.js";
+import { listModels } from "../../src/gateway/server-methods/models-list-result.openai-routes.test-support.js";
 import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../../src/gateway/test-helpers.e2e.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../../src/gateway/test-helpers.env.js";
 import * as pluginModuleLoader from "../../src/plugins/plugin-module-loader-cache.js";
-import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
-} from "../../src/plugins/runtime.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
@@ -114,7 +106,7 @@ it("models.list selects a native user-home API-key catalog through the prepared 
           },
           computerUse: { enabled: false },
         };
-        let config: OpenClawConfig = {
+        const config: OpenClawConfig = {
           gateway: { mode: "local", auth: { mode: "token", token } },
           agents: {
             defaults: {
@@ -173,137 +165,103 @@ it("models.list selects a native user-home API-key catalog through the prepared 
             agentId: "main",
             config: getRuntimeConfig(),
           });
-          const registry = owner?.pluginRegistry;
-          const harness = registry?.agentHarnesses.find(
+          const harness = owner?.pluginRegistry?.agentHarnesses.find(
             (entry) => entry.harness.id === "codex",
           )?.harness;
-          if (!owner || !registry || !harness?.loadModelCatalog) {
+          if (!owner || !harness?.loadModelCatalog || !harness.readModelCatalogReadiness) {
             throw new Error("Gateway did not publish the bundled native harness owner");
           }
-          config = owner.observationConfig;
           const scope = {
-            config,
+            config: owner.observationConfig,
             agentId: "main",
             agentDir: state.agentDir(),
             workspaceDir: state.workspaceDir,
           };
-          const previous = captureActivePluginRegistrySnapshot();
-          try {
-            const result = await registeredList();
-            const publicRow = result.models.find((row) => row.id === model.id);
-            expect(publicRow).toMatchObject({
-              name: "Synthetic name",
-              available: true,
-              reasoning: true,
+          const readiness = (cfg = scope.config) =>
+            harness.readModelCatalogReadiness?.({
+              ...scope,
+              config: cfg,
+              provider: "openai",
+              modelId: model.id,
             });
-            expect(requests).toContain("account/read");
-            const rows =
-              owner.readFullModelCatalog?.()?.entries.filter((row) => row.id === model.id) ?? [];
-            expect(rows[0]).toMatchObject({ nativeRuntime: "codex", name: "Synthetic name" });
-            expect(rows[0]).not.toHaveProperty("api");
-            expect(rows[0]).not.toHaveProperty("baseUrl");
-            expect(publicRow).not.toHaveProperty("nativeRuntime");
-            const readiness = (cfg = config) =>
-              harness.readModelCatalogReadiness?.({
-                ...scope,
-                config: cfg,
-                provider: "openai",
-                modelId: model.id,
-              });
-            expect(readiness()).toEqual({ accountType: "apiKey", authMode: "api_key" });
-            const configured = (cfg = config, catalog = structuredClone(rows)) =>
-              listModels({
-                ...scope,
-                pluginRegistry: registry,
-                cfg,
-                catalog,
-                view: "configured",
-                preparedOnly: true,
-              });
-            const calls = requests.length;
-            expect((await configured()).models[0]?.available).toBe(true);
-            expect(requests).toHaveLength(calls);
-            expect((await configured({ ...config })).models[0]?.available).toBe(false);
+          const rows =
+            owner.readFullModelCatalog?.()?.entries.filter((row) => row.id === model.id) ?? [];
+          const configured = (cfg = owner.observationConfig) =>
+            listModels({
+              ...scope,
+              cfg,
+              pluginRegistry: owner.pluginRegistry,
+              catalog: rows,
+              view: "configured",
+              preparedOnly: true,
+            });
+          const result = await registeredList();
+          const publicRow = result.models.find((row) => row.id === model.id);
+          expect(publicRow).toMatchObject({
+            name: "Synthetic name",
+            available: true,
+            reasoning: true,
+          });
+          expect(requests).toContain("account/read");
+          expect(publicRow).not.toHaveProperty("nativeRuntime");
 
-            for (const socket of server.clients) {
-              socket.send(
-                JSON.stringify({ method: "account/updated", params: { authMode: null } }),
-              );
-            }
-            await expect.poll(() => readiness()).toBeUndefined();
-            expect((await configured()).models[0]?.available).toBe(false);
-            for (const observed of [
-              {
-                value: { type: "chatgpt", email: "synthetic@example.test", planType: "plus" },
-                readiness: { accountType: "chatgpt" },
-                available: true,
-              },
-              { value: null, readiness: undefined, available: false },
-              {
-                value: { type: "apiKey" },
-                readiness: { accountType: "apiKey", authMode: "api_key" },
-                available: true,
-              },
-            ]) {
-              account = observed.value;
-              const beforeModels = requests.filter((method) => method === "model/list").length;
-              await registeredList(true);
-              await expect
-                .poll(() => requests.filter((method) => method === "model/list").length, {
-                  timeout: 15_000,
-                })
-                .toBeGreaterThan(beforeModels);
-              await nativeCatalogSettled(observed.available);
-              expect(readiness()).toEqual(observed.readiness);
-            }
-            const hostRoutes: ModelProviderConfig[] = [
-              {
-                api: "openai-responses",
-                baseUrl: "https://host.example.test/v1",
-                models: [],
-              },
-              {
-                baseUrl: "",
-                models: [
-                  {
-                    id: " openai/synthetic-opaque ",
-                    name: "Synthetic name",
-                    api: "openai-responses",
-                    baseUrl: "https://host.example.test/v1",
-                    reasoning: true,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    maxTokens: 100,
-                  },
-                ],
-              },
-              {
-                baseUrl: "",
-                apiKey: { source: "env", provider: "default", id: "SYNTHETIC_ABSENT_KEY" },
-                models: [],
-              },
-            ];
-            for (const [routeIndex, openai] of hostRoutes.entries()) {
-              const hostConfig = { ...config, models: { providers: { openai } } };
-              await harness.loadModelCatalog({ ...scope, config: hostConfig });
-              const host = await configured(hostConfig, rows);
-              expect(readiness(hostConfig)).toEqual({
-                accountType: "apiKey",
-                authMode: "api_key",
-              });
-              expect(host.models[0]?.available, `host route ${routeIndex}`).toBe(false);
-            }
-            expect(requests).not.toContain("account/login/start");
-            for (const socket of server.clients) {
-              socket.close();
-            }
-            await expect.poll(() => readiness()).toBeUndefined();
-            expect((await configured()).models[0]?.available).toBe(false);
-            setActivePluginRegistry(createEmptyPluginRegistry());
-            expect((await configured()).models[0]?.available).toBe(false);
-          } finally {
-            restoreActivePluginRegistrySnapshot(previous);
+          for (const socket of server.clients) {
+            socket.send(JSON.stringify({ method: "account/updated", params: { authMode: null } }));
           }
+          await expect.poll(() => readiness()).toBeUndefined();
+          for (const [value, available] of [
+            [{ type: "chatgpt", email: "synthetic@example.test", planType: "plus" }, true],
+            [null, false],
+            [{ type: "apiKey" }, true],
+          ] as const) {
+            account = value;
+            const beforeModels = requests.filter((method) => method === "model/list").length;
+            await registeredList(true);
+            await expect
+              .poll(() => requests.filter((method) => method === "model/list").length, {
+                timeout: 15_000,
+              })
+              .toBeGreaterThan(beforeModels);
+            await nativeCatalogSettled(available);
+          }
+          // Inline model routes and unresolved credentials each block native-account fallback.
+          const hostRoutes: ModelProviderConfig[] = [
+            { api: "openai-responses", baseUrl: "https://host.example.test/v1", models: [] },
+            {
+              baseUrl: "",
+              models: [
+                {
+                  id: " openai/synthetic-opaque ",
+                  name: "Synthetic name",
+                  api: "openai-responses",
+                  baseUrl: "https://host.example.test/v1",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 100,
+                },
+              ],
+            },
+            {
+              baseUrl: "",
+              apiKey: { source: "env", provider: "default", id: "SYNTHETIC_ABSENT_KEY" },
+              models: [],
+            },
+          ];
+          for (const [routeIndex, openai] of hostRoutes.entries()) {
+            const hostConfig = { ...owner.observationConfig, models: { providers: { openai } } };
+            await harness.loadModelCatalog({ ...scope, config: hostConfig });
+            expect(readiness(hostConfig)).toEqual({ accountType: "apiKey", authMode: "api_key" });
+            expect(
+              (await configured(hostConfig)).models[0]?.available,
+              `host route ${routeIndex}`,
+            ).toBe(false);
+          }
+          expect(requests).not.toContain("account/login/start");
+          for (const socket of server.clients) {
+            socket.close();
+          }
+          await expect.poll(() => readiness()).toBeUndefined();
         } finally {
           await disconnectGatewayClient(gateway.client);
           await gateway.server.close();

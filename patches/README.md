@@ -44,11 +44,11 @@ The root package bundles this patched dependency so npm installations preserve t
 
 Remove the noVNC patch, its registration, and its exact-version guard exception when an upstream version passes the Desktop panel and document browser suites (`test/vitest/vitest.ui-e2e.config.ts`) and the live view-only selection/type stress check. The regression uses the real noVNC parser, covers coalesced and fragmented payload delivery, and requires the next framebuffer update without a reconnect.
 
-`matrix-js-sdk@43.0.0` has an approved temporary patch for saved-sync verification replay. Classic sync propagates its existing cache provenance through ordinary client events, and the crypto listener ignores restored events. This preserves room history, sync cursors, ordinary event listeners, fresh verification events, and to-device processing while preventing cached verification requests from restarting after a clean client shutdown. Version 43.0.0 still routes restored events into crypto, so the patch remains necessary.
+`matrix-js-sdk@44.0.0` has an approved temporary patch for saved-sync verification replay. Classic sync propagates its existing cache provenance through ordinary client events, and the crypto listener ignores restored events. This preserves room history, sync cursors, ordinary event listeners, fresh verification events, and to-device processing while preventing cached verification requests from restarting after a clean client shutdown. Version 44.0.0 still routes restored events into crypto, so the patch remains necessary.
 
-The published integrity is `sha512-d2w/VPJoMgE9g015sAsHFqODe+B7KJ8zdm077i8luKTwG4PQrchCd74r65IiPqR5t97ZYz/8FZyujvamgB/7qQ==`; the patch SHA-256 is `c3ad7f3afbd9ded4643fbfa31f5862d48d4e05d198cb438efbb4fcdaa845b0cc`.
+The published integrity is `sha512-5wjcYMIX1aqhJC9hSUGjfSW+7SWEaLC8NUaek0xH5KGXqAO11M4Z5Mk7Voodsk+16Jm9PYB8/wMtyqIKFm0VAQ==`; the patch SHA-256 is `c3ad7f3afbd9ded4643fbfa31f5862d48d4e05d198cb438efbb4fcdaa845b0cc`.
 
-Remove the Matrix patch, its registration, and its exact-version guard exception when an upstream release passes `node scripts/run-vitest.mjs extensions/matrix/src/matrix/client/file-sync-store.sdk.test.ts` and the full Matrix QA catalog, including the original DM SAS-to-QR sequence. The regression exercises the real SQLite sync store, SDK cache hydration, and crypto event wiring; it observes crypto input rather than substituting for native verification proof.
+Remove the Matrix patch, its registration, and its exact-version guard exception when an upstream release passes `node scripts/run-vitest.mjs extensions/matrix/src/matrix/client/file-sync-store.test.ts` and the full Matrix QA catalog, including the original DM SAS-to-QR sequence. The regression exercises the real SQLite sync store, SDK cache hydration, and crypto event wiring; it observes crypto input rather than substituting for native verification proof.
 
 `vitest@5.0.5` has one approved exact-version pnpm patch. Vitest 5 bundles the
 runner, and `@vitest/runner@5.0.0` is not published, so no standalone runner
@@ -235,3 +235,36 @@ recorder writes, import identity, contention, stale recovery, compromise,
 normal exit, and signal cleanup. Its package file list explicitly retains the
 published changelog during patch regeneration. The existing Crabline package
 patch is unchanged.
+
+`@clawdbot/lobster@2026.9.16` has an approved temporary validation patch. Its two
+fixed LLM payload/envelope checks are generated with Ajv at build time. A scoped
+compiler callback lets the OpenClaw plugin use the shared codegen-free validator
+on AOT hosts while keeping native Ajv validation on Node and JIT Bun. The scope
+belongs to one async tool request; schema caches remain separate for each native
+Ajv owner. No process-global engine setter or format-registry write is added.
+
+Regenerate fixed checks inside a `pnpm patch` edit directory with
+`pnpm lobster:validators:gen --package-dir <directory>`, then run
+`pnpm patch-commit <directory>`. `pnpm lobster:validators:check` checks the installed
+patch without editing `node_modules`. The generator owns the generated file;
+never edit its patch hunk directly.
+The generated header records the Ajv version and canonical Unicode helper hash;
+the existing CI generated-validator gate checks both through `pnpm validators:check`.
+
+Normalize pnpm's trailing header tabs, then refresh the native patch hash:
+
+```sh
+node --input-type=module <<'JS'
+import { readFileSync, writeFileSync } from "node:fs";
+const patch = "patches/@clawdbot__lobster@2026.9.16.patch";
+const source = readFileSync(patch, "utf8");
+writeFileSync(patch, source.replace(/^(?:---|\+\+\+) .+\t$/gm, (line) => line.slice(0, -1)));
+JS
+pnpm install --fix-lockfile
+pnpm lobster:validators:check
+```
+
+Upstream follow-up: port the generated fixed checks and request-scoped compiler
+hook to [openclaw/lobster](https://github.com/openclaw/lobster), then remove this
+patch and its exact-version guard when a published version passes the Lobster
+runner validation suite and the AOT/codegen-ban probe without the patch.

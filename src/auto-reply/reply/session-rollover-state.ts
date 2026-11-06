@@ -32,12 +32,15 @@ export function resolveReplySessionRolloverState(
     responseUsage: entry.responseUsage,
     ...selectSessionModelOverride(preservedSelection),
     communication: preservedSelection.communication,
+    cyberAccessProgram: preservedSelection.cyberAccessProgram,
     authProfileOverride: preservedSelection.authProfileOverride,
     authProfileOverrideSource: preservedSelection.authProfileOverrideSource,
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
     label: entry.label,
     autoLabel: entry.autoLabel,
     displayName: entry.displayName,
+    icon: entry.icon,
+    color: entry.color,
     category: entry.category,
     sidebarRoot: entry.sidebarRoot,
     deviceFolder: entry.deviceFolder ? { ...entry.deviceFolder } : undefined,
@@ -58,6 +61,7 @@ export function resolveReplySessionRolloverState(
           spawnDepth: entry.spawnDepth,
           subagentRole: entry.subagentRole,
           subagentControlScope: entry.subagentControlScope,
+          blindPrompt: entry.blindPrompt,
         }
       : {}),
     // Native worktrees and registered projects belong to the logical session, not its

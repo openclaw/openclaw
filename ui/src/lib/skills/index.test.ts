@@ -3,6 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SkillStatusReport } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { createProps, createSkill } from "../../pages/skills/view.test-support.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -16,7 +18,6 @@ import {
   loadSkills,
   loadSkillCard,
   loadClawHubDetail,
-  loadClawHubSecurityVerdicts,
   refreshSkills,
   reconcileSkillsAgentId,
   saveSkillApiKey,
@@ -123,12 +124,15 @@ describe("loadSkills", () => {
       const pending = createDeferred<unknown>();
       request.mockReturnValue(pending.promise);
       state.skillsReport = createSkillCardReport("1.2.3");
-      const task =
-        kind === "inventory"
-          ? loadSkills(state)
-          : kind === "verdicts"
-            ? loadClawHubSecurityVerdicts(state, state.skillsReport)
-            : loadSkillCard(state, "agentreceipt");
+      if (kind === "verdicts") {
+        request.mockResolvedValueOnce(state.skillsReport);
+      }
+      const task = kind === "card" ? loadSkillCard(state, "agentreceipt") : loadSkills(state);
+      if (kind === "verdicts") {
+        await waitForFast(() =>
+          expect(request).toHaveBeenCalledWith("skills.securityVerdicts", { agentId: "main" }),
+        );
+      }
       const completion =
         kind === "inventory"
           ? state.skillsRead?.completion
@@ -572,6 +576,7 @@ describe("skill mutations", () => {
       .mockResolvedValue({});
     await installFromClawHub(state, "github");
     expect(state.clawhubInstallMessage).toEqual({
+      ref: "github",
       kind: "success",
       text: `Installed github@1.2.3\n\n${warning}`,
     });
@@ -588,6 +593,7 @@ describe("skill mutations", () => {
     await installFromClawHub(state, "github");
     expect(request).toHaveBeenCalledOnce();
     expect(state.clawhubInstallMessage).toEqual({
+      ref: "github",
       kind: "error",
       text: `${message}\n\n${details.warning}`,
     });
@@ -633,19 +639,37 @@ it("retires presentation before selecting the roster default after the selected 
   setSkillsAgentId(state, " deleted ", beforeRetarget);
   expect(beforeRetarget).not.toHaveBeenCalled();
 
-  reconcileSkillsAgentId(
-    state,
-    {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }],
-    },
-    beforeRetarget,
-  );
+  reconcileSkillsAgentId(state, makeBootRoster(), beforeRetarget);
   expect(beforeRetarget).toHaveBeenCalledTimes(1);
   expect(state.skillsAgentId).toBe("main");
   expect(state.skillsAgentRevision).toBe(1);
   expect(state.skillsReport).toBeNull();
   expect(state.skillOperation).toEqual({ kind: "clawhub", ref: "calendar" });
+});
+
+it.each([true, false])("localizes skill toggle feedback (enabled=%s)", async (enabled) => {
+  request.mockResolvedValue(statusReport());
+  const translate = vi.spyOn(i18n, "t").mockReturnValue("localized skill feedback");
+  onTestFinished(() => translate.mockRestore());
+  await updateSkillEnabled(state, "github", enabled);
+  expect(translate).toHaveBeenCalledWith(
+    enabled ? "skillsPage.skillEnabled" : "skillsPage.skillDisabled",
+  );
+  expect(state.skillMessages.github?.message).toBe("localized skill feedback");
+});
+
+it("localizes only the UI-authored ClawHub installation fallback", async () => {
+  request.mockImplementation(async (method) => (method === "skills.install" ? {} : statusReport()));
+  const translate = vi.spyOn(i18n, "t").mockReturnValue("localized installation feedback");
+  onTestFinished(() => translate.mockRestore());
+  await installFromClawHub(state, "publisher/skill-name");
+  expect(translate).toHaveBeenCalledWith("skillsPage.installedRef", {
+    ref: "publisher/skill-name",
+  });
+  expect(state.clawhubInstallMessage?.text).toBe("localized installation feedback");
+  request.mockImplementation(async (method) =>
+    method === "skills.install" ? { message: "Publisher feedback" } : statusReport(),
+  );
+  await installFromClawHub(state, "publisher/skill-name");
+  expect(state.clawhubInstallMessage?.text).toBe("Publisher feedback");
 });

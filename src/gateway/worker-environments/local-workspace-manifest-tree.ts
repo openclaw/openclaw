@@ -12,8 +12,6 @@ export type LocalWorkspaceManifestRecord = {
   children: string | null;
   contentRef: string;
   treeRef: string;
-  canonicalIdentity?: string;
-  projectionIdentity?: string;
 };
 
 export type LocalWorkspaceManifestChange = { path: string; node?: LocalWorkspaceManifestNode };
@@ -123,10 +121,6 @@ function manifestRecord(
       right?.treeRef ?? EMPTY_REF,
     ),
   };
-  if (previous?.contentRef === contentRef) {
-    record.canonicalIdentity = previous.canonicalIdentity;
-    record.projectionIdentity = previous.projectionIdentity;
-  }
   return record;
 }
 

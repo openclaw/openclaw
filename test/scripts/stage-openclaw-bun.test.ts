@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
 const it = createCommandTest();
 const nodeDirectory = path.dirname(resolveTestNodeExecPath());
@@ -102,10 +103,9 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
         const executable = `${directory}/bun`;
         const asset = `${directory}.zip`;
         const binary = binaries[scenario === "architecture" ? otherArch : arch];
-        await write(executable, binary);
-        const archive = file(`downloads/${asset}`);
-        await run("/usr/bin/zip", ["-q", archive, executable]);
-        const archiveBytes = await readFile(archive);
+        // Staging assigns executable modes and verifies the real extracted bytes.
+        const archiveBytes = makeStoredZip({ [executable]: binary });
+        await write(`downloads/${asset}`, archiveBytes);
         await write(
           `.cache/openclaw-bun/${tag}/${asset}`,
           redownload ? "damaged cache" : archiveBytes,

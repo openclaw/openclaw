@@ -6,47 +6,28 @@ const object = (properties: Record<string, unknown>, extra: Record<string, unkno
   properties,
   ...extra,
 });
+const string = { type: "string" };
 
 describe("cleanSchemaForGemini", () => {
   it.each([
     [
-      "removes required when no fields match properties",
-      object({ action: { type: "string" } }, { required: ["missing_a", "missing_b"] }),
-      object({ action: { type: "string" } }),
+      "unmatched required",
+      object({ action: string }, { required: ["missing"] }),
+      object({ action: string }),
     ],
+    ["required without properties", { type: "object", required: ["a"] }, { type: "object" }],
     [
-      "removes required when properties is absent",
-      { type: "object", required: ["a", "b"] },
-      { type: "object" },
+      "null properties and valid siblings",
+      object({ bad: { type: "object", properties: null }, good: string }),
+      object({ bad: object({}), good: string }),
     ],
+    ["nullable", { type: ["string", "null"], description: "x" }, { ...string, description: "x" }],
+    ["first type", { type: ["null", "string", "number"], default: "" }, { ...string, default: "" }],
+    ["null-only", { type: ["null"], description: "x" }, { description: "x" }],
+    ["empty type", { type: [], title: "Empty" }, { title: "Empty" }],
+    ["integer const", { const: 42, type: "integer" }, { enum: ["42"], type: "integer" }],
     [
-      "coerces nested null properties while preserving valid siblings",
-      object({ bad: { type: "object", properties: null }, good: { type: "string" } }),
-      object({ bad: object({}), good: { type: "string" } }),
-    ],
-    [
-      "collapses type arrays by stripping null entries",
-      { type: ["string", "null"], description: "nullable field" },
-      { type: "string", description: "nullable field" },
-    ],
-    [
-      "selects the first non-null type from a mixed type array",
-      { type: ["null", "string", "number"], description: "table cell", default: "" },
-      { type: "string", description: "table cell", default: "" },
-    ],
-    [
-      "omits type when a type array contains only null",
-      { type: ["null"], description: "empty choice" },
-      { description: "empty choice" },
-    ],
-    ["omits an empty type array", { type: [], title: "Empty" }, { title: "Empty" }],
-    [
-      "stringifies an integer const before type without changing the schema type",
-      { const: 42, type: "integer" },
-      { enum: ["42"], type: "integer" },
-    ],
-    [
-      "returns no enum key when array becomes empty after coercion",
+      "empty enum after coercion",
       { type: "integer", enum: [null, undefined, {}] },
       { type: "integer" },
     ],
@@ -58,19 +39,13 @@ describe("cleanSchemaForGemini", () => {
     for (const { variants, expected } of [
       {
         variants: [
-          { type: "string", const: "compact" },
-          { type: "string", const: "wide" },
+          { ...string, const: "a" },
+          { ...string, const: "b" },
         ],
-        expected: { type: "string", enum: ["compact", "wide"] },
+        expected: { ...string, enum: ["a", "b"] },
       },
-      {
-        variants: [{ type: "null" }, { type: "string", description: "inner" }],
-        expected: { type: "string", description: "outer" },
-      },
-      {
-        variants: [{ type: "string" }, { type: "integer" }],
-        expected: { type: "string" },
-      },
+      { variants: [{ type: "null" }, { ...string, description: "inner" }], expected: string },
+      { variants: [string, { type: "integer" }], expected: string },
     ]) {
       expect(
         cleanSchemaForGemini({ [keyword]: variants, description: "outer", title: "Choice" }),
@@ -79,7 +54,7 @@ describe("cleanSchemaForGemini", () => {
   });
 
   it("strips empty required arrays in nested schemas", () => {
-    const nested = object({ optional: { type: "string" } });
+    const nested = object({ optional: string });
     expect(
       cleanSchemaForGemini(
         object({ nested: { ...nested, required: [] } }, { required: ["nested"] }),
@@ -90,15 +65,12 @@ describe("cleanSchemaForGemini", () => {
   it("stringifies nested numeric enums while preserving their number type", () => {
     const cleaned = cleanSchemaForGemini(
       object({
-        outer: {
-          type: "array",
-          items: object({ score: { type: "number", enum: [1, 2, 3, 4, 5] } }),
-        },
+        outer: { type: "array", items: object({ score: { type: "number", enum: [1, 2] } }) },
       }),
     );
     expect(cleaned).toHaveProperty("properties.outer.items.properties.score", {
       type: "number",
-      enum: ["1", "2", "3", "4", "5"],
+      enum: ["1", "2"],
     });
   });
 
@@ -116,19 +88,16 @@ describe("cleanSchemaForGemini", () => {
 
   it("resolves same-named definitions in the namespace named by each reference", () => {
     expect(
-      cleanSchemaForGemini({
-        type: "object",
-        $defs: { Value: { type: "string" } },
-        definitions: { Value: { type: "integer" } },
-        properties: {
-          modern: { $ref: "#/$defs/Value" },
-          legacy: { $ref: "#/definitions/Value" },
-        },
-      }),
-    ).toStrictEqual({
-      type: "object",
-      properties: { modern: { type: "string" }, legacy: { type: "integer" } },
-    });
+      cleanSchemaForGemini(
+        object(
+          {
+            modern: { $ref: "#/$defs/Value" },
+            legacy: { $ref: "#/definitions/Value" },
+          },
+          { $defs: { Value: string }, definitions: { Value: { type: "integer" } } },
+        ),
+      ),
+    ).toStrictEqual(object({ modern: string, legacy: { type: "integer" } }));
   });
 
   it("preserves shared definitions across inline and reference traversal", () => {

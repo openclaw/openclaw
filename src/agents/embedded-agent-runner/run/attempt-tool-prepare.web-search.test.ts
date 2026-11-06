@@ -1,4 +1,6 @@
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.entry.js";
@@ -14,10 +16,12 @@ import {
 } from "../../admitted-run-context.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
+import { markCodeModePermissionChangeResult } from "../../code-mode-permission-change.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { getHoisted, resetEmbeddedAttemptHarness } from "./attempt-spawn-workspace.test-support.js";
+import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 
@@ -29,6 +33,9 @@ async function createFixture(
   overrides: Partial<EmbeddedRunAttemptInternalParams> = {},
   authority?: Parameters<typeof prepareSystemAgentRunAdmission>[5],
   runAbortController = new AbortController(),
+  observeAttempt: (
+    attempt: EmbeddedRunAttemptInternalParams,
+  ) => EmbeddedRunAttemptInternalParams = (attempt) => attempt,
 ) {
   await using resources = new AsyncDisposableStack();
   const config = overrides.config ?? { tools: { codeMode: false, toolSearch: { enabled: false } } };
@@ -49,6 +56,7 @@ async function createFixture(
     sessionId: "attribution",
     sessionKey: "agent:main:attribution",
     modelId: "test-model",
+    authProfileId: "selected-search-profile",
     provider,
     model: makeProviderModelFixture({
       id: "test-model",
@@ -61,7 +69,7 @@ async function createFixture(
     ...overrides,
   } as EmbeddedRunAttemptInternalParams;
   const result = await prepareEmbeddedAttemptToolBase({
-    attempt,
+    attempt: observeAttempt(attempt),
     agentDir: attempt.agentDir ?? "/tmp/attribution-agent",
     setup: createAttemptSetupFixture({ sandboxSessionKey: attempt.sessionKey! }),
     markCoreToolStage: () => {},
@@ -107,6 +115,55 @@ beforeAll(async () => {
   );
 });
 afterAll(async () => await state?.cleanup());
+
+it.each(["completion", "permission change"] as const)(
+  "retained %s signals release the retiring run without changing cancellation",
+  async (outcome) => {
+    class RetiringRun {
+      settle(result: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>) {
+        return outcome === "completion"
+          ? result.releaseTools("completion")
+          : result.refreshPermissionMode(null, () => {});
+      }
+    }
+    const retained = await (async () => {
+      await using fixture = await createFixture();
+      const signal = fixture.result.toolAbortSignal;
+      let reasonAtAbort: unknown;
+      signal.addEventListener("abort", () => (reasonAtAbort = signal.reason), { once: true });
+      await new RetiringRun().settle(fixture.result);
+      return { signal, reasonAtAbort };
+    })();
+    // Error matchers can materialize the lazy stack and hide the retained caller.
+    await nextTurn();
+    expect(queryObjects(RetiringRun)).toBe(0);
+    expect(retained.signal.aborted).toBe(true);
+    expect(retained.signal.reason).toBe(retained.reasonAtAbort);
+    if (outcome === "completion") {
+      expect(retained.signal.reason).toBeInstanceOf(DOMException);
+      expect(retained.signal.reason).toHaveProperty("name", "AbortError");
+    } else {
+      const details = { status: "failed", code: "aborted", error: "original failure" };
+      markCodeModePermissionChangeResult(details, retained.signal);
+      expect(details.error).toContain("Permission change interrupted this Code Mode program.");
+    }
+  },
+);
+
+it("prepares tools without enumerating unrelated attempt state", async () => {
+  const enumerate = vi.fn((target: EmbeddedRunAttemptInternalParams) => Reflect.ownKeys(target));
+  codingTools.mockReturnValue([createStubTool("read")]);
+  await using fixture = await createFixture(
+    {},
+    undefined,
+    undefined,
+    (attempt) => new Proxy(attempt, { ownKeys: enumerate }),
+  );
+  expect(fixture.result.toolsRaw.map((tool) => tool.name)).toEqual(["read"]);
+  expect(codingTools).toHaveBeenCalledTimes(1);
+  expect(enumerate).not.toHaveBeenCalled();
+});
+
 it.each(
   (["built-in", "catalog"] as const).flatMap((surface) =>
     (["retired source", "capture invalidated"] as const).map((outcome) => ({ surface, outcome })),
@@ -167,9 +224,6 @@ it.each(
       expect(builtInOptions?.pluginExecutionAuthority).toBe(authority);
       expect(builtInOptions?.pluginExecutionSkillsSnapshot).toBe(skillsSnapshot);
       expect(() => builtInOptions?.assertInvocationCurrent?.()).not.toThrow();
-      expect(builtInOptions?.awaitSessionDiffBaseline).toBe(
-        result.toolHookContext.awaitSessionDiffBaseline,
-      );
       const tool =
         surface === "built-in"
           ? result.toolsRaw[0]
@@ -210,12 +264,21 @@ it.each([
   { name: "inherited dashboard policy denied", inheritedDeny: true, expected: false },
   { name: "globally disabled", disabled: true, expected: false },
   { name: "session disabled", sessionDisabled: true, expected: false },
-  { name: "native OpenAI", native: true, expected: false },
-])("keeps the actual callback truthful for $name and clears it on rebuild", async (scenario) => {
+  { name: "native OpenAI", native: true, expected: false, callable: true },
+  { name: "native denied", native: true, deny: true, expected: false },
+  { name: "native inherited denial", native: true, inheritedDeny: true, expected: false },
+  { name: "native disabled", native: true, disabled: true, expected: false },
+  { name: "native session disabled", native: true, sessionDisabled: true, expected: false },
+  { name: "native runtime denied", native: true, runtimeDenied: true, expected: false },
+  { name: "native execution denied", native: true, executionDenied: true, expected: false },
+  { name: "native tools disabled", native: true, toolsDisabled: true, expected: false },
+  { name: "native raw run", native: true, raw: true, expected: false },
+])("keeps search guidance and admission truthful for $name on rebuild", async (scenario) => {
   const config: OpenClawConfig = {
     session: { store: storePath },
     tools: {
-      codeMode: false,
+      codeMode: true,
+      allow: ["web_search"],
       toolSearch: { enabled: false },
       ...(scenario.deny ? { deny: ["web_search"] } : {}),
       ...(scenario.disabled ? { web: { search: { enabled: false } } } : {}),
@@ -237,15 +300,38 @@ it.each([
         : "agent:main:search-guidance",
     agentDir: state.agentDir(),
     provider: scenario.native ? "openai" : "anthropic",
+    toolsAllow: scenario.runtimeDenied ? ["exec"] : ["web_search", "exec"],
+    toolExecutionAllow: scenario.executionDenied ? ["read"] : undefined,
+    disableTools: scenario.toolsDisabled,
+    modelRun: scenario.raw,
     toolOverrides: scenario.sessionDisabled ? { webSearch: false } : undefined,
   });
   const { result, attempt } = fixture;
-  expect(codingTools).toHaveBeenCalledTimes(1);
+  if (scenario.toolsDisabled || scenario.raw) {
+    expect(codingTools).not.toHaveBeenCalled();
+  } else {
+    expect(codingTools.mock.calls[0]?.[0]?.modelAuthProfileId).toBe("selected-search-profile");
+  }
   expect(result.webSearchUnconfigured).toBe(scenario.expected);
+  const catalog = await prepareEmbeddedAttemptToolCatalog({
+    attempt,
+    setup: createAttemptSetupFixture({ sandboxSessionKey: attempt.sessionKey! }),
+    preparedToolBase: result,
+    bundleTools: { clientTools: undefined, uncompactedEffectiveTools: result.toolsRaw },
+    abortSignal: result.toolAbortSignal,
+    executeCodeModeTool: async () => ({ content: [], details: {} }),
+  });
+  expect(catalog.toolSearch.catalogToolCount).toBe(0);
+  expect(catalog.toolSearchRunPlan.hasCallableTools).toBe(scenario.callable === true);
+  if (scenario.callable) {
+    expect(catalog.emptyExplicitToolAllowlistError).toBeNull();
+    expect(catalog.toolSearchRunPlan.liveAllowedToolNames.has("web_search")).toBe(false);
+  }
   // A disabled factory never reports configuration, so rebuild must clear the old fact.
   codingTools.mockImplementation(() => []);
   attempt.toolOverrides = { webSearch: false };
   await result.refreshPermissionMode(null, () => {});
   expect(result.webSearchUnconfigured).toBe(false);
-  expect(codingTools).toHaveBeenCalledTimes(2);
+  catalog.refreshTools(() => {});
+  expect(catalog.toolSearchRunPlan.hasCallableTools).toBe(false);
 });

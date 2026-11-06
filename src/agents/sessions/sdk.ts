@@ -1,11 +1,16 @@
 /** Assembles an agent session from the run owner's selected model and prepared resources. */
+import { markModelPayloadObserver } from "@openclaw/ai/internal/model-request-body";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
+import {
+  setInternalBeforeToolBatch,
+  type InternalBeforeToolBatchHook,
+} from "../../../packages/agent-core/src/internal-hooks.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import type { SessionMetadataCommit } from "../../config/sessions/transcript-write-context-store.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
-  type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Model } from "../../llm/types.js";
@@ -19,10 +24,6 @@ import {
   type AgentTool,
   type ThinkingLevel,
 } from "../runtime/index.js";
-import {
-  setInternalBeforeToolBatch,
-  type InternalBeforeToolBatchHook,
-} from "../runtime/internal-hooks.js";
 import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import type { ExtensionRunner } from "./extensions/index.js";
@@ -235,15 +236,19 @@ export async function createAgentSession(
     convertToLlm: (messages) =>
       convertToLlmWithBlockImages(messages, settingsManager.getBlockImages()),
     streamFn: createSessionStreamFn(modelRegistry, settingsManager, options.thinkingExplicit),
-    onPayload: async (payload) => {
-      const runner = extensionRunnerRef.current;
-      if (!runner?.hasHandlers("before_provider_request")) {
-        return payload;
-      }
-      return await runWithSessionWriteSettlement(
-        async () => await runner.emitBeforeProviderRequest(payload),
-      );
-    },
+    onPayload: markModelPayloadObserver(
+      async (payload: unknown) => {
+        const runner = extensionRunnerRef.current;
+        if (!runner?.hasHandlers("before_provider_request")) {
+          return payload;
+        }
+        return await runWithSessionWriteSettlement(
+          async () => await runner.emitBeforeProviderRequest(payload),
+        );
+      },
+      undefined,
+      () => !extensionRunnerRef.current?.hasHandlers("before_provider_request"),
+    ),
     onResponse: async (response) => {
       const runner = extensionRunnerRef.current;
       if (!runner?.hasHandlers("after_provider_response")) {

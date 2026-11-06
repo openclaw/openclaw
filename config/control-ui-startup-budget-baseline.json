@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281702,
-  "reason": "Combined warm transcript and shared visible clocks: measured 281702 B after integrating main. Warm transcript remote median improved from 509.3 to 304.7 ms; shared clocks retain their separately measured CPU win. Startup requests remain 7 JS and 1 CSS; accept the sub-0.5 KB change against main.",
-  "updatedAt": "2026-10-24"
+  "startupJsGzipBytes": 90280,
+  "reason": "Normalize generated asset hashes before compression: current main ce8b7add7b0 measures 90,280 B budget gzip (90,664 B served). Remove rename-only variance; retain the 512 B growth allowance and reduce toolchain variance to 64 B.",
+  "updatedAt": "2026-11-06"
 }

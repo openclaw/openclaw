@@ -43,12 +43,14 @@ test("publishes committed private topic titles to a connected session-list subsc
     ThreadLabel: "After reply",
     SessionKey: sessionKey,
   };
-  await recordInboundSessionMeta({
-    storePath,
-    sessionKey,
-    ctx: { ...ctx, ThreadLabel: "Before reply" },
-    createIfMissing: false,
-  });
+  const record = (overrides: Partial<typeof ctx> = {}, key = sessionKey) =>
+    recordInboundSessionMeta({
+      storePath,
+      sessionKey: key,
+      ctx: { ...ctx, ...overrides, SessionKey: key },
+      createIfMissing: false,
+    });
+  await record({ ThreadLabel: "Before reply" });
   const { ws } = await openClient();
   try {
     expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
@@ -63,21 +65,12 @@ test("publishes committed private topic titles to a connected session-list subsc
       "Before reply",
     );
     const notices = vi.fn();
-    const stop = onSessionLifecycleEvent(notices);
-    try {
+    {
+      using _ = { [Symbol.dispose]: onSessionLifecycleEvent(notices) };
       const missingKey = "agent:main:telegram:direct:42001:thread:42001:78";
-      expect(
-        await recordInboundSessionMeta({
-          storePath,
-          sessionKey: missingKey,
-          ctx: { ...ctx, SessionKey: missingKey, MessageThreadId: "78" },
-          createIfMissing: false,
-        }),
-      ).toBeNull();
+      expect(await record({ MessageThreadId: "78" }, missingKey)).toBeNull();
       expect(loadSessionEntry({ storePath, sessionKey: missingKey })).toBeUndefined();
       expect(notices).not.toHaveBeenCalled();
-    } finally {
-      stop();
     }
     const changed = onceMessage(
       ws,
@@ -87,7 +80,7 @@ test("publishes committed private topic titles to a connected session-list subsc
         event.payload?.sessionKey === sessionKey &&
         event.payload?.reason === "metadata",
     );
-    await recordInboundSessionMeta({ storePath, sessionKey, ctx, createIfMissing: false });
+    await record();
     expect((await changed).payload?.session).toMatchObject({
       key: sessionKey,
       sessionId: "private-topic-after-reply",

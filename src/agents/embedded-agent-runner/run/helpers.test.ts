@@ -1,7 +1,6 @@
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
-import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import {
@@ -36,20 +35,16 @@ describe("resolveEmbeddedAttemptBasePrompt", () => {
   });
 });
 
-function answer(text: string, withCommentary = true): AssistantMessage {
-  return {
+function answer(text: string, withCommentary = true) {
+  return makeAgentAssistantMessage({
     api: "responses",
     provider: "openai",
     model: "gpt-5.4",
-    usage: createZeroUsageFixture(),
-    role: "assistant",
     content: [
       ...(withCommentary ? [signedText("Working...", "commentary")] : []),
       signedText(text, "final_answer"),
     ],
-    timestamp: Date.now(),
-    stopReason: "stop",
-  };
+  });
 }
 
 function signedText(text: string, phase: "commentary" | "final_answer") {
@@ -71,6 +66,14 @@ function errorMeta(overrides: Partial<Parameters<typeof buildErrorAgentMeta>[0]>
     usageAccumulator: createUsageAccumulator(),
     lastRunPromptUsage: undefined,
     ...overrides,
+  });
+}
+
+function usageMeta(lastCallUsage: NormalizedUsage, previous?: NormalizedUsage) {
+  return buildUsageAgentMetaFields({
+    usageAccumulator: accumulated(...(previous ? [previous] : []), lastCallUsage),
+    latestUsage: previous ? undefined : lastCallUsage,
+    lastRunPromptUsage: lastCallUsage,
   });
 }
 
@@ -109,12 +112,7 @@ describe("buildUsageAgentMetaFields", () => {
       contextUsage: { state: "available", promptTokens: 180, totalTokens: 200 },
       total: 200,
     } satisfies NormalizedUsage;
-    const fields = buildUsageAgentMetaFields({
-      usageAccumulator: accumulated({ input: 100, output: 50, total: 150 }, latestCallUsage),
-      latestUsage: undefined,
-      lastRunPromptUsage: latestCallUsage,
-    });
-
+    const fields = usageMeta(latestCallUsage, { input: 100, output: 50, total: 150 });
     expect(fields).toMatchObject({
       usage: { input: 180, output: 70, cacheRead: 100, total: 350 },
       promptTokens: 180,
@@ -131,12 +129,7 @@ describe("buildUsageAgentMetaFields", () => {
       contextUsage: { state: "unavailable" },
       total: 927_907,
     } satisfies NormalizedUsage;
-    const fields = buildUsageAgentMetaFields({
-      usageAccumulator: accumulated(latestCallUsage),
-      latestUsage: latestCallUsage,
-      lastRunPromptUsage: latestCallUsage,
-    });
-
+    const fields = usageMeta(latestCallUsage);
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
     expect(fields.promptTokens).toBeUndefined();
   });

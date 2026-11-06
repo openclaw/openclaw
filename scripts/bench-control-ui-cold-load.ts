@@ -1,27 +1,47 @@
 // Opt-in production-bundle benchmark; real delays model wire delivery, not test synchronization.
 // --cpu-profile: source-mapped reload/live/streaming tables and per-run/median cpu-profile.json.
+// --coverage: separate --untraced run without CPU profiling; retains thread CPU metrics.
 // --thread-cpu-time excludes renderer descheduling from CDP duration metrics.
+// Traces report coarse V8 module parse/compile CPU, not exhaustive compiler CPU.
+// javaScriptResources includes completed modulepreloads absent from V8 coverage.
 // --cpu-profile-compare <baseline cpu-profile.json>: profile and diff against that report.
 // --selector-stats: ranked boot CSS selectors (instrumentation overhead included).
 // --viewport desktop|mobile: 1719×1179 (default) or 390×844 browser viewport.
 // --allocations --untraced --live-events: collected-object renderer bytes per event.
 // --streaming-allocations: sampled allocation bytes including collected objects during deltas.
+// --streaming-content tool-code grows an expanded tool card and code fence together.
+// --streaming-panes 2 streams independent sessions in the native split layout.
 // Sampling inflates timings: never compare profiled runs with unprofiled runs.
 // --session-event-duration-ms 135000 --session-event-ancestor-refs extends the native churn.
 // Pair built bundles with --fixture-now-ms and --live-start-at-ms (one run per process).
 // OPENCLAW_CONTROL_UI_BUILD_ID supplies the matching identity outside a Git checkout.
 // --gateway-url uses real Gateway HTTP serving with synthetic bootstrap/RPC fixtures.
-// --gateway-http serves paired bundles through the Gateway HTTP owner on loopback.
+// --gateway-http serves paired bundles, including layout cells, through the Gateway HTTP owner.
 // --first-load skips warm-up and clears client state; external Gateway URL runs stay single-sample.
+// --skip-long-session-heap-snapshots separates timing from heap-profiler conditioning.
+// --long-session-scroll-cycles 3 records post-GC memory after repeated full traversals.
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
+// --boot-route chat|new|sessions|settings selects the measured reload destination.
+// --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
+// Repeat --layout-cell mobile:light:chat:cold to isolate cells with their matrix setup intact.
+// --sidebar-presentation adds badges/avatars; --sidebar-presentation-probe records visible waves.
+// --warm-reload-perf-probe records warm metrics without sidebar presentation observation.
+// --late-row-facts covers titled links, native/ticketed thumbnails, archive notice and avatars.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
+// --critical-path-intent-ms 150 includes hover/focus prefetch before route activation.
+// --settings-core-schema replays the server's core config schema, prepared before sampling.
 // Paint/CLS and static-shell geometry are recorded in presentation; --filmstrip-only saves frames.
+// --transcript-witness distinguishes native saved/live text paint in warm Chat reloads.
+// --transcript-witness-hold also holds startup for saved paint: correctness only, never timing.
+// --details-processes observes populated warm Details with one synthetic running process.
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { chromium, type Browser, type CDPSession, type Page } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../src/gateway/control-ui-bootstrap-contract.ts";
@@ -35,21 +55,24 @@ import {
   createControlUiMockBootstrapConfig,
   installControlUiMockBootstrapDocument,
   createControlUiMockGatewayInitScript,
-  controlUiSessionPath,
   controlUiSessionUrl,
   controlUiBundledSettingsStorageKey,
-  prepareControlUiMockGatewayScenario,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
   startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../ui/src/test-helpers/control-ui-navigation.ts";
+import { prepareNativePluginMockGatewayScenario } from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
+import { sidebarPresentationProbe } from "../ui/src/test-helpers/control-ui-sidebar-presentation-probe.test-support.ts";
 import {
-  createControlUiStreamingReply,
-  createStreamingReplyProbeInitScript,
-} from "../ui/src/test-helpers/control-ui-streaming-reply.ts";
+  installTeamScaleSidebarPresentation,
+  installSidebarCachedParitySettings,
+} from "../ui/src/test-helpers/control-ui-sidebar-presentation.test-support.ts";
+import { revealSidebarTarget } from "../ui/src/test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
+import { LONG_SESSION_SCENARIOS } from "../ui/src/test-helpers/control-ui-team-scale-history-fixture.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { resolveColdLoadLatency } from "./lib/control-ui-bench-latency.ts";
 import {
@@ -58,6 +81,7 @@ import {
 } from "./lib/control-ui-bench-warm-state.ts";
 import {
   compareCpuTables,
+  controlUiScriptAssetUrl,
   formatCpuTables,
   medianCpuTables,
   readCpuProfileReport,
@@ -66,8 +90,13 @@ import {
   prepareColdLoadTraceEvent,
   summarizeColdLoadTrace,
   summarizeScriptCoverage,
+  summarizeJavaScriptResources,
   summarizeCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
+import {
+  renderCriticalPathWaterfall,
+  type CriticalPathHttpRequest,
+} from "./lib/control-ui-critical-path-waterfall.ts";
 import {
   criticalPathRoutes,
   criticalPathCpuDelta,
@@ -75,6 +104,7 @@ import {
   navigateCriticalPath,
   readCriticalPath,
   readCriticalPathCpu,
+  type CriticalPathPresentation,
   type CriticalPathRoute,
 } from "./lib/control-ui-critical-path.ts";
 import {
@@ -86,12 +116,24 @@ import {
   summarizeLongTaskCpuProfiles,
   type InteractionStyleSheet,
 } from "./lib/control-ui-interaction-trace.ts";
+import {
+  probeLongSession,
+  readLongSessionMessageCount,
+} from "./lib/control-ui-long-session-probe.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
-import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
+import { installPaneChromeProbe } from "./lib/control-ui-pane-chrome-probe.ts";
+import { createControlUiStreamingReply } from "./lib/control-ui-streaming-fixture.ts";
+import { createStreamingReplyProbeInitScript } from "./lib/control-ui-streaming-reply.ts";
+import { warmReloadProbe, type TranscriptWitnesses } from "./lib/control-ui-warm-reload-probe.ts";
 import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   readGatewayHeapProfile,
 } from "./lib/gateway-bench-profile.ts";
+import {
+  installWarmReloadBrowserProbe,
+  summarizeDetailsGeometry,
+} from "./perf/warm-reload-browser-probe.ts";
+type SidebarPresentationSnapshot = ReturnType<ReturnType<typeof sidebarPresentationProbe>["read"]>;
 
 function readRigProbeSnapshot() {
   const perf = Reflect.get(window, "__perf");
@@ -237,20 +279,44 @@ function summarizeSidebarWindows(
 
 const { values } = parseArgs({
   options: {
+    "new-session-first-token": { type: "boolean", default: false },
+    "new-session-token-ms": { type: "string", default: "1500" },
+    "new-session-worker": { type: "boolean", default: false },
+    "new-session-filmstrip": { type: "boolean", default: false },
+    "new-session-list-mode": { type: "string", default: "normal" },
     "cpu-profile": { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     "cpu-profile-compare": { type: "string" },
     "thread-cpu-time": { type: "boolean", default: false },
+    "no-owner-probes": { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
+    "transcript-witness": { type: "boolean", default: false },
+    "transcript-witness-hold": { type: "boolean", default: false },
+    "row-facts": { type: "boolean", default: false },
+    "late-row-facts": { type: "boolean", default: false },
+    "pane-chrome-probe": { type: "boolean", default: false },
+    "pane-chrome-facts": { type: "boolean", default: false },
+    "archived-session": { type: "boolean", default: false },
+    "details-session-facts": { type: "boolean", default: false },
+    "details-processes": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
     "latency-profile": { type: "string" },
     "transcript-messages": { type: "string" },
+    "long-session": { type: "boolean", default: false },
+    "long-session-trace": { type: "boolean", default: false },
+    "skip-long-session-heap-snapshots": { type: "boolean", default: false },
+    "long-session-scenario": { type: "string", default: "mixed" },
+    "long-session-scroll-cycles": { type: "string", default: "1" },
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "filmstrip-only": { type: "boolean", default: false },
+    "layout-matrix": { type: "boolean", default: false },
+    "layout-route": { type: "string", multiple: true, default: [] },
+    "layout-cell": { type: "string", multiple: true, default: [] },
+    "layout-start": { type: "string", default: "0" },
     "hold-boot-assets": { type: "boolean", default: false },
     "history-validator-delay-ms": { type: "string", default: "0" },
     "dashboard-paint-marker": { type: "boolean", default: false },
@@ -261,13 +327,24 @@ const { values } = parseArgs({
     "streaming-reply": { type: "boolean", default: false },
     "streaming-allocations": { type: "boolean", default: false },
     "streaming-burst-size": { type: "string", default: "1" },
+    "streaming-rate": { type: "string", default: "30" },
+    "streaming-content": { type: "string", default: "markdown" },
+    "streaming-panes": { type: "string", default: "1" },
     "session-switch": { type: "boolean", default: false },
     "critical-path": { type: "boolean", default: false },
     "critical-path-route": { type: "string", multiple: true, default: [] },
+    "critical-path-intent-ms": { type: "string" },
+    "settings-core-schema": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-live-churn": { type: "boolean", default: false },
     "sidebar-avatars": { type: "boolean", default: false },
+    "transcript-avatars": { type: "boolean", default: false },
+    "sidebar-presentation": { type: "boolean", default: false },
+    "sidebar-cached-parity": { type: "boolean", default: false },
+    "sidebar-scroll-top": { type: "string", default: "0" },
+    "sidebar-presentation-probe": { type: "boolean", default: false },
+    "warm-reload-perf-probe": { type: "boolean", default: false },
     "sidebar-expanded": { type: "boolean", default: false },
     "sidebar-persistent-children": { type: "boolean", default: false },
     "omit-hello-self-presence": { type: "boolean", default: false },
@@ -292,6 +369,7 @@ const { values } = parseArgs({
     "network-latency-ms": { type: "string" },
     "download-kbps": { type: "string" },
     "cpu-throttle": { type: "string" },
+    "low-memory": { type: "boolean", default: false },
     port: { type: "string" },
     "sandbox-port": { type: "string" },
     "compare-bundle-dir": { type: "string", multiple: true, default: [] },
@@ -308,6 +386,34 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
+if (values["late-row-facts"]) {
+  if (
+    !values["warm-reload"] ||
+    !values["gateway-http"] ||
+    values["cold-http-cache"] ||
+    values["hold-boot-assets"] ||
+    Number(values["history-validator-delay-ms"]) > 0 ||
+    values["duplicate-boot-reads"]
+  ) {
+    throw new Error(
+      "late-row-facts requires cache-enabled gateway-http + warm-reload without intercepted assets or duplicate-boot-reads",
+    );
+  }
+  values["row-facts"] = true;
+  values["transcript-avatars"] = true;
+}
+if (values["details-processes"]) {
+  if (!values["warm-reload"]) {
+    throw new Error("details-processes requires warm-reload for the populated Details boundary");
+  }
+  values["pane-chrome-probe"] = true;
+}
+if (values["pane-chrome-probe"] && !values["warm-reload"]) {
+  throw new Error("pane-chrome-probe requires warm-reload for the first transcript paint boundary");
+}
+if (values["warm-reload-perf-probe"] && !values["warm-reload"]) {
+  throw new Error("warm-reload-perf-probe requires warm-reload");
+}
 if (values["selector-stats"] && (values.untraced || values["filmstrip-only"])) {
   throw new Error("selector-stats requires tracing; exclude untraced and filmstrip-only");
 }
@@ -316,6 +422,9 @@ if (values["streaming-reply"] && values["live-events"]) {
 }
 if (values["streaming-allocations"] && !values["streaming-reply"]) {
   throw new Error("streaming-allocations requires streaming-reply");
+}
+if (values["sidebar-presentation-probe"] && !values["sidebar-presentation"]) {
+  throw new Error("sidebar-presentation-probe requires sidebar-presentation");
 }
 if (values["sidebar-list-churn"] && !values["live-events"]) {
   throw new Error("sidebar-list-churn requires live-events");
@@ -344,6 +453,12 @@ const cpuProfile = values["cpu-profile"] || Boolean(values["cpu-profile-compare"
 const performanceTimeDomain = values["thread-cpu-time"] ? "threadTicks" : "timeTicks";
 const allocations = values.allocations;
 const traced = !values.untraced && !values["filmstrip-only"];
+// Coverage and CPU sampling use separate CDP sessions with isolate-global coverage state.
+if (values.coverage && (traced || cpuProfile)) {
+  throw new Error(
+    "coverage requires --untraced without --cpu-profile or --cpu-profile-compare; run CPU sampling separately",
+  );
+}
 if (
   allocations &&
   (!values["live-events"] || !values.untraced || cpuProfile || values["filmstrip-only"])
@@ -353,6 +468,16 @@ if (
   );
 }
 const captureTrace = traced || values["filmstrip-only"];
+if (
+  values["long-session-trace"] &&
+  (!values["long-session"] || !values.untraced || cpuProfile || values["filmstrip-only"])
+) {
+  throw new Error(
+    "long-session-trace requires long-session + untraced without CPU or filmstrip capture",
+  );
+}
+// Keep startup and streaming untraced so their overhead cannot warm the scroll path.
+const captureLongSessionTrace = captureTrace || values["long-session-trace"];
 const colorScheme = values["color-scheme"];
 if (colorScheme !== undefined && colorScheme !== "light" && colorScheme !== "dark") {
   throw new Error("Expected color-scheme light or dark");
@@ -375,7 +500,61 @@ const baselineCpu = values["cpu-profile-compare"]
     ])
   : undefined;
 const cpuRuns: Record<string, ColdLoadCpuTables[]> = {};
-const runs = Number(values.runs);
+const layoutStart = Number(values["layout-start"]);
+if (
+  !Number.isInteger(layoutStart) ||
+  layoutStart < 0 ||
+  layoutStart > 31 ||
+  values["layout-cell"].some(
+    (cell) =>
+      !/^(desktop|mobile):(light|dark):(chat|new|sessions|settings):(cold|warm)$/u.test(cell),
+  ) ||
+  values["layout-route"].some((route) => !["chat", "new", "sessions", "settings"].includes(route))
+) {
+  throw new Error(
+    "Expected layout-start 0–31, a known layout-route, and layout-cell viewport:theme:route:cold|warm",
+  );
+}
+if (
+  values["layout-matrix"] &&
+  (values["first-load"] || values["critical-path"] || values["gateway-url"])
+) {
+  throw new Error(
+    "layout-matrix owns cold/warm setup and route readiness; exclude first-load, critical-path and external gateway-url modes",
+  );
+}
+const layoutCells = values["layout-matrix"]
+  ? (["desktop", "mobile"] as const)
+      .flatMap((cellViewport) =>
+        (["light", "dark"] as const).flatMap((cellColorScheme) =>
+          (["chat", "new", "sessions", "settings"] as const).flatMap((route) =>
+            [true, false].map((cold) => ({
+              viewport: cellViewport,
+              colorScheme: cellColorScheme,
+              route,
+              cold,
+            })),
+          ),
+        ),
+      )
+      .filter(
+        ({ route }) => !values["layout-route"].length || values["layout-route"].includes(route),
+      )
+      .filter(
+        (cell) =>
+          !values["layout-cell"].length ||
+          values["layout-cell"].includes(
+            `${cell.viewport}:${cell.colorScheme}:${cell.route}:${cell.cold ? "cold" : "warm"}`,
+          ),
+      )
+      .slice(layoutStart)
+  : [];
+if (values["layout-matrix"] && !layoutCells.length) {
+  throw new Error("Layout filters and layout-start must leave at least one matrix cell");
+}
+const layoutVariants = values["layout-matrix"] ? values["compare-bundle-dir"].length + 1 : 1;
+const requestedRuns = Number(values.runs);
+const runs = requestedRuns * (layoutCells.length || 1) * layoutVariants;
 const gatewayUrl = values["gateway-url"] ? new URL(values["gateway-url"]) : undefined;
 const firstLoad = values["first-load"];
 if (
@@ -385,10 +564,29 @@ if (
   throw new Error("hold-boot-assets requires one first-load filmstrip-only run without comparison");
 }
 const bootRoute = values["boot-route"];
-if (bootRoute !== "chat" && bootRoute !== "new") {
-  throw new Error("Expected boot-route chat or new");
+if (
+  bootRoute !== "chat" &&
+  bootRoute !== "new" &&
+  bootRoute !== "sessions" &&
+  bootRoute !== "settings"
+) {
+  throw new Error("Expected boot-route chat, new, sessions or settings");
 }
 const navigationRoutes: CriticalPathRoute[] = [];
+if (
+  (values["transcript-witness"] &&
+    (!values["warm-reload"] || firstLoad || bootRoute !== "chat" || layoutCells.length)) ||
+  (values["transcript-witness-hold"] && (!values["transcript-witness"] || values["critical-path"]))
+) {
+  throw new Error(
+    "transcript-witness requires warm Chat without a layout matrix; hold requires transcript-witness without critical-path navigation",
+  );
+}
+// Cold New has no Chat owner to complete registration, so omit the unused WeakMap shim.
+const captureOwnerRegistration = !values["no-owner-probes"] && (!firstLoad || bootRoute !== "new");
+const ownerProbes =
+  captureOwnerRegistration && !cpuProfile && !allocations && !values["session-event-churn"];
+const sidebarCounters = captureOwnerRegistration && !cpuProfile;
 for (const route of values["critical-path-route"]) {
   const matched = criticalPathRoutes.find((candidate) => candidate === route);
   if (!matched || navigationRoutes.includes(matched)) {
@@ -399,21 +597,43 @@ for (const route of values["critical-path-route"]) {
 if (navigationRoutes.length && !values["critical-path"]) {
   throw new Error("critical-path-route requires critical-path");
 }
-if (values["critical-path"] && !navigationRoutes.length && bootRoute !== "new") {
+const criticalPathIntentMs = Number(values["critical-path-intent-ms"] ?? 0);
+if (!Number.isFinite(criticalPathIntentMs) || criticalPathIntentMs < 0) {
+  throw new Error("critical-path-intent-ms must be a nonnegative number");
+}
+if (values["critical-path-intent-ms"] !== undefined && !values["critical-path"]) {
+  throw new Error("critical-path-intent-ms requires critical-path");
+}
+if (values["critical-path"] && !navigationRoutes.length && bootRoute === "chat") {
   navigationRoutes.push(...criticalPathRoutes);
 }
 if (
-  bootRoute === "new" &&
-  (!firstLoad ||
-    values["live-events"] ||
+  bootRoute !== "chat" &&
+  (values["live-events"] ||
     values["session-switch"] ||
     values["streaming-reply"] ||
     values["overlay-probe"])
 ) {
-  throw new Error("boot-route new requires first-load without chat interaction phases");
+  throw new Error("Non-chat boot routes exclude chat interaction phases");
 }
+const {
+  latencyProfile,
+  downloadKbps: profileDownloadKbps,
+  latencyMs,
+  frameGapMs,
+  connectNotBeforeMs,
+  methodLatencyMs,
+  sidebarQueryLatencyMs,
+} = resolveColdLoadLatency({
+  profile: values["latency-profile"],
+  latencyMs: values["latency-ms"],
+  frameGapMs: values["frame-gap-ms"],
+  connectNotBeforeMs: values["connect-not-before-ms"],
+  methodLatencyMs: values["method-latency-ms"],
+  sidebarQueryLatencyMs: values["sidebar-query-latency-ms"],
+});
 const networkLatencyMs = Number(values["network-latency-ms"] ?? 0);
-const downloadKbps = Number(values["download-kbps"] ?? 0);
+const downloadKbps = Number(values["download-kbps"] ?? profileDownloadKbps);
 const cpuThrottle = Number(values["cpu-throttle"] ?? 1);
 if (
   (gatewayUrl &&
@@ -441,21 +661,7 @@ if (
     "gateway-url requires an HTTP origin, bundle-dir and one first-load run without comparison; gateway-http requires bundle-dir without gateway-url; first-load requires sidebar-view=sessions without warm-reload; network limits must be nonnegative and cpu-throttle at least 1",
   );
 }
-const {
-  latencyProfile,
-  latencyMs,
-  frameGapMs,
-  connectNotBeforeMs,
-  methodLatencyMs,
-  sidebarQueryLatencyMs,
-} = resolveColdLoadLatency({
-  profile: values["latency-profile"],
-  latencyMs: values["latency-ms"],
-  frameGapMs: values["frame-gap-ms"],
-  connectNotBeforeMs: values["connect-not-before-ms"],
-  methodLatencyMs: values["method-latency-ms"],
-  sidebarQueryLatencyMs: values["sidebar-query-latency-ms"],
-});
+
 const historyValidatorDelayMs = Number(values["history-validator-delay-ms"]);
 if (
   !Number.isFinite(historyValidatorDelayMs) ||
@@ -469,13 +675,70 @@ const face = values.face;
 if (face !== "chat" && face !== "dashboard") {
   throw new Error("Expected face chat or dashboard");
 }
+if (
+  values["long-session"] &&
+  (face !== "chat" || bootRoute !== "chat" || values["layout-matrix"] || values["large-snapshot"])
+) {
+  throw new Error(
+    "long-session requires the chat route, chat face, and its dedicated transcript fixture",
+  );
+}
+const longSessionScenario = LONG_SESSION_SCENARIOS.find(
+  (scenario) => scenario === values["long-session-scenario"],
+);
+const longSessionScrollCycles = Number(values["long-session-scroll-cycles"]);
+if (
+  !Number.isSafeInteger(longSessionScrollCycles) ||
+  longSessionScrollCycles < 1 ||
+  (longSessionScrollCycles !== 1 && !values["long-session"])
+) {
+  throw new Error("long-session-scroll-cycles requires long-session and a positive integer");
+}
+if (!longSessionScenario || (longSessionScenario !== "mixed" && !values["long-session"])) {
+  throw new Error(
+    "long-session-scenario requires long-session and mixed, paging, single-run, or direct-run",
+  );
+}
+if (
+  longSessionScenario !== "mixed" &&
+  (values["streaming-reply"] || values["live-events"] || values["session-switch"])
+) {
+  throw new Error(
+    "Dedicated paging and single-run diagnostics require an unchanged history; use mixed for streaming, live-events, and session-switch",
+  );
+}
 if (values["chat-dashboard-route"] && face !== "dashboard") {
   throw new Error("chat-dashboard-route requires the dashboard face");
 }
 const captureMs = Number(values["capture-ms"]);
 const transcriptMessages =
-  values["transcript-messages"] === undefined ? undefined : Number(values["transcript-messages"]);
+  values["transcript-messages"] === undefined
+    ? values["long-session"]
+      ? 2_000
+      : undefined
+    : Number(values["transcript-messages"]);
+if (
+  (longSessionScenario === "single-run" || longSessionScenario === "direct-run") &&
+  (transcriptMessages ?? 0) < 2
+) {
+  throw new Error("Single-run diagnostics require at least a prompt and a final answer");
+}
 const streamingBurstSize = Number(values["streaming-burst-size"]);
+const streamingRate = Number(values["streaming-rate"]);
+const streamingContent = values["streaming-content"];
+const streamingPanes = Number(values["streaming-panes"]);
+if (streamingContent !== "markdown" && streamingContent !== "tool-code") {
+  throw new Error("streaming-content must be markdown or tool-code");
+}
+if (streamingPanes !== 1 && streamingPanes !== 2) {
+  throw new Error("streaming-panes must be 1 or 2");
+}
+if ((streamingContent !== "markdown" || streamingPanes !== 1) && !values["streaming-reply"]) {
+  throw new Error("streaming-content and streaming-panes require streaming-reply");
+}
+if (!Number.isFinite(streamingRate) || streamingRate <= 0) {
+  throw new Error("streaming-rate must be a positive number of deltas per second");
+}
 if (
   !Number.isSafeInteger(streamingBurstSize) ||
   streamingBurstSize < 1 ||
@@ -497,17 +760,19 @@ if (
     port === sandboxPort ||
     [port, sandboxPort].some(
       (value) =>
-        value === undefined || !Number.isInteger(value) || value < 40_000 || value > 65_535,
+        value === undefined ||
+        !Number.isInteger(value) ||
+        !((value >= 19_600 && value <= 19_699) || (value >= 40_000 && value <= 65_535)),
     ))
 ) {
   throw new Error(
-    "Explicit port and sandbox-port require a built bundle and distinct ports from 40000 to 65535",
+    "Explicit port and sandbox-port require a built bundle and distinct ports in 19600–19699 or 40000–65535",
   );
 }
 if (
-  !Number.isInteger(runs) ||
-  runs < 1 ||
-  runs > (values["compare-bundle-dir"].length ? 60 : 20) ||
+  !Number.isInteger(requestedRuns) ||
+  requestedRuns < 1 ||
+  requestedRuns > (values["compare-bundle-dir"].length ? 60 : 20) ||
   !Number.isFinite(latencyMs) ||
   latencyMs < 0 ||
   !Number.isFinite(connectNotBeforeMs) ||
@@ -584,6 +849,7 @@ const server =
       ? await startBuiltControlUiE2eServer(bundleDir, undefined, port)
       : await startProductionControlUiE2eServer(bundleDir, buildId);
 const baseUrl = gatewayUrl?.origin ?? gatewayHttpServer?.baseUrl ?? server!.baseUrl;
+const coldResetUrl = new URL("/__control-ui-bench-cold-reset__", baseUrl).href;
 const usesGatewayHttp = Boolean(gatewayUrl || gatewayHttpServer);
 const comparisonBundleDirs = values["compare-bundle-dir"].map((directory) =>
   path.resolve(directory),
@@ -595,22 +861,25 @@ async function selectComparisonBundle(index: number, page?: Page) {
   if (!comparisonBundleDirs.length || activeBundle === index) {
     return;
   }
+  const nextBuildId = explicitBuildId ?? (await readBundleBuildId(bundleSlots[index]!));
+  if (page) {
+    await page.evaluate((id) => {
+      const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("Mock Gateway is not installed");
+      }
+      gateway.setServerBuildId(id);
+    }, nextBuildId);
+    // Retire lazy imports from the old page before its assets leave the served root.
+    await page.goto("about:blank");
+  }
   if (gatewayHttpServer) {
     await gatewayHttpServer.selectBuild(bundleSlots[index]!);
   } else {
     await server!.replaceBuild(bundleSlots[index]!, bundleSlots[activeBundle]!);
   }
   activeBundle = index;
-  buildId =
-    explicitBuildId ??
-    (await readBundleBuildId(gatewayHttpServer ? bundleSlots[index]! : bundleDir));
-  await page?.evaluate((id) => {
-    const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-    if (!gateway) {
-      throw new Error("Mock Gateway is not installed");
-    }
-    gateway.setServerBuildId(id);
-  }, buildId);
+  buildId = nextBuildId;
 }
 const dashboardFont = values["dashboard-widget"]
   ? await readFile("ui/public/fonts/space-grotesk-latin.woff2")
@@ -645,6 +914,9 @@ const fixture = createControlUiTeamScaleFixture({
   sidebarListChurn: values["sidebar-list-churn"],
   sidebarLiveChurn: values["sidebar-live-churn"],
   sidebarAvatars: values["sidebar-avatars"],
+  transcriptAvatars: values["transcript-avatars"],
+  sidebarPresentation: values["sidebar-presentation"],
+  sidebarCachedParity: values["sidebar-cached-parity"],
   sidebarPersistentChildren: values["sidebar-persistent-children"],
   sessionEventChurn: values["session-event-churn"],
   sessionEventDurationMs,
@@ -655,15 +927,129 @@ const fixture = createControlUiTeamScaleFixture({
     : undefined,
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
+  rowFacts: values["row-facts"],
+  lateRowFacts: values["late-row-facts"],
   offRosterSession: values["off-roster-route"],
+  archivedSession: values["archived-session"],
+  paneChromeFacts: values["pane-chrome-facts"],
+  detailsSessionFacts: values["details-session-facts"],
   transcriptMessages,
+  richTranscript: values["long-session"],
+  longSessionScenario: values["long-session"] ? longSessionScenario : undefined,
   dashboardWidgetFontUrl: dashboardFont
     ? `http://127.0.0.1:${address.port}${dashboardFontPath}`
     : undefined,
-  historyStateReceipt: historyValidatorDelayMs > 0,
   dashboardPaintMarker: values["dashboard-paint-marker"],
 });
-const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply() : undefined;
+const witnessPhaseKey = "openclaw-bench-transcript-witness-phase";
+const transcriptWitness = values["transcript-witness"]
+  ? (() => {
+      const messages = fixture.scenario.historyMessages ?? [];
+      const index = messages.length - 1;
+      const message = messages[index];
+      const metadata = message?.["__openclaw"];
+      if (
+        message?.role !== "assistant" ||
+        typeof metadata?.id !== "string" ||
+        !Array.isArray(message.content)
+      ) {
+        throw new Error("Transcript witness requires an existing final assistant text message");
+      }
+      const originalText = "The current implementation is ready for verification.";
+      const witnesses: TranscriptWitnesses = {
+        saved: {
+          messageId: `${metadata.id}-cache`,
+          rowKey: "",
+          text: "The cached implementation is ready for verification.",
+        },
+        live: {
+          messageId: `${metadata.id}-fresh`,
+          rowKey: "",
+          text: "The latest implementation is ready for verification.",
+        },
+      };
+      const variants = { saved: messages, live: messages };
+      for (const source of ["saved", "live"] as const) {
+        const witness = witnesses[source];
+        witness.rowKey = `group:assistant:msg:id:${witness.messageId}:0`;
+        let replacements = 0;
+        const content = message.content.slice();
+        content.forEach((value, position) => {
+          if (
+            value.type !== "text" ||
+            typeof value.text !== "string" ||
+            !value.text.includes(originalText)
+          ) {
+            return;
+          }
+          replacements++;
+          content[position] = { ...value, text: value.text.replace(originalText, witness.text) };
+        });
+        if (replacements !== 1) {
+          throw new Error("Transcript witness requires exactly one existing fixture paragraph");
+        }
+        const replacement = { ...message };
+        replacement["__openclaw"] = { ...metadata, id: witness.messageId };
+        replacement.content = content;
+        const variant = messages.slice();
+        variant[index] = replacement;
+        variants[source] = variant;
+      }
+      // Preserve the visible reaction across both IDs; one unused lookup alias remains per phase.
+      const reactions = fixture.scenario.sessionReactions?.[fixture.selectedSessionKey];
+      const reaction = reactions?.[metadata.id];
+      if (reactions && reaction) {
+        reactions[witnesses.saved.messageId] = reaction;
+        reactions[witnesses.live.messageId] = reaction;
+        delete reactions[metadata.id];
+      }
+      return {
+        witnesses,
+        variants,
+        originalMessageId: metadata.id,
+        messageCount: messages.length,
+        // Native persistence retains the last 80 distinct-sequence fixture messages.
+        snapshotMessageCount: Math.min(messages.length, 80),
+        preparedAt: new Date().toISOString(),
+      };
+    })()
+  : undefined;
+if (transcriptWitness && fixture.liveHistory) {
+  fixture.liveHistory.messages = transcriptWitness.variants.live;
+}
+const streamingReply = values["streaming-reply"]
+  ? createControlUiStreamingReply(streamingRate, streamingContent)
+  : undefined;
+const streamingSessions = streamingReply
+  ? Array.from({ length: streamingPanes }, (_, index) => ({
+      sessionKey: index === 0 ? fixture.selectedSessionKey : fixture.pinnedKeys[1]!,
+      runId: `${fixture.scenario.inFlightRun!.runId}${index === 0 ? "" : "-pane-2"}`,
+    }))
+  : [];
+const streamingSplitLayout =
+  streamingPanes === 2
+    ? {
+        activePaneId: "streaming-pane-1",
+        columnWeights: [0.5, 0.5],
+        columns: streamingSessions.map((session, index) => ({
+          id: `streaming-column-${index + 1}`,
+          paneWeights: [1],
+          panes: [{ id: `streaming-pane-${index + 1}`, sessionKey: session.sessionKey }],
+        })),
+      }
+    : undefined;
+if (streamingSplitLayout) {
+  for (const session of streamingSessions) {
+    Object.assign(
+      fixture.scenario.sessions!.find((row) => row.key === session.sessionKey)!,
+      {
+        hasActiveRun: true,
+        status: "running",
+        activeRunIds: [session.runId],
+      },
+    );
+  }
+}
 const extraInitScripts = await Promise.all(
   values["init-script"].map((file) => readFile(file, "utf8")),
 );
@@ -671,11 +1057,21 @@ const isolatedSandboxOrigin =
   values["dashboard-widget"] || values["dashboard-mcp-app"] || values["dashboard-paint-marker"]
     ? `http://127.0.0.1:${address.port}`
     : undefined;
-const chromiumArgs = isolatedSandboxOrigin ? [`--isolate-origins=${isolatedSandboxOrigin}`] : [];
+const chromiumArgs = [
+  ...(isolatedSandboxOrigin ? [`--isolate-origins=${isolatedSandboxOrigin}`] : []),
+  ...(values["low-memory"]
+    ? ["--enable-low-end-device-mode", "--js-flags=--max-old-space-size=128"]
+    : []),
+];
 let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
 const results = [];
+const waterfallArtifacts: Array<{
+  file: string;
+  capture: Awaited<ReturnType<typeof readCriticalPath>>;
+  requests: CriticalPathHttpRequest[];
+}> = [];
 try {
   const terminalEnabled = gatewayUrl
     ? await fetch(new URL("/control-ui-config.json", gatewayUrl)).then(async (response) => {
@@ -685,8 +1081,65 @@ try {
         return (await response.json()).terminalEnabled === true;
       })
     : fixture.scenario.terminalEnabled;
-  const prepared = await prepareControlUiMockGatewayScenario({
+  const settingsCoreSchema = values["settings-core-schema"]
+    ? (await import("../src/config/schema.ts")).buildConfigSchemaCore()
+    : undefined;
+  const agentsResponse = fixture.scenario.methodResponses?.["agents.list"];
+  const workerAgents =
+    values["new-session-worker"] && agentsResponse && typeof agentsResponse === "object"
+      ? {
+          ...agentsResponse,
+          sessionPlacement: { requiredProfile: { id: "l247-worker", providerId: "crabbox" } },
+        }
+      : undefined;
+  const prepared = await prepareNativePluginMockGatewayScenario({
     ...fixture.scenario,
+    ...(values["details-processes"]
+      ? {
+          featureMethods: [...fixture.scenario.featureMethods!, "sessions.processes.list"],
+        }
+      : {}),
+    ...(streamingSplitLayout
+      ? {
+          sessionTranscripts: Object.fromEntries(
+            streamingSessions.map((session) => [
+              session.sessionKey,
+              {
+                messages: fixture.scenario.historyMessages!,
+                inFlightRun: { ...fixture.scenario.inFlightRun!, runId: session.runId },
+              },
+            ]),
+          ),
+        }
+      : {}),
+    subscriptionInitialHistory: true,
+    methodResponses: {
+      ...fixture.scenario.methodResponses,
+      ...(values["details-processes"]
+        ? {
+            "sessions.processes.list": {
+              sessionId: fixture.scenario.sessions!.find(
+                (row) => row.key === fixture.selectedSessionKey,
+              )!.sessionId,
+              processes: [
+                {
+                  processId: "verification",
+                  instanceId: "verification-1",
+                  name: "Synthetic verifier",
+                  status: "running",
+                  startedAt: fixtureNowMs ?? Date.now(),
+                  tail: "ready",
+                  truncated: false,
+                  canStop: true,
+                },
+              ],
+              truncated: false,
+            },
+          }
+        : {}),
+      ...(workerAgents ? { "agents.list": workerAgents } : {}),
+      ...(settingsCoreSchema ? { "config.schema": settingsCoreSchema } : {}),
+    },
     terminalEnabled,
     serverBuildId: buildId,
     serverVersion: JSON.parse(await readFile("package.json", "utf8")).version,
@@ -698,6 +1151,8 @@ try {
   });
   const context = await browser.newContext({
     viewport,
+    isMobile: viewportName === "mobile",
+    hasTouch: viewportName === "mobile",
     ...(colorScheme ? { colorScheme } : {}),
     serviceWorkers: "block",
     permissions: ["local-network-access"],
@@ -717,8 +1172,11 @@ try {
         firstLiveShellMs: null as number | null,
         firstShellInteractiveMs: null as number | null,
         firstEnabledComposerMs: null as number | null,
+        firstUsableComposerMs: null as number | null,
+        firstUsableComposerKind: null as "static" | "hydrated" | "new" | null,
         firstComposerFocusMs: null as number | null,
         firstNonemptyTranscriptMs: null as number | null,
+        firstRouteReadyMs: null as number | null,
         fontLoadEventsMs: [] as number[],
         staticShellGeometry: null as Record<string, unknown> | null,
         firstLiveShellGeometry: null as Record<string, unknown> | null,
@@ -727,6 +1185,7 @@ try {
           value: number;
           hadRecentInput: boolean;
           sources: Array<{
+            nodeName: string | null;
             element: string | null;
             previousRect: unknown;
             currentRect: unknown;
@@ -761,14 +1220,17 @@ try {
             atMs: entry.startTime,
             value,
             hadRecentInput,
-            sources: sources.map(({ node, previousRect, currentRect }) => ({
-              element:
-                node instanceof Element
-                  ? `${node.localName}${node.id ? `#${node.id}` : ""}.${[...node.classList].join(".")}`
+            sources: sources.map(({ node, previousRect, currentRect }) => {
+              const element = node instanceof Element ? node : node?.parentElement;
+              return {
+                nodeName: node?.nodeName ?? null,
+                element: element
+                  ? `${element.localName}${element.id ? `#${element.id}` : ""}.${[...element.classList].join(".")}`
                   : null,
-              previousRect: previousRect.toJSON(),
-              currentRect: currentRect.toJSON(),
-            })),
+                previousRect: previousRect.toJSON(),
+                currentRect: currentRect.toJSON(),
+              };
+            }),
           });
           if (!hadRecentInput) {
             milestones.nonRecentInputShiftSum += value;
@@ -818,6 +1280,35 @@ try {
           }),
         );
       const sample = () => {
+        const route = location.pathname.split("/")[1] || measuredRoute;
+        const readySelector =
+          route === "new"
+            ? ".new-session-page__message"
+            : route === "sessions"
+              ? ".sessions-toolbar__refresh"
+              : route === "settings"
+                ? "#settings-font-chat"
+                : ".chat-pane-cache__pane--active .chat-virtual-row .chat-text";
+        const readyControl = document.querySelector(readySelector);
+        const activePane = document.querySelector(".chat-pane-cache__pane--active");
+        const routeDataReady =
+          route === "chat" || route === "dashboard"
+            ? activePane &&
+              Reflect.get(activePane, "transcriptReady") === true &&
+              activePane.querySelector("textarea:not(:disabled)")
+            : route === "sessions"
+              ? document.querySelector("openclaw-sessions-page .session-link")
+              : readyControl;
+        if (
+          milestones.firstRouteReadyMs === null &&
+          readyControl &&
+          routeDataReady &&
+          visible(routeDataReady) &&
+          visible(readyControl) &&
+          !readyControl.matches(":disabled")
+        ) {
+          milestones.firstRouteReadyMs = performance.now();
+        }
         const staticShell = document.querySelector("#openclaw-boot-shell");
         if (milestones.firstStaticShellMs === null && staticShell && visible(staticShell)) {
           milestones.firstStaticShellMs = performance.now();
@@ -833,15 +1324,14 @@ try {
           milestones.firstLiveShellGeometry === null &&
           shell &&
           visible(shell) &&
-          chatInput &&
-          visible(chatInput)
+          (chatInput ? visible(chatInput) : readyControl && visible(readyControl))
         ) {
           milestones.firstLiveShellMs = performance.now();
           milestones.firstLiveShellGeometry = geometry(shell, {
             sidebar: ".shell-nav",
-            header: ".chat-pane__header, .agent-chat__header--mobile",
-            transcript: ".chat-thread",
-            composer: ".agent-chat__input",
+            header: ".chat-pane__header, .agent-chat__header--mobile, .content-header, .topbar",
+            transcript: ".chat-thread, main.content",
+            composer: ".agent-chat__input, .new-session-page__message",
           });
         }
         if (
@@ -863,6 +1353,29 @@ try {
         ) {
           milestones.firstEnabledComposerMs = performance.now();
         }
+        if (milestones.firstUsableComposerMs === null) {
+          const composers = document.querySelectorAll<HTMLTextAreaElement>(
+            "#openclaw-boot-composer, .chat-pane-cache__pane--active .agent-chat__composer-combobox textarea, .new-session-page__message",
+          );
+          for (const candidate of composers) {
+            if (
+              candidate.matches(":disabled") ||
+              candidate.readOnly ||
+              candidate.closest("[inert]") ||
+              !visible(candidate)
+            ) {
+              continue;
+            }
+            milestones.firstUsableComposerMs = performance.now();
+            milestones.firstUsableComposerKind =
+              candidate.id === "openclaw-boot-composer"
+                ? "static"
+                : candidate.matches(".new-session-page__message")
+                  ? "new"
+                  : "hydrated";
+            break;
+          }
+        }
         if (
           milestones.firstNonemptyTranscriptMs === null &&
           [
@@ -874,9 +1387,11 @@ try {
           milestones.firstNonemptyTranscriptMs = performance.now();
         }
         if (
-          milestones.firstShellInteractiveMs === null ||
-          milestones.firstEnabledComposerMs === null ||
-          (measuredRoute === "chat" && milestones.firstNonemptyTranscriptMs === null)
+          milestones.firstRouteReadyMs === null ||
+          milestones.firstLiveShellGeometry === null ||
+          (milestones.firstShellInteractiveMs === null &&
+            shell &&
+            !shell.classList.contains("shell--mobile-nav"))
         ) {
           requestAnimationFrame(sample);
         }
@@ -961,17 +1476,41 @@ try {
   ]);
   if (gatewayHttpServer) {
     // Native fixture HTTP keeps browser caching available for production assets.
-    gatewayHttpServer.setFixtureReader((pathname) => {
+    gatewayHttpServer.setFixtureReader((pathname, url) => {
       if (pathname === "/control-ui-config.json") {
         return {
           body: JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario)),
           contentType: "application/json",
         };
       }
+      if (fixture.lateRowFacts && pathname === "/__openclaw__/assistant-media") {
+        if (url.searchParams.get("source") !== fixture.lateRowFacts.cacheableImageSource) {
+          return undefined;
+        }
+        if (url.searchParams.get("meta") === "1") {
+          return {
+            body: JSON.stringify(fixture.lateRowFacts.metadata),
+            contentType: "application/json",
+            headers: { "Cache-Control": "private, no-store" },
+          };
+        }
+        if (url.searchParams.get("mediaTicket") !== fixture.lateRowFacts.metadata.mediaTicket) {
+          return {
+            body: "Synthetic media ticket required",
+            contentType: "text/plain",
+            status: 403,
+          };
+        }
+      }
       const asset = assets.get(pathname);
       return asset
         ? {
             ...asset,
+            headers:
+              url.searchParams.has("v") &&
+              (pathname.startsWith("/avatar/") || /^\/api\/users\/[^/]+\/avatar$/u.test(pathname))
+                ? { "Cache-Control": "private, max-age=31536000, immutable" }
+                : undefined,
             delayMs:
               (fixture.assets.get(pathname)?.delayMs ?? 0) +
               (values["dashboard-widget"] && pathname.startsWith("/__openclaw__/board/")
@@ -1008,6 +1547,7 @@ try {
     if (
       values["sidebar-live-churn"] ||
       values["sidebar-avatars"] ||
+      values["sidebar-presentation"] ||
       values["closed-menu-members"]
     ) {
       await page.route("**/api/users/*/avatar?*", async (route) => {
@@ -1023,14 +1563,30 @@ try {
         }
         return route.fulfill(response);
       });
+      if (values["sidebar-presentation"]) {
+        await page.route("**/avatar/*", (route) => {
+          const asset = fixture.assets.get(new URL(route.request().url()).pathname);
+          return asset ? route.fulfill(asset) : route.fallback();
+        });
+      }
     }
   }
+  await page.addInitScript((entries) => {
+    if (window !== window.top || location.protocol === "about:") {
+      return;
+    }
+    for (const [key, value] of Object.entries(entries)) {
+      if (localStorage.getItem(key) === null) {
+        localStorage.setItem(key, value);
+      }
+    }
+  }, fixture.paneChromeSettings);
   await page.addInitScript(
-    ({ key, pins, mode, bootstrap, bootstrapAttribute, fixtureUrl }) => {
+    ({ key, pins, mode, bootstrap, bootstrapAttribute, fixtureUrl, splitLayout }) => {
       if (window !== window.top || location.protocol === "about:") {
         return;
       }
-      if (fixtureUrl) {
+      if (fixtureUrl && location.pathname === "/chat") {
         history.replaceState(null, "", fixtureUrl);
       }
       if (bootstrap) {
@@ -1051,13 +1607,15 @@ try {
           observer.observe(document, { childList: true });
         }
       }
-      if (!localStorage.getItem(key)) {
+      if (!localStorage.getItem(key) || splitLayout) {
         localStorage.setItem(
           key,
           JSON.stringify({
+            ...(splitLayout ? JSON.parse(localStorage.getItem(key) ?? "{}") : {}),
             sidebarAgentsMode: mode,
             railShortcuts: pins,
             navigationByProfile: { "team-person-001": { railShortcuts: pins } },
+            ...(splitLayout ? { chatSplitLayout: splitLayout } : {}),
           }),
         );
       }
@@ -1065,15 +1623,14 @@ try {
     {
       key: controlUiBundledSettingsStorageKey(baseUrl),
       fixtureUrl: usesGatewayHttp
-        ? bootRoute === "new"
-          ? new URL("/new", baseUrl).href
-          : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face)
+        ? controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face)
         : null,
       bootstrap: usesGatewayHttp
         ? JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario))
         : null,
       bootstrapAttribute: CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
       pins: fixture.sidebarEntries,
+      splitLayout: streamingSplitLayout,
       mode:
         !values["session-event-ancestor-refs"] &&
         (values["sidebar-list-churn"] ||
@@ -1083,12 +1640,58 @@ try {
           : "chip",
     },
   );
-  const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
+  const paneChromeScript =
+    values["pane-chrome-probe"] || values["warm-reload-perf-probe"]
+      ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);`
+      : "";
+  const warmProbes =
+    values["warm-reload"] || firstLoad
+      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"], lateRowFacts: values["late-row-facts"], witnesses: transcriptWitness?.witnesses })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
+      : "";
+  const warmPerformanceProbe = values["warm-reload-perf-probe"]
+    ? `\nReflect.set(window, "__warmReloadProof", (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(face)}));`
+    : "";
+  // The last history case is the fixture's full-window fallback. Witness mode
+  // measures a changed transcript, so it must not replay the unchanged-cursor delta.
+  const historyCases = asNullableRecord(fixture.scenario.methodResponses?.["chat.history"])?.cases;
+  const witnessHistory =
+    transcriptWitness && Array.isArray(historyCases)
+      ? asNullableRecord(asNullableRecord(historyCases.at(-1))?.response)
+      : undefined;
+  if (transcriptWitness && !Array.isArray(witnessHistory?.messages)) {
+    throw new Error("Transcript witness requires the fixture's complete history response");
+  }
+  const gatewayScenario = transcriptWitness
+    ? {
+        ...prepared.scenario,
+        historyMessages: [],
+        methodResponses: {
+          ...prepared.scenario.methodResponses,
+          "chat.history": { ...witnessHistory, messages: [] },
+          "chat.startup": { ...witnessHistory, messages: [] },
+        },
+      }
+    : prepared.scenario;
+  const witnessInit = transcriptWitness
+    ? `
+    const witnessLive = localStorage.getItem(${JSON.stringify(witnessPhaseKey)}) === "live";
+    const witnessMessages = ${JSON.stringify(transcriptWitness.variants.saved)};
+    if (witnessLive) witnessMessages[witnessMessages.length - 1] = ${JSON.stringify(transcriptWitness.variants.live.at(-1))};
+    window.openclawControlUiE2eGateway.setHistoryMessages(witnessMessages);
+    if (witnessLive && ${values["transcript-witness-hold"]}) window.openclawControlUiE2eGateway.deferNext("chat.startup");
+  `
+    : "";
+  const presentationProbes = fixture.sidebarPresentation
+    ? `\n(${installTeamScaleSidebarPresentation.toString()})(${JSON.stringify(fixture.sidebarPresentation)});${values["sidebar-presentation-probe"] ? `\n(${sidebarPresentationProbe.toString()})();` : ""}`
+    : "";
+  const paritySettings = values["sidebar-cached-parity"]
+    ? `\n(${installSidebarCachedParitySettings.toString()})(${JSON.stringify(fixture.scenario.sessionGroups)});`
+    : "";
   const boardTickets = values["dashboard-widget"]
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !allocations && !values["session-event-churn"], sidebarCounters: !cpuProfile })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(gatewayScenario)}\n${witnessInit}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || values["long-session"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes}${warmPerformanceProbe}${presentationProbes}${paritySettings} })();`,
   });
   if (values["critical-path"]) {
     await page.addInitScript({
@@ -1097,18 +1700,35 @@ try {
   }
   // Fetch the real public document; the init script selects the synthetic session.
   // Session-entry authorization is outside this static-delivery benchmark.
-  const url = usesGatewayHttp
-    ? new URL(bootRoute === "new" ? "/new" : "/chat", baseUrl).href
-    : bootRoute === "new"
-      ? new URL("/new", baseUrl).href
-      : values["full-uuid-route"]
-        ? new URL(
-            `/${face}/main/${fixture.selectedSessionKey.split(":").at(-1)!.replaceAll("-", "")}`,
-            baseUrl,
-          ).href
-        : values["short-route"]
-          ? new URL(controlUiSessionPath(fixture.selectedSessionKey, "", face), baseUrl).href
-          : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face);
+  const shortSessionUrl = (namespace: "chat" | "dashboard") => {
+    const pathname = buildControlUiSessionPath({
+      namespace,
+      sessionKey: fixture.selectedSessionKey,
+      fallbackAgentId: "main",
+      shortIdLength: values["off-roster-route"] ? 8 : 32,
+    });
+    if (!pathname) {
+      throw new Error("Fixture session has no short route");
+    }
+    return new URL(pathname, baseUrl).href;
+  };
+  const chatDashboardUrl = values["short-route"]
+    ? shortSessionUrl("chat")
+    : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, "chat");
+  const chatUrl = usesGatewayHttp
+    ? new URL("/chat", baseUrl).href
+    : values["full-uuid-route"]
+      ? new URL(
+          `/${face}/main/${fixture.selectedSessionKey.split(":").at(-1)!.replaceAll("-", "")}`,
+          baseUrl,
+        ).href
+      : values["short-route"]
+        ? shortSessionUrl(face)
+        : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face);
+  const url =
+    bootRoute === "chat"
+      ? chatUrl
+      : new URL(bootRoute === "settings" ? "/settings/appearance" : `/${bootRoute}`, baseUrl).href;
   let releaseBootAssets: (() => void) | undefined;
   const heldBootAssets: Array<{ url: string; type: string }> = [];
   if (values["hold-boot-assets"]) {
@@ -1124,12 +1744,6 @@ try {
       await route.fallback();
     });
   }
-  const coldResetUrl = new URL("/__control-ui-bench-cold-reset__", baseUrl).href;
-  if (firstLoad) {
-    await page.route(coldResetUrl, (route) =>
-      route.fulfill({ body: "", contentType: "text/html" }),
-    );
-  }
   async function resetColdState(cdp: CDPSession, bundleIndex: number) {
     // Retire pagehide writers before clearing the measured origin's persistent state.
     await page.goto("about:blank");
@@ -1140,39 +1754,50 @@ try {
     await cdp.send("Network.clearBrowserCache");
     await selectComparisonBundle(bundleIndex);
     // The empty same-origin document seeds only the existing mock's build identity.
+    await page.route(coldResetUrl, (route) =>
+      route.fulfill({ body: "", contentType: "text/html" }),
+    );
     await page.goto(coldResetUrl);
+    await page.unroute(coldResetUrl);
     await page.evaluate((id) => {
       localStorage.clear();
       sessionStorage.clear();
       Reflect.get(window, "openclawControlUiE2eGateway").setServerBuildId(id);
     }, buildId);
   }
-  async function settle() {
+  async function settle(route = bootRoute) {
     try {
-      if (bootRoute === "new") {
-        await page.locator(".new-session-page__message").waitFor();
-        await page.waitForFunction(() => {
+      const mobile = (page.viewportSize()?.width ?? viewport.width) <= 900;
+      if (route !== "chat") {
+        const selector =
+          route === "new"
+            ? ".new-session-page__message"
+            : route === "sessions"
+              ? ".sessions-toolbar__refresh"
+              : "#settings-font-chat";
+        await page.locator(selector).waitFor();
+        await page.waitForFunction((readySelector) => {
           const state = Reflect.get(window, "__coldLoad")?.read();
-          const composer = document.querySelector<HTMLTextAreaElement>(
-            ".new-session-page__message",
-          );
+          const control = document.querySelector(readySelector);
+          const readyAt = Reflect.get(window, "__coldLoadPresentation")?.firstRouteReadyMs;
           return (
-            composer &&
-            !composer.disabled &&
+            control?.checkVisibility() &&
+            !control.matches(":disabled") &&
+            typeof readyAt === "number" &&
             state &&
             !state.pending &&
             !state.queued &&
             state.idleMs > 750
           );
-        });
+        }, selector);
         return;
       }
       await page
-        .locator(viewportName === "mobile" ? ".agent-chat__header--mobile" : ".chat-pane__header")
+        .locator(mobile ? ".agent-chat__header--mobile" : ".chat-pane__header")
         .first()
         .waitFor();
       // A closed mobile drawer parks its sidebar rows; they are not part of responsive boot.
-      if (viewportName === "desktop") {
+      if (!mobile) {
         if (values["session-event-ancestor-refs"]) {
           await page
             .locator(
@@ -1180,11 +1805,17 @@ try {
             )
             .waitFor({ state: "visible" });
         }
-        await page
-          .locator(
-            `[data-session-section="pinned"] [data-session-key="${fixture.pinnedKeys.at(-1)}"]`,
-          )
-          .waitFor({ state: "attached" });
+        if (values["sidebar-cached-parity"]) {
+          await page
+            .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+            .waitFor();
+        } else {
+          await page
+            .locator(
+              `[data-session-section="pinned"] [data-session-key="${fixture.pinnedKeys.at(-1)}"]`,
+            )
+            .waitFor({ state: "attached" });
+        }
         await page.locator('[data-sidebar-entry="plugin:team-scale-7/overview"]').waitFor();
         if (sidebarView === "online") {
           await page.locator('[data-online-user-id="team-person-120"]').waitFor();
@@ -1201,12 +1832,26 @@ try {
           .getByText("Team metric 1", { exact: true })
           .waitFor();
       }
-      await page
-        .frameLocator(".chat-tool-card__preview-frame")
-        .last()
-        .frameLocator("iframe")
-        .getByText("Team metric 12", { exact: true })
-        .waitFor();
+      if (
+        fixture.longSessionWorkload.scenario === "single-run" ||
+        fixture.longSessionWorkload.scenario === "direct-run"
+      ) {
+        await page
+          .locator(
+            `.chat-pane-cache__pane--active .chat-bubble[data-entry-id="${fixture.longSessionWorkload.lastEntryId}"]`,
+          )
+          .waitFor({ state: "visible" });
+        await page
+          .locator(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea")
+          .waitFor({ state: "visible" });
+      } else {
+        await page
+          .frameLocator(".chat-tool-card__preview-frame")
+          .last()
+          .frameLocator("iframe")
+          .getByText("Team metric 12", { exact: true })
+          .waitFor();
+      }
       if (face === "dashboard") {
         await page.waitForFunction(() => {
           const ready = Reflect.get(window, "__readWidgetReadiness")();
@@ -1238,6 +1883,7 @@ try {
         .evaluate(() => ({
           ...Reflect.get(window, "__coldLoad")?.read(),
           widgetReadiness: Reflect.get(window, "__readWidgetReadiness")?.(),
+          transcriptWitnesses: Reflect.get(window, "__warmReload")?.witnesses(),
         }))
         .catch(() => ({ unavailable: "Page navigated while capturing diagnostics" }));
       await writeFile(
@@ -1255,16 +1901,37 @@ try {
     }
     if (fixture.sidebarPersistentChildren) {
       const { parentKey, childKeys } = fixture.sidebarPersistentChildren;
-      const toggle = page.locator(`[data-child-session-toggle="${parentKey}"]`);
+      const reveal = async (selector: string) => {
+        const target = page.locator(selector);
+        await revealSidebarTarget(page.locator(".sidebar-shell__body"), target, 30_000);
+        return target;
+      };
+      const toggle = await reveal(`[data-child-session-toggle="${parentKey}"]`);
       if ((await toggle.getAttribute("aria-expanded")) !== "true") {
         await toggle.click();
       }
+      await page.waitForFunction(
+        (expectedParent) =>
+          Reflect.get(window, "__coldLoad")
+            .read()
+            .rpcs.some(
+              (rpc: { method: string; params: { spawnedBy?: string } }) =>
+                rpc.method === "sessions.list" && rpc.params.spawnedBy === expectedParent,
+            ),
+        parentKey,
+      );
       for (const key of childKeys) {
-        await page.locator(`.sidebar-session-content [data-session-key="${key}"]`).waitFor();
+        await reveal(`.sidebar-session-content [data-session-key="${key}"]`);
       }
     }
-    const expansionSaved = async (expanded: boolean) => {
-      type SavedRow = { key: string; children?: SavedRow[] };
+    const expansionSaved = async ({
+      expanded,
+      persistentChildren,
+    }: {
+      expanded: boolean;
+      persistentChildren?: { parentKey: string; childKeys: string[] };
+    }) => {
+      type SavedRow = { key: string; children?: SavedRow[]; childrenDisplayMode?: string };
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
         const request = indexedDB.open("openclaw-chat-snapshots");
         request.addEventListener("success", () => resolve(request.result), { once: true });
@@ -1277,7 +1944,10 @@ try {
       try {
         const records = await new Promise<
           Array<{
-            model: { sections: Array<{ visibleLimit: number; rows: SavedRow[] }> };
+            model: {
+              pinnedSessions: SavedRow[];
+              sections: Array<{ visibleLimit: number; rows: SavedRow[] }>;
+            };
           }>
         >((resolve, reject) => {
           const request = database
@@ -1296,15 +1966,24 @@ try {
         ].map((row) => row.getAttribute("data-session-key"));
         return records.some(({ model }) => {
           const savedKeys = new Set<string>();
+          let parentExpanded = !persistentChildren;
           const collect = (rows: SavedRow[]) => {
             for (const row of rows) {
               savedKeys.add(row.key);
+              if (row.key === persistentChildren?.parentKey) {
+                parentExpanded =
+                  row.childrenDisplayMode === "expanded" ||
+                  row.childrenDisplayMode === "expanded-fully";
+              }
               collect(row.children ?? []);
             }
           };
+          collect(model.pinnedSessions);
           collect(model.sections.flatMap((section) => section.rows));
           return (
             (!expanded || model.sections.some(({ visibleLimit }) => visibleLimit > 10)) &&
+            parentExpanded &&
+            (persistentChildren?.childKeys.every((key) => savedKeys.has(key)) ?? true) &&
             visibleKeys.every((key) => key !== null && savedKeys.has(key))
           );
         });
@@ -1313,7 +1992,7 @@ try {
       }
     };
     // Sticky live rows can exceed ten without an explicit Show more selection.
-    if (values["sidebar-expanded"] && !(await page.evaluate(expansionSaved, true))) {
+    if (values["sidebar-expanded"] && !(await page.evaluate(expansionSaved, { expanded: true }))) {
       await page
         .locator(".sidebar-session-content .sidebar-session-pagination__button")
         .filter({ hasText: "Show more" })
@@ -1322,25 +2001,128 @@ try {
     }
     // waitForFunction treats an async predicate's Promise as truthy.
     const deadline = Date.now() + 30_000;
-    while (!(await page.evaluate(expansionSaved, values["sidebar-expanded"]))) {
+    while (
+      !(await page.evaluate(expansionSaved, {
+        expanded: values["sidebar-expanded"],
+        persistentChildren: fixture.sidebarPersistentChildren,
+      }))
+    ) {
       if (Date.now() >= deadline) {
         throw new Error("Expanded sidebar membership was not persisted");
       }
       await page.evaluate(() => new Promise(requestAnimationFrame));
     }
+    await page.locator(".sidebar-shell__body").evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await page
+      .locator(`.sidebar-session-content [data-session-key="${fixture.pinnedKeys[1]}"]`)
+      .waitFor();
   }
   const warmStates: Array<Awaited<ReturnType<typeof persistColdLoadWarmState>>["storage"]> = [];
   const snapshotSaves: Array<
     Omit<Awaited<ReturnType<typeof persistColdLoadWarmState>>, "storage">
   > = [];
+  const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
+    sessionKey: fixture.selectedSessionKey,
+    rowFacts: values["row-facts"],
+    lateRowFacts: values["late-row-facts"],
+    offRosterSession: values["off-roster-route"],
+    sidebarView: sidebarView === "online" ? "online" : "sessions",
+  };
+  const qualifyDetailsProcess = async () => {
+    if (!values["details-processes"]) {
+      return;
+    }
+    const details = page.locator(".chat-details:visible");
+    if (!(await details.count())) {
+      await page.locator(".chat-details-toggle:visible").first().click();
+    }
+    await details.locator('[data-details-group="processes"] [data-process-id]').waitFor();
+    await details
+      .locator('[data-details-group="automations"] .chat-summary__automation')
+      .first()
+      .waitFor();
+  };
+  const qualifyLateRowFacts = async () => {
+    if (!fixture.lateRowFacts) {
+      return;
+    }
+    await page
+      .waitForFunction(({ sessionTitle, prUrl }) => {
+        const thread = document.querySelector(".chat-pane-cache__pane--active .chat-thread");
+        const links = [...(thread?.querySelectorAll<HTMLAnchorElement>("a") ?? [])];
+        const images = [
+          ...(thread?.querySelectorAll<HTMLImageElement>(".chat-image-frame img") ?? []),
+        ];
+        const assistantAvatars = [
+          ...(thread?.querySelectorAll<HTMLImageElement>(
+            "img.chat-avatar.assistant, .chat-avatar.assistant img, .identity-avatar--agent img",
+          ) ?? []),
+        ];
+        return (
+          links.some(
+            (link) =>
+              link.classList.contains("markdown-session-link--titled") &&
+              link.textContent === sessionTitle,
+          ) &&
+          links.some((link) => link.href === prUrl && link.dataset.linkReaderTone === "positive") &&
+          images.length === 2 &&
+          images.every((image) => image.complete && image.naturalWidth > 0) &&
+          Boolean(thread?.querySelector('.chat-notice[data-chat-row-key^="archive:"]')) &&
+          assistantAvatars.some(
+            (image) => image.checkVisibility() && image.complete && image.naturalWidth > 0,
+          )
+        );
+      }, fixture.lateRowFacts)
+      .catch(async (error: unknown) => {
+        await writeFile(
+          path.join(artifactDir, "late-row-qualification-failure.json"),
+          JSON.stringify({
+            errors,
+            consoleErrors,
+            diagnostics: await page.evaluate(() => Reflect.get(window, "__coldLoad")?.read()),
+            thread: await page.locator(".chat-pane-cache__pane--active .chat-thread").innerHTML(),
+          }),
+        );
+        await page.screenshot({
+          path: path.join(artifactDir, "late-row-qualification-failure.png"),
+        });
+        throw error;
+      });
+  };
+  const qualifyLateRowSnapshot = (saved: (typeof snapshotSaves)[number], bundleIndex: number) => {
+    if (!values["late-row-facts"] || !comparisonBundleDirs.length || bundleIndex === 0) {
+      return;
+    }
+    const facts = saved.displayFacts;
+    if (
+      !facts ||
+      facts.thumbnails !== 2 ||
+      facts.imageDimensions !== 2 ||
+      facts.links < 2 ||
+      facts.thumbnailBytes <= 0 ||
+      facts.cachedThumbnails > 32 ||
+      facts.cachedThumbnailBytes > 8 * 1024 * 1024
+    ) {
+      throw new Error(`Unqualified candidate late-row snapshot: ${JSON.stringify(facts)}`);
+    }
+  };
   if (!firstLoad) {
-    await page.goto(url);
+    await page.goto(chatUrl);
+    const ownerFilter = values["session-event-ancestor-refs"]
+      ? "all"
+      : fixture.sidebarPersistentChildren
+        ? `owner:${fixture.sidebarListInput.viewerProfileId}`
+        : "involving-me";
     try {
+      if (viewportName === "mobile") {
+        await navigationDrawerToggle(page).click();
+        await page.locator(".shell--nav-drawer-open").waitFor();
+      }
       await page.locator("#sidebar-session-owner-title").click();
       await page
-        .locator(
-          `.sidebar-session-owner-filter [role="option"][data-value="${values["session-event-ancestor-refs"] ? "all" : "involving-me"}"]`,
-        )
+        .locator(`.sidebar-session-owner-filter [role="option"][data-value="${ownerFilter}"]`)
         .click();
     } catch (error) {
       await writeFile(
@@ -1357,8 +2139,12 @@ try {
     if (sidebarView === "online") {
       await page.locator('[data-navigation-view="online"]').click();
     }
-    await settle();
+    await settle("chat");
     await expandSidebar();
+    if (viewportName === "mobile") {
+      await page.keyboard.press("Escape");
+      await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+    }
     if (values["chat-dashboard-route"] || (face === "dashboard" && values["dashboard-widget"])) {
       // Save the operator's dashboard-first layout through its normal action.
       if (
@@ -1387,32 +2173,143 @@ try {
       if (values["chat-dashboard-route"]) {
         await page.evaluate(
           (deepLink) => history.replaceState(null, "", deepLink),
-          controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, "chat"),
+          chatDashboardUrl,
         );
       }
-      await settle();
+      await settle("chat");
     }
-    await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
-    const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
-      sessionKey: fixture.selectedSessionKey,
-      offRosterSession: values["off-roster-route"],
-      sidebarView: sidebarView === "online" ? "online" : "sessions",
-    };
+    await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
+    await qualifyLateRowFacts();
+    await qualifyDetailsProcess();
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
       warmInput,
     );
-    warmStates.push(warmStorage);
-    snapshotSaves.push(snapshotSave);
-    for (let index = 1; index < bundleSlots.length; index++) {
-      await restoreColdLoadWarmState(page, warmStorage);
-      await selectComparisonBundle(index, page);
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await settle();
-      await expandSidebar();
-      const { storage, ...saved } = await page.evaluate(persistColdLoadWarmState, warmInput);
-      warmStates.push(storage);
-      snapshotSaves.push(saved);
+    const passes = values["warm-reload"] ? 2 : 1;
+    for (let index = 0; index < bundleSlots.length; index++) {
+      let storage = warmStorage;
+      if (!values["warm-reload"] && index === 0) {
+        warmStates.push(storage);
+        snapshotSaves.push(snapshotSave);
+        continue;
+      }
+      const primes: typeof snapshotSaves = [];
+      // Every arm starts from the same seed, then reloads its own projection before freezing it.
+      for (let pass = 0; pass < passes; pass++) {
+        await restoreColdLoadWarmState(page, storage, pass === 0 ? warmStates.at(-1) : storage);
+        const reloadUrl = page.url();
+        await selectComparisonBundle(index, page);
+        await page.goto(reloadUrl, { waitUntil: "domcontentloaded" });
+        await settle("chat");
+        if (viewportName === "mobile") {
+          await navigationDrawerToggle(page).click();
+          await page.locator(".shell--nav-drawer-open").waitFor();
+        }
+        await expandSidebar();
+        await page.locator(".sidebar-shell__body").evaluate((element, top) => {
+          element.scrollTop = top;
+          element.dispatchEvent(new Event("scroll"));
+        }, Number(values["sidebar-scroll-top"]));
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+        await qualifyLateRowFacts();
+        await qualifyDetailsProcess();
+        const { storage: captured, ...saved } = await page.evaluate(
+          persistColdLoadWarmState,
+          warmInput,
+        );
+        qualifyLateRowSnapshot(saved, index);
+        storage = captured;
+        primes.push(saved);
+        if (pass === passes - 1) {
+          if (values["warm-reload"]) {
+            const warmReload = await page.evaluate(() =>
+              Reflect.get(window, "__warmReload")?.read(),
+            );
+            if (typeof warmReload?.milestones?.cacheRead !== "number") {
+              throw new Error(
+                "Warm comparison seed requires a cached transcript read in every arm",
+              );
+            }
+            await writeFile(
+              path.join(artifactDir, `warm-prime-${index}.json`),
+              JSON.stringify({ primes, warmReload, snapshots: storage.records.snapshots }),
+            );
+          }
+          warmStates.push(storage);
+          snapshotSaves.push(saved);
+        }
+        if (viewportName === "mobile") {
+          await page.keyboard.press("Escape");
+          await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+        }
+      }
+    }
+    await restoreColdLoadWarmState(page, warmStorage, warmStates.at(-1));
+    if (values["sidebar-presentation-probe"]) {
+      for (const [index, storage] of warmStates.entries()) {
+        await writeFile(
+          path.join(artifactDir, `warm-sidebar-${index}.json`),
+          JSON.stringify({ records: storage.records.sidebarSnapshots }),
+        );
+      }
+    }
+  }
+  if (transcriptWitness) {
+    const seeds = warmStates.map((storage, bundleIndex) => {
+      const snapshotRecord = storage.records.snapshots.find((row) =>
+        row.sessionKey.endsWith(`\u0000${fixture.selectedSessionKey}`),
+      );
+      const messages = snapshotRecord?.snapshot.messages ?? [];
+      const present = (source: "saved" | "live") =>
+        messages.filter((message) => {
+          const messageRecord = asNullableRecord(message);
+          return (
+            asNullableRecord(messageRecord?.["__openclaw"])?.id ===
+              transcriptWitness.witnesses[source].messageId &&
+            (JSON.stringify(messageRecord?.content) ?? "").includes(
+              transcriptWitness.witnesses[source].text,
+            )
+          );
+        }).length;
+      return {
+        bundleIndex,
+        messageCount: messages.length,
+        saved: present("saved"),
+        live: present("live"),
+      };
+    });
+    await writeFile(
+      path.join(artifactDir, "transcript-witness-fixture.json"),
+      JSON.stringify(
+        {
+          ...transcriptWitness,
+          variants: undefined,
+          seededAt: new Date().toISOString(),
+          seeds,
+          measurement: values["transcript-witness-hold"] ? "held-correctness" : "natural-timing",
+        },
+        null,
+        2,
+      ),
+    );
+    if (
+      seeds.length !== bundleSlots.length ||
+      seeds.some(
+        (seed) =>
+          seed.messageCount !== transcriptWitness.snapshotMessageCount ||
+          seed.saved !== 1 ||
+          seed.live !== 0,
+      )
+    ) {
+      throw new Error(
+        "Native snapshot seed did not preserve exactly one saved witness and no live witness",
+      );
     }
   }
   let historyValidatorRequests = 0;
@@ -1433,8 +2330,45 @@ try {
       await route.fallback();
     });
   }
-  await selectComparisonBundle(0, page);
   for (let run = 0; run < runs; run++) {
+    const bundleIndex = run % bundleSlots.length;
+    // Compare every bundle under the same route and roster conditions.
+    const bundleCycle = Math.floor(run / bundleSlots.length);
+    const layoutCell = layoutCells[bundleCycle % layoutCells.length];
+    const runRoute = layoutCell?.route ?? bootRoute;
+    const cold = layoutCell?.cold ?? firstLoad;
+    const runUrl =
+      runRoute === "chat"
+        ? values["chat-dashboard-route"] && !cold
+          ? chatDashboardUrl
+          : chatUrl
+        : new URL(runRoute === "settings" ? "/settings/appearance" : `/${runRoute}`, baseUrl).href;
+    let reloadStorage = warmStates[bundleIndex];
+    if (layoutCell) {
+      await selectComparisonBundle(bundleIndex, page);
+      await page.setViewportSize(
+        layoutCell.viewport === "mobile"
+          ? { width: 390, height: 844 }
+          : { width: 1719, height: 1179 },
+      );
+      await page.emulateMedia({ colorScheme: layoutCell.colorScheme });
+      if (!layoutCell.cold) {
+        // Cold Settings never opens the chat database. Let its native owner
+        // create the schema before restoring the saved warm fixture.
+        await page.goto(chatUrl, { waitUntil: "domcontentloaded" });
+        await settle("chat");
+        await restoreColdLoadWarmState(page, warmStates[bundleIndex]!);
+        await page.goto(chatUrl, { waitUntil: "domcontentloaded" });
+        await settle("chat");
+        // Save through the native owner at this viewport. Reusing the desktop
+        // seed would measure a width-change restore instead of a warm reload.
+        reloadStorage = (await page.evaluate(persistColdLoadWarmState, warmInput)).storage;
+        if (runRoute !== "chat") {
+          await page.goto(runUrl, { waitUntil: "domcontentloaded" });
+          await settle(runRoute);
+        }
+      }
+    }
     const hostLoadAverage = loadavg();
     const cpuPhases: Record<string, ColdLoadCpuTables> = {};
     async function recordCpu(phase: string, profile: Parameters<typeof mapColdLoadCpuProfile>[0]) {
@@ -1462,30 +2396,47 @@ try {
       );
       return { ...mapped, summary };
     }
-    const bundleIndex = run % bundleSlots.length;
     const validatorRequestsBeforeReload = historyValidatorRequests;
+    const witnessReload = transcriptWitness
+      ? {
+          restoreStartedAt: new Date().toISOString(),
+          phase: "live",
+          measurement: values["transcript-witness-hold"] ? "held-correctness" : "natural-timing",
+        }
+      : undefined;
+    let witnessHold: unknown;
     const cdp = await context.newCDPSession(page);
-    if (firstLoad) {
+    if (cold) {
       await resetColdState(cdp, bundleIndex);
     } else {
-      await restoreColdLoadWarmState(page, warmStates[bundleIndex]!);
+      if (transcriptWitness) {
+        reloadStorage = {
+          ...reloadStorage!,
+          local: [
+            ...reloadStorage!.local.filter(([key]) => key !== witnessPhaseKey),
+            [witnessPhaseKey, "live"],
+          ],
+        };
+      }
+      await restoreColdLoadWarmState(page, reloadStorage!, layoutCell && reloadStorage);
       await selectComparisonBundle(bundleIndex, page);
     }
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
         ? "delta"
         : "full";
-    const requests: Array<{ url: string; type?: string; timestamp: number; initiator: unknown }> =
-      [];
-    if (firstLoad || values["cold-http-cache"]) {
+    const requests: CriticalPathHttpRequest[] = [];
+    if (firstLoad || values["cold-http-cache"] || values["critical-path"]) {
       await cdp.send("Network.enable");
     }
-    if (firstLoad) {
+    if (firstLoad || values["critical-path"]) {
       cdp.on("Network.requestWillBeSent", (event) => {
         requests.push({
+          requestId: event.requestId,
           url: event.request.url,
           type: event.type,
           timestamp: event.timestamp,
+          wallTime: event.wallTime,
           initiator: event.initiator,
         });
       });
@@ -1493,7 +2444,11 @@ try {
     if (values["cold-http-cache"]) {
       await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
     }
-    if (values["network-latency-ms"] !== undefined || values["download-kbps"] !== undefined) {
+    if (
+      values["network-latency-ms"] !== undefined ||
+      values["download-kbps"] !== undefined ||
+      profileDownloadKbps > 0
+    ) {
       await cdp.send("Network.emulateNetworkConditions", {
         offline: false,
         latency: networkLatencyMs,
@@ -1523,7 +2478,12 @@ try {
     }
     let collectedTrace = rawTrace;
     cdp.on("Tracing.dataCollected", (data) => collectedTrace.push(...data.value));
-    if (cpuProfile || values["critical-path"] || values["thread-cpu-time"]) {
+    if (
+      cpuProfile ||
+      values["critical-path"] ||
+      values["thread-cpu-time"] ||
+      values["long-session"]
+    ) {
       await cdp.send("Performance.enable", { timeDomain: performanceTimeDomain });
     }
     if (traced || cpuProfile) {
@@ -1614,15 +2574,115 @@ try {
         releaseBootAssets?.();
         await page.waitForLoadState("domcontentloaded");
       }
-    } else if (firstLoad || values["critical-path"]) {
-      await page.goto(url, { waitUntil: "domcontentloaded" });
+    } else if (
+      layoutCell ||
+      firstLoad ||
+      values["critical-path"] ||
+      values["new-session-first-token"] ||
+      bootRoute !== "chat" ||
+      // Typing in the second pane changes the URL; restore the fixture's primary route.
+      streamingPanes > 1 ||
+      comparisonBundleDirs.length
+    ) {
+      await page.goto(runUrl, { waitUntil: "domcontentloaded" });
     } else {
       await page.reload({ waitUntil: "domcontentloaded" });
     }
-    await settle();
+    if (values["long-session"]) {
+      const selector = ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea";
+      const composer = page.locator(selector);
+      try {
+        await composer.waitFor({ state: "visible" });
+      } catch (error) {
+        await writeFile(
+          path.join(artifactDir, `run-${run + 1}.open-failure.json`),
+          JSON.stringify(
+            {
+              errors,
+              consoleErrors,
+              documentNavigations,
+              text: await page.locator("body").textContent(),
+            },
+            null,
+            2,
+          ),
+        );
+        await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.open-failure.png`) });
+        throw error;
+      }
+      await page.waitForFunction((targetSelector) => {
+        const input = document.querySelector<HTMLTextAreaElement>(targetSelector);
+        return input && !input.disabled && !input.readOnly;
+      }, selector);
+      await composer.focus();
+      if (!(await composer.evaluate((input) => input === document.activeElement))) {
+        throw new Error("Long-session composer did not accept focus during open");
+      }
+    }
+    if (values["transcript-witness-hold"]) {
+      await page.waitForFunction(
+        () => typeof Reflect.get(window, "__warmReload").witnesses()?.saved.paintMs === "number",
+        undefined,
+        { timeout: 10_000 },
+      );
+      await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.saved-witness.png`) });
+      // Saved paint can precede startup, including its nested subscription response queue.
+      const released = await page.waitForFunction(
+        () => {
+          const beforeRelease = Reflect.get(window, "__warmReload")?.witnesses();
+          const releasedAtMs = performance.now();
+          try {
+            Reflect.get(window, "openclawControlUiE2eGateway").resolveDeferred("chat.startup");
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.message === "No deferred mock Gateway response for chat.startup"
+            ) {
+              return false;
+            }
+            throw error;
+          }
+          return { releasedAtMs, beforeRelease };
+        },
+        undefined,
+        { timeout: 10_000 },
+      );
+      witnessHold = await released.jsonValue();
+      await released.dispose();
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.witness-hold.json`),
+        JSON.stringify(
+          {
+            ...witnessReload,
+            observation: witnessHold,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+    await settle(runRoute);
+    const longSessionLoadedMessages = values["long-session"]
+      ? await readLongSessionMessageCount(page, fixture.selectedSessionKey)
+      : undefined;
+    if (values["long-session"]) {
+      const expectedMessages =
+        fixture.longSessionWorkload?.scenario === "paging"
+          ? fixture.longSessionWorkload.initialMessageCount
+          : fixture.counts.transcriptMessages;
+      if (longSessionLoadedMessages !== expectedMessages) {
+        throw new Error(
+          `Long-session open loaded ${longSessionLoadedMessages} messages; expected ${expectedMessages}. Use --first-load to avoid restoring a truncated warm snapshot.`,
+        );
+      }
+    }
+    if (values["late-row-facts"]) {
+      // Seeds are qualified above; best-effort live link prefetch can skip a reload.
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+    }
     const coverage = values.coverage
       ? (await page.coverage.stopJSCoverage())
-          .filter((entry) => URL.parse(entry.url)?.pathname.startsWith("/assets/"))
+          .filter((entry) => controlUiScriptAssetUrl(entry.url, new URL("assets/", baseUrl)))
           .map((entry) =>
             Object.assign(
               { url: entry.url, functions: entry.functions },
@@ -1674,6 +2734,9 @@ try {
               ["layoutMs", "LayoutDuration"],
               ["styleMs", "RecalcStyleDuration"],
               ["threadMs", "ThreadTime"],
+              ["compileMs", "V8CompileDuration"],
+              ["devtoolsMs", "DevToolsCommandDuration"],
+              ["otherTaskMs", "TaskOtherDuration"],
             ].map(([key, name]) => {
               const before = threadCpuBefore.find((metric) => metric.name === name)?.value;
               const after = threadCpuAfter.find((metric) => metric.name === name)?.value;
@@ -1705,6 +2768,11 @@ try {
         transferBytes: entry.transferSize,
       }));
       return {
+        display: {
+          width: innerWidth,
+          height: innerHeight,
+          colorScheme: document.documentElement.dataset.themeMode,
+        },
         ...Reflect.get(window, "__coldLoad").read(),
         bootRpcs: Reflect.get(window, "__coldLoad")
           .read()
@@ -1751,6 +2819,13 @@ try {
           rowKeys: rows?.map((row) => row.getAttribute("data-virtual-row-key")) ?? null,
           sessionKey: pane ? Reflect.get(pane, "sessionKey") : null,
           ready: pane ? Reflect.get(pane, "transcriptReady") === true : false,
+          historyErrorPresent: pane ? pane.querySelector(".chat-history-error") !== null : null,
+          reactionRows: pane
+            ? [...pane.querySelectorAll<HTMLElement>(".chat-message-reactions")].map((element) => ({
+                messageId: element.dataset.messageId,
+                visible: element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
+              }))
+            : [],
         },
       };
     });
@@ -1763,16 +2838,150 @@ try {
     if (historyValidatorDelayMs && metrics.historyValidatorResources.length !== 1) {
       throw new Error("Measured reload lacks the delayed validator resource timing");
     }
-    const warmReload = values["warm-reload"]
-      ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
+    const warmReload =
+      values["warm-reload"] || firstLoad
+        ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
+        : undefined;
+    if (transcriptWitness) {
+      const observed = warmReload?.transcriptWitnesses;
+      const cache =
+        observed?.history.filter((entry: { source: string }) => entry.source === "snapshot-read") ??
+        [];
+      const wire =
+        observed?.history.filter((entry: { source: string }) => entry.source !== "snapshot-read") ??
+        [];
+      const valid =
+        observed &&
+        cache.some(
+          (entry: { saved: number; live: number; messageCount: number }) =>
+            entry.saved === 1 &&
+            entry.live === 0 &&
+            entry.messageCount === transcriptWitness.snapshotMessageCount,
+        ) &&
+        wire.length > 0 &&
+        wire.every(
+          (entry: { saved: number; live: number; messageCount: number }) =>
+            entry.saved === 0 &&
+            entry.live === 1 &&
+            entry.messageCount === transcriptWitness.messageCount,
+        ) &&
+        observed.attached.live &&
+        !observed.attached.saved &&
+        observed.live.paintMs !== null;
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.transcript-witness.json`),
+        JSON.stringify(
+          {
+            ...witnessReload,
+            capturedAt: new Date().toISOString(),
+            hold: witnessHold,
+            observed,
+            valid: Boolean(valid),
+            savedPaintObserved:
+              observed?.saved.paintMs !== null && observed?.saved.paintMs !== undefined,
+          },
+          null,
+          2,
+        ),
+      );
+      if (!valid) {
+        throw new Error(
+          "Saved/live witness provenance or final live presentation was not established; see transcript-witness artifact",
+        );
+      }
+    }
+    const paneChrome = values["pane-chrome-probe"]
+      ? {
+          ...(await page.evaluate(
+            (firstPaint) => Reflect.get(window, "__paneChrome").read(firstPaint),
+            warmReload?.milestones.firstTranscriptPaint ?? null,
+          )),
+          snapshotBytes: Buffer.byteLength(
+            JSON.stringify(
+              reloadStorage!.records.snapshots.find((record) =>
+                record.sessionKey.endsWith(`\u0000${fixture.selectedSessionKey}`),
+              )!.snapshot,
+            ),
+          ),
+        }
       : undefined;
+    const warmReloadPerformance = values["warm-reload-perf-probe"]
+      ? await page.evaluate(() => {
+          const probe: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
+            window,
+            "__warmReloadProof",
+          );
+          probe.stopped = true;
+          return {
+            timeOrigin: performance.timeOrigin,
+            capturedUntilMs: performance.now(),
+            helloPublishedMs: probe.helloPublishedMs,
+            helloHandledMs: probe.helloHandledMs,
+            fcpMs: probe.fcpMs,
+            firstPaintedRowsMs: probe.firstPaintedRowsMs,
+            finalRowsDomMs: probe.finalRowsDomMs,
+            firstDashboardContentDomMs: probe.firstDashboardContentDomMs,
+            allBoardWidgetsVisibleMs: probe.allBoardWidgetsVisibleMs,
+            cachedBoardLayoutMs: probe.cachedBoardLayoutMs,
+            boardWidgetSkeletonMs: probe.boardWidgetSkeletonMs,
+            loafBlockingMs: probe.loafBlockingMs,
+            cls: probe.cls,
+          };
+        })
+      : undefined;
+    const detailsGeometry =
+      values["details-processes"] && paneChrome
+        ? summarizeDetailsGeometry(paneChrome.detailsFrames)
+        : undefined;
+    const sidebarPresentation = values["sidebar-presentation-probe"]
+      ? await page.evaluate(() => {
+          const probe: { read(): SidebarPresentationSnapshot } = Reflect.get(
+            window,
+            "__sidebarPresentation",
+          );
+          return probe.read();
+        })
+      : undefined;
+    if (sidebarPresentation) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.sidebar-presentation.json`),
+        JSON.stringify(sidebarPresentation, null, 2),
+      );
+    }
+    if (warmReloadPerformance) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.warm-perf.json`),
+        JSON.stringify(
+          {
+            ...warmReloadPerformance,
+            measurement:
+              "Unprofiled timing requires untraced without cpu-profile or coverage; existing warm-reload probe metric definitions",
+          },
+          null,
+          2,
+        ),
+      );
+    }
     if (cpuProfile) {
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.cpu-clock.json`),
         JSON.stringify((await cdp.send("Performance.getMetrics")).metrics),
       );
     }
-    await writeFile(path.join(artifactDir, `run-${run + 1}.metrics.json`), JSON.stringify(metrics));
+    await writeFile(
+      path.join(artifactDir, `run-${run + 1}.metrics.json`),
+      JSON.stringify({
+        ...metrics,
+        layoutCell,
+        variant: ["base", "candidate", "candidate-2"][bundleIndex],
+        hostLoadAverage,
+        threadCpu,
+        warmReloadPerformance,
+        threadCpuSamples: threadCpuBefore
+          ? { before: threadCpuBefore, after: threadCpuAfter }
+          : undefined,
+      }),
+    );
     const profile = !traced && !cpuProfile ? undefined : await cdp.send("Profiler.stop");
     if (captureTrace) {
       const complete = new Promise<void>((resolve) => {
@@ -1781,11 +2990,15 @@ try {
       await cdp.send("Tracing.end");
       await complete;
     }
-    await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.png`) });
-    await writeFile(
-      path.join(artifactDir, `run-${run + 1}.trace.json`),
-      JSON.stringify({ traceEvents: rawTrace }),
-    );
+    if (!layoutCells.length || run < layoutCells.length * bundleSlots.length) {
+      await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.png`) });
+    }
+    if (captureTrace) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.trace.json`),
+        JSON.stringify({ traceEvents: rawTrace }),
+      );
+    }
     if (profile) {
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.cpuprofile`),
@@ -1994,8 +3207,54 @@ try {
     }
     let streaming;
     if (streamingReply) {
-      const composer = page.locator(".agent-chat__composer-combobox textarea").last();
-      await composer.focus();
+      await page.waitForFunction(
+        (sessions) =>
+          sessions.every(({ sessionKey }) =>
+            Array.from(document.querySelectorAll("openclaw-chat-pane")).some(
+              (pane) =>
+                Reflect.get(pane, "sessionKey") === sessionKey &&
+                pane.getClientRects().length &&
+                pane.querySelector(".chat-bubble.streaming") &&
+                pane.querySelector(".agent-chat__composer-combobox textarea"),
+            ),
+          ),
+        streamingSessions,
+      );
+      const panes = page.locator(
+        streamingSplitLayout
+          ? "openclaw-chat-pane.chat-split-view__pane"
+          : "openclaw-chat-pane.chat-pane-cache__pane--active",
+      );
+      const composers = panes.locator(".agent-chat__composer-combobox textarea");
+      const initialDrafts = await composers.evaluateAll((inputs) =>
+        inputs.map((input) => (input instanceof HTMLTextAreaElement ? input.value : "")),
+      );
+      if (initialDrafts.length !== streamingPanes) {
+        throw new Error(
+          `Expected ${streamingPanes} streaming composers, found ${initialDrafts.length}`,
+        );
+      }
+      if (streamingReply.growingTool) {
+        await page.evaluate((input) => Reflect.get(window, "__streamingReply").prepare(input), {
+          streams: streamingSessions,
+          growingTool: true,
+        });
+        for (let index = 0; index < streamingPanes; index++) {
+          const tool = panes
+            .nth(index)
+            .locator(".chat-tool-msg-collapse")
+            .filter({ hasText: "verify-streaming" })
+            .last();
+          await tool.locator("button.chat-tool-row[aria-expanded='false']").click();
+          await tool.locator(".chat-tool-term__out").waitFor({ state: "visible" });
+        }
+      }
+      await composers.first().focus();
+      await composers
+        .first()
+        .evaluate((input: HTMLTextAreaElement) =>
+          input.setSelectionRange(input.value.length, input.value.length),
+        );
       await cdp.send("Performance.enable", { timeDomain: performanceTimeDomain });
       let previousCpu = (await cdp.send("Performance.getMetrics")).metrics;
       let previousDelivered = 0;
@@ -2009,10 +3268,11 @@ try {
       if (cpuProfile) {
         await cdp.send("Profiler.start");
       }
-      if (traced) {
+      if (captureTrace) {
         await cdp.send("Tracing.start", {
-          categories:
-            "toplevel,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline.stack,v8",
+          categories: values["filmstrip-only"]
+            ? "blink.user_timing,disabled-by-default-devtools.screenshot"
+            : "toplevel,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline.stack,v8,disabled-by-default-devtools.screenshot",
           transferMode: "ReportEvents",
         });
       }
@@ -2026,13 +3286,24 @@ try {
       await page.evaluate((input) => Reflect.get(window, "__streamingReply").start(input), {
         ...streamingReply,
         burstSize: streamingBurstSize,
-        sessionKey: fixture.selectedSessionKey,
-        runId: fixture.scenario.inFlightRun!.runId,
+        observeTextVisibility: captureTrace,
+        streams: streamingSessions,
       });
       const streamingInput = new AbortController();
+      const typedCharacters = initialDrafts.map(() => 0);
       const nativeInput = (async () => {
+        let inputIndex = 0;
         while (!streamingInput.signal.aborted) {
+          const index = inputIndex++ % streamingPanes;
+          if (streamingPanes > 1) {
+            const composer = composers.nth(index);
+            await composer.focus();
+            await composer.evaluate((input: HTMLTextAreaElement) =>
+              input.setSelectionRange(input.value.length, input.value.length),
+            );
+          }
           await page.keyboard.press("x");
+          typedCharacters[index]!++;
           await new Promise((resolve) => {
             setTimeout(resolve, 500);
           });
@@ -2042,8 +3313,8 @@ try {
         for (let quartile = 1; quartile <= 4; quartile++) {
           await page.waitForFunction(
             (count) => Reflect.get(window, "__streamingReply").read().delivered >= count,
-            Math.floor((streamingReply.deltas.length * quartile) / 4),
-            { timeout: 60_000 },
+            Math.floor((streamingReply.deltas.length * streamingPanes * quartile) / 4),
+            { timeout: 60_000, polling: 50 },
           );
           await page.evaluate(
             () =>
@@ -2072,10 +3343,19 @@ try {
           previousCpu = nextCpu;
           previousDelivered = delivered;
         }
+      } catch (error) {
+        const progress = await page.evaluate(() => Reflect.get(window, "__streamingReply").read());
+        await writeFile(
+          path.join(artifactDir, `run-${run + 1}.streaming-error.json`),
+          JSON.stringify({ progress, errors, consoleErrors }, null, 2),
+        );
+        throw error;
       } finally {
         streamingInput.abort();
         await nativeInput;
       }
+      // Freeze the workload before profiler/trace shutdown adds diagnostic tasks.
+      await page.evaluate(() => Reflect.get(window, "__streamingReply").stop());
       let streamingAllocations;
       const allocationProfile = values["streaming-allocations"]
         ? (await cdp.send("HeapProfiler.stopSampling")).profile
@@ -2095,7 +3375,7 @@ try {
       if (cpuProfile) {
         await recordCpu("streaming", (await cdp.send("Profiler.stop")).profile);
       }
-      if (traced) {
+      if (captureTrace) {
         const complete = new Promise<void>((resolve) => {
           cdp.once("Tracing.tracingComplete", () => resolve());
         });
@@ -2105,12 +3385,30 @@ try {
           path.join(artifactDir, `run-${run + 1}.streaming.trace.json`),
           JSON.stringify({ traceEvents: streamingTrace }),
         );
+        const frames = streamingTrace
+          .map(prepareColdLoadTraceEvent)
+          .filter((event) => event.name === "Screenshot" && event.args?.snapshot);
+        const directory = path.join(artifactDir, `run-${run + 1}.streaming.filmstrip`);
+        await mkdir(directory);
+        for (const [index, frame] of frames.entries()) {
+          await writeFile(
+            path.join(directory, `${index}-${frame.ts}.jpg`),
+            Buffer.from(frame.args!.snapshot!, "base64"),
+          );
+        }
       }
       streaming = {
         ...(await page.evaluate(() => Reflect.get(window, "__streamingReply").finish())),
         cpu,
         allocations: streamingAllocations,
+        typingByPane: await Promise.all(
+          typedCharacters.map(async (characters, index) => ({
+            characters,
+            draft: await composers.nth(index).inputValue(),
+          })),
+        ),
       };
+      streaming = { ...streaming, typing: streaming.typingByPane[0]! };
       if (allocationProfile) {
         await writeFile(
           path.join(artifactDir, `run-${run + 1}.streaming.heapprofile`),
@@ -2128,6 +3426,8 @@ try {
             chars: streamingReply.text.length,
             deltasPerSecond: streamingReply.deltasPerSecond,
             burstSize: streamingBurstSize,
+            content: streamingContent,
+            paneCount: streamingPanes,
             ...streaming,
           },
           null,
@@ -2135,13 +3435,44 @@ try {
         ),
       );
       await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.streaming.png`) });
-      if (
-        streaming.tailPosition.scrollHeight <= streaming.tailPosition.initialScrollHeight ||
-        Math.abs(streaming.tailPosition.distanceFromBottom) > 2
-      ) {
-        throw new Error(
-          `Streaming tail did not grow and stay followed: ${JSON.stringify(streaming.tailPosition)}`,
-        );
+      for (const [index, typing] of streaming.typingByPane.entries()) {
+        if (
+          !typing.characters ||
+          typing.draft !== initialDrafts[index] + "x".repeat(typing.characters)
+        ) {
+          throw new Error(
+            `Streaming pane ${index + 1} lost composer input: ${JSON.stringify(typing)}`,
+          );
+        }
+      }
+      for (const pane of streaming.panes) {
+        const expected = streamingReply.growingTool
+          ? "Streaming code complete."
+          : "The result is ready for the next checkpoint.";
+        const finalBlock = streamingReply.growingTool
+          ? "export const checkpoint180 = 180;"
+          : "Checkpoint 24";
+        if (
+          !pane.visible ||
+          !pane.finalText?.trimEnd().endsWith(expected) ||
+          !pane.finalText.includes(finalBlock)
+        ) {
+          throw new Error(`Streaming pane ${pane.sessionKey} did not show the complete reply`);
+        }
+        if (
+          streamingReply.growingTool &&
+          !pane.toolOutput?.includes(`Tool progress ${streamingReply.deltas.length}`)
+        ) {
+          throw new Error(
+            `Streaming pane ${pane.sessionKey} did not show the complete tool output`,
+          );
+        }
+        if (
+          pane.tailPosition.scrollHeight <= pane.tailPosition.initialScrollHeight ||
+          Math.abs(pane.tailPosition.distanceFromBottom) > 2
+        ) {
+          throw new Error(`Streaming tail did not grow and stay followed: ${JSON.stringify(pane)}`);
+        }
       }
     }
     let live;
@@ -2397,17 +3728,75 @@ try {
             : undefined,
         )
       : undefined;
+    if (values["long-session"] && sidebarView !== "sessions") {
+      await page.locator('[data-navigation-view="sessions"]').click();
+    }
+    if (values["long-session"] && cpuProfile) {
+      await cdp.send("Profiler.start");
+    }
+    const longSessionTrace: unknown[] = [];
+    if (values["long-session"] && captureLongSessionTrace) {
+      collectedTrace = longSessionTrace;
+      await cdp.send("Tracing.start", {
+        categories: values["filmstrip-only"]
+          ? "blink.user_timing,disabled-by-default-devtools.screenshot"
+          : "toplevel,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,disabled-by-default-devtools.timeline.invalidationTracking,blink.debug,v8",
+        transferMode: "ReportEvents",
+      });
+    }
+    const longSession = values["long-session"]
+      ? await probeLongSession({
+          page,
+          cdp,
+          artifactDir,
+          prefix: `run-${run + 1}`,
+          sessionKey: fixture.selectedSessionKey,
+          otherSessionKey: fixture.pinnedKeys[1]!,
+          messageCount: fixture.counts.transcriptMessages,
+          workload: fixture.longSessionWorkload,
+          scrollCycles: longSessionScrollCycles,
+          captureHeap:
+            run < bundleSlots.length && !cpuProfile && !values["skip-long-session-heap-snapshots"],
+        })
+      : undefined;
+    if (values["long-session"] && cpuProfile) {
+      await recordCpu("long-session", (await cdp.send("Profiler.stop")).profile);
+    }
+    if (values["long-session"] && captureLongSessionTrace) {
+      const complete = new Promise<void>((resolve) => {
+        cdp.once("Tracing.tracingComplete", () => resolve());
+      });
+      await cdp.send("Tracing.end");
+      await complete;
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.long-session.trace.json`),
+        JSON.stringify({ traceEvents: longSessionTrace }),
+      );
+    }
     let sessionSwitch;
     if (values["session-switch"]) {
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await navigationDrawerToggle(page).click();
+        await page.locator(".shell--nav-drawer-open").waitFor();
+      }
       if (sidebarView !== "sessions") {
         await page.locator('[data-navigation-view="sessions"]').click();
       }
-      // The next owner cycle is a direct chat visible in the fixture's Involving me window.
-      const target = fixture.scenario.sessions![fixture.counts.owners]!;
+      // Cold runs keep the default My sessions filter until this phase.
+      await page.locator("#sidebar-session-owner-title").click();
+      await page
+        .locator('.sidebar-session-owner-filter [role="option"][data-value="involving-me"]')
+        .click();
+      // The first non-main chat is in the initial Involving me page.
+      const target = fixture.scenario.sessions![1]!;
       const link = page.locator(
         `.sidebar-recent-session[data-session-key="${target.key}"] a.sidebar-recent-session__link`,
       );
-      await link.waitFor({ state: "visible" });
+      await link.scrollIntoViewIfNeeded();
+      await page.waitForFunction(() => {
+        const state = Reflect.get(window, "__coldLoad").read();
+        return !state.pending && !state.queued && state.idleMs > 750;
+      });
       const rpcOffset = await page.evaluate(
         () => Reflect.get(window, "__coldLoad").read().rpcs.length,
       );
@@ -2477,26 +3866,26 @@ try {
         if (firstLoad) {
           await resetColdState(cdp, bundleIndex);
         }
+        const routeRequestsOffset = requests.length;
         await page.goto(url, { waitUntil: "domcontentloaded" });
         await settle();
         const routeTrace: unknown[] = [];
-        criticalPath.push(
-          await navigateCriticalPath(
-            page,
-            cdp,
-            route,
-            cpuProfile
-              ? async () => {
-                  collectedTrace = routeTrace;
-                  await cdp.send("Profiler.start");
-                  await cdp.send("Tracing.start", {
-                    categories:
-                      "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,v8",
-                    transferMode: "ReportEvents",
-                  });
-                }
-              : undefined,
-          ),
+        const routeCapture = await navigateCriticalPath(
+          page,
+          cdp,
+          route,
+          cpuProfile
+            ? async () => {
+                collectedTrace = routeTrace;
+                await cdp.send("Profiler.start");
+                await cdp.send("Tracing.start", {
+                  categories:
+                    "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,v8",
+                  transferMode: "ReportEvents",
+                });
+              }
+            : undefined,
+          criticalPathIntentMs,
         );
         if (cpuProfile) {
           const routeProfile = (await cdp.send("Profiler.stop")).profile;
@@ -2511,12 +3900,97 @@ try {
             JSON.stringify({ traceEvents: routeTrace }),
           );
         }
+        // Observe late shifts after timing/CPU capture without extending those measured intervals.
+        await page.waitForTimeout(500);
+        const presentationSnapshot: Pick<
+          CriticalPathPresentation,
+          "startedMs" | "capturedMs" | "layoutShifts"
+        > = await page.evaluate((startedMs) => {
+          const capturedMs = performance.now();
+          return {
+            startedMs,
+            capturedMs,
+            layoutShifts: Reflect.get(window, "__coldLoadPresentation").layoutShifts.filter(
+              (shift: { atMs: number }) => shift.atMs >= startedMs && shift.atMs <= capturedMs,
+            ),
+          };
+        }, routeCapture.intentStartedMs ?? routeCapture.startedMs);
+        let cls = 0;
+        let nonRecentInputShiftSum = 0;
+        let allShiftSum = 0;
+        let shiftWindowStartMs = 0;
+        let previousShiftMs = 0;
+        let shiftWindowValue = 0;
+        for (const shift of presentationSnapshot.layoutShifts) {
+          allShiftSum += shift.value;
+          if (shift.hadRecentInput) {
+            continue;
+          }
+          nonRecentInputShiftSum += shift.value;
+          if (
+            previousShiftMs === 0 ||
+            shift.atMs - previousShiftMs >= 1000 ||
+            shift.atMs - shiftWindowStartMs >= 5000
+          ) {
+            shiftWindowStartMs = shift.atMs;
+            shiftWindowValue = 0;
+          }
+          previousShiftMs = shift.atMs;
+          shiftWindowValue += shift.value;
+          cls = Math.max(cls, shiftWindowValue);
+        }
+        criticalPath.push({
+          ...routeCapture,
+          presentation: {
+            ...presentationSnapshot,
+            settleMs: 500,
+            cls,
+            nonRecentInputShiftSum,
+            allShiftSum,
+          },
+        });
+        const routeRequests = requests.slice(routeRequestsOffset);
+        await writeFile(
+          path.join(artifactDir, `run-${run + 1}.${route}.requests.json`),
+          JSON.stringify(
+            {
+              timeOrigin: routeCapture.timeOrigin,
+              startedMs: routeCapture.startedMs,
+              readyMs: routeCapture.readyMs,
+              capturedMs: routeCapture.capturedMs,
+              requests: routeRequests,
+            },
+            null,
+            2,
+          ),
+        );
+        waterfallArtifacts.push({
+          file: path.join(artifactDir, `run-${run + 1}.${route}.waterfall.html`),
+          capture: routeCapture,
+          requests: routeRequests,
+        });
         await saveCriticalPath();
         await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.${route}.png`) });
       }
     }
+    const newSessionFirstToken = values["new-session-first-token"]
+      ? await (
+          await import("./lib/control-ui-new-session-first-token.ts")
+        ).measureNewSession(page, artifactDir, run + 1, {
+          initialHistory: fixture.scenario.methodResponses?.["chat.startup"],
+          viewerId: fixture.sidebarListInput.viewerProfileId,
+          tokenDelayMs: Number(values["new-session-token-ms"]),
+          worker: values["new-session-worker"],
+          filmstrip: values["new-session-filmstrip"],
+          held:
+            values["new-session-list-mode"] === "held" ||
+            (values["new-session-list-mode"] === "alternate" && bundleCycle % 2 === 1),
+        })
+      : undefined;
     await cdp.detach();
     const result = {
+      newSessionFirstToken,
+      layoutCell,
       run: run + 1,
       hostLoadAverage,
       ...(comparisonBundleDirs.length
@@ -2531,6 +4005,7 @@ try {
       ...metrics,
       threadCpu,
       coverage,
+      javaScriptResources: summarizeJavaScriptResources(metrics.http.waterfall, coverage),
       trace: bootTrace,
       selectorStats,
       longTaskDetails:
@@ -2552,8 +4027,15 @@ try {
       live,
       streaming,
       sessionSwitch,
+      longSession,
+      longSessionLoadedMessages,
       criticalPath,
       warmReload,
+      transcriptWitnessReload: witnessReload,
+      paneChrome,
+      detailsGeometry,
+      sidebarPresentation,
+      warmReloadPerformance,
       historyValidatorRequests: historyValidatorRequests - validatorRequestsBeforeReload,
       snapshotSave: snapshotSaves[bundleIndex],
       overlays,
@@ -2564,6 +4046,7 @@ try {
     console.log(
       JSON.stringify({
         run: result.run,
+        layoutCell,
         variant: result.variant,
         hostLoadAverage,
         presentation: {
@@ -2571,6 +4054,8 @@ try {
           firstStaticShellMs: result.presentation.firstStaticShellMs,
           firstShellInteractiveMs: result.presentation.firstShellInteractiveMs,
           firstEnabledComposerMs: result.presentation.firstEnabledComposerMs,
+          firstUsableComposerMs: result.presentation.firstUsableComposerMs,
+          firstUsableComposerKind: result.presentation.firstUsableComposerKind,
           firstNonemptyTranscriptMs: result.presentation.firstNonemptyTranscriptMs,
           cls: result.presentation.cls,
         },
@@ -2622,6 +4107,12 @@ try {
   await new Promise<void>((resolve, reject) => {
     sandbox.close((error) => (error ? reject(error) : resolve()));
   });
+  for (const artifact of waterfallArtifacts) {
+    await writeFile(
+      artifact.file,
+      renderCriticalPathWaterfall(artifact.capture, artifact.requests),
+    );
+  }
   await writeFile(
     path.join(artifactDir, "summary.json"),
     JSON.stringify(
@@ -2637,6 +4128,17 @@ try {
             ? "Production Gateway HTTP handler; synthetic bootstrap, WebSocket RPC and fixture media. Immutable server asset caches stay warm per bundle."
             : "Vite production preview HTTP; synthetic bootstrap, WebSocket RPC and fixture media.",
         firstLoad,
+        transcriptWitness: transcriptWitness
+          ? {
+              witnesses: transcriptWitness.witnesses,
+              preparedAt: transcriptWitness.preparedAt,
+              messageCount: transcriptWitness.messageCount,
+              snapshotMessageCount: transcriptWitness.snapshotMessageCount,
+              measurement: values["transcript-witness-hold"]
+                ? "held-correctness"
+                : "natural-timing",
+            }
+          : undefined,
         gatewayHttp: values["gateway-http"],
         bootRoute,
         coldHttpCache: values["cold-http-cache"],
@@ -2644,23 +4146,48 @@ try {
         networkLatencyMs,
         downloadKbps,
         cpuThrottle,
+        memoryProfile: values["low-memory"]
+          ? "Chromium low-end-device mode; 128 MiB V8 old-space limit, not an OS/RSS limit."
+          : "default",
         comparisonBundleDirs,
         fixture: fixture.counts,
+        longSessionScenario: values["long-session"] ? longSessionScenario : undefined,
+        ...(longSessionScrollCycles > 1 ? { longSessionScrollCycles } : {}),
+        longSessionHeapSnapshots: values["long-session"]
+          ? !cpuProfile && !values["skip-long-session-heap-snapshots"]
+            ? longSessionScrollCycles > 1
+              ? "each-scroll-cycle"
+              : "first-cycle"
+            : "disabled"
+          : undefined,
         sidebarView,
         sidebarAvatars: values["sidebar-avatars"],
+        sidebarPresentation: values["sidebar-presentation"],
+        sidebarPresentationProbe: values["sidebar-presentation-probe"],
+        warmReloadPerfProbe: values["warm-reload-perf-probe"],
+        performanceProbeScope: values["warm-reload-perf-probe"]
+          ? "Existing warm-reload-browser-probe metric definitions in the final document; tracing and profiling must be off for timing."
+          : undefined,
+        sidebarCachedParity: values["sidebar-cached-parity"],
+        sidebarScrollTop: Number(values["sidebar-scroll-top"]),
         sidebarExpanded: values["sidebar-expanded"],
         sidebarPersistentChildren: fixture.sidebarPersistentChildren,
         omitHelloSelfPresence: values["omit-hello-self-presence"],
         streamingReply: values["streaming-reply"],
         streamingAllocations: values["streaming-allocations"],
+        streamingContent,
+        streamingPanes,
         sessionSwitch: values["session-switch"],
         criticalPathRoutes: values["critical-path"] ? navigationRoutes : undefined,
+        criticalPathIntentMs: values["critical-path"] ? criticalPathIntentMs : undefined,
+        settingsCoreSchema: values["settings-core-schema"],
         sidebarListChurn: values["sidebar-list-churn"],
         sidebarLiveChurn: fixture.sidebarLiveChurn,
         duplicateBootReads: values["duplicate-boot-reads"],
         dashboardMcpApp: values["dashboard-mcp-app"],
         chatDashboardRoute: values["chat-dashboard-route"],
-        traced,
+        traced: traced || values["long-session-trace"],
+        traceMode: values["long-session-trace"] ? "long-session-only" : undefined,
         selectorStats: values["selector-stats"],
         filmstripOnly: values["filmstrip-only"],
         holdBootAssets: values["hold-boot-assets"],
@@ -2671,6 +4198,8 @@ try {
         chromiumArgs,
         isolatedSandboxOrigin,
         cpuProfile,
+        ownerProbes,
+        sidebarCounters,
         metricTimeDomain: performanceTimeDomain,
         cpuProfileCompare: values["cpu-profile-compare"],
         sidebarRowTransfer,
@@ -2683,6 +4212,8 @@ try {
         sidebarQueryLatencyMs,
         connectNotBeforeMs,
         dashboardWidget: values["dashboard-widget"],
+        rowFacts: values["row-facts"],
+        lateRowFacts: values["late-row-facts"],
         face,
         shortRoute: values["short-route"],
         fullUuidRoute: values["full-uuid-route"],

@@ -1,5 +1,5 @@
 // Tsdown config tests protect package artifact build contracts.
-import { execFile } from "node:child_process";
+import { execFile, type ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
@@ -14,6 +14,7 @@ import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
 } from "../../scripts/lib/package-dist-imports.mjs";
+import { collectRuntimeDependencySpecs } from "../../scripts/lib/plugin-package-dependencies.mts";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
@@ -22,6 +23,7 @@ import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worker-deploy-build-plugin.mts";
+import { pruneDockerPluginDist } from "../../scripts/prune-docker-plugin-dist.mjs";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
 import {
   WORKER_BUNDLE_CHUNK_PATH_PATTERN,
@@ -41,6 +43,14 @@ afterEach(() => vi.unstubAllEnvs());
 
 type TsdownConfig = (typeof configs)[number];
 type OutExtensions = NonNullable<TsdownConfig["outExtensions"]>;
+
+function runNodeFixture(args: string[], options: ExecFileOptionsWithStringEncoding) {
+  return new Promise<{ error: Error | null; stdout: string; stderr: string }>((resolve) => {
+    execFile(testNodeExecPath, args, options, (error, stdout, stderr) => {
+      resolve({ error, stdout, stderr });
+    });
+  });
+}
 
 function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boolean {
   const entry = config.entry;
@@ -333,13 +343,9 @@ describe("tsdown config", () => {
         assert.equal(lazy, identity);
         assert.equal(value, "bundled plugin dependency");
       `;
-        const result = await new Promise<{ error: Error | null; stderr: string }>((resolve) => {
-          execFile(
-            testNodeExecPath,
-            ["--input-type=module", "-e", script],
-            { cwd: root, timeout: 30_000 },
-            (error, _stdout, stderr) => resolve({ error, stderr }),
-          );
+        const result = await runNodeFixture(["--input-type=module", "-e", script], {
+          cwd: root,
+          timeout: 30_000,
         });
         expect(result.error, result.stderr).toBeNull();
       } finally {
@@ -373,22 +379,36 @@ describe("tsdown config", () => {
       expect(source).toBeDefined();
       expect(runtimeSource).toBeDefined();
       const root = fs.realpathSync(createTempDir("openclaw-tsdown-memory-"));
+      const rootManifest = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+        dependencies: Record<string, string>;
+        optionalDependencies?: Record<string, string>;
+      };
       const manifest = JSON.parse(
         fs.readFileSync("extensions/memory-lancedb/package.json", "utf8"),
       ) as {
         dependencies: Record<string, string>;
         optionalDependencies: Record<string, string>;
       };
-      fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
-      for (const name of Object.keys({
-        ...manifest.dependencies,
-        ...manifest.optionalDependencies,
-      })) {
-        const installed = path.resolve("extensions/memory-lancedb/node_modules", name);
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(rootManifest));
+      for (const name of collectRuntimeDependencySpecs(rootManifest).keys()) {
+        const installed = path.resolve("node_modules", name);
         if (!fs.existsSync(installed)) {
           continue;
         }
         const destination = path.join(root, "node_modules", name);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.symlinkSync(fs.realpathSync(installed), destination, "dir");
+      }
+      const pluginInstallRoot = path.join(root, "extensions", "memory-lancedb");
+      fs.mkdirSync(pluginInstallRoot, { recursive: true });
+      fs.writeFileSync(path.join(pluginInstallRoot, "package.json"), JSON.stringify(manifest));
+      const pluginDependencies = collectRuntimeDependencySpecs(manifest);
+      for (const name of pluginDependencies.keys()) {
+        const installed = path.resolve("extensions/memory-lancedb/node_modules", name);
+        if (!fs.existsSync(installed)) {
+          continue;
+        }
+        const destination = path.join(pluginInstallRoot, "node_modules", name);
         fs.mkdirSync(path.dirname(destination), { recursive: true });
         fs.symlinkSync(fs.realpathSync(installed), destination, "dir");
       }
@@ -401,6 +421,11 @@ describe("tsdown config", () => {
         logLevel: "silent",
       });
       try {
+        fs.mkdirSync(path.join(root, "dist-runtime"));
+        pruneDockerPluginDist({
+          repoRoot: root,
+          env: { OPENCLAW_EXTENSIONS: "memory-lancedb" },
+        });
         const script = `
           import assert from "node:assert/strict";
           import { registerHooks } from "node:module";
@@ -443,23 +468,17 @@ describe("tsdown config", () => {
           }
           console.log("bundled memory store persists and recalls without image dependencies");
         `;
-        const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-          (resolve) => {
-            execFile(
-              testNodeExecPath,
-              [
-                "--input-type=module",
-                "-e",
-                script,
-                root,
-                path.join(root, "dist", `${entryName}.js`),
-                path.join(root, "dist", `${runtimeEntryName}.js`),
-                JSON.stringify(Object.keys(manifest.optionalDependencies)),
-              ],
-              { cwd: root, timeout: 30_000 },
-              (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-            );
-          },
+        const result = await runNodeFixture(
+          [
+            "--input-type=module",
+            "-e",
+            script,
+            root,
+            path.join(root, "dist", `${entryName}.js`),
+            path.join(root, "dist", `${runtimeEntryName}.js`),
+            JSON.stringify(Object.keys(manifest.optionalDependencies)),
+          ],
+          { cwd: root, timeout: 30_000 },
         );
         expect(result.error, result.stderr).toBeNull();
         expect(result.stdout.trim()).toBe(
@@ -497,21 +516,12 @@ describe("tsdown config", () => {
       logLevel: "silent",
     });
     try {
-      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-        (resolve) => {
-          execFile(
-            testNodeExecPath,
-            [
-              fileURLToPath(new URL("./imap-packaged-service.test-support.mjs", import.meta.url)),
-              root,
-            ],
-            {
-              cwd: root,
-              env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
-              timeout: 30_000,
-            },
-            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-          );
+      const result = await runNodeFixture(
+        [fileURLToPath(new URL("./imap-packaged-service.test-support.mjs", import.meta.url)), root],
+        {
+          cwd: root,
+          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+          timeout: 30_000,
         },
       );
       expect(result.error, result.stderr || result.stdout).toBeNull();
@@ -738,15 +748,9 @@ describe("tsdown config", () => {
         }
         console.log("retained config APIs migrate without plugin installation or capability grants");
       `;
-      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-        (resolve) => {
-          execFile(
-            testNodeExecPath,
-            ["--input-type=module", "-e", script, root, JSON.stringify(Object.keys(entries))],
-            { cwd: root, timeout: 30_000 },
-            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-          );
-        },
+      const result = await runNodeFixture(
+        ["--input-type=module", "-e", script, root, JSON.stringify(Object.keys(entries))],
+        { cwd: root, timeout: 30_000 },
       );
       expect(result.error, result.stderr).toBeNull();
       expect(result.stdout.trim()).toBe(
@@ -786,7 +790,9 @@ describe("tsdown config", () => {
       fs.renameSync(outDir, path.join(installed, "dist"));
       const require = createRequire(import.meta.url);
       if (worker) {
-        const files = bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName));
+        const files = bundles
+          .flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))
+          .filter((file) => !file.startsWith(".source-module-urls/"));
         expect(files).toContain(`${entry}.mjs`);
         expect(files.length).toBeGreaterThan(1);
         expect(
@@ -817,14 +823,11 @@ describe("tsdown config", () => {
           );
         }
       }
-      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-        (resolve) => {
-          execFile(
-            testNodeExecPath,
-            [
-              "--input-type=module",
-              "--eval",
-              `
+      const result = await runNodeFixture(
+        [
+          "--input-type=module",
+          "--eval",
+          `
 import assert from "node:assert/strict";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
@@ -840,8 +843,9 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   return resolved;
 } });
 assert.throws(() => createRequire(entry).resolve("tree-sitter-bash"), { code: "MODULE_NOT_FOUND" });
-const { parseBashForCommandExplanation } = await import(entry.href);
-const tree = await parseBashForCommandExplanation('printf "%s" "$(whoami)" | cat');
+const { getBashParserForCommandExplanation } = await import(entry.href);
+const parse = await getBashParserForCommandExplanation();
+const tree = parse('printf "%s" "$(whoami)" | cat');
 try {
   assert.equal(tree.rootNode.hasError, false);
   assert.deepEqual(tree.rootNode.descendantsOfType("command").map(node => node.childForFieldName("name").text), ["printf", "whoami", "cat"]);
@@ -850,16 +854,104 @@ try {
 }
 console.log("relocated Bash parser works without native grammar package");
 `,
-              path.join(installed, "dist", `${entry}.${worker ? "mjs" : "js"}`),
-            ],
-            { cwd: installed, timeout: 30_000 },
-            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-          );
-        },
+          path.join(installed, "dist", `${entry}.${worker ? "mjs" : "js"}`),
+        ],
+        { cwd: installed, timeout: 30_000 },
       );
       expect(result.error, result.stderr).toBeNull();
       expect(result.stdout.trim()).toBe(
         "relocated Bash parser works without native grammar package",
+      );
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
+  it("highlights from one bundled chunk in a relocated package", async () => {
+    const root = fs.realpathSync(createTempDir("openclaw-highlight-package-"));
+    const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+    expect(selected).toBeDefined();
+    const outDir = path.join(root, "build");
+    const entry = "extensions/fixture/highlighter";
+    const { bundles } = await build({
+      ...selected,
+      config: false,
+      entry: { [entry]: path.resolve("src/agents/utils/syntax-highlight.ts") },
+      outDir,
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      const installed = path.join(root, "installed package");
+      fs.mkdirSync(installed);
+      fs.writeFileSync(path.join(installed, "package.json"), JSON.stringify({ type: "module" }));
+      fs.renameSync(outDir, path.join(installed, "dist"));
+      const require = createRequire(import.meta.url);
+      // Install only the entity decoder the highlighter keeps external.
+      fs.cpSync(
+        fs.realpathSync(path.resolve("node_modules/entities")),
+        path.join(installed, "node_modules/entities"),
+        { recursive: true },
+      );
+      expect(fs.readFileSync(path.join(installed, "dist/highlight.js.LICENSE"))).toEqual(
+        fs.readFileSync(
+          path.join(path.dirname(require.resolve("highlight.js/package.json")), "LICENSE"),
+        ),
+      );
+      const samples = [
+        ["typescript", "const answer: number = 42; // done"],
+        ["python", "def f(x):\n    return f'{x!r}'"],
+        ["bash", 'echo "$(whoami)" | grep -v root'],
+        ["json", '{"a": [1, true, null]}'],
+        ["rust", "fn main() { let v: Vec<u8> = vec![]; }"],
+      ] as const;
+      const script = `
+import assert from "node:assert/strict";
+import { createRequire, registerHooks } from "node:module";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const [entryPath, samplesJson] = process.argv.slice(1);
+const entry = pathToFileURL(entryPath);
+// The relocated package must not reach the source checkout's highlight.js.
+const packageRoot = pathToFileURL(process.cwd() + path.sep).href;
+registerHooks({ resolve(specifier, context, nextResolve) {
+  const resolved = nextResolve(specifier, context);
+  if (resolved.url.startsWith("file:") && !resolved.url.startsWith(packageRoot)) {
+    throw Object.assign(new Error("Dependency escaped relocated package: " + specifier), { code: "MODULE_NOT_FOUND" });
+  }
+  return resolved;
+} });
+assert.throws(() => createRequire(entry).resolve("highlight.js"), { code: "MODULE_NOT_FOUND" });
+const { highlight, supportsLanguage } = await import(entry.href);
+const theme = new Proxy({}, { get: (_, scope) => (text) => "<" + String(scope) + ">" + text + "</>" });
+console.log(JSON.stringify(JSON.parse(samplesJson).map(([language, code]) => [supportsLanguage(language), highlight(code, language, theme)])));
+`;
+      const result = await runNodeFixture(
+        [
+          "--input-type=module",
+          "--eval",
+          script,
+          path.join(installed, "dist", `${entry}.js`),
+          JSON.stringify(samples),
+        ],
+        { cwd: installed, timeout: 30_000 },
+      );
+      expect(result.error, result.stderr).toBeNull();
+      const { highlight, supportsLanguage } =
+        await import("../../src/agents/utils/syntax-highlight.js");
+      const theme = new Proxy(
+        {},
+        { get: (_, scope) => (text: string) => `<${String(scope)}>${text}</>` },
+      );
+      const rendered = JSON.parse(result.stdout);
+      expect(rendered[0]).toEqual([true, expect.stringContaining("<keyword>const</>")]);
+      expect(rendered).toEqual(
+        samples.map(([language, code]) => [
+          supportsLanguage(language),
+          highlight(code, language, theme),
+        ]),
       );
     } finally {
       for (const bundle of bundles) {
@@ -893,14 +985,11 @@ console.log("relocated Bash parser works without native grammar package");
           fs.readFileSync(path.join(installed, "dist/assets/session-card", notice), "utf8"),
         ).toContain("SIL OPEN FONT LICENSE");
       }
-      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-        (resolve) => {
-          execFile(
-            testNodeExecPath,
-            [
-              "--input-type=module",
-              "--eval",
-              `
+      const result = await runNodeFixture(
+        [
+          "--input-type=module",
+          "--eval",
+          `
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 const { renderPublicSessionCardPng } = await import(pathToFileURL(process.argv[1]).href);
@@ -917,12 +1006,9 @@ assert.equal(png.readUInt32BE(16), 1200);
 assert.equal(png.readUInt32BE(20), 630);
 console.log("relocated session card renders with bundled fonts");
 `,
-              path.join(installed, "dist", `${entry}.js`),
-            ],
-            { cwd: installed, timeout: 30_000 },
-            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-          );
-        },
+          path.join(installed, "dist", `${entry}.js`),
+        ],
+        { cwd: installed, timeout: 30_000 },
       );
       expect(result.error, result.stderr).toBeNull();
       expect(result.stdout.trim()).toBe("relocated session card renders with bundled fonts");
@@ -969,7 +1055,11 @@ console.log("relocated session card renders with bundled fonts");
         });
         try {
           files.push(
-            ...bundles.flatMap((bundle) => bundle.chunks.map((chunk) => `dist/${chunk.fileName}`)),
+            ...bundles.flatMap((bundle) =>
+              bundle.chunks
+                .filter((chunk) => !chunk.fileName.startsWith(".source-module-urls/"))
+                .map((chunk) => `dist/${chunk.fileName}`),
+            ),
           );
         } finally {
           for (const bundle of bundles) {
@@ -985,12 +1075,18 @@ console.log("relocated session card renders with bundled fonts");
         readText: (file) => fs.readFileSync(path.join(root, file), "utf8"),
       });
       expect(collectPackageDistImportErrors({ files, imports })).toEqual([]);
-      const sealedAnchorEdge = {
-        importerPath: `dist/${relay}.${extension}`,
-        importedPath: `dist/${anchor}.mjs`,
-      };
       if (worker) {
-        expect(imports).toContainEqual(sealedAnchorEdge);
+        if (process.platform !== "win32") {
+          const result = await runNodeFixture(
+            [
+              path.resolve("test/scripts/service-relay-artifact.test-support.mjs"),
+              path.join(root, "dist", `${relay}.${extension}`),
+            ],
+            { timeout: 15_000 },
+          );
+          expect(result.error, result.stderr).toBeNull();
+          expect(result.stdout.trim()).toBe("emitted relay and anchor completed and retired");
+        }
       } else {
         // Each launch boots both helpers; shared chunks pull unrelated runtime
         // exports into startup before the durable worker gate can open.
@@ -1125,41 +1221,35 @@ console.log("relocated session card renders with bundled fonts");
         ) => {
           const rootDir = path.join(relocatedRoot, name);
           fs.mkdirSync(rootDir);
-          const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-            (resolve) => {
-              execFile(
-                testNodeExecPath,
-                [
-                  "--input-type=module",
-                  "--eval",
-                  FS_SAFE_CALLER_PROBE,
-                  entry,
-                  observer,
-                  rootDir,
-                  mode,
-                  outcome,
-                  worker ? "sealed" : "",
-                  bundledNativeAsset,
-                  emittedChunksPath,
-                ],
-                {
-                  cwd: relocatedRoot,
-                  encoding: "utf8",
-                  timeout: 30_000,
-                  env: {
-                    PATH: process.env.PATH,
-                    SystemRoot: process.env.SystemRoot,
-                    WINDIR: process.env.WINDIR,
-                    HOME: temporaryRoot,
-                    USERPROFILE: temporaryRoot,
-                    TMPDIR: temporaryRoot,
-                    TMP: temporaryRoot,
-                    TEMP: temporaryRoot,
-                    ...override,
-                  },
-                },
-                (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-              );
+          const result = await runNodeFixture(
+            [
+              "--input-type=module",
+              "--eval",
+              FS_SAFE_CALLER_PROBE,
+              entry,
+              observer,
+              rootDir,
+              mode,
+              outcome,
+              worker ? "sealed" : "",
+              bundledNativeAsset,
+              emittedChunksPath,
+            ],
+            {
+              cwd: relocatedRoot,
+              encoding: "utf8",
+              timeout: 30_000,
+              env: {
+                PATH: process.env.PATH,
+                SystemRoot: process.env.SystemRoot,
+                WINDIR: process.env.WINDIR,
+                HOME: temporaryRoot,
+                USERPROFILE: temporaryRoot,
+                TMPDIR: temporaryRoot,
+                TMP: temporaryRoot,
+                TEMP: temporaryRoot,
+                ...override,
+              },
             },
           );
           expect(result.error, `${name}\n${result.stdout}\n${result.stderr}`).toBeNull();
@@ -1492,7 +1582,7 @@ console.log("relocated session card renders with bundled fonts");
       declarationSources.filter(
         (source) => source.startsWith("src/") && !source.startsWith("src/plugin-sdk/"),
       ),
-    ).toEqual(["src/index.ts"]);
+    ).toEqual(["src/index.ts", "src/runtime-artifacts.ts"]);
     expect(
       declarationSources.filter((source) => source.startsWith("extensions/anthropic/")).toSorted(),
     ).toEqual(["extensions/anthropic/api.ts", "extensions/anthropic/contract-api.ts"]);
@@ -1575,7 +1665,9 @@ console.log("relocated session card renders with bundled fonts");
     }
     for (const config of [receiverConfig, relayConfig, anchorConfig]) {
       expect(config?.alias).toBeUndefined();
-      expect(config?.plugins).toBeUndefined();
+      expect(config?.plugins).toEqual([
+        expect.objectContaining({ name: "openclaw:standalone-source-module-urls" }),
+      ]);
       expect(config?.outputOptions).toEqual({ codeSplitting: false });
     }
 

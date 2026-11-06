@@ -55,12 +55,13 @@ type WikiQueryParams = Omit<SharedMemorySearchParams, "query"> &
   };
 
 function resolveWikiPageVisibility(params: {
+  config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
 }): WikiPageVisibility | null {
-  if (params.sandboxed !== true) {
+  if (params.sandboxed !== true && params.config.bridge.ownership !== "owner") {
     return null;
   }
   const sessionKey = params.agentSessionKey?.trim();
@@ -340,6 +341,10 @@ export async function getMemoryWikiPage(
       }));
     if (page) {
       const lines = page.parsed.body.split(/\r?\n/);
+      // A terminal newline closes the last line; its split sentinel is not another page.
+      if (lines.at(-1) === "") {
+        lines.pop();
+      }
       const totalLines = lines.length;
       const slice = lines.slice(fromLine - 1, fromLine - 1 + lineCount).join("\n");
       const truncated = fromLine - 1 + lineCount < totalLines;

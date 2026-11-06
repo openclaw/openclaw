@@ -1,4 +1,5 @@
 import { expect } from "vitest";
+import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -55,6 +56,28 @@ export async function runGatewayCli(instance: OpenClawTestInstance, args: string
   const result = await instance.cli(args);
   expect(result.code, result.stderr).toBe(0);
   return result.stdout;
+}
+
+export function connectChatGateway(instance: OpenClawTestInstance, signal: AbortSignal) {
+  return acquireGatewayTestClient(
+    {
+      url: instance.url,
+      token: instance.gatewayToken,
+      env: instance.env,
+      clientName: "cli",
+      mode: "cli",
+      scopes: ["operator.admin"],
+      deviceIdentity: null,
+      deviceAuthScope: instance.url,
+      sharedStateMode: "read-only",
+    },
+    {
+      signal,
+      timeoutMs: 10_000,
+      timeoutMessage: "Chat fixture client did not connect",
+      closeMessage: "Chat fixture client closed during connect",
+    },
+  );
 }
 
 export function callGateway(

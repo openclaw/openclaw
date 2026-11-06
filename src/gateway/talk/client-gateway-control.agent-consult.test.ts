@@ -54,7 +54,7 @@ import {
   resetConsultFixture,
 } from "./client-gateway-control.agent-consult-fixture.test-support.js";
 import type { ConsultParams } from "./client-gateway-control.agent-consult.test-support.js";
-import { resolveTalkAgentConsultAuthority } from "./client-gateway-control.js";
+import { resolveTalkAgentConsultAuthority } from "./client-tool-authority.js";
 
 type ConsultOverrides = Parameters<typeof createConsultRunner>[0];
 const agentId = "researcher";

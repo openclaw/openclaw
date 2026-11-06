@@ -4,7 +4,7 @@ Delete unnecessary work before batching or caching; follow the [performance work
 
 ## Startup bundle
 
-`scripts/check-control-ui-performance.mts` and `config/control-ui-startup-budget-baseline.json` own startup measurement and enforcement: the committed gzip baseline plus growth and build-variance allowances, and one startup CSS request. The baseline itself may not exceed the script's `startupJsGzipBytes` cap. Preserve the lazy graph and compare every changed boot surface against its merge base. A surface already above its cap may not grow beyond the 64-byte build-variance allowance. Lower the startup baseline with the official `--update-baseline --reason` command after a verified reduction, using the measured head value rather than a lower target; raising budgets needs owner approval.
+`scripts/check-control-ui-performance.mts` and `config/control-ui-startup-budget-baseline.json` own startup measurement and enforcement: the committed gzip baseline plus growth and build-variance allowances, and one startup CSS request. Gzip and Brotli budgets normalize generated asset hashes; separate served sizes in the report retain the actual transfer bytes. The baseline itself may not exceed the script's `startupJsGzipBytes` cap. Preserve the lazy graph and compare every changed boot surface against its merge base. A surface already above its cap may not grow beyond the 64-byte build-variance allowance. Lower the startup baseline with the official `--update-baseline --reason` command after a verified reduction, using the measured head value rather than a lower target; raising budgets needs owner approval.
 
 - Keep code out of the startup graph until a startup surface actually needs it. Defer behind the route or interaction that uses it: automation readiness loads on the first read of its hook, and System busyness renders only when opened.
 - The Solid shell now owns startup rendering. Its imports must not eagerly register lazy page custom elements or load route-only libraries, even if every importer uses Solid. An eager Zod import previously added about 36 KB gzip.
@@ -59,11 +59,66 @@ Plugin views ship their own Solid runtime (the X plugin bundle went from 36 KB t
 
 These are results for the cited workloads, not universal speedups.
 
+- **Streaming cadence:** bounded 50 ms formatting plus removing per-delta viewport/end-anchor geometry reads reduced standard streaming script CPU by 21%, with next-frame text visibility ([#182993](https://github.com/openclaw/openclaw/pull/182993)).
 - **Streaming:** narrowing subscriptions reduced whole-pane renders from 353 to 1 and script CPU by 51% ([#180884](https://github.com/openclaw/openclaw/pull/180884)). Reuse settled Markdown blocks. The incremental Markdown pipeline in [#181828](https://github.com/openclaw/openclaw/pull/181828) was reverted by [#181856](https://github.com/openclaw/openclaw/pull/181856): bookkeeping offset sanitizer savings, and only 120 of 1,283 sanitizer calls used text-only patches. See [lessons](lessons.md#streaming-markdown-performance) before trying it again.
+- **Markdown live tails:** [#182875](https://github.com/openclaw/openclaw/pull/182875) constructs supported Markdown tokens directly as allowlisted DOM only in the mutable streaming tail. Settled messages, history/reload, completed prefixes, and completion retain the HTML + DOMPurify path and string cache; raw HTML and unsupported renderers also retain DOMPurify. In 20 serial base/base/head triplets over 400 messages and 645 deltas, streaming script CPU median fell 1,838.36 → 1,712.02 ms (−6.87%), p95 fell 12.08%, and HTML assignments fell 2,114 → 236.5 (−88.81%), for +2,204 B gzip on chat boot. The sanitizer round trip is avoidable in the live-tail hot path, not a universal Markdown cost floor.
+
+  Reload script median changed +0.34%; its raw p95 increased 6.42% while the unchanged A/A control increased 9.85%. Reload task median/p95 changed +3.22%/−4.95%. The shared host load was 35.14–77.36; the independent assessment found no attributable reload regression under the noisy-host rule. Reload style median +6.26% (p95 −2.08%) remains a disclosed subphase limitation, not an all-metrics win. The broader direct-rendering variant was rejected for its reload tail; a short profile did not establish per-node construction as the cause. Preserve the bulk path rather than generalizing the streaming win. Security proof covered 1,612 corpus/fuzz documents plus 2,487 split-stream updates and 71 completions, with zero differences after removing only empty reconciler comments and an independent XSS/mXSS review. The original 40% CPU targets were not reached.
+
 - **Session switch:** retain prepared transcript rows within the existing bounded pane cache; invalidate only consumers of changed facts ([#181278](https://github.com/openclaw/openclaw/pull/181278)).
 - **Filtered typing:** avoid re-sorting unchanged inventories on each keystroke. Narrowing the row source kept the existing request coalescer and reduced desktop Cron typing task median from 265.5 to 179.2 ms ([#181599](https://github.com/openclaw/openclaw/pull/181599)).
 - **Boot and CSS:** keep component/content renderers and locale namespaces behind their owning lazy boundaries. Consolidating sheets already fetched together cut Chat from eight to three CSS requests ([#181255](https://github.com/openclaw/openclaw/pull/181255)). At 100 ms latency, readiness medians improved 36–58%; zero-latency results stayed within the acceptance band. Measure local and remote profiles before judging transport changes; ratchet budgets to the measured head, never below it.
 - **Memory:** callbacks, fallback providers, and unstarted bootstrap work outlived their owners ([#181259](https://github.com/openclaw/openclaw/pull/181259)). Fix the retaining owner. Dependency-owned select/pending-computation retention needed exact-version patches and prepared upstream reports ([#182101](https://github.com/openclaw/openclaw/pull/182101)); that PR did not publish the reports upstream.
+
+### WebKit
+
+- For aged-tab comparisons, put each fresh control in its own browser process
+  and match retained session keys, not just pane counts. Use the aged-tab
+  harness's separate `--in-page` run to distinguish application settlement from
+  compound native-input gaps. Zero-delay typing includes key acknowledgments
+  between edits; cancelling `keydown` does not isolate the driver because the
+  engine can invalidate focus styling before dispatch. Corroborate with paced
+  trusted input and browser-local frame measurements. Synthetic input does not
+  cover native editing defaults or IME, and two animation frames are not CPU or
+  presentation timestamps. Do not attribute a gap from resource counts alone.
+- Keep fixture validation outside CPU and input windows. Returning all recorded
+  requests grows with a soak even when the assertion only needs a count; use a
+  scalar count outside measurement. Chromium `Performance.enable` defaults to
+  elapsed task time: request `timeDomain: "threadTicks"` for thread CPU claims.
+- Match once-loaded route styles when isolating progressive aging. In the aged-tab
+  census, Chromium's remaining typing/sidebar gap disappeared after matching
+  external stylesheet residency (77 sheets versus 20 before matching). Report
+  that bounded first-visit cost separately; do not call it an ever-growing
+  subscription or automation backlog. Keep an unmatched run to show the actual
+  cost a used document pays.
+- Zero `document.getAnimations()` does not rule out native animation growth.
+  WebKit filters disconnected targets out of that API and subtree enumeration.
+  Session churn retained nine running `::after` shimmers per removed loading
+  skeleton in WebKit 27.2. Inspect native animation instances after timing;
+  diagnostic enumeration itself can create retaining wrappers. Capturing handles
+  while connected can flush style and mask a short-lived loading-frame failure.
+  Script cancellation stops ticking but may leave native CSS ownership records;
+  test style retirement at the connected owner boundary as well as running counts.
+- Split disclosure expansion and collapse before diagnosing a slow toggle cycle.
+  The chat `*-toggle` benchmarks await ARIA/content assertions between two native
+  activations, so their input-to-last-commit span includes the intervening driver
+  round trips. Use `chat-actions-{reasoning,tool}-{expand,collapse}-{short,long}`
+  for one activation with 15/400 messages. These completed-work and tool controls
+  are buttons with conditional Solid content, not native `details`; inspect the
+  actual control before applying a `details` workaround. Keep first lazy expansion
+  separate from an already-loaded collapse or `tool-reopen` case, and use Timeline/source maps to
+  distinguish the click handler from later visibility-check style/layout work.
+- Separate automation delivery from application elapsed time before ranking short actions. The engines harness reports the initial native-event delivery prefix, first input to last observed DOM commit (including native input value edits), and the assertion/settle tail; its headline uses the commit span and keeps wall time visible. This is not CPU or paint timing: focus work can precede input, compound typing/navigation retains driver gaps between inputs, and missing commit boundaries stay unranked. Use Timeline and source maps before treating a high ratio as owner work. The earlier ~260 ms cluster did not establish a shared timer ([#189013](https://github.com/openclaw/openclaw/pull/189013)).
+- Keep the visibility-hidden mobile host an absolutely positioned flex box through its transform exit. Adding `display: none` to `.sidebar-region--mobile-host > .chat-mobile-host[hidden]` was sufficient to hang WebKit while closing the composer's native `<details>` picker; native samples spun in `Style::TreeResolver::resetStyleForNonRenderedDescendants` and details slot assignment. A discrete display transition was not required. The flex/visibility structure from [#188810](https://github.com/openclaw/openclaw/pull/188810) avoids this reproduced combination. Close-cycle proof must reuse the document: navigating after each open skips the failing boundary.
+- Nested grid intrinsic sizing (`auto`, `min-content`, or `max-content` tracks inside grid items) can hang WebKit on large content; use explicit track sizes such as `minmax(0, 1fr)` ([#185997](https://github.com/openclaw/openclaw/pull/185997)).
+- Keep container queries and size containment on the smallest element that needs them. Moving containment from repeated Board reports to their toolbars cut WebKit opening time by 60% ([#185587](https://github.com/openclaw/openclaw/pull/185587)).
+- Avoid relational `:has()` selectors over frequently mutated elements. Derive the state in the existing owner: replacing position-rail sibling queries halved the median scroll frame gap ([#185727](https://github.com/openclaw/openclaw/pull/185727)).
+- Let the menu owner mark spacing boundaries explicitly. A universal `:has(> .oc-menu-item...)` made unrelated composer typing pay for wrapper matching on every style pass, even inside `@scope (.oc-menu)`; removing only `@scope` did not recover the cost. The menu owner's `data-menu-row-start/end` attributes replace relational inference. Keep first/last-child and submenu boundaries intact, retain standalone row gaps, and compare typing, Usage filters, picker geometry, and boot in both engines before accepting a replacement.
+- Trace the loaded stylesheet graph when unrelated pages gain style cost. Shared locale-aware formatters and permission labels were captured recursively by Chat's boot chunk; importing them from Usage also loaded Chat's styles. Keep shared leaf helpers in their existing neutral chunk, and check the built import closure as well as selector timings.
+- Mixed ancestor and leaf families inside a single `:where(...)` can defeat cheap selector matching even without `:has()`. Compare separately indexed zero-specificity branches and flat state rules; flattening nesting alone did not recover the Usage field cost. Preserve specificity, descendant relationships, hover exclusions, and forced-colors focus while measuring both engines.
+- Keep date-only chart labels separate from changing totals. A retained row can still repeat `Intl` formatting when its tooltip reads both the date and new values; a leaf memo keyed by the date and reactive locale removes that work without a shared cache. Three-way benchmark comparisons must rotate positions as well as direction: reversing base/head/control leaves head in the middle every time.
+- Check for redundant `content-visibility` alongside containment. Removing it from virtualized transcript rows improved WebKit fast scrolling ([#185665](https://github.com/openclaw/openclaw/pull/185665)); preserve offscreen geometry and verify both engines.
+- WebKit CPUProfiler `cpuMs` is aged utilization, not CPU consumed by the action ([#185466](https://github.com/openclaw/openclaw/pull/185466)). Attribute with Timeline elapsed time and measure untraced wall time separately.
 
 ## Measuring
 

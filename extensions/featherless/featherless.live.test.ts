@@ -4,12 +4,10 @@ import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin
 import { describe, expect, it } from "vitest";
 import {
   createLiveValueTool,
+  createLiveToolReplayContext,
   requireLiveToolCall,
 } from "../test-support/live-value-tool.test-support.js";
-import {
-  makeTextToolResult,
-  makeUserMessage,
-} from "../test-support/message-fixtures.test-support.js";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import { buildFeatherlessProvider, FEATHERLESS_DEFAULT_MODEL_ID } from "./models.js";
 
 const FEATHERLESS_API_KEY = process.env.FEATHERLESS_API_KEY?.trim() ?? "";
@@ -59,15 +57,7 @@ describeLive("featherless plugin live", () => {
 
     const second = await completeSimple(
       model,
-      {
-        messages: [
-          userPrompt,
-          first,
-          makeTextToolResult(toolCall.id, toolCall.name, "ok", false, Date.now() - 1),
-          makeUserMessage("Reply with exactly: ok", Date.now()),
-        ],
-        tools: [tool],
-      },
+      createLiveToolReplayContext(userPrompt, first, toolCall, tool),
       {
         apiKey: FEATHERLESS_API_KEY,
         maxTokens: 64,

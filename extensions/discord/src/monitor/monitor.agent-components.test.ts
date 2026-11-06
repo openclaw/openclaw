@@ -1,4 +1,3 @@
-// Discord tests cover monitor.agent components plugin behavior.
 import { ChannelType, ComponentType } from "discord-api-types/v10";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -42,27 +41,32 @@ vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
 }));
 
 describe("agent components", () => {
-  const defaultDmSessionKey = buildAgentSessionKey({
-    agentId: "main",
-    channel: "discord",
-    accountId: "default",
-    peer: { kind: "direct", id: "123456789" },
-  });
-  const defaultGroupDmSessionKey = buildAgentSessionKey({
-    agentId: "main",
-    channel: "discord",
-    accountId: "default",
-    peer: { kind: "group", id: "group-dm-channel" },
-  });
+  const sessionKey = (peer: Parameters<typeof buildAgentSessionKey>[0]["peer"]) =>
+    buildAgentSessionKey({ agentId: "main", channel: "discord", accountId: "default", peer });
+  const defaultDmSessionKey = sessionKey({ kind: "direct", id: "123456789" });
+  const defaultGroupDmSessionKey = sessionKey({ kind: "group", id: "group-dm-channel" });
 
-  const createCfg = (): OpenClawConfig => ({}) as OpenClawConfig;
-  const createDmInteraction = (params: { interactionId: string; data?: Record<string, unknown> }) =>
-    createInteraction(
+  type ControlContext = Parameters<typeof createAgentComponentButton>[0];
+  const context = (overrides: Partial<ControlContext> = {}): ControlContext => ({
+    cfg: {},
+    accountId: "default",
+    ...overrides,
+  });
+  function createControlInteraction(
+    interactionId = "interaction-1",
+    kind: "button" | "select" | "group" = "button",
+  ) {
+    const interaction = createInteraction(
       createInternalTestClient(),
       createInternalComponentInteractionPayload({
-        id: params.interactionId,
-        token: `token-${params.interactionId}`,
-        channel_id: "dm-channel",
+        id: interactionId,
+        token: `token-${interactionId}`,
+        channel_id: kind === "group" ? "group-dm-channel" : "dm-channel",
+        ...(kind === "group"
+          ? {
+              channel: { id: "group-dm-channel", type: ChannelType.GroupDM, name: "incident-room" },
+            }
+          : {}),
         user: {
           id: "123456789",
           username: "Alice",
@@ -70,41 +74,23 @@ describe("agent components", () => {
           global_name: null,
           avatar: null,
         },
-        data: params.data,
+        ...(kind === "select"
+          ? { data: { component_type: ComponentType.StringSelect, values: ["alpha"] } }
+          : {}),
       }),
     );
-
-  function mockInteractionReplies(interaction: BaseComponentInteraction) {
-    const defer = vi.spyOn(interaction, "defer").mockResolvedValue(undefined);
-    const reply = vi.spyOn(interaction, "reply").mockResolvedValue(undefined);
+    if (!(interaction instanceof BaseComponentInteraction)) {
+      throw new Error(`expected a Discord ${kind} interaction`);
+    }
     return {
       interaction,
-      defer,
-      reply,
+      defer: vi.spyOn(interaction, "defer").mockResolvedValue(undefined),
+      reply: vi.spyOn(interaction, "reply").mockResolvedValue(undefined),
     };
   }
-
-  const createDmButtonInteraction = (interactionId = "interaction-1") => {
-    const interaction = createDmInteraction({ interactionId });
-    if (!(interaction instanceof BaseComponentInteraction)) {
-      throw new Error("expected a Discord button interaction");
-    }
-    return mockInteractionReplies(interaction);
-  };
-
-  const createDmSelectInteraction = (interactionId = "interaction-1") => {
-    const interaction = createDmInteraction({
-      interactionId,
-      data: {
-        component_type: ComponentType.StringSelect,
-        values: ["alpha"],
-      },
-    });
-    if (!(interaction instanceof BaseComponentInteraction)) {
-      throw new Error("expected a Discord string select interaction");
-    }
-    return mockInteractionReplies(interaction);
-  };
+  const createDmButtonInteraction = (id?: string) => createControlInteraction(id);
+  const createDmSelectInteraction = (id?: string) => createControlInteraction(id, "select");
+  const createGroupDmButtonInteraction = (id?: string) => createControlInteraction(id, "group");
 
   const firstReplyContent = (reply: ReturnType<typeof vi.fn>): string => {
     const [call] = reply.mock.calls;
@@ -122,62 +108,14 @@ describe("agent components", () => {
     return content;
   };
 
-  const createGroupDmButtonInteraction = (interactionId = "interaction-1") => {
-    const interaction = createInteraction(
-      createInternalTestClient(),
-      createInternalComponentInteractionPayload({
-        id: interactionId,
-        token: `token-${interactionId}`,
-        channel_id: "group-dm-channel",
-        channel: {
-          id: "group-dm-channel",
-          type: ChannelType.GroupDM,
-          name: "incident-room",
-        },
-        user: {
-          id: "123456789",
-          username: "Alice",
-          discriminator: "1234",
-          global_name: null,
-          avatar: null,
-        },
-      }),
-    );
-    if (!(interaction instanceof BaseComponentInteraction)) {
-      throw new Error("expected a Discord button interaction");
-    }
-    return mockInteractionReplies(interaction);
-  };
-
-  async function expectSuccessfulDmButtonInteraction(params: {
-    dmPolicy: "pairing" | "open";
-    expectPairingStoreRead: boolean;
-    allowFrom?: string[];
-  }) {
-    const button = createAgentComponentButton({
-      cfg: createCfg(),
-      accountId: "default",
-      dmPolicy: params.dmPolicy,
-      allowFrom: params.allowFrom,
-    });
-    const { interaction, defer, reply } = createDmButtonInteraction();
-
-    await button.run(interaction, { componentId: "hello" } as ComponentData);
-
-    expect(defer).not.toHaveBeenCalled();
-    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      "[Discord component: hello clicked by Alice#1234 (123456789)]",
-      {
-        sessionKey: defaultDmSessionKey,
-        contextKey: "discord:agent-button:dm-channel:hello:123456789:interaction-1",
-      },
-    );
-    if (params.expectPairingStoreRead) {
-      expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
-    } else {
-      expect(readAllowFromStoreMock).not.toHaveBeenCalled();
-    }
+  async function click(
+    overrides: Partial<ControlContext>,
+    fixture = createDmButtonInteraction(),
+    data: ComponentData = { componentId: "hello" } as ComponentData,
+  ) {
+    await createAgentComponentButton(context(overrides)).run(fixture.interaction, data);
+    expect(fixture.defer).not.toHaveBeenCalled();
+    return fixture;
   }
 
   beforeEach(() => {
@@ -231,16 +169,7 @@ describe("agent components", () => {
   });
 
   it("sends pairing reply when DM sender is not allowlisted", async () => {
-    const button = createAgentComponentButton({
-      cfg: createCfg(),
-      accountId: "default",
-      dmPolicy: "pairing",
-    });
-    const { interaction, defer, reply } = createDmButtonInteraction();
-
-    await button.run(interaction, { componentId: "hello" } as ComponentData);
-
-    expect(defer).not.toHaveBeenCalled();
+    const { reply } = await click({ dmPolicy: "pairing" });
     expect(reply).toHaveBeenCalledTimes(1);
     const pairingText = firstReplyContent(reply);
     const code = expectPairingReplyText(pairingText, {
@@ -252,68 +181,44 @@ describe("agent components", () => {
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
   });
 
-  it("blocks DM interactions in allowlist mode when sender is not in configured allowFrom", async () => {
-    const button = createAgentComponentButton({
-      cfg: createCfg(),
-      accountId: "default",
-      dmPolicy: "allowlist",
-    });
-    const { interaction, defer, reply } = createDmButtonInteraction();
-
-    await button.run(interaction, { componentId: "hello" } as ComponentData);
-
-    expect(defer).not.toHaveBeenCalled();
-    expect(reply).toHaveBeenCalledWith({
-      content: "You are not authorized to use this button.",
-      ephemeral: true,
-    });
+  it.each([
+    ["allowlist", false, "You are not authorized to use this button."],
+    ["open", true, "You are not authorized to use this button."],
+    ["disabled", false, "DM interactions are disabled."],
+  ] as const)("blocks %s interactions (group=%s)", async (dmPolicy, group, content) => {
+    if (dmPolicy === "disabled") {
+      readAllowFromStoreMock.mockResolvedValue(["123456789"]);
+    }
+    const { reply } = await click(
+      {
+        dmPolicy,
+        ...(group
+          ? { discordConfig: { dm: { groupEnabled: true, groupChannels: ["other-group-dm"] } } }
+          : {}),
+      },
+      group ? createGroupDmButtonInteraction() : createDmButtonInteraction(),
+    );
+    expect(reply).toHaveBeenCalledWith({ content, ephemeral: true });
     expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
-    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
-  });
-
-  it("blocks Group DM interactions that are not allowlisted even when dmPolicy is open", async () => {
-    const button = createAgentComponentButton({
-      cfg: createCfg(),
-      accountId: "default",
-      dmPolicy: "open",
-      discordConfig: {
-        dm: {
-          groupEnabled: true,
-          groupChannels: ["other-group-dm"],
-        },
-      } as DiscordAccountConfig,
-    });
-    const { interaction, defer, reply } = createGroupDmButtonInteraction();
-
-    await button.run(interaction, { componentId: "hello" } as ComponentData);
-
-    expect(defer).not.toHaveBeenCalled();
-    expect(reply).toHaveBeenCalledWith({
-      content: "You are not authorized to use this button.",
-      ephemeral: true,
-    });
-    expect(peekSystemEvents(defaultGroupDmSessionKey)).toStrictEqual([]);
-    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
+    if (group) {
+      expect(peekSystemEvents(defaultGroupDmSessionKey)).toStrictEqual([]);
+    }
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
   it("routes allowlisted Group DM interactions to the group session without applying DM policy", async () => {
-    const button = createAgentComponentButton({
-      cfg: createCfg(),
-      accountId: "default",
-      dmPolicy: "disabled",
-      discordConfig: {
-        dm: {
-          groupEnabled: true,
-          groupChannels: ["group-dm-channel"],
-        },
-      } as DiscordAccountConfig,
-    });
-    const { interaction, defer, reply } = createGroupDmButtonInteraction();
-
-    await button.run(interaction, { componentId: "hello" } as ComponentData);
-
-    expect(defer).not.toHaveBeenCalled();
+    const { reply } = await click(
+      {
+        dmPolicy: "disabled",
+        discordConfig: {
+          dm: {
+            groupEnabled: true,
+            groupChannels: ["group-dm-channel"],
+          },
+        } as DiscordAccountConfig,
+      },
+      createGroupDmButtonInteraction(),
+    );
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "[Discord component: hello clicked by Alice#1234 (123456789)]",
@@ -326,52 +231,36 @@ describe("agent components", () => {
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
-  it("authorizes DM interactions from pairing-store entries in pairing mode", async () => {
+  it.each(["pairing", "open"] as const)("authorizes %s DM interactions", async (dmPolicy) => {
     readAllowFromStoreMock.mockResolvedValue(["123456789"]);
-    await expectSuccessfulDmButtonInteraction({
-      dmPolicy: "pairing",
-      expectPairingStoreRead: true,
+    const { reply } = await click({
+      dmPolicy,
+      ...(dmPolicy === "open" ? { allowFrom: ["*"] } : {}),
     });
-    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-  });
-
-  it("allows DM component interactions in open mode without reading pairing store", async () => {
-    readAllowFromStoreMock.mockResolvedValue(["123456789"]);
-    await expectSuccessfulDmButtonInteraction({
-      dmPolicy: "open",
-      expectPairingStoreRead: false,
-      allowFrom: ["*"],
-    });
-  });
-
-  it("blocks DM component interactions in disabled mode without reading pairing store", async () => {
-    readAllowFromStoreMock.mockResolvedValue(["123456789"]);
-    const button = createAgentComponentButton({
-      cfg: createCfg(),
-      accountId: "default",
-      dmPolicy: "disabled",
-    });
-    const { interaction, defer, reply } = createDmButtonInteraction();
-
-    await button.run(interaction, { componentId: "hello" } as ComponentData);
-
-    expect(defer).not.toHaveBeenCalled();
-    expect(reply).toHaveBeenCalledWith({
-      content: "DM interactions are disabled.",
-      ephemeral: true,
-    });
-    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
-    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "[Discord component: hello clicked by Alice#1234 (123456789)]",
+      {
+        sessionKey: defaultDmSessionKey,
+        contextKey: "discord:agent-button:dm-channel:hello:123456789:interaction-1",
+      },
+    );
+    if (dmPolicy === "pairing") {
+      expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
+      expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    } else {
+      expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+    }
   });
 
   it("matches tag-based allowlist entries for DM select menus", async () => {
-    const select = createAgentSelectMenu({
-      cfg: createCfg(),
-      accountId: "default",
-      discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
-      dmPolicy: "allowlist",
-      allowFrom: ["Alice#1234"],
-    });
+    const select = createAgentSelectMenu(
+      context({
+        discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
+        dmPolicy: "allowlist",
+        allowFrom: ["Alice#1234"],
+      }),
+    );
     const { interaction, defer, reply } = createDmSelectInteraction();
 
     await select.run(interaction, { componentId: "hello" } as ComponentData);
@@ -393,17 +282,9 @@ describe("agent components", () => {
   });
 
   it("keeps malformed percent cid values without throwing", async () => {
-    const button = createAgentComponentButton({
-      cfg: createCfg(),
-      accountId: "default",
-      dmPolicy: "allowlist",
-      allowFrom: ["123456789"],
-    });
-    const { interaction, defer, reply } = createDmButtonInteraction();
-
-    await button.run(interaction, { cid: "hello%2G" } as ComponentData);
-
-    expect(defer).not.toHaveBeenCalled();
+    const { reply } = await click({ dmPolicy: "allowlist", allowFrom: ["123456789"] }, undefined, {
+      cid: "hello%2G",
+    } as ComponentData);
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "[Discord component: hello%2G clicked by Alice#1234 (123456789)]",
@@ -418,14 +299,9 @@ describe("agent components", () => {
   it.each(["button", "select"] as const)(
     "queues distinct %s occurrences while deduplicating replayed occurrences",
     async (kind) => {
-      const context = {
-        cfg: createCfg(),
-        accountId: "default",
-        dmPolicy: "allowlist" as const,
-        allowFrom: ["123456789"],
-      };
+      const ctx = context({ dmPolicy: "allowlist", allowFrom: ["123456789"] });
       const control =
-        kind === "button" ? createAgentComponentButton(context) : createAgentSelectMenu(context);
+        kind === "button" ? createAgentComponentButton(ctx) : createAgentSelectMenu(ctx);
       const createInteractionForKind =
         kind === "button" ? createDmButtonInteraction : createDmSelectInteraction;
       const first = createInteractionForKind("interaction-1");

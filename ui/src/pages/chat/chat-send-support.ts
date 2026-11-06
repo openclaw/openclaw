@@ -1,3 +1,4 @@
+import { isAbortTrigger } from "../../../../src/auto-reply/reply/abort-trigger-text.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { RetainedChatSubmission } from "../../app/chat-submissions.ts";
 import { t } from "../../i18n/index.ts";
@@ -9,7 +10,7 @@ import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts
 import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -26,6 +27,7 @@ import {
   updateQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import { formatChatSelectionQuote } from "./components/chat-selection-attachment.ts";
 import type { ChatQueueAdmissionResult } from "./composer-queue-persistence.ts";
 import {
   admitChatSubmission,
@@ -41,8 +43,9 @@ import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-m
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
-export const OFFLINE_QUEUE_STORAGE_ERROR =
-  "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+export function chatOfflineQueueStorageError(): string {
+  return t("chat.queue.storageFailed");
+}
 
 export function formatChatQueueAdmissionError(
   result: Exclude<ChatQueueAdmissionResult, "admitted">,
@@ -54,7 +57,7 @@ export function formatChatQueueAdmissionError(
   if (result === "full") {
     return t("chat.queue.full");
   }
-  return editing ? t("chat.queue.editStorageFailed") : OFFLINE_QUEUE_STORAGE_ERROR;
+  return editing ? t("chat.queue.editStorageFailed") : chatOfflineQueueStorageError();
 }
 
 export function isChatResetCommand(text: string) {
@@ -62,6 +65,20 @@ export function isChatResetCommand(text: string) {
   return (
     parsed?.command.key === "new" ||
     (parsed?.command.key === "reset" && !/^soft(?:\s|$)/i.test(parsed.args))
+  );
+}
+
+/** Commands and Goals never acquire ambient context, including during queued-row edits. */
+export function acceptsChatAmbientContext(
+  message: string,
+  quotedMessage: string,
+  intent?: ChatQueueItem["intent"],
+): boolean {
+  return (
+    !intent &&
+    !message.startsWith("/") &&
+    !message.startsWith("!") &&
+    !isAbortTrigger(quotedMessage)
   );
 }
 
@@ -108,7 +125,7 @@ function chatConnectionPendingReason(host: Pick<ChatHost, "client" | "connected"
     : null;
 }
 
-// Hello permits RPCs before account recovery has claimed any retained first turn.
+// Sending waits for the authenticated outbox scope and locally owned session creation.
 // Renderers show loading only for these transient holds, never terminal expiry.
 export function chatSendPendingReason(
   host: Pick<ChatHost, "client" | "connected" | "hasPendingInitialTurn">,
@@ -292,15 +309,13 @@ export function retireDeliveredQueuedUserTurn(
   });
 }
 
-type ChatDeliveryFailureHost = Parameters<typeof visibleSessionMatches>[0] & {
-  lastError?: string | null;
-  chatError?: string | null;
-  sessionsResult?: SessionsListResult | null;
-};
-
 /** Surface a terminal delivery failure in the owning pane or a named toast. */
 export function surfaceChatDeliveryFailure(
-  host: ChatDeliveryFailureHost,
+  host: Parameters<typeof visibleSessionMatches>[0] & {
+    lastError?: string | null;
+    chatError?: string | null;
+    sessionsResult?: SessionsListResult | null;
+  },
   sessionKey: string,
   agentId: string | undefined,
   error: string,
@@ -320,7 +335,18 @@ export function surfaceChatDeliveryFailure(
         !scopedAgentId ||
         (session.agentId !== undefined && normalizeAgentId(session.agentId) === scopedAgentId)),
   );
-  showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}` });
+  showToast({
+    placement: "top-right",
+    severity: "error",
+    message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}`,
+  });
+}
+
+/** Model-facing text an annotation contributes ahead of the user's own message. */
+export function annotationMessageContext(attachment: ChatAttachment): string | undefined {
+  return attachment.selectionAnnotation
+    ? formatChatSelectionQuote(attachment.selectionAnnotation)
+    : attachment.browserAnnotation?.modelContext.trim();
 }
 
 export function prependReplyQuote(

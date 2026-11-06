@@ -8,18 +8,28 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 const suite = createControlUiE2eSuite({ name: "Settings typography search" });
 
 suite.define(() => {
   it.each([
-    { query: "Language", destination: "Language" },
-    { query: "Text size", destination: "Text size" },
-    { query: "Typography", destination: "Typography" },
-    { query: "font", destination: "Typography" },
-    { query: "Chat prose", destination: "Typography" },
+    { query: "Language", destination: "Language", target: "#settings-language" },
+    { query: "Text size", destination: "Text size", target: "#settings-appearance-text-size" },
+    {
+      query: "Typography",
+      destination: "Language and text",
+      target: "#settings-appearance-typography",
+    },
+    { query: "font", destination: "Language and text", target: "#settings-appearance-typography" },
+    {
+      query: "Chat font",
+      destination: "Language and text",
+      target: "#settings-appearance-typography",
+    },
   ])(
     "finds the visible $destination controls by searching $query",
-    async ({ query, destination }) => {
+    async ({ query, destination, target }) => {
       await suite.withPage(
         { locale: "en-US", viewport: { width: 1280, height: 1000 } },
         async ({ page }) => {
@@ -31,27 +41,38 @@ suite.define(() => {
           await expect(page).toHaveURL(/\/settings\/connection$/);
           await sidebar.getByRole("link", { name: "Appearance", exact: true }).click();
           await expect(page).toHaveURL(/\/settings\/appearance$/);
-          const typography = page.getByRole("heading", { name: "Typography", exact: true });
+          const typography = page.getByRole("heading", { name: "Language and text", exact: true });
           await typography.scrollIntoViewIfNeeded();
           await expect(typography).toBeInViewport();
           const typographySection = page.locator(".settings-section").filter({ has: typography });
-          await expect(typographySection.getByText("Interface", { exact: true })).toBeVisible();
-          await expect(typographySection.getByText("Chat prose", { exact: true })).toBeVisible();
+          await expect(
+            typographySection.getByText("Interface font", { exact: true }),
+          ).toBeVisible();
+          await expect(typographySection.getByText("Chat font", { exact: true })).toBeVisible();
           await typographySection.scrollIntoViewIfNeeded();
-          await page.screenshot({ path: path.join(artifacts, "typography-present.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifacts, "typography-present.png") });
+          }
 
           await page.locator(".page-title").scrollIntoViewIfNeeded();
           await search.fill(query);
           await expect(search).toHaveValue(query);
-          await page.screenshot({ path: path.join(artifacts, "search-before-result.png") });
-          const result = sidebar.getByRole("link", { name: destination, exact: true });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifacts, "search-before-result.png") });
+          }
+          const result = sidebar.getByRole("link", {
+            name: `${destination} Appearance`,
+            exact: true,
+          });
           await expect(result).toBeVisible();
           await result.click();
           await expect(page).toHaveURL(/\/settings\/appearance\?/);
-          const heading = page.getByRole("heading", { name: destination, exact: true });
+          const heading = page.locator(target);
           await expect(heading).toBeInViewport();
           await expect.poll(async () => (await heading.boundingBox())?.y).toBeLessThan(500);
-          await page.screenshot({ path: path.join(artifacts, "search-destination.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifacts, "search-destination.png") });
+          }
           expect(await gateway.getRequests("config.set")).toHaveLength(0);
           expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         },

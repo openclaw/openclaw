@@ -2,9 +2,8 @@ import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "
 import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
 import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
+import { canDeleteAgent, deleteAgent } from "../lib/agents/delete-agent.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
-import { formatUiError } from "../lib/format-error.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
@@ -13,16 +12,14 @@ import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
-import { showToast } from "../lib/toast.ts";
-import { clawCreatorAction } from "../pages/claws/creator-flow.ts";
-import { canCreateClawDraft } from "../pages/claws/draft-navigation.ts";
+import { templateCreatorAction } from "../pages/templates/creator-owner.ts";
+import { canCreateTemplateDraft } from "../pages/templates/draft-navigation.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { showConfirmDialog } from "./confirm-dialog.ts";
 import "../styles/sidebar-pinned-agents.css";
 import { createSidebarRosterWindow } from "./sidebar-roster-window.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -39,11 +36,6 @@ import "../styles/sidebar-agent-roster.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
 type RosterHost = AppSidebarRenderHost & SessionListHost;
-type RosterProps = {
-  host: RosterHost;
-  active: boolean;
-  sections: SidebarVisibleSections["sections"];
-};
 type AgentMenuCard = { id: string; name: string };
 type AgentContextMenu = { id: string; x: number; y: number; anchor: HTMLElement | null };
 
@@ -65,7 +57,11 @@ function cachedRosterCards(host: RosterHost) {
   }));
 }
 
-export function SidebarAgentRoster(props: RosterProps) {
+export function SidebarAgentRoster(props: {
+  host: RosterHost;
+  active: boolean;
+  sections: SidebarVisibleSections["sections"];
+}) {
   const context = useApplication();
   const hostProjection = createMemo(() => projectOwner(props.host, (host) => host));
   const presented = () => props.active;
@@ -150,41 +146,6 @@ export function SidebarAgentRoster(props: RosterProps) {
           ),
       )?.id,
   );
-  const canDeleteAgent = (id: string) =>
-    (context.agents.state.agentsList?.agents.filter((agent) => agent.kind !== "system").length ??
-      0) > 1 &&
-    canCallGatewayMethod(context.gateway.snapshot, "agents.delete", "operator.admin") &&
-    cards().some((agent) => agent.id === id);
-  const deleteAgent = async (agent: { id: string; name: string }) => {
-    const currentContext = context;
-    const client = currentContext.gateway.snapshot.client;
-    if (!client || !canDeleteAgent(agent.id)) {
-      return;
-    }
-    const confirmed = await showConfirmDialog({
-      message: t("agentsHome.deleteAgentConfirm", { agent: agent.name }),
-      details: t("agentsHome.deleteAgentDetails"),
-      confirmLabel: t("common.delete"),
-      danger: true,
-    }).catch((error: unknown) => {
-      showToast({ message: formatUiError(error) });
-      return false;
-    });
-    if (
-      !confirmed ||
-      currentContext.gateway.snapshot.client !== client ||
-      !canDeleteAgent(agent.id)
-    ) {
-      return;
-    }
-    try {
-      await client.request("agents.delete", { agentId: agent.id, deleteFiles: true });
-    } catch (error) {
-      showToast({ message: formatUiError(error) });
-    } finally {
-      await currentContext.agents.refreshList();
-    }
-  };
   // Pinned tiles and roster rows share one action list; only the opening affordance differs.
   const agentMenuItems = (card: AgentMenuCard): MenuEntry[] => {
     const pinned = pinnedIds().has(card.id);
@@ -201,11 +162,11 @@ export function SidebarAgentRoster(props: RosterProps) {
         class: "sidebar-customize-menu__item",
         icon: <Icon name="listTree" />,
       },
-      ...(canCreateClawDraft(context)
+      ...(canCreateTemplateDraft(context)
         ? [
             {
-              id: "create-claw",
-              label: t("clawsDraft.title"),
+              id: "create-template",
+              label: t("templatesDraft.title"),
               class: "sidebar-customize-menu__item",
               icon: <Icon name="share" />,
             },
@@ -223,7 +184,7 @@ export function SidebarAgentRoster(props: RosterProps) {
         class: "sidebar-customize-menu__item",
         icon: <Icon name="trash" />,
         variant: "danger" as const,
-        disabled: !canDeleteAgent(card.id),
+        disabled: !canDeleteAgent(context, card.id),
       },
     ];
   };
@@ -239,8 +200,8 @@ export function SidebarAgentRoster(props: RosterProps) {
         context.agentSelection.setScope(card.id);
         host().onNavigate?.("sessions");
         break;
-      case "create-claw":
-        clawCreatorAction(context, card.id)?.();
+      case "create-template":
+        templateCreatorAction(context, card.id)?.();
         break;
       case "settings":
         context.navigate("agents", {
@@ -248,7 +209,7 @@ export function SidebarAgentRoster(props: RosterProps) {
         });
         break;
       case "delete":
-        void deleteAgent(card);
+        void deleteAgent(context, card);
         break;
     }
   };
@@ -488,6 +449,7 @@ export function SidebarAgentRoster(props: RosterProps) {
             )}
           </Show>
         </div>,
+        true,
       )}
     </openclaw-sidebar-agent-roster>
   );

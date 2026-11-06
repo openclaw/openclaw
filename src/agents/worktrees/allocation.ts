@@ -17,13 +17,17 @@ import {
   timeWorktreePreparationPhase,
 } from "./preparation-timing.js";
 import { captureWorktreeRunEndContext, retainWorktreeRunEndFailure } from "./run-end-lifecycle.js";
-import type { WorktreeLeaseSet, WorktreeWorkerAuthority } from "./types.js";
+import type {
+  WorktreeLeaseSet,
+  WorktreeSourceCurrent,
+  WorktreeSourceStage,
+  WorktreeWaitBudget,
+  WorktreeWorkerAuthority,
+} from "./types.js";
 
 const WORKTREE_CREATE_LEASE_MS = 60_000;
 // A dependency install can take 15 minutes; contenders also wait for checkout and cleanup.
 export const WORKTREE_CREATE_LEASE_WAIT_MS = 30 * 60_000;
-
-export type WorktreeWaitBudget = { remainingMs: number };
 
 export type WorktreeAllocationGuard = WorktreeFilesystemOptions & {
   rollbackGuard: () => void;
@@ -124,6 +128,34 @@ export function startWorktreeWait(budget?: WorktreeWaitBudget) {
       }
     },
   };
+}
+
+/** Charge source acquisition once, ending before any protected work starts. */
+export async function withWorktreeSourceWait<T>(
+  withSource: WorktreeSourceStage,
+  budget: WorktreeWaitBudget | undefined,
+  run: (source: WorktreeSourceCurrent) => T | Promise<T>,
+  acquisition?: { waitMs?: number },
+): Promise<T> {
+  if (!budget || acquisition?.waitMs !== undefined) {
+    // Immediate reservation refusal must retain its typed busy outcome for safe re-entry.
+    return await withSource(run, acquisition);
+  }
+  const waiting = startWorktreeWait(budget);
+  try {
+    return await withSource(
+      (source) => {
+        waiting.end();
+        return run(source);
+      },
+      { waitMs: waiting.waitMs },
+    );
+  } catch (error) {
+    waiting.end(error);
+    throw error;
+  } finally {
+    waiting.end();
+  }
 }
 
 async function withWorktreeLease<T>(

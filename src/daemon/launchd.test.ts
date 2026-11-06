@@ -106,12 +106,11 @@ async function runWithFakeTimers<T>(run: () => Promise<T>): Promise<T> {
   vi.useFakeTimers();
   try {
     let settled = false;
-    const pending = run()
-      .then((value) => ({ ok: true as const, value }))
-      .catch((error: unknown) => ({ ok: false as const, error }))
-      .finally(() => {
-        settled = true;
-      });
+    const pending = run();
+    const markSettled = () => {
+      settled = true;
+    };
+    void pending.then(markSettled, markSettled);
     await vi.waitFor(
       async () => {
         await vi.runAllTimersAsync();
@@ -119,11 +118,7 @@ async function runWithFakeTimers<T>(run: () => Promise<T>): Promise<T> {
       },
       { timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS - 1000 },
     );
-    const result = await pending;
-    if (!result.ok) {
-      throw result.error;
-    }
-    return result.value;
+    return await pending;
   } finally {
     vi.useRealTimers();
   }
@@ -248,6 +243,30 @@ describe("launchd uninstall", () => {
     },
   );
 
+  it.each(["mkdir", "rename"] as const)(
+    "removes the booted-out plist when Trash %s is denied without Full Disk Access",
+    async (operation) => {
+      state.files.set(PLIST, "RunAtLoad=true");
+      vi.mocked(fs[operation]).mockRejectedValueOnce(
+        Object.assign(new Error(`EPERM: operation not permitted, ${operation}`), { code: "EPERM" }),
+      );
+
+      await expect(uninstallLaunchAgent(control())).resolves.toBeUndefined();
+      expect(state.files.has(PLIST)).toBe(false);
+    },
+  );
+
+  it("moves the plist into the Trash without replacing an earlier same-name item", async () => {
+    const earlier = "/Users/test/.Trash/ai.openclaw.gateway.plist";
+    state.files.set(PLIST, "RunAtLoad=true");
+    state.files.set(earlier, "earlier");
+
+    await expect(uninstallLaunchAgent(control())).resolves.toBeUndefined();
+    expect(state.files.has(PLIST)).toBe(false);
+    expect(state.files.get(earlier)).toBe("earlier");
+    expect([...state.files.keys()].filter((file) => file.includes("/.Trash/"))).toHaveLength(2);
+  });
+
   it("preserves the plist when launchctl cannot boot out the service", async () => {
     state.files.set(PLIST, "RunAtLoad=true");
     state.bootoutError = "launchctl bootout permission denied";
@@ -258,12 +277,10 @@ describe("launchd uninstall", () => {
     expect(state.files.has(PLIST)).toBe(true);
   });
 
-  it.each(["missing", "stopped symlink", "concurrently removed"])(
+  it.each(["stopped symlink", "concurrently removed"])(
     "keeps removal idempotent for a %s LaunchAgent",
     async (kind) => {
-      if (kind !== "missing") {
-        state.files.set(PLIST, "RunAtLoad=true");
-      }
+      state.files.set(PLIST, "RunAtLoad=true");
       if (kind === "stopped symlink") {
         state.serviceLoaded = false;
         state.bootoutError = "Boot-out failed: 5: Input/output error";
@@ -358,6 +375,34 @@ describe("launchd install", () => {
       expect(await isLaunchAgentEnabled({ env: ENV })).toBe(enabled);
     },
   );
+  it.each([
+    [true, true],
+    [true, false],
+    [false, true],
+  ])(
+    "restores the previous LaunchAgent and runs the hook only once booted-out PIDs exit (replacement loads=%s, exits=%s)",
+    async (replacementLoads, exits) => {
+      const previous = setGatewayPlist(PREVIOUS_ARGS);
+      Object.assign(state, {
+        bootstrapError: "injected activation failure",
+        bootstrapTransient: true,
+        bootstrapLoadsServiceOnFailure: replacementLoads,
+      });
+      // The booted-out PID outlives bootout and exits on its third liveness check, or never.
+      let pidChecks = 0;
+      isPidDefinitelyDead.mockImplementation(() => exits && ++pidChecks > 2);
+      const checksAtHook: number[] = [];
+      const beforeRecovery = async () => void checksAtHook.push(pidChecks);
+
+      const error = await runWithFakeTimers(() =>
+        install({ beforeRecovery }).catch((e: unknown) => e),
+      );
+      expect(error instanceof AggregateError).toBe(!exits);
+      expect(checksAtHook).toEqual(exits ? [3] : []);
+      expect(state.files.get(PLIST)).toBe(previous);
+    },
+  );
+
   it.each(["install", "restart"] as const)(
     "refuses %s before user LaunchAgent mutation when a system daemon owns it",
     async (action) => {
@@ -475,13 +520,7 @@ describe("launchd install", () => {
 
   it("publishes the rewritten plist before restart bootstrap", async () => {
     state.serviceLoaded = false;
-    setLegacyGatewayLaunchAgentPlist(PLIST, [
-      "    <key>EnvironmentVariables</key>",
-      "    <dict>",
-      "      <key>OPENCLAW_SERVICE_VERSION</key>",
-      "      <string>2026.4.24</string>",
-      "    </dict>",
-    ]);
+    setGatewayPlist(["node", "gateway.js"], { OPENCLAW_SERVICE_VERSION: "2026.4.24" });
 
     const execLaunchctl = launchdExec.execLaunchctl;
     using launchctl = vi.spyOn(launchdExec, "execLaunchctl");
@@ -802,15 +841,10 @@ describe("launchd install", () => {
     setLaunchAgentPlist(env, "ai.openclaw.gateway", ["node", "gateway.js"]);
     const plistPath = resolveLaunchAgentPlistPath(env);
     const originalPlist = state.files.get(plistPath);
-    inspectPortUsage.mockResolvedValue({
-      port: 19002,
-      status: "busy",
-      listeners: [
-        { pid: 4242, address: "TCP 127.0.0.1:19002 (LISTEN)" },
-        { pid: 5151, address: "TCP [::1]:19002 (LISTEN)" },
-      ],
-      hints: ["Another process is listening on this port."],
-    });
+    mockPort(19002, "busy", [
+      { pid: 4242, address: "TCP 127.0.0.1:19002 (LISTEN)" },
+      { pid: 5151, address: "TCP [::1]:19002 (LISTEN)" },
+    ]);
     formatPortDiagnostics.mockReturnValue(["Port 19002 is already in use."]);
 
     await expect(restartLaunchAgent(launchAgentControlFixture(env))).rejects.toThrow(

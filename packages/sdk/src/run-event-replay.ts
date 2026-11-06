@@ -6,12 +6,7 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseAgentSessionKey,
 } from "@openclaw/session-url-contract/session-key-normalization";
-import {
-  isTerminalRunEvent,
-  projectAssistantRunEvent,
-  readChatProjection,
-  type AssistantProjection,
-} from "./chat-projection.js";
+import { isTerminalRunEvent, readChatProjection } from "./chat-projection.js";
 import { EventHub } from "./event-hub.js";
 import { normalizeGatewayEvent } from "./normalize.js";
 import { resolveSdkRunWaitStatus } from "./run-terminal.js";
@@ -22,6 +17,34 @@ import {
   type GatewayReconnectContext,
 } from "./transport.js";
 import type { GatewayEvent, OpenClawEvent } from "./types.js";
+
+type AssistantProjection = { itemId?: string; text: string };
+
+function projectAssistantRunEvent(
+  event: OpenClawEvent,
+  previous: AssistantProjection | undefined,
+): { event: OpenClawEvent; assistant: AssistantProjection | undefined } | undefined {
+  if (event.raw?.event !== "agent" || asRecord(event.raw.payload).stream !== "assistant") {
+    return undefined;
+  }
+  const data = asRecord(event.data);
+  if (typeof data.text !== "string" && typeof data.delta !== "string") {
+    return undefined;
+  }
+  const itemId = typeof data.itemId === "string" ? data.itemId : undefined;
+  let text = typeof data.text === "string" ? data.text : undefined;
+  if (
+    text === undefined &&
+    typeof data.delta === "string" &&
+    (data.replace === true || (previous && previous.itemId === itemId))
+  ) {
+    text = (data.replace === true ? "" : (previous?.text ?? "")) + data.delta;
+  }
+  return {
+    event: text === undefined ? event : { ...event, data: { ...data, text } },
+    assistant: text === undefined ? undefined : { itemId, text },
+  };
+}
 
 const MAX_REPLAY_RUNS = 100;
 const MAX_REPLAY_EVENTS_PER_RUN = 500;

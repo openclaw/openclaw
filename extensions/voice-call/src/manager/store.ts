@@ -101,15 +101,8 @@ function parseEventKeySequence(key: string): number {
   return sequence ? Number.parseInt(sequence, 10) : 0;
 }
 
-function countCallRecordChunks(call: CallRecord): number {
-  return Math.max(
-    1,
-    Math.ceil(Buffer.byteLength(JSON.stringify(call), "utf8") / RAW_CALL_RECORD_CHUNK_BYTES),
-  );
-}
-
 /** Truncate oversized call records to fit the bounded plugin state chunk budget. */
-function prepareVoiceCallRecordForStorage(call: CallRecord): CallRecord {
+function prepareVoiceCallRecordForStorage(call: CallRecord): string {
   let boundedCall = call;
   if (call.processedEventIds.length > MAX_CALL_REPLAY_KEYS) {
     boundedCall = {
@@ -118,8 +111,10 @@ function prepareVoiceCallRecordForStorage(call: CallRecord): CallRecord {
     };
     trimCallReplayKeys(boundedCall.processedEventIds);
   }
-  if (countCallRecordChunks(boundedCall) <= MAX_CHUNKS_PER_CALL_RECORD_EVENT) {
-    return boundedCall;
+  const serialized = JSON.stringify(boundedCall);
+  const maxBytes = RAW_CALL_RECORD_CHUNK_BYTES * MAX_CHUNKS_PER_CALL_RECORD_EVENT;
+  if (Buffer.byteLength(serialized, "utf8") <= maxBytes) {
+    return serialized;
   }
   const transcriptEntries = boundedCall.transcript.length;
   const metadata = {
@@ -148,16 +143,17 @@ function prepareVoiceCallRecordForStorage(call: CallRecord): CallRecord {
       ...boundedCall,
       ...candidateInput,
     });
-    if (countCallRecordChunks(candidate) <= MAX_CHUNKS_PER_CALL_RECORD_EVENT) {
-      return candidate;
+    const candidateJson = JSON.stringify(candidate);
+    if (Buffer.byteLength(candidateJson, "utf8") <= maxBytes) {
+      return candidateJson;
     }
   }
-  return boundedCall;
+  return serialized;
 }
 
 /** Encode one bounded record; chunks are produced only when requested by the writer. */
 function encodeCallRecordEvent(call: CallRecord) {
-  const serialized = JSON.stringify(prepareVoiceCallRecordForStorage(call));
+  const serialized = prepareVoiceCallRecordForStorage(call);
   const buffer = Buffer.from(serialized, "utf8");
   const chunkCount = Math.max(1, Math.ceil(buffer.byteLength / RAW_CALL_RECORD_CHUNK_BYTES));
   if (chunkCount > MAX_CHUNKS_PER_CALL_RECORD_EVENT) {
@@ -326,11 +322,7 @@ export async function persistCallRecord(
 export async function loadActiveCallsFromStore(
   storePath: string,
   stateRuntime?: VoiceCallStateRuntime["state"],
-): Promise<{
-  activeCalls: Map<CallId, CallRecord>;
-  interruptedDeliveries: CallRecord[];
-  processedEventIds: Set<string>;
-}> {
+) {
   const stores = tryCreateCallRecordStateStores(storePath, stateRuntime);
   let calls: CallRecord[] = [];
   try {

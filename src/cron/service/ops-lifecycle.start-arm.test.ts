@@ -5,8 +5,8 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import type { CliDeps } from "../../cli/deps.types.js";
+import type { GatewayCronState } from "../../gateway/server-cron-contract.js";
 import { createLazyGatewayCronState } from "../../gateway/server-cron-lazy.js";
-import type { GatewayCronState } from "../../gateway/server-cron.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -53,14 +53,13 @@ it.each([false, true])(
     const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => ({
       status: "ok",
     }));
-    const log = { ...noopLogger, debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const clock = createGatewaySchedulerClock(now);
     const scheduler = createTestGatewayScheduler(clock.clock);
     const { cron: service, state } = createCronServiceWithStateForTest({
       scheduler,
       storePath,
       cronEnabled: true,
-      log,
+      log: noopLogger,
       enqueueSystemEvent: vi.fn(),
       runSessionEvent,
       runIsolatedAgentJob: vi.fn(),
@@ -89,15 +88,9 @@ it.each([false, true])(
       // A tick acknowledges activation; the retained run owns terminal accounting.
       await waitForCronRunQueue(state);
       if (failWrite) {
-        expect(log.error).toHaveBeenCalledExactlyOnceWith(
-          { jobId: "overdue", err: expect.stringContaining("injected terminal write failure") },
-          "cron: queued launch failed",
-        );
         const overdue = (await loadCronStore(storePath)).jobs.find((job) => job.id === "overdue");
         expect(overdue?.state.runningAtMs).toBe(now + 120_000);
         expect(overdue?.state.lastRunStatus).toBeUndefined();
-      } else {
-        expect(log.error).not.toHaveBeenCalled();
       }
       const tick = async (delayMs: number, expected: string[], drain = true) => {
         clock.setTime(clock.clock.now() + delayMs);

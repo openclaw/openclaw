@@ -1,5 +1,7 @@
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
 import type { BrowserContext, Page } from "playwright/test";
-import { assert, expect, it } from "vitest";
+import { assert, expect, inject, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
@@ -93,10 +95,9 @@ suite.define(() => {
       const releasePreviewReads = await holdOutboxPreviewReads(page);
       await page.reload();
       await waitForControlUiGatewayReady(page);
-      await paneFor(page)
-        .locator(".chat-send-status")
-        .getByText("Queued", { exact: true })
-        .waitFor();
+      const retainedTurn = paneFor(page).locator(".chat-group.user", { hasText: message });
+      await retainedTurn.locator("time.chat-group-timestamp").waitFor();
+      expect(await retainedTurn.locator(".chat-send-status").count()).toBe(0);
       await expectRequestCountStable(gateway, "chat.send", 0);
       // Automatic replay waits for a private copy of the complete Blob payload.
       expect(await releasePreviewReads()).toBeGreaterThan(0);
@@ -123,6 +124,18 @@ suite.define(() => {
       const queueModule = controlUiE2eBuiltModuleRequest(
         "ui/src/pages/chat/components/chat-composer-queue.tsx",
       );
+      const buildRoot = inject("controlUiE2eBuildRoot");
+      assert(buildRoot);
+      const assetsDir = path.join(buildRoot, "assets");
+      const queueStyles = readdirSync(assetsDir).filter(
+        (file) =>
+          file.endsWith(".css") &&
+          /(?:^|\})\s*\.chat-queue\s*\{/u.test(readFileSync(path.join(assetsDir, file), "utf8")),
+      );
+      expect(queueStyles).toHaveLength(1);
+      // Vite can reject the queue's CSS preload before requesting its JavaScript.
+      const isQueueAsset = (text: string) =>
+        queueModule.test(text) || text.includes(`/assets/${queueStyles[0]}`);
       await page.addInitScript(() => {
         window.addEventListener("vite:preloadError", (event) => {
           console.debug(
@@ -138,12 +151,12 @@ suite.define(() => {
       await context.setOffline(true);
       await disconnect(page, gateway);
       const [failedQueueRequest] = await Promise.all([
-        page.waitForEvent("requestfailed", (request) => queueModule.test(request.url())),
+        page.waitForEvent("requestfailed", (request) => isQueueAsset(request.url())),
         page.waitForEvent(
           "console",
           (consoleMessage) =>
             consoleMessage.text().startsWith("outbox-preload-error: ") &&
-            queueModule.test(consoleMessage.text()),
+            isQueueAsset(consoleMessage.text()),
         ),
         send(page),
       ]);
@@ -246,7 +259,10 @@ suite.define(() => {
           .poll(async () => (await readQueue(removedDuplicate))[0]?.attachmentPayload?.key)
           .not.toBe(original.attachmentPayload?.key);
         await expect.poll(() => payloadCount(page)).toBe(3);
+        // Routine replay is quiet; discard remains available when delivery needs reconnecting.
+        await disconnect(removedDuplicate, removalGateway);
         await paneFor(removedDuplicate)
+          .locator('.chat-send-status[data-send-state="waiting-reconnect"]')
           .getByRole("button", { name: "Discard", exact: true })
           .click();
         await expect.poll(() => payloadCount(page)).toBe(2);
@@ -300,11 +316,8 @@ suite.define(() => {
       await duplicate.addInitScript((eventName) => {
         const manager = navigator.locks;
         const nativeRequest = manager.request.bind(manager);
-        let release!: () => void;
         let released = false;
-        const latch = new Promise<void>((resolve) => {
-          release = resolve;
-        });
+        const { promise: latch, resolve: release } = Promise.withResolvers<void>();
         window.addEventListener(
           eventName,
           () => {

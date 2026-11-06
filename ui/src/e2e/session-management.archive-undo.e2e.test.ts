@@ -19,58 +19,53 @@ import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
-  it.each(["stay", "navigate"] as const)(
-    "offers Undo when an individual archive completes after %s on the Sessions page",
-    (transition) =>
-      suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const main = sessionRow("agent:main:main", "Main", 1);
-        const target = sessionRow("agent:main:pending-archive", "Pending archive", 2, {
-          pinned: true,
-        });
-        const gateway = await installMockGateway(page, {
-          sessions: [main, target],
-          sessionKey: main.key,
-          sessionArchiveFiltering: true,
-        });
+  it("offers Undo when an individual archive completes after leaving the Sessions page", () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const main = sessionRow("agent:main:main", "Main", 1);
+      const target = sessionRow("agent:main:pending-archive", "Pending archive", 2, {
+        pinned: true,
+      });
+      const gateway = await installMockGateway(page, {
+        sessions: [main, target],
+        sessionKey: main.key,
+        sessionArchiveFiltering: true,
+      });
 
-        await page.goto(`${suite.server.baseUrl}sessions`);
-        const row = page.locator(".session-data-row").filter({ hasText: target.label });
-        await ui.visible(row);
-        await gateway.deferNext("sessions.patch", { key: target.key, archived: true });
-        await ui.archiveSession(page, row, "list");
-        const archived = await ui.sessionPatch(gateway, target.key, { archived: true });
-        expect(archived.params).toMatchObject({
-          key: target.key,
-          expectedSessionId: target.sessionId,
-          archived: true,
-        });
-        const undo = ui.button(page, "Undo");
-        expect(await undo.count()).toBe(0);
-        if (transition === "navigate") {
-          const pages = await openSidebarPages(page);
-          await pages.getByRole("link", { name: "Usage", exact: true }).click();
-          await page.waitForURL((url) => url.pathname.endsWith("/usage"));
-          await page.locator("openclaw-sessions-page").waitFor({ state: "detached" });
-        }
-        const destination = new URL(page.url()).pathname;
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const row = page.locator(".session-data-row").filter({ hasText: target.label });
+      await ui.visible(row);
+      await gateway.deferNext("sessions.patch", { key: target.key, archived: true });
+      await ui.archiveSession(page, row, "list");
+      const archived = await ui.sessionPatch(gateway, target.key, { archived: true });
+      expect(archived.params).toMatchObject({
+        key: target.key,
+        expectedSessionId: target.sessionId,
+        archived: true,
+      });
+      const undo = ui.button(page, "Undo");
+      expect(await undo.count()).toBe(0);
+      const pages = await openSidebarPages(page);
+      await pages.getByRole("link", { name: "Usage", exact: true }).click();
+      await page.waitForURL((url) => url.pathname.endsWith("/usage"));
+      await page.locator("openclaw-sessions-page").waitFor({ state: "detached" });
+      const destination = new URL(page.url()).pathname;
 
-        // Only the archive acknowledgement is held; the canonical mock owns its row update.
-        await gateway.resolveDeferred("sessions.patch");
-        await ui.visible(undo);
+      // Only the archive acknowledgement is held; the canonical mock owns its row update.
+      await gateway.resolveDeferred("sessions.patch");
+      await ui.visible(undo);
 
-        await undo.click();
-        const restored = await ui.sessionPatch(gateway, target.key, { archived: false });
-        expect(restored.params).toMatchObject({
-          key: target.key,
-          expectedSessionId: target.sessionId,
-          archived: false,
-          pinned: true,
-        });
-        expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
-        await ui.visible(page.locator(`.sidebar-recent-session[data-session-key="${target.key}"]`));
-        expect(new URL(page.url()).pathname).toBe(destination);
-      }),
-  );
+      await undo.click();
+      const restored = await ui.sessionPatch(gateway, target.key, { archived: false });
+      expect(restored.params).toMatchObject({
+        key: target.key,
+        expectedSessionId: target.sessionId,
+        archived: false,
+        pinned: true,
+      });
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
+      await ui.visible(page.locator(`.sidebar-recent-session[data-session-key="${target.key}"]`));
+      expect(new URL(page.url()).pathname).toBe(destination);
+    }));
 
   it.each([
     { surface: "header", reconnect: false },

@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { i18n } from "../i18n/index.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import {
+  expectElement,
   renderAnalyzedFormFixture,
   renderConfigFormFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { ConfigFormProps, JsonSchema } from "./config-form.shared.ts";
 
@@ -30,14 +32,6 @@ beforeEach(() => {
   onTestFinished(() => container.remove());
   onPatch = vi.fn();
 });
-
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
-}
 
 function query<T extends Element>(
   selector: string,
@@ -86,38 +80,216 @@ function edit(input: HTMLInputElement | HTMLSelectElement, value: string, type =
 afterEach(() => i18n.setLocale("en"));
 
 describe("config form renderer", () => {
-  it.each([
-    { label: "Ingress", initiallyOpen: false },
-    { label: "Portals", initiallyOpen: true },
-  ])(
-    "retains the manually toggled $label disclosure across a form update",
-    ({ label, initiallyOpen }) => {
+  it("drops a heading that repeats a name already on screen and keeps its description and help", async () => {
+    const analysis = analyze({
+      gateway: object({ enabled: { type: "boolean" } }, { description: "Gateway help" }),
+    });
+    renderForm(analysis, {
+      activeSection: "gateway",
+      repeatedHeadings: ["gateway"],
+      uiHints: { gateway: { docsUrl: "https://docs.openclaw.ai/gateway" } },
+    });
+    await waitForSolid(() => expect(texts(".settings-section__desc")).toHaveLength(1));
+    expect(container.querySelector("h2.settings-section__heading")).toBeNull();
+    expect(container.querySelector("section.settings-section")?.getAttribute("aria-label")).toBe(
+      "Gateway",
+    );
+    const header = query(".settings-section__header", HTMLElement);
+    expect(header.querySelector(".settings-section__desc")).not.toBeNull();
+    expect(header.querySelector(".settings-section__help-button")).not.toBeNull();
+  });
+
+  it("drops a heading that opens the name on screen", async () => {
+    const analysis = analyze({ gateway: object({ enabled: { type: "boolean" } }) });
+    renderForm(analysis, { activeSection: "gateway", repeatedHeadings: ["Gateway Policy"] });
+    await waitForSolid(() =>
+      expect(container.querySelector("section.settings-section[aria-label]")).not.toBeNull(),
+    );
+    expect(container.querySelector("h2.settings-section__heading")).toBeNull();
+  });
+
+  it("keeps a heading that names something else", async () => {
+    const analysis = analyze({ gateway: object({ enabled: { type: "boolean" } }) });
+    renderForm(analysis, { activeSection: "gateway", repeatedHeadings: ["Network"] });
+    await waitForSolid(() => expect(texts("h2.settings-section__heading")).toHaveLength(1));
+  });
+
+  it("notes an unsupported setting quietly and links Raw only where the page has it", async () => {
+    const schema = object({ lab: object({ mode: { type: "string" }, name: { type: "string" } }) });
+    const onOpenRaw = vi.fn();
+    renderRaw({ schema, activeSection: "lab", unsupportedPaths: ["lab.mode"], onOpenRaw });
+    await waitForSolid(() =>
+      expect(container.textContent).toContain("Unsupported schema node. Use Raw mode."),
+    );
+    expect(container.querySelector(".cfg-field__error:not([hidden])")).toBeNull();
+    query("button.config-field__raw-link", HTMLButtonElement).click();
+    expect(onOpenRaw).toHaveBeenCalledTimes(1);
+
+    renderRaw({ schema, activeSection: "lab", unsupportedPaths: ["lab.mode"] });
+    await waitForSolid(() => expect(container.querySelector(".config-field__raw-link")).toBeNull());
+    expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
+  });
+
+  it("localizes the security heading while preserving Gateway and schema descriptions", async () => {
+    const analysis = analyze({
+      security: object({ enabled: { type: "boolean" } }, { description: "Schema security help" }),
+    });
+    renderForm(analysis, { activeSection: "security" });
+    for (const [locale, label] of [
+      ["zh-CN", "安全"],
+      ["en", "Security"],
+    ] as const) {
+      await i18n.setLocale(locale);
+      await waitForSolid(() => expect(texts("h2.settings-section__heading")).toEqual([label]));
+      expect(texts(".settings-section__desc")).toEqual(["Schema security help"]);
+      renderForm(analysis, {
+        activeSection: "security",
+        uiHints: { security: { label: "Runtime security label", help: "Gateway security help" } },
+      });
+      expect(texts("h2.settings-section__heading")).toEqual([label]);
+      expect(texts(".settings-section__desc")).toEqual(["Gateway security help"]);
+      renderForm(analysis, { activeSection: "security" });
+    }
+  });
+
+  it("defers first sections and appends without replacing focused edits or hiding later fields", async () => {
+    const yields: Array<() => void> = [];
+    vi.stubGlobal("scheduler", {
+      yield: () =>
+        new Promise<void>((resolve) => {
+          yields.push(resolve);
+        }),
+    });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const properties = Object.fromEntries(
+      Array.from({ length: 16 }, (_, index) => [
+        `part${index}`,
+        object({ field: { type: "string", title: `Field ${index}` } }),
+      ]),
+    );
+    const value = Object.fromEntries(
+      Array.from({ length: 16 }, (_, index) => [`part${index}`, { field: `Value ${index}` }]),
+    );
+    const props = { schema: object(properties), value, progressive: true };
+    renderRaw(props);
+    expect(all("input.settings-input")).toHaveLength(0);
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    yields.shift()!();
+    await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(7));
+    const first = query("input.settings-input", HTMLInputElement);
+    first.focus();
+    edit(first, "Editing the first field");
+    first.setSelectionRange(2, 8);
+
+    for (const count of [14, 16]) {
+      yields.shift()!();
+      await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(count));
+    }
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(query("input.settings-input", HTMLInputElement)).toBe(first);
+    expect(document.activeElement).toBe(first);
+    expect(first.value).toBe("Editing the first field");
+    expect([first.selectionStart, first.selectionEnd]).toEqual([2, 8]);
+    expect(container.textContent).toContain("Field 15");
+
+    renderRaw({
+      ...props,
+      schema: object({ ...properties, part16: object({ field: { type: "string" } }) }),
+      value: { ...value, part16: { field: "Added after completion" } },
+    });
+    expect(all("input.settings-input")).toHaveLength(17);
+    expect(query("input.settings-input", HTMLInputElement)).toBe(first);
+    expect(first.value).toBe("Editing the first field");
+    expect([first.selectionStart, first.selectionEnd]).toEqual([2, 8]);
+  });
+
+  it("yields a large map while retaining its edited first entry", async () => {
+    const yields: Array<() => void> = [];
+    vi.stubGlobal("scheduler", {
+      yield: () =>
+        new Promise<void>((resolve) => {
+          yields.push(resolve);
+        }),
+    });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const entries = Object.fromEntries(
+      Array.from({ length: 12 }, (_, index) => [`entry${index}`, `Value ${index}`]),
+    );
+    renderRaw({
+      schema: object({ entries: { type: "object", additionalProperties: { type: "string" } } }),
+      value: { entries },
+      progressive: true,
+    });
+    yields.shift()!();
+    const values = () => all<HTMLInputElement>('.cfg-map input:not([aria-label^="Key:"])');
+    await waitForSolid(() => expect(values()).toHaveLength(2));
+    const first = values()[0]!;
+    first.focus();
+    edit(first, "Edited first entry");
+    first.setSelectionRange(1, 5);
+    for (const count of [7, 12]) {
+      yields.shift()!();
+      await waitForSolid(() => expect(values()).toHaveLength(count));
+    }
+    expect(values()[0]).toBe(first);
+    expect(first.value).toBe("Edited first entry");
+    expect(document.activeElement).toBe(first);
+    expect([first.selectionStart, first.selectionEnd]).toEqual([1, 5]);
+    expect(container.querySelector('.cfg-map[aria-busy="true"]')).toBeNull();
+  });
+
+  it.each(["Ingress", "Portals"])(
+    "retains the manually toggled %s disclosure across a form update",
+    async (label) => {
       const props = {
         schema: object({
           gateway: object({
             portals: object(
               {
                 ingress: object({ port: { type: "integer" } }, { title: "Ingress" }),
+                name: { type: "string" },
               },
               { title: "Portals" },
             ),
+            mode: { type: "string" },
           }),
         }),
         value: { gateway: { portals: { ingress: { port: 443 } } } },
       };
-      const findDisclosure = () =>
+      const findDisclosure = (name = label) =>
         all<HTMLDetailsElement>("details.cfg-object").find(
           (node) =>
             node.querySelector(":scope > summary .settings-row__title")?.textContent?.trim() ===
-            label,
+            name,
         );
       renderRaw(props);
-      const disclosure = expectElement(findDisclosure(), label);
+      expect(container.querySelector('input[type="number"]')).toBeNull();
+
+      const portals = expectElement(findDisclosure("Portals"), "Portals");
+      expect(portals.open).toBe(false);
+      query("summary", HTMLElement, portals).click();
+      await waitForSolid(() => expect(findDisclosure("Ingress")).toBeDefined());
+      const ingress = expectElement(findDisclosure("Ingress"), "Ingress");
+      expect(ingress.open).toBe(false);
+      query("summary", HTMLElement, ingress).click();
+      await waitForSolid(() =>
+        expect(container.querySelector('input[type="number"]')).not.toBeNull(),
+      );
       const input = query('input[type="number"]', HTMLInputElement);
       expect(input.value).toBe("443");
-      expect(disclosure.open).toBe(initiallyOpen);
+
+      // Once opened, native disclosure toggles keep the actual editor and its draft.
+      const disclosure = expectElement(findDisclosure(), label);
+      input.value = "9443";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
       query("summary", HTMLElement, disclosure).click();
-      expect(disclosure.open).toBe(!initiallyOpen);
+      await waitForSolid(() => expect(disclosure.open).toBe(false));
+      expect(container.querySelector('input[type="number"]')).toBe(input);
+      expect(input.value).toBe("9443");
 
       renderRaw({
         ...props,
@@ -127,7 +299,7 @@ describe("config form renderer", () => {
       expect(findDisclosure()).toBe(disclosure);
       expect(container.querySelector('input[type="number"]')).toBe(input);
       expect(input.value).toBe("8443");
-      expect(disclosure.open).toBe(!initiallyOpen);
+      expect(disclosure.open).toBe(false);
     },
   );
 
@@ -179,7 +351,7 @@ describe("config form renderer", () => {
       };
       for (const [locale, expectedLabel, expectedHelp] of [
         ["tr", translated, translatedHelp],
-        ["en", label, help],
+        ["en", field ? "Gateway token" : label, help],
       ] as const) {
         await i18n.setLocale(locale);
         renderForm(analysis, props);
@@ -214,7 +386,9 @@ describe("config form renderer", () => {
       ).toEqual([subsection ? "Auth" : "Gateway"]);
       if (subsection) {
         expect(container.querySelector(".cfg-object")).toBeNull();
-        expect(texts(".settings-row__title")).toEqual(["Token"]);
+        expect(
+          texts(".settings-row:not(.settings-disclosure__summary) .settings-row__title"),
+        ).toEqual(["Token"]);
       } else {
         expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
           "Gateway server settings (port, auth, binding)",
@@ -239,7 +413,7 @@ describe("config form renderer", () => {
       revealSensitive: false,
     });
 
-    for (const label of ["Encrypt Key", "Private Key", "FOO"]) {
+    for (const label of ["Encrypt key", "Private key", "FOO"]) {
       const input = query(`input[aria-label='${label}']`, HTMLInputElement);
       expect(input).toMatchObject({ readOnly: true, value: "" });
       expect(input.classList.contains("cfg-redacted")).toBe(true);
@@ -371,7 +545,7 @@ describe("config form renderer", () => {
     });
     const checkbox = query('.settings-toggle__input[role="switch"]', HTMLInputElement);
     const row = expectElement(checkbox.closest(".settings-row"), "toggle row");
-    const label = wildcard ? "Plugin Enabled" : "Beta";
+    const label = wildcard ? "Plugin enabled" : "Beta";
     expect(row.tagName).toBe("DIV");
     expect(row.querySelector(".settings-row__title")?.textContent?.trim()).toBe(label);
     expect(
@@ -395,7 +569,7 @@ describe("config form renderer", () => {
     });
 
     expect(container.querySelector('.settings-toggle__input[role="switch"]')).toBeNull();
-    const select = query('select[aria-label="Automations Enabled"]', HTMLSelectElement);
+    const select = query('select[aria-label="Automations enabled"]', HTMLSelectElement);
     expect(select.selectedOptions[0]?.textContent?.trim()).toBe("Default: On");
     expect(onPatch).not.toHaveBeenCalled();
     edit(select, "1", "change");
@@ -447,7 +621,9 @@ describe("config form renderer", () => {
       searchQuery: "tag:advanced",
     });
     expect(texts(".settings-section__heading")[0]).toBe("Gateway");
-    expect(texts(".settings-row__title")).toEqual(["Auth", "Token"]);
+    expect(texts(".settings-row:not(.settings-disclosure__summary) .settings-row__title")).toEqual([
+      "Token",
+    ]);
   });
 
   it("supports SecretInput unions in additionalProperties maps", () => {
@@ -519,10 +695,40 @@ describe("config form renderer", () => {
     });
     const descriptions = texts(".settings-row__desc");
     expect(descriptions.filter((text) => text === help)).toHaveLength(1);
-    expect(
-      descriptions.filter((text) => text === `Default: ${JSON.stringify(defaults)}`),
-    ).toHaveLength(1);
+    expect(container.querySelectorAll('button[aria-label^="Help for"]')).toHaveLength(1);
     expect(descriptions.some((text) => text?.includes("nested-default"))).toBe(false);
+  });
+
+  it("drops the heading from a row's visible label and keeps it for assistive tech", () => {
+    renderForm(
+      analyze({
+        gateway: object({
+          port: { type: "integer", title: "Gateway port" },
+          mode: { type: "string", title: "Bind mode" },
+        }),
+      }),
+      { activeSection: "gateway", showAdvanced: true },
+    );
+    expect(texts(".settings-row__title")).toContain("Port");
+    expect(texts(".settings-row__title")).toContain("Bind mode");
+    expect(container.querySelector('input[aria-label="Gateway port"]')).not.toBeNull();
+  });
+
+  it("moves the help of a level's only group behind the section's help", () => {
+    const help = "Reload strategy for this gateway.";
+    renderForm(
+      analyze({
+        gateway: object({
+          reload: object(
+            { mode: { type: "string" }, debounce: { type: "string" } },
+            { title: "Reload" },
+          ),
+        }),
+      }),
+      { uiHints: { "gateway.reload": { help } }, activeSection: "gateway" },
+    );
+    expect(query(".settings-section__help-popover", HTMLElement).textContent).toContain(help);
+    expect(texts(".settings-section__desc")).not.toContain(help);
   });
 
   it.each([true, false])("renders section help only with a docs URL: %s", async (hasDocs) => {
@@ -535,8 +741,15 @@ describe("config form renderer", () => {
 
     if (!hasDocs) {
       expect(container.querySelector(".settings-section__help-button")).toBeNull();
+      expect(texts(".settings-section__desc")).toEqual([
+        "Gateway server settings (port, auth, binding)",
+      ]);
       return;
     }
+    expect(container.querySelector(".settings-section__desc")).toBeNull();
+    expect(query(".settings-section__help-panel p", HTMLElement).textContent?.trim()).toBe(
+      "Gateway server settings (port, auth, binding)",
+    );
     const button = query(".settings-section__help-button", HTMLButtonElement);
     expect(button.getAttribute("aria-label")).toBe("Help for Gateway");
     const tooltip = expectElement(button.closest("openclaw-tooltip"), "section help tooltip");

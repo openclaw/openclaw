@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
-import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
+import { clearRotatedSessionMetadata } from "../../agents/session-reset-metadata.js";
 import { evaluateSessionFreshness, type SessionFreshness } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
 import { resolveTerminalMainSessionTranscriptRegistryCheck } from "../../config/sessions/lifecycle.js";
-import { hasMainSessionRecoveryClaim } from "../../config/sessions/restart-recovery-state.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
@@ -35,19 +34,6 @@ import {
   type TrustedGroupMetadata,
 } from "./agent-subagent-registration.js";
 
-export type AgentSessionPatchBuild = {
-  patch: Partial<SessionEntry>;
-  spawnedBy: string | undefined;
-  groupId: string | undefined;
-  groupChannel: string | undefined;
-  groupSpace: string | undefined;
-  freshSessionRotatedSinceLoad: boolean;
-  isNewSession: boolean;
-  rotatedSessionId: boolean;
-  usableRequestedSessionId: string | undefined;
-  freshness: SessionFreshness | undefined;
-};
-
 export async function buildAgentSessionPatch(params: {
   freshEntry: SessionEntry | undefined;
   cfg: OpenClawConfig;
@@ -69,7 +55,7 @@ export async function buildAgentSessionPatch(params: {
   pluginOwnerId?: string;
   fallbackSessionId?: string;
   touchInteraction: boolean;
-}): Promise<AgentSessionPatchBuild> {
+}) {
   // Re-evaluate each read; callers retain admission and concurrent-rotation fencing.
   const lifecycleTimestamps = params.freshEntry
     ? await resolveSessionLifecycleTimestampsAsync({
@@ -84,7 +70,7 @@ export async function buildAgentSessionPatch(params: {
     params.hasRestoredCronContinuation ||
     params.freshEntry?.modelSelectionLocked === true ||
     (params.resetPolicy.configured !== true && hasProviderOwnedSession(params.freshEntry));
-  const freshness = params.freshEntry
+  const freshness: SessionFreshness | undefined = params.freshEntry
     ? skipImplicitExpiry
       ? ({ fresh: true } satisfies SessionFreshness)
       : evaluateSessionFreshness({
@@ -147,8 +133,16 @@ export async function buildAgentSessionPatch(params: {
     params.requestedSessionId && (!params.freshEntry?.sessionId || canReuseSession)
       ? params.requestedSessionId
       : undefined;
+  const automaticResetReason =
+    !canReuseSession &&
+    !usableRequestedSessionId &&
+    !(failedSession && !metadata?.present) &&
+    !terminalMainTranscriptNewerThanRegistry
+      ? freshness?.staleReason
+      : undefined;
   const sessionId =
-    usableRequestedSessionId ?? (canReuseSession ? params.freshEntry?.sessionId : undefined);
+    usableRequestedSessionId ??
+    (canReuseSession || automaticResetReason ? params.freshEntry?.sessionId : undefined);
   const isNewSession =
     !params.freshEntry ||
     (!canReuseSession && !usableRequestedSessionId) ||
@@ -197,11 +191,14 @@ export async function buildAgentSessionPatch(params: {
     deliveryContextFromSession(params.freshEntry),
     params.requestDeliveryHint,
   );
-  const delivery = normalizeSessionDeliveryState({
-    route: sessionDeliveryRoute(params.freshEntry),
-    context: effectiveDelivery,
-    origin: sessionDeliveryOrigin(params.freshEntry),
-  });
+  const delivery =
+    !params.requestDeliveryHint && params.freshEntry?.delivery
+      ? params.freshEntry.delivery
+      : normalizeSessionDeliveryState({
+          route: sessionDeliveryRoute(params.freshEntry),
+          context: effectiveDelivery,
+          origin: sessionDeliveryOrigin(params.freshEntry),
+        });
   const labelValue = normalizeOptionalString(params.requestLabel) || params.freshEntry?.label;
   const explicitSessionDisplayName =
     params.freshEntry === undefined &&
@@ -229,13 +226,12 @@ export async function buildAgentSessionPatch(params: {
   const shouldClearTerminalState =
     canReuseSession &&
     recoverableTerminalSession &&
-    !hasMainSessionRecoveryClaim(params.freshEntry) &&
     !freshSessionRotatedSinceLoad &&
     patchSessionId === params.freshEntry?.sessionId;
-  const automaticRecoveryClearPatch = shouldClearRotatedState
-    ? buildMainSessionRecoveryClearPatch(params.freshEntry)
-    : {};
   const patch: Partial<SessionEntry> = {
+    ...(automaticResetReason && params.freshEntry
+      ? { ...clearRotatedSessionMetadata(params.freshEntry), agentHarnessId: undefined }
+      : {}),
     sessionId: patchSessionId,
     updatedAt: params.now,
     ...(isNewSession && !freshSessionRotatedSinceLoad
@@ -253,7 +249,7 @@ export async function buildAgentSessionPatch(params: {
           agentStatus: undefined,
         }
       : {}),
-    ...automaticRecoveryClearPatch,
+    ...(shouldClearRotatedState ? { resumeAfterRestart: undefined } : {}),
     delivery,
     ...(labelValue ? { label: labelValue } : {}),
     // An operator-supplied key is an explicit name: keep it instead of generating
@@ -284,6 +280,7 @@ export async function buildAgentSessionPatch(params: {
   }
   return {
     patch,
+    ...(automaticResetReason ? { automaticResetReason } : {}),
     spawnedBy: freshSpawnedBy,
     ...nextGroup,
     freshSessionRotatedSinceLoad,

@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -19,6 +20,8 @@ import { useSessionSnoozeEntries } from "./session-menu-snooze.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
 import type { MenuControls, MenuEntry, MenuItem } from "./solid/menu.tsx";
+
+registerSessionMenuEnglish();
 
 export function SessionMenuShortcut(props: { shortcut: string; alias?: KeyboardShortcutCombo }) {
   return (
@@ -100,6 +103,8 @@ export function useSessionMenuEntries(
   });
   const separator = (id: string) =>
     content(id, <div class="session-menu__separator" role="separator" />);
+  const communicationDivider = separator("communication-divider");
+  const involvementDivider = separator("involvement-divider");
   const deleteDivider = separator("delete-divider");
   const item = (entry: ItemOptions): MenuItem => ({
     id: entry.kind,
@@ -256,7 +261,8 @@ export function useSessionMenuEntries(
     );
   function body(view: CompactSessionMenuView): MenuEntry[] {
     switch (view) {
-      case "advanced":
+      case "advanced": {
+        const involvementEntries = state.involvingMeContext ? [] : involvement();
         return [
           submenu({
             view: "icon",
@@ -276,21 +282,14 @@ export function useSessionMenuEntries(
               : undefined,
           }),
           submenu({ view: "copy", label: t("sessionsView.copyDetails"), icon: "copy" }),
-          ...(state.navigationAllowed || state.worktreePath || options.openInExtra
-            ? [
-                submenu({
-                  view: "open-in",
-                  label: t("sessionsView.openInEditorMenu"),
-                  icon: "externalLink",
-                }),
-              ]
-            : []),
+          communicationDivider,
           ...details.communication(),
           details.readStatus,
-          ...(!state.involvingMeContext ? involvement() : []),
+          ...(involvementEntries.length ? [involvementDivider, ...involvementEntries] : []),
           deleteDivider,
           deleteAction(),
         ];
+      }
       case "snooze":
         return snoozeEntries()();
       case "copy":
@@ -322,6 +321,25 @@ export function useSessionMenuEntries(
         return [content("appearance", appearanceContent())];
       case "group":
         return groupOptions();
+      case "collections":
+        return [
+          ...actions.personalGroups.map((group): MenuItem => ({
+            id: "personal-collection:" + group.id,
+            label: group.label,
+            class: "session-menu__item",
+            labelClass: "session-menu__text",
+            disabled: state.disabled || group.sessionKeys.includes(state.session.target?.key ?? ""),
+            icon: icon("layers"),
+          })),
+          {
+            id: "personal-collection:new",
+            label: t("sessionsView.personalGroupNew"),
+            class: "session-menu__item",
+            labelClass: "session-menu__text",
+            disabled: state.disabled,
+            icon: icon("plus"),
+          },
+        ];
       case "assign-owner":
         return details.ownerOptions();
       case "root":
@@ -377,6 +395,16 @@ export function useSessionMenuEntries(
           }),
         ]
       : []),
+    ...(!batch() &&
+    (state.navigationAllowed || state.splitAllowed || state.worktreePath || options.openInExtra)
+      ? [
+          submenu({
+            view: "open-in",
+            label: t("sessionsView.openInEditorMenu"),
+            icon: "externalLink",
+          }),
+        ]
+      : []),
     ...(!batch() && state.session.placementAction
       ? [
           item({
@@ -418,6 +446,16 @@ export function useSessionMenuEntries(
         disabled: actions.actionDisabled("move-to-group"),
         title: state.actionDisabledReasons["move-to-group"],
       }),
+      ...(actions.collectionTarget
+        ? [
+            submenu({
+              view: "collections",
+              label: t("sessionsView.personalGroupAdd"),
+              icon: "layers",
+              disabled: state.disabled,
+            }),
+          ]
+        : []),
       ...(!batch() && state.session.isChild
         ? [
             item({
@@ -454,10 +492,7 @@ export function useSessionMenuEntries(
   const backDivider = separator("back-divider");
   const compact = (view: CompactSessionMenuView): MenuEntry[] => [
     {
-      id:
-        view === "icon" || view === "copy" || view === "open-in"
-          ? "compact:back-advanced"
-          : "compact:back",
+      id: view === "icon" || view === "copy" ? "compact:back-advanced" : "compact:back",
       label: t("common.back"),
       class: "session-menu__item session-menu__back",
       icon: icon("arrowLeft"),

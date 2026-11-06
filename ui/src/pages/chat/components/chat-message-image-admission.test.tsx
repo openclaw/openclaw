@@ -50,14 +50,23 @@ beforeEach(() => {
       readonly rootMargin = "240px 0px";
       readonly scrollMargin = "0px";
       readonly thresholds = [0];
-      constructor(callback: IntersectionObserverCallback) {
-        intersections.push(() =>
-          callback([{ isIntersecting: true } as IntersectionObserverEntry], this),
-        );
+      private readonly targets = new Set<Element>();
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      observe(target: Element) {
+        this.targets.add(target);
+        intersections.push(() => {
+          if (this.targets.has(target)) {
+            // SAFETY: The viewport owner reads only target and isIntersecting.
+            this.callback([{ target, isIntersecting: true } as IntersectionObserverEntry], this);
+          }
+        });
       }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
       takeRecords() {
         return [];
       }
@@ -265,7 +274,7 @@ it("replaces failed native images with unavailable cards and offers local retry"
   const card = container.querySelector(
     ".chat-image-frame--compact .chat-assistant-attachment-card",
   );
-  expect(card?.textContent).toContain("Could not load this image. Try again.");
+  expect(card?.textContent).toContain("Couldn’t load this image. Try again.");
   expect(container.querySelector('img[alt="Local image"]')).toBeNull();
   expect(container.querySelectorAll(".chat-image-action")).toHaveLength(1);
   for (const [index, frame] of [...container.querySelectorAll(".chat-image-frame")].entries()) {
@@ -777,4 +786,28 @@ describe("message attachment availability", () => {
     }
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
+});
+
+it("retains inline pixels while parked and retires them before canonical admission", async () => {
+  const fetch = vi.fn(async () => ticketResponse());
+  vi.stubGlobal("fetch", fetch);
+  const local = "data:image/png;base64,cG5n";
+  const source = managedSource();
+  const mounted = draw([{ url: local }]);
+  const original = imageElement();
+  expect(original).not.toBeNull();
+  mounted.setPresented(false);
+  flush();
+  expect(imageElement()).toBe(original);
+  mounted.setPresented(true);
+  flush();
+  expect(imageElement()).toBe(original);
+  mounted.setPresented(false);
+  flush();
+  draw([{ url: source }]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(imageElement()).toBeNull();
+  expect(fetch).not.toHaveBeenCalled();
+  unmount();
+  expect(disconnectMedia.size).toBe(0);
 });

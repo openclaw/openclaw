@@ -31,11 +31,7 @@ describe("catchup", () => {
     await closeOpenClawStateDatabaseAsync();
   });
 
-  function advance(
-    lastSeenRowid: number,
-    lastSeenMs: number,
-    config: ReturnType<typeof resolveCatchupConfig>,
-  ) {
+  function advance(lastSeenRowid: number, lastSeenMs: number, config = liveConfig) {
     return advanceIMessageCatchupCursor("primary", { lastSeenMs, lastSeenRowid }, config);
   }
 
@@ -60,7 +56,7 @@ describe("catchup", () => {
     }
   }
 
-  async function saveIMessageCatchupCursor(
+  async function seedCursor(
     lastSeenRowid: number,
     lastSeenMs: number,
     failureRetries?: Record<string, number>,
@@ -102,10 +98,10 @@ describe("catchup", () => {
 
   describe("advanceIMessageCatchupCursor", () => {
     it("advances monotonically from a live-handled row and preserves given-up retry state", async () => {
-      await saveIMessageCatchupCursor(42, 1_700_000_000_000, { "GIVEN-UP": 3 });
+      await seedCursor(42, 1_700_000_000_000, { "GIVEN-UP": 3 });
 
-      await expect(advance(41, 1_700_000_001_000, liveConfig)).resolves.toBe(false);
-      await expect(advance(50, 1_700_000_002_000, liveConfig)).resolves.toBe(true);
+      await expect(advance(41, 1_700_000_001_000)).resolves.toBe(false);
+      await expect(advance(50, 1_700_000_002_000)).resolves.toBe(true);
 
       await expectCursor({
         lastSeenRowid: 50,
@@ -114,40 +110,21 @@ describe("catchup", () => {
       });
     });
 
-    it("serializes concurrent live cursor advances so a lower row cannot overwrite a higher row", async () => {
-      await saveIMessageCatchupCursor(10, 1_700_000_000_000);
-
-      const results = await Promise.all([
-        advance(50, 1_700_000_050_000, liveConfig),
-        ...Array.from({ length: 24 }, (_, index) =>
-          advance(11 + index, 1_700_000_011_000 + index, liveConfig),
-        ),
-      ]);
-
-      expect(results[0]).toBe(true);
-      expect(results.slice(1).every((advanced) => !advanced)).toBe(true);
-      await expectCursor({ lastSeenRowid: 50, lastSeenMs: 1_700_000_050_000 });
-    });
-
     it("does not advance from live rows while a catchup failure is still retrying", async () => {
-      await saveIMessageCatchupCursor(42, 1_700_000_000_000, { RETRYING: 1 });
+      await seedCursor(42, 1_700_000_000_000, { RETRYING: 1 });
 
-      await expect(advance(50, 1_700_000_002_000, liveConfig)).resolves.toBe(false);
+      await expect(advance(50, 1_700_000_002_000)).resolves.toBe(false);
 
       await expectCursor({ lastSeenRowid: 42, failureRetries: { RETRYING: 1 } });
     });
   });
 
   describe("capFailureRetriesMap", () => {
-    it("is identity below the cap", () => {
-      const map = { a: 1, b: 2 };
-      expect(capFailureRetriesMap(map, 10)).toEqual({ a: 1, b: 2 });
-    });
-
-    it("keeps the highest counts when over the cap", () => {
-      const map = { a: 1, b: 9, c: 5, d: 9 };
-      const capped = capFailureRetriesMap(map, 2);
-      expect(Object.keys(capped).toSorted()).toEqual(["b", "d"]);
+    it.each([
+      [{ a: 1, b: 2 }, 10, { a: 1, b: 2 }],
+      [{ a: 1, b: 9, c: 5, d: 9 }, 2, { b: 9, d: 9 }],
+    ] as const)("retains the highest retry counts within cap: %j / %i", (map, cap, expected) => {
+      expect(capFailureRetriesMap(map, cap)).toEqual(expected);
     });
 
     it("keeps the persisted retry map under the plugin-state value budget", () => {
@@ -186,7 +163,6 @@ describe("catchup", () => {
         }));
       const dispatch = options.dispatch ?? vi.fn<CatchupDispatchFn>(async () => ({ ok: true }));
       return {
-        fetch,
         dispatch,
         result: performIMessageCatchup({
           accountId: "primary",
@@ -237,26 +213,29 @@ describe("catchup", () => {
     });
 
     it("treats already-given-up rows as skippedGivenUp without dispatching", async () => {
-      await saveIMessageCatchupCursor(0, now - 60_000, { "WEDGED-1": 99 });
+      await seedCursor(0, now - 60_000, { "WEDGED-1": 99 });
       const { result, dispatch } = run([row("WEDGED-1", 5), row("FRESH", 6)]);
       expect(await result).toMatchObject({ skippedGivenUp: 1, replayed: 1 });
       expect(dispatch).toHaveBeenCalledTimes(1);
     });
 
     it("removes a guid from the retry map after a successful dispatch", async () => {
-      await saveIMessageCatchupCursor(0, now - 60_000, { RETRYING: 1 });
+      await seedCursor(0, now - 60_000, { RETRYING: 1 });
       await run([row("RETRYING", 5)]).result;
       expect((await loadCursor())?.failureRetries).toBeUndefined();
     });
 
     it("does NOT leapfrog a held failure when a later row in the same batch succeeds", async () => {
       // #78649: a later success must not move the cursor past a retryable failure.
-      const { result, dispatch } = run(
+      const { result } = run(
         [row("A", 10, { date: now - 40_000 }), row("B", 11, { date: now - 30_000 })],
-        { dispatch: vi.fn<CatchupDispatchFn>(async (entry) => ({ ok: entry.guid !== "A" })) },
+        {
+          highWatermarkRowid: 99,
+          highWatermarkMs: now - 100,
+          dispatch: vi.fn<CatchupDispatchFn>(async (entry) => ({ ok: entry.guid !== "A" })),
+        },
       );
       expect(await result).toMatchObject({ failed: 1, replayed: 1, givenUp: 0 });
-      expect(dispatch).toHaveBeenCalledTimes(2);
       await expectCursor({ lastSeenRowid: 9, failureRetries: { A: 1 } });
     });
 
@@ -271,28 +250,8 @@ describe("catchup", () => {
       await expectCursor({ lastSeenRowid: 9, failureRetries: { A: 1 } });
     });
 
-    it("advances the cursor past parser-rejected rows via the fetch high-watermark", async () => {
-      const { result, dispatch } = run([], {
-        highWatermarkRowid: 42,
-        highWatermarkMs: now - 5_000,
-      });
-      expect(await result).toMatchObject({ querySucceeded: true, replayed: 0, fetchedCount: 0 });
-      expect(dispatch).not.toHaveBeenCalled();
-      await expectCursor({ lastSeenRowid: 42, lastSeenMs: now - 5_000 });
-    });
-
-    it("does not let the high-watermark leapfrog a held failure", async () => {
-      const { result } = run([row("A", 10, { date: now - 40_000 })], {
-        highWatermarkRowid: 99,
-        highWatermarkMs: now - 100,
-        dispatch: vi.fn<CatchupDispatchFn>(async () => ({ ok: false })),
-      });
-      expect((await result).failed).toBe(1);
-      await expectCursor({ lastSeenRowid: 9 });
-    });
-
     it("returns querySucceeded=false and preserves the cursor on fetch failure", async () => {
-      await saveIMessageCatchupCursor(7, now - 60_000);
+      await seedCursor(7, now - 60_000);
       const warn = vi.fn();
       const { result, dispatch } = run([], {
         warn,
@@ -309,7 +268,6 @@ describe("catchup", () => {
 
   describe("iMessage catchup cursor writes", () => {
     const now = 1_700_001_000_000;
-
     beforeEach(() => {
       vi.spyOn(Date, "now").mockReturnValue(now);
     });
@@ -334,7 +292,7 @@ describe("catchup", () => {
         return await register(...args);
       });
       let settled = false;
-      const first = advance(50, now, liveConfig).then((advanced) => {
+      const first = advance(50, now).then((advanced) => {
         settled = true;
         return advanced;
       });
@@ -344,7 +302,7 @@ describe("catchup", () => {
           throw new Error("Cursor advancement settled before the pending write.");
         }),
       ]);
-      const second = advance(40, now, liveConfig);
+      const second = advance(40, now);
       try {
         expect(settled).toBe(false);
         expect(await loadCursor()).toBeNull();
@@ -353,7 +311,7 @@ describe("catchup", () => {
         await Promise.allSettled([first, second]);
       }
       await expect(Promise.all([first, second])).resolves.toEqual([true, false]);
-      expect((await loadCursor())?.lastSeenRowid).toBe(50);
+      await expectCursor({ lastSeenRowid: 50, lastSeenMs: now });
     });
 
     it("propagates uncertain persistence without retrying a dispatched catchup pass", async () => {

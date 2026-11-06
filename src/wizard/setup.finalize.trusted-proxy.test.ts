@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withSetupHealthGateway } from "../../test/helpers/setup-health-gateway.js";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 
 type DefaultModelAuthStatus = Awaited<
   ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
@@ -213,14 +214,6 @@ vi.mock("./setup.completion.js", () => ({
 import { createFinalizeArgs, createRuntime } from "./setup.finalize.fixtures.test-support.js";
 import { finalizeSetupWizard } from "./setup.finalize.js";
 
-function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
@@ -315,7 +308,7 @@ describe("finalizeSetupWizard", () => {
       }
     }
 
-    const probeParams = requireMockArg(probeGatewayReachable) as { password?: string };
+    const probeParams = mockCall(probeGatewayReachable)[0] as { password?: string };
     expect(probeParams.password).toBe("resolved-gateway-password"); // pragma: allowlist secret
     expect(healthCommand).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -359,7 +352,7 @@ describe("finalizeSetupWizard", () => {
       }
     }
 
-    const probeParams = requireMockArg(probeGatewayReachable) as { password?: string };
+    const probeParams = mockCall(probeGatewayReachable)[0] as { password?: string };
     expect(probeParams.password).toBe("ambient-gateway-password"); // pragma: allowlist secret
   });
 

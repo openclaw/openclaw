@@ -1,8 +1,8 @@
 import { expect, it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { configAuth } from "./model-catalog-fixtures.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI model default capabilities" });
 suite.define(() => {
@@ -38,7 +38,7 @@ suite.define(() => {
           assistantName: "QA Assistant",
           models,
           methodResponses: {
-            "config.get": configSnapshot(config, "qa-defaults"),
+            "config.get": sourceConfigSnapshot(config, "qa-defaults"),
             "models.authStatus": {
               ts: 1,
               providers: [configAuth("openai")],

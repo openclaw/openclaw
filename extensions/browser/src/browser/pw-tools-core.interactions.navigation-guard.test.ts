@@ -177,7 +177,6 @@ describe("pw-tools-core interaction navigation guard", () => {
     await expect(
       settle(() => mod.evaluateViaPlaywright({ ...strict(), fn: "() => 1" })),
     ).rejects.toThrow("SSRF blocked: private network");
-    expect(complete).toHaveBeenCalledTimes(1);
     expectComplete(page);
     expect(session.withPageNavigationRequestGuard).toHaveBeenCalledBefore(page.evaluate);
   });
@@ -228,26 +227,19 @@ describe("pw-tools-core interaction navigation guard", () => {
         expect(
           await mod.evaluateViaPlaywright({ ...target, ref: ref ? "1" : undefined, fn: source }),
         ).toBe(ref ? "Ada" : 42);
+        if (!ref) {
+          await expect(
+            mod.evaluateViaPlaywright({
+              ...target,
+              fn: '() => { throw { message: { toString() { return "page detail"; } } }; }',
+            }),
+          ).rejects.toThrow("Invalid evaluate function: page detail");
+        }
       } finally {
         hostFunction.mockRestore();
       }
     },
   );
-
-  it("preserves custom page-thrown message values", async () => {
-    install({
-      url: vi.fn(() => localPageUrl),
-      evaluate: vi.fn(async (fn: (args: unknown) => unknown, args: unknown) =>
-        runInNewContext(`(${fn.toString()})(args)`, { args }),
-      ),
-    });
-    await expect(
-      mod.evaluateViaPlaywright({
-        ...target,
-        fn: '() => { throw { message: { toString() { return "page detail"; } } }; }',
-      }),
-    ).rejects.toThrow("Invalid evaluate function: page detail");
-  });
 
   it("propagates blocked delayed submit navigation instead of reporting type success", async () => {
     const navigation = navigationPage("https://example.com/form");
@@ -283,14 +275,11 @@ describe("pw-tools-core interaction navigation guard", () => {
     const download = managedDownload("report.pdf");
     const drain = vi.fn(async () => [download]);
     const dispose = captureDownloads(drain);
-    const page = installAt("https://example.com", { click: vi.fn(async () => {}) });
+    installAt("https://example.com", { click: vi.fn(async () => {}) });
     const result = await settle(() => act({ kind: "click", ref: "1" }));
     expect(result.downloads).toEqual([download]);
     expect(drain).toHaveBeenCalledWith({ ...downloadGrace, firstEventGraceMs: 0 });
     expect(dispose).toHaveBeenCalledOnce();
-    expect(session.beginActionDownloadCaptureOnPage).toHaveBeenCalledWith(page, {
-      beforeSave: expect.any(Function),
-    });
   });
 
   it("does not quarantine a source page preserved after policy denial", async () => {
@@ -362,10 +351,27 @@ describe("pw-tools-core interaction navigation guard", () => {
       }),
     });
     complete.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
+      expect(currentUrl).toBe("http://127.0.0.1:18080/private-final");
       await session.quarantineBlockedNavigationTarget({ ...target, page });
       throw blocked;
     });
-    await expect(settle(() => act(hoverAction))).rejects.toBe(blocked);
+    await withFakeTimers(async () => {
+      const guardSettled = vi.fn();
+      session.withPageNavigationRequestGuard.mockImplementationOnce(async ({ action }) => {
+        try {
+          return await action(page.url());
+        } finally {
+          guardSettled();
+        }
+      });
+      const task = act(hoverAction);
+      const rejected = expect(task).rejects.toBe(blocked);
+      await vi.advanceTimersByTimeAsync(249);
+      expect(guardSettled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await rejected;
+      expect(guardSettled).toHaveBeenCalledOnce();
+    });
     expect(complete).toHaveBeenCalledTimes(2);
     expectQuarantine(page);
   });

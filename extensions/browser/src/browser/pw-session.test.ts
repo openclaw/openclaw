@@ -103,9 +103,18 @@ function saveContents(contents: string, gate?: Promise<void>) {
 
 function observedPage() {
   const harness = fakePage();
+  const { page } = harness;
   return {
     ...harness,
-    state: ensurePageState(harness.page),
+    state: ensurePageState(page),
+    dialogs: () => getObservedBrowserStateForPage(page).dialogs,
+    capture: (options?: Parameters<typeof beginActionDownloadCaptureOnPage>[1]) =>
+      beginActionDownloadCaptureOnPage(page, options),
+    observe: () => createObservedDialogAbortSignalForPage({ page }),
+    arm: (options: Omit<Parameters<typeof armObservedDialogResponseOnPage>[0], "page">) =>
+      armObservedDialogResponseOnPage({ page, ...options }),
+    respond: (options: Omit<Parameters<typeof respondToObservedDialogOnPage>[0], "page">) =>
+      respondToObservedDialogOnPage({ page, ...options }),
     send: (...args: Parameters<typeof download>) => {
       const candidate = download(...args);
       harness.emit("download", candidate);
@@ -275,8 +284,8 @@ describe("pw-session ensurePageState", () => {
   });
 
   it("captures a just-late action download within the first-event grace", async () => {
-    const { page, send } = observedPage();
-    const capture = beginActionDownloadCaptureOnPage(page);
+    const { capture: begin, send } = observedPage();
+    const capture = begin();
     const saveAs = saveContents("late-action-download");
     const drain = capture.drain({ firstEventGraceMs: 1_000 });
 
@@ -286,35 +295,37 @@ describe("pw-session ensurePageState", () => {
     capture.dispose();
   });
 
-  it("detaches ownership before waiting for slow file saves", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const { page, send } = observedPage();
+  it("keeps the sibling quiet window across clock steps and detaches before slow saves", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const { capture: begin, send } = observedPage();
     const firstSaveGate = Promise.withResolvers<void>();
     const beforeSave = vi.fn(async () => {});
-    const capture = beginActionDownloadCaptureOnPage(page, { beforeSave });
+    const capture = begin({ beforeSave });
     const firstSave = saveContents("first", firstSaveGate.promise);
     send("first.txt", firstSave);
+    vi.setSystemTime(Date.now() + 10_000);
 
     const drain = capture.drain();
-    await vi.advanceTimersByTimeAsync(250);
+    setTimeout(() => send("sibling.txt", saveContents("sibling")), 50);
+    await vi.advanceTimersByTimeAsync(300);
     const lateSave = saveContents("late");
     const lateDownload = send("late.txt", lateSave);
     firstSaveGate.resolve();
 
-    await expect(drain).resolves.toEqual(captured("first.txt"));
+    await expect(drain).resolves.toEqual([...captured("first.txt"), ...captured("sibling.txt")]);
     await expect(lateDownload.path?.()).resolves.toMatch(/-late\.txt$/);
-    expect(beforeSave).toHaveBeenCalledOnce();
+    expect(beforeSave).toHaveBeenCalledTimes(2);
     expect(lateSave).toHaveBeenCalledOnce();
     capture.dispose();
   });
 
   it("keeps started saves with their owner and assigns future downloads to the latest action", async () => {
-    const { page, send } = observedPage();
-    const first = beginActionDownloadCaptureOnPage(page);
+    const { capture, send } = observedPage();
+    const first = capture();
     const firstSaveAs = saveContents("first-action-download");
     send("first.txt", firstSaveAs);
 
-    const latest = beginActionDownloadCaptureOnPage(page);
+    const latest = capture();
     first.dispose();
     const latestSaveAs = saveContents("latest-action-download");
     send("latest.txt", latestSaveAs);
@@ -327,9 +338,9 @@ describe("pw-session ensurePageState", () => {
   });
 
   it("leaves action capture empty while an explicit download owner is armed", async () => {
-    const { page, send, state } = observedPage();
+    const { capture: begin, send, state } = observedPage();
     state.downloadWaiterDepth = 1;
-    const capture = beginActionDownloadCaptureOnPage(page);
+    const capture = begin();
     const explicit = send("explicit.txt", undefined, "");
 
     await expect(capture.drain()).resolves.toBeUndefined();
@@ -339,10 +350,10 @@ describe("pw-session ensurePageState", () => {
   });
 
   it("drains late siblings before surfacing the first download policy failure", async () => {
-    const { page, send } = observedPage();
+    const { capture: begin, send } = observedPage();
     const blocked = new Error("blocked action download");
     const beforeSave = vi.fn().mockRejectedValue(blocked);
-    const capture = beginActionDownloadCaptureOnPage(page, { beforeSave });
+    const capture = begin({ beforeSave });
     const firstSave = vi.fn(async () => {});
     const secondSave = vi.fn(async () => {});
 
@@ -357,14 +368,14 @@ describe("pw-session ensurePageState", () => {
   });
 
   it("surfaces a sibling policy denial without waiting for an allowed slow save", async () => {
-    const { page, send } = observedPage();
+    const { capture: begin, send } = observedPage();
     const blocked = new Error("blocked sibling download");
     const beforeSave = vi.fn(async (candidate: { url: string }) => {
       if (candidate.url.endsWith("/blocked.txt")) {
         throw blocked;
       }
     });
-    const capture = beginActionDownloadCaptureOnPage(page, { beforeSave });
+    const capture = begin({ beforeSave });
     const allowedSaveGate = Promise.withResolvers<void>();
     const allowedDownload = send("allowed.txt", saveContents("allowed", allowedSaveGate.promise));
     setImmediate(() => send("blocked.txt"));
@@ -376,8 +387,8 @@ describe("pw-session ensurePageState", () => {
   });
 
   it("surfaces action-owned download save failures without an unhandled rejection", async () => {
-    const { page, emit } = observedPage();
-    const capture = beginActionDownloadCaptureOnPage(page);
+    const { capture: begin, emit } = observedPage();
+    const capture = begin();
     const error = new Error("action download save failed");
     const cancel = vi.fn(async () => {
       throw new Error("browser disconnected during cancellation");
@@ -512,15 +523,6 @@ describe("pw-session ensurePageState", () => {
   });
 });
 
-function createPageHarness() {
-  const { page, emitAll } = observedPage();
-  return {
-    page,
-    dialogs: () => getObservedBrowserStateForPage(page).dialogs,
-    emit: emitAll,
-  };
-}
-
 function createDialog(
   overrides: Partial<{ type: string; message: string; defaultValue: string }> = {},
 ) {
@@ -535,7 +537,7 @@ function createDialog(
 
 describe("observed browser dialogs", () => {
   it.each(["agent", "remote"] as const)("records a dialog responded to by %s", async (closedBy) => {
-    const { page, emit, dialogs } = createPageHarness();
+    const { respond, emitAll: emit, dialogs } = observedPage();
     const remote = closedBy === "remote";
     const message = remote ? "Continue?" : "Ship it?";
     const dialog = createDialog({ message });
@@ -544,8 +546,7 @@ describe("observed browser dialogs", () => {
     }
     emit("dialog", dialog);
     expect(dialogs().pending).toMatchObject([{ id: "d1", type: "confirm", message }]);
-    const closed = await respondToObservedDialogOnPage({
-      page,
+    const closed = await respond({
       dialogId: "d1",
       accept: !remote,
       promptText: remote ? undefined : "yes",
@@ -559,15 +560,14 @@ describe("observed browser dialogs", () => {
   });
 
   it("aborts every in-flight action and consumes a failed armed dialog", async () => {
-    const accept = true;
-    const { page, emit, dialogs } = createPageHarness();
+    const { arm, observe, respond, emitAll: emit, dialogs } = observedPage();
     const dialog = createDialog();
     const failure = new Error("Browser dialog response failed");
-    dialog[accept ? "accept" : "dismiss"].mockRejectedValue(failure);
-    const first = createObservedDialogAbortSignalForPage({ page });
-    const second = createObservedDialogAbortSignalForPage({ page });
+    dialog.accept.mockRejectedValue(failure);
+    const first = observe();
+    const second = observe();
 
-    armObservedDialogResponseOnPage({ page, accept, timeoutMs: 1000 });
+    arm({ accept: true, timeoutMs: 1000 });
     emit("dialog", dialog);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -576,49 +576,42 @@ describe("observed browser dialogs", () => {
     expect(first.signal.reason).toBe(failure);
     expect(second.signal.reason).toBe(failure);
     expect(dialogs()).toEqual({ pending: [], recent: [] });
-    await expect(respondToObservedDialogOnPage({ page, dialogId: "d1", accept })).rejects.toThrow(
+    await expect(respond({ dialogId: "d1", accept: true })).rejects.toThrow(
       'Dialog "d1" is not pending.',
     );
     first.cleanup();
     second.cleanup();
   });
 
-  it("uses the default arm-next-dialog timeout for non-finite timeoutMs", async () => {
-    vi.useFakeTimers();
+  it.each([Number.NaN, 1000])("expires arms by elapsed time (%s)", async (timeoutMs) => {
+    const durationMs = Number.isNaN(timeoutMs) ? 120_000 : timeoutMs;
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(0);
-    const { page, emit, dialogs } = createPageHarness();
-    const dialog = createDialog({ type: "alert", message: "Still armed" });
-    const observed = createObservedDialogAbortSignalForPage({ page });
-
-    armObservedDialogResponseOnPage({ page, accept: false, timeoutMs: Number.NaN });
-    await vi.advanceTimersByTimeAsync(119_999);
-    emit("dialog", dialog);
+    const { arm, observe, emitAll: emit, dialogs } = observedPage();
+    const observed = observe();
+    const first = createDialog({ type: "prompt" });
+    arm({ accept: true, promptText: "synthetic answer", timeoutMs });
+    await vi.advanceTimersByTimeAsync(durationMs - 1);
+    vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+    emit("dialog", first);
     await Promise.resolve();
-
+    expect(first.accept).toHaveBeenCalledWith("synthetic answer");
     expect(observed.signal.aborted).toBe(false);
-    expect(dialog.dismiss).toHaveBeenCalledOnce();
-    expect(dialogs()).toMatchObject({
-      pending: [],
-      recent: [{ id: "d1", type: "alert", closedBy: "armed" }],
-    });
+    expect(dialogs()).toMatchObject({ pending: [], recent: [{ id: "d1", closedBy: "armed" }] });
+
+    const expired = createDialog({ message: "Still pending" });
+    arm({ accept: false, timeoutMs });
+    await vi.advanceTimersByTimeAsync(durationMs);
+    emit("dialog", expired);
+    expect(expired.dismiss).not.toHaveBeenCalled();
+    expect(observed.signal.aborted).toBe(true);
+    expect(dialogs().pending).toMatchObject([{ id: "d2", message: "Still pending" }]);
     observed.cleanup();
   });
 
-  it("does not arm next-dialog responses when the expiry would overflow Date bounds", () => {
-    vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
-    const { page, emit, dialogs } = createPageHarness();
-    const dialog = createDialog({ type: "alert", message: "Still pending" });
-    armObservedDialogResponseOnPage({ page, accept: false, timeoutMs: 1000 });
-    emit("dialog", dialog);
-    expect(dialog.dismiss).not.toHaveBeenCalled();
-    expect(dialogs().pending).toMatchObject([
-      { id: "d1", type: "alert", message: "Still pending" },
-    ]);
-  });
-
   it("keeps a newer dialog pending after the interrupted dialog was handled remotely", async () => {
-    const { page, emit, dialogs } = createPageHarness();
-    const observed = createObservedDialogAbortSignalForPage({ page });
+    const { page, observe, respond, emitAll: emit, dialogs } = observedPage();
+    const observed = observe();
     const first = createDialog({ message: "First" });
     emit("dialog", first);
     expect(observed.signal.aborted).toBe(true);
@@ -634,7 +627,7 @@ describe("observed browser dialogs", () => {
       pending: [{ id: "d2", message: "Second" }],
       recent: [{ id: "d1", closedBy: "remote" }],
     });
-    await respondToObservedDialogOnPage({ page, dialogId: "d2", accept: false });
+    await respond({ dialogId: "d2", accept: false });
     expect(next.dismiss).toHaveBeenCalledOnce();
     expect(dialogs()).toMatchObject({
       pending: [],

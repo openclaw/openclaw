@@ -22,6 +22,7 @@ import {
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   hasGatewayServiceDefinitionOverrides,
+  resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
   type GatewayServiceState,
   type GatewayServiceUnitInspection,
@@ -449,7 +450,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   const command = inspected?.command ?? null;
   const layout = await summarizeGatewayServiceLayout(command);
   plan.serviceUnitTarget = layout?.entrypoint ?? "no service entrypoint found";
-  if (!layout?.packageRootReal) {
+  if (!inspected || !layout?.packageRootReal) {
     return plan;
   }
   const serviceRoot = layout?.packageRoot;
@@ -461,8 +462,15 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   const executable = command?.programArguments[0];
   const serviceBun = executable && isBunRuntime(executable);
   const serviceNode = serviceBun
-    ? await resolvePinnedDaemonRuntimePath(executable, "bun", inspected?.env ?? process.env)
+    ? await resolvePinnedDaemonRuntimePath(executable, "bun", inspected.env)
     : resolveManagedServiceNodeRunner(command);
+  plan.service = {
+    running: inspected.running,
+    serviceUpdateVerdict: inspected.verdict,
+    serviceEnv: inspected.env,
+    serviceDefinitionEnv: resolveManagedGatewayServiceCommand(command)?.environment ?? {},
+    serviceNodeRunner: serviceNode,
+  };
   if (
     serviceNode &&
     (differentRoot ||
@@ -480,7 +488,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
       params.rebind !== false &&
       process.platform !== "win32" &&
       !hasGatewayServiceDefinitionOverrides(command) &&
-      inspected?.verdict.refreshDefinition === true
+      inspected.verdict.refreshDefinition
     ) {
       plan.serviceRoot = serviceRoot;
     } else {

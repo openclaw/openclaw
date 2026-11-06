@@ -1,10 +1,10 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
@@ -21,22 +21,17 @@ import {
 } from "./components/chat-transcript.test-support.ts";
 
 function sessionsResult(rows: GatewaySessionRow[]): SessionsListResult {
-  return {
-    ts: 1,
-    path: "",
-    count: rows.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: rows,
-  };
+  return sessionListResult(1, rows);
 }
 
-describe.each([false, true])("chat run activity (recovery ready: %s)", (recoveryScopeReady) => {
-  beforeEach(installTranscriptDomMocks);
-  afterEach(() => {
-    resetChatComposerState();
-    resetTranscriptTestDom();
-  });
+beforeEach(installTranscriptDomMocks);
+afterEach(() => {
+  resetChatComposerState();
+  resetTranscriptTestDom();
+  vi.restoreAllMocks();
+});
 
+describe.each([false, true])("chat run activity (recovery ready: %s)", (recoveryScopeReady) => {
   it.each([
     {
       name: "shows a completed parent waiting on its child roster",
@@ -109,13 +104,6 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
 });
 
 describe("composer run status", () => {
-  beforeEach(installTranscriptDomMocks);
-  afterEach(() => {
-    resetChatComposerState();
-    resetTranscriptTestDom();
-    vi.restoreAllMocks();
-  });
-
   it.each(["editable", "view-only subagent", "read-only shared"] as const)(
     "keeps %s child counts and the request timer through roster hydration and settlement",
     async (access) => {
@@ -196,13 +184,11 @@ describe("composer run status", () => {
       expect(container.querySelector(".chat-working-indicator .chat-reading-indicator")).toBeNull();
       expect(container.querySelector(".chat-subagent-activity")).toBeNull();
       expect(container.querySelector("openclaw-working-phrase")).toBeNull();
-      expect(container.textContent).not.toContain("Backend implementation");
-      const count = container.querySelector<HTMLButtonElement>(
-        ".chat-working-indicator__subagents",
-      );
-      expect(count?.textContent).toBe("1 subagent running");
-      count?.click();
-      expect(onOpenSubagents).toHaveBeenCalledExactlyOnceWith();
+      // A handoff's wait names the session it waits on in place of a running count.
+      const wait = () =>
+        container.querySelector(".chat-subagent-wait")?.textContent?.replace(/\s+/gu, " ").trim();
+      expect(wait()).toBe("Waiting on Backend implementation · 1m 5s");
+      expect(container.querySelector(".chat-working-indicator__subagents")).toBeNull();
       const timer = container.querySelector(".chat-working-indicator openclaw-elapsed-time");
       expect(timer?.textContent).toBe("1m 5s");
 
@@ -210,9 +196,12 @@ describe("composer run status", () => {
         child,
         { ...child, key: "agent:main:subagent:frontend", label: "Frontend implementation" },
       ]);
-      expect(container.querySelector(".chat-working-indicator__subagents")?.textContent).toBe(
-        "2 subagents running",
-      );
+      expect(
+        container
+          .querySelector(".chat-subagent-wait button[aria-expanded]")
+          ?.textContent?.replace(/\s+/gu, " ")
+          .trim(),
+      ).toBe("Waiting on 2 sessions · 1m 5s");
       expect(
         container.querySelectorAll(".chat-working-indicator openclaw-elapsed-time"),
       ).toHaveLength(1);
@@ -220,7 +209,7 @@ describe("composer run status", () => {
 
       await draw([{ ...child, hasActiveRun: false }]);
       expect(container.querySelector(".chat-subagent-activity")).toBeNull();
-      expect(container.querySelector(".chat-working-indicator__subagents")).toBeNull();
+      expect(container.querySelector(".chat-subagent-wait")).toBeNull();
     },
   );
 
@@ -251,5 +240,72 @@ describe("composer run status", () => {
     props.runStatus = { phase: "done", runId: "work", sessionKey: props.sessionKey, occurredAt: 1 };
     draw();
     expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
+  });
+});
+
+describe("resumed handoff list", () => {
+  it("re-renders a settled row when a listed child's name or attention changes", () => {
+    const parent: GatewaySessionRow = { key: "agent:main:parent", kind: "direct", endedAt: 4_100 };
+    const child: GatewaySessionRow = {
+      key: "agent:main:subagent:docs",
+      kind: "direct",
+      spawnedBy: parent.key,
+      label: "Docs",
+      status: "done",
+      startedAt: 2_100,
+      endedAt: 3_000,
+    };
+    const acknowledgment = "Started the docs session.";
+    const yieldCall = {
+      type: "toolCall",
+      id: "yield",
+      name: "sessions_yield",
+      arguments: { acknowledgment },
+    };
+    const messages = [
+      { role: "assistant", runId: "parent-run", timestamp: 1_900, content: [yieldCall] },
+      {
+        role: "toolResult",
+        runId: "parent-run",
+        toolCallId: "yield",
+        toolName: "sessions_yield",
+        timestamp: 2_000,
+        content: [{ type: "text", text: JSON.stringify({ status: "yielded", acknowledgment }) }],
+      },
+      { role: "assistant", runId: "resumed-run", timestamp: 4_000, content: "Docs are ready." },
+    ];
+    const { pane, state, context } = createRefreshChatPane();
+    state.sessionKey = parent.key;
+    state.sessionsResult = sessionsResult([parent]);
+    pane.render();
+    const container = createApplicationContextProvider(context);
+    // Each draw passes the same transcript, so only the roster can refresh the row.
+    const draw = (row: GatewaySessionRow, session = parent) => {
+      const props = { selectedSession: session, messages, subagentSessions: [row] };
+      const chatProps = expectDefined(pane.chatProps, "chat props");
+      renderChatPropsInto(
+        container,
+        { ...chatProps, ...props, subagentSessionsHydrated: true },
+        context,
+      );
+      flush();
+      const collapsed = ".chat-handoff-resume button[aria-expanded=false]";
+      container.querySelector<HTMLButtonElement>(collapsed)?.click();
+      flush();
+      const rows = container.querySelectorAll(".chat-handoff-resume li");
+      return [...rows].map((item) => item.textContent?.replace(/\s+/gu, " ").trim());
+    };
+    expect(draw(child)).toEqual(["Docs Done"]);
+    const renamed = { ...child, label: "Docs and changelog" };
+    expect(draw(renamed)).toEqual(["Docs and changelog Done"]);
+    const working = { ...parent, startedAt: 4_200 };
+    const pausedRows = draw({ ...renamed, subagentRunState: "paused" }, working);
+    expect(pausedRows).toEqual(["Docs and changelog Paused"]);
+    const agentStatus = {
+      note: "Pick a release note",
+      attention: "hand" as const,
+      expiresAt: 9e15,
+    };
+    expect(draw({ ...renamed, agentStatus })).toEqual(["Docs and changelog Needs your input"]);
   });
 });

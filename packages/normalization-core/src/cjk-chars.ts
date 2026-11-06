@@ -11,6 +11,7 @@ export const CHARS_PER_TOKEN_ESTIMATE = 4;
 
 export type StringCharBudgetOptions = { minimumRawWeight?: number };
 const DEFAULT_BUDGET_OPTIONS: StringCharBudgetOptions = {};
+const NUMERIC_RUN_PATTERN = /^[0-9]+$/;
 const ASCII_RUN_OR_NON_ASCII_CODE_POINT_RE = /[\p{ASCII}]+|[^\p{ASCII}]/gu;
 
 const WEIGHTED_CJK_RANGES = [
@@ -46,8 +47,9 @@ const WEIGHTED_CJK_RANGES = [
   [[0x1d360, 0x1d371]],
   [
     [0x16fe0, 0x16fff],
+    [0x17000, 0x18d0f],
     [0x1aff0, 0x1afff],
-    [0x1b000, 0x1b16f],
+    [0x1b000, 0x1b2ff],
     [0x1f200, 0x1f2ff],
     [0x20000, 0x2fa1f],
     [0x30000, 0x3347f],
@@ -152,4 +154,30 @@ export function estimateStringCharsWithMinimumRawWeight(
 
 export function estimateTokensFromChars(chars: number): number {
   return Math.ceil(Math.max(0, chars) / CHARS_PER_TOKEN_ESTIMATE);
+}
+
+export function estimateStringTokenPressure(
+  text: string,
+  charsPerToken = CHARS_PER_TOKEN_ESTIMATE,
+) {
+  let tokens = estimateStringChars(text) / charsPerToken;
+  // Encoded runs, numeric groups and JSON delimiters have lexical boundaries
+  // that prose character averages miss, regardless of the message's tool role.
+  for (const run of text.match(/[A-Za-z0-9+/_=-]{16,}|\b[0-9]+\b|[{}[\]:,]/g) ?? []) {
+    let denseTokens = 0;
+    if (NUMERIC_RUN_PATTERN.test(run)) {
+      denseTokens = Math.ceil(run.length / 3);
+    } else if (run.length === 1) {
+      denseTokens = 1;
+    } else {
+      if (run.length < 64 && !(/[A-Za-z]/.test(run) && /[0-9]/.test(run))) {
+        continue;
+      }
+      for (const part of run.match(/[A-Za-z]+|[0-9]{1,3}|[^A-Za-z0-9]/g) ?? []) {
+        denseTokens += Math.ceil(part.length / charsPerToken);
+      }
+    }
+    tokens += Math.max(0, denseTokens - run.length / charsPerToken);
+  }
+  return Math.ceil(tokens);
 }

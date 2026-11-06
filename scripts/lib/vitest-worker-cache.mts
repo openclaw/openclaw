@@ -16,8 +16,10 @@ import {
   verifyVitestWorkerArtifacts,
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
+import type { VitestWorkerPreset } from "./vitest-worker-descriptor.mts";
 
-const isCacheSlot = (directory: string) => /^run-cache-\d+$/u.test(path.basename(directory));
+const isCacheSlot = (directory: string) =>
+  /^run-cache-(?:runtime-)?\d+$/u.test(path.basename(directory));
 
 function cacheLocation(root: string, directory: string) {
   const cacheRoot = path.join(root, ".artifacts/vitest-worker-cache");
@@ -173,7 +175,11 @@ async function transferRoots(source: string, target: string, outputs: Record<str
 }
 
 /** Metadata preparation belongs to the compiler; joined cleanup does not load that graph. */
-export async function createVitestWorkerCache(root: string, directory: string) {
+export async function createVitestWorkerCache(
+  root: string,
+  directory: string,
+  preset: VitestWorkerPreset = "full",
+) {
   if (!isCacheSlot(directory)) {
     return undefined;
   }
@@ -186,6 +192,7 @@ export async function createVitestWorkerCache(root: string, directory: string) {
   // These absolute external URLs must return to the same exclusively reserved slot.
   const args = [
     `output=${fs.realpathSync(directory)}`,
+    `preset=${preset}`,
     `schtasks=${process.env.CI_WINDOWS_SCHTASKS_INTEGRATION ?? ""}`,
     `node-options=${process.env.NODE_OPTIONS ?? ""}`,
     `node-arguments=${JSON.stringify(process.execArgv)}`,

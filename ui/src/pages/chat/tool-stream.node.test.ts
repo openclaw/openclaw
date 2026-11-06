@@ -7,8 +7,8 @@ import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-snapshot.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
-import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 import {
   agentEvent,
   createHost,
@@ -354,6 +354,43 @@ describe("app-tool-stream approval lifecycle", () => {
         targetId: "tab-1",
         title: "Example",
       },
+    });
+    resetToolStream(host);
+  });
+
+  it("keeps text output next to node browser tab details in a completed live result", () => {
+    const host = createHost();
+    const emit = toolEvents(host, "browser-text-run", {
+      name: "browser",
+      toolCallId: "browser-text-call",
+    });
+    emit(1, {
+      phase: "start",
+      args: { action: "open" },
+    });
+    emit(2, {
+      phase: "result",
+      result: {
+        content: [{ type: "text", text: "CLI result" }],
+        details: {
+          browserTab: {
+            profile: "shared",
+            target: "node",
+            node: "node-1",
+            targetId: "tab-shared",
+            url: "https://example.org/",
+            title: "Shared tab",
+          },
+        },
+      },
+    });
+    const entry = [...host.toolStreamById.values()][0];
+    const [card] = extractToolCardsCached(entry?.message);
+    expect(card).toMatchObject({
+      completed: true,
+      outputText: "CLI result",
+      browserTab: { profile: "shared", target: "node", node: "node-1", targetId: "tab-shared" },
+      preview: { kind: "browser-tab", profile: "shared", target: "node", targetId: "tab-shared" },
     });
     resetToolStream(host);
   });

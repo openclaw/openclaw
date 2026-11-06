@@ -134,6 +134,22 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     }
     other = other.filter(({ name }) => !rootNames.includes(name));
   }
+  // Pair singleton selections within the existing two-compiler worker budget.
+  // Full stripes and root partitions keep their own timeout/memory boundaries.
+  if (hosted && typePlan?.mode === "changed") {
+    const singletons = coreRows.filter(
+      (row) => !row.root_type_stripe && JSON.parse(row.type_graph_names_json!).length === 1,
+    );
+    for (let index = 1; index < singletons.length; index += 2) {
+      const first = singletons[index - 1]!;
+      const second = singletons[index]!;
+      first.type_graph_names_json = JSON.stringify([
+        ...JSON.parse(first.type_graph_names_json!),
+        ...JSON.parse(second.type_graph_names_json!),
+      ]);
+      coreRows.splice(coreRows.indexOf(second), 1);
+    }
+  }
   const checkRows = input.checkMatrix.include.flatMap((row) => {
     if (input.preserveFullChecks) {
       return [row];

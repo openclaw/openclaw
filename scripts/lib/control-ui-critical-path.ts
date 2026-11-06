@@ -1,14 +1,45 @@
-import type { CDPSession, Page } from "playwright";
+import type { CDPSession, Locator, Page } from "playwright";
 
 export const criticalPathRoutes = ["sessions", "settings", "cron", "agents"] as const;
 export type CriticalPathRoute = (typeof criticalPathRoutes)[number];
 
-type CriticalPathCapture = {
-  name: string;
+export type CriticalPathPresentation = {
   startedMs: number;
+  capturedMs: number;
+  settleMs: number;
+  cls: number;
+  nonRecentInputShiftSum: number;
+  allShiftSum: number;
+  layoutShifts: Array<{
+    atMs: number;
+    value: number;
+    hadRecentInput: boolean;
+    sources: Array<{
+      element: string | null;
+      previousRect: unknown;
+      currentRect: unknown;
+    }>;
+  }>;
+};
+
+export type CriticalPathCapture = {
+  name: string;
+  documentUrl: string;
+  timeOrigin: number;
+  startedMs: number;
+  intentStartedMs?: number;
+  intentDwellMs?: number;
+  intentElapsedMs?: number;
   readyMs: number;
   elapsedMs: number;
   capturedMs: number;
+  presentation?: CriticalPathPresentation;
+  navigation?: {
+    startedMs: number;
+    cpuMilliseconds: Record<string, number>;
+    documentRpcsCapturedMs: number;
+    documentRpcs: CriticalPathCapture["rpcs"];
+  };
   rpcs: Array<{
     method: string;
     params: unknown;
@@ -16,8 +47,21 @@ type CriticalPathCapture = {
     responseMs: number;
     requestBytes: number;
     responseBytes: number;
+    stack?: string;
+    abandoned?: true;
   }>;
-  resources: unknown[];
+  resources: Array<
+    Pick<
+      PerformanceResourceTiming,
+      | "name"
+      | "initiatorType"
+      | "startTime"
+      | "duration"
+      | "encodedBodySize"
+      | "decodedBodySize"
+      | "transferSize"
+    >
+  >;
 };
 
 function canonicalParams(value: unknown): unknown {
@@ -64,15 +108,17 @@ export function criticalPathCpuDelta(
 }
 
 /** Browser-local frame sampling excludes the driver's polling/round-trip delay. */
-export function installCriticalPathProbe(bootRoute: "chat" | "new") {
+export function installCriticalPathProbe(bootRoute: "chat" | "new" | "sessions" | "settings") {
   performance.setResourceTimingBufferSize(5000);
   type Step = {
     name: string;
     startedMs: number;
+    intentStartedMs?: number;
     readyMs: number | null;
     sessionKey?: string;
   };
   let step: Step = { name: `cold-${bootRoute}`, startedMs: 0, readyMs: null };
+  let intent: { name: string; startedMs: number } | undefined;
   let frame = 0;
   const visible = (selector: string) => {
     const element = document.querySelector<HTMLElement>(selector);
@@ -100,14 +146,18 @@ export function installCriticalPathProbe(bootRoute: "chat" | "new") {
       case "cold-new":
         ready = Boolean(enabled(".new-session-page__message"));
         break;
+      case "cold-sessions":
       case "sessions":
         ready = Boolean(
           visible("openclaw-sessions-page .session-link") && enabled(".sessions-toolbar__refresh"),
         );
         break;
+      case "cold-settings":
       case "settings":
         ready = Boolean(
-          enabled(".settings-sidebar__search-input") && visible("#settings-font-chat"),
+          (document.querySelector(".shell--mobile-nav:not(.shell--nav-drawer-open)") ||
+            enabled(".settings-sidebar__search-input")) &&
+          enabled("#settings-font-chat"),
         );
         break;
       case "cron":
@@ -126,24 +176,36 @@ export function installCriticalPathProbe(bootRoute: "chat" | "new") {
   };
   const start = (name: string, sessionKey?: string) => {
     cancelAnimationFrame(frame);
-    step = { name, sessionKey, startedMs: performance.now(), readyMs: null };
+    step = {
+      name,
+      sessionKey,
+      startedMs: performance.now(),
+      readyMs: null,
+      ...(intent?.name === name ? { intentStartedMs: intent.startedMs } : {}),
+    };
+    intent = undefined;
     performance.mark(`critical-path:${name}:start`);
     frame = requestAnimationFrame(sample);
   };
   Reflect.set(window, "__criticalPath", {
     start,
+    intent(name: string) {
+      intent = { name, startedMs: performance.now() };
+      performance.mark(`critical-path:${name}:intent`);
+    },
     ready: () => step.readyMs !== null,
     read() {
       const capturedMs = performance.now();
+      const intervalStartedMs = step.intentStartedMs ?? step.startedMs;
       const rpcs = Reflect.get(window, "__coldLoad")
         .read()
         .rpcs.filter(
           (rpc: { requestMs: number; responseMs: number }) =>
-            rpc.responseMs >= step.startedMs && rpc.requestMs <= capturedMs,
+            rpc.responseMs >= intervalStartedMs && rpc.requestMs <= capturedMs,
         );
       const resources = performance
         .getEntriesByType("resource")
-        .filter((entry) => entry.startTime + entry.duration >= step.startedMs)
+        .filter((entry) => entry.startTime + entry.duration >= intervalStartedMs)
         .map((entry) => entry.toJSON());
       return {
         ...step,
@@ -151,8 +213,14 @@ export function installCriticalPathProbe(bootRoute: "chat" | "new") {
         timeOrigin: performance.timeOrigin,
         capturedMs,
         elapsedMs: step.readyMs === null ? null : step.readyMs - step.startedMs,
+        ...(step.intentStartedMs !== undefined
+          ? {
+              intentDwellMs: step.startedMs - step.intentStartedMs,
+              intentElapsedMs: step.readyMs === null ? null : step.readyMs - step.intentStartedMs,
+            }
+          : {}),
         measurement:
-          "First renderer animation frame with visible, enabled readiness selectors; not INP. RPC/resource timestamps use the document performance clock. Collection continues through idle to retain secondary requests.",
+          "First renderer animation frame with visible, enabled readiness selectors; not INP. elapsedMs starts at activation; intentElapsedMs, when present, starts before hover/focus. RPC/resources include that intent interval. Timestamps use the document performance clock. Collection continues through idle to retain secondary requests.",
         rpcs,
         resources,
       };
@@ -204,58 +272,85 @@ export async function navigateCriticalPath(
   cdp: CDPSession,
   route: CriticalPathRoute,
   beforeMeasurement?: () => Promise<void>,
+  intentMs = 0,
 ) {
-  let cpuBefore: Record<string, number>;
+  if (beforeMeasurement) {
+    await beforeMeasurement();
+  }
+  const navigationCpuBefore = await readCriticalPathCpu(cdp);
+  const navigationStartedMs = await page.evaluate((name) => {
+    const startedMs = performance.now();
+    performance.mark(`critical-path:${name}:navigation`);
+    return startedMs;
+  }, route);
+  let target: Locator | undefined;
   if (route === "settings") {
-    if (beforeMeasurement) {
-      await beforeMeasurement();
+    if (intentMs > 0) {
+      await page.locator(".sidebar-identity-card").click();
+      target = page.locator('.sidebar-identity-menu [data-value="command:settings"]');
+      await target.waitFor({ state: "visible" });
     }
-    cpuBefore = await readCriticalPathCpu(cdp);
-    await page.evaluate(() => Reflect.get(window, "__criticalPath").start("settings"));
-    await page.keyboard.press("Control+Shift+,");
   } else if (route === "agents") {
     if (!(await page.locator(".settings-sidebar").isVisible())) {
       await page.keyboard.press("Control+Shift+,");
       await page.locator(".settings-sidebar__search-input").waitFor({ state: "visible" });
     }
-    const link = page.locator('.settings-sidebar a[href="/settings/agents"]').first();
-    await link.waitFor({ state: "visible" });
-    if (beforeMeasurement) {
-      await beforeMeasurement();
-    }
-    cpuBefore = await readCriticalPathCpu(cdp);
-    await link.evaluate((element: HTMLAnchorElement) => {
-      Reflect.get(window, "__criticalPath").start("agents");
-      element.click();
-    });
+    target = page.locator('.settings-sidebar a[href="/settings/agents"]').first();
+    await target.waitFor({ state: "visible" });
   } else {
     if (await page.locator(".settings-sidebar").isVisible()) {
       await page.keyboard.press("Escape");
       await page.locator("openclaw-app-sidebar").waitFor({ state: "visible" });
     }
     const pathname = { sessions: "/sessions", cron: "/automations" }[route];
-    let link = page.locator(`openclaw-app-sidebar a[href="${pathname}"]`).first();
-    if (!(await link.isVisible())) {
+    target = page.locator(`openclaw-app-sidebar a[href="${pathname}"]`).first();
+    if (!(await target.isVisible())) {
       await page.locator('[data-navigation-view="pages"]').click();
-      link = page.locator(`openclaw-app-sidebar a[href="${pathname}"]`).first();
+      target = page.locator(`openclaw-app-sidebar a[href="${pathname}"]`).first();
     }
-    await link.waitFor({ state: "visible" });
-    if (beforeMeasurement) {
-      await beforeMeasurement();
-    }
-    cpuBefore = await readCriticalPathCpu(cdp);
-    await link.evaluate((element: HTMLAnchorElement, name) => {
+    await target.waitFor({ state: "visible" });
+  }
+  const cpuBefore = await readCriticalPathCpu(cdp);
+  if (target && intentMs > 0) {
+    await page.evaluate((name) => Reflect.get(window, "__criticalPath").intent(name), route);
+    await target.hover();
+    await target.focus();
+    await page.waitForTimeout(intentMs);
+  }
+  if (target) {
+    await target.evaluate((element: HTMLElement, name) => {
       Reflect.get(window, "__criticalPath").start(name);
       element.click();
     }, route);
+  } else {
+    await page.evaluate(() => Reflect.get(window, "__criticalPath").start("settings"));
+    await page.keyboard.press("Control+Shift+,");
   }
   await page.waitForFunction(() => Reflect.get(window, "__criticalPath").ready());
   await page.waitForFunction(() => {
     const state = Reflect.get(window, "__coldLoad").read();
     return !state.pending && !state.queued && state.idleMs > 750;
   });
+  const capture = await readCriticalPath(page);
+  const cpuAfter = await readCriticalPathCpu(cdp);
+  // Keep the full-document census after CPU capture so serializing boot RPCs is not timed.
+  const document = await page.evaluate(
+    (): {
+      capturedMs: number;
+      rpcs: CriticalPathCapture["rpcs"];
+    } => {
+      const rpcs: CriticalPathCapture["rpcs"] = Reflect.get(window, "__coldLoad").read().rpcs;
+      return { capturedMs: performance.now(), rpcs };
+    },
+  );
   return {
-    ...(await readCriticalPath(page)),
-    cpuMilliseconds: criticalPathCpuDelta(cpuBefore, await readCriticalPathCpu(cdp)),
+    ...capture,
+    cpuMilliseconds: criticalPathCpuDelta(cpuBefore, cpuAfter),
+    navigation: {
+      startedMs: navigationStartedMs,
+      cpuMilliseconds: criticalPathCpuDelta(navigationCpuBefore, cpuAfter),
+      documentRpcsCapturedMs: document.capturedMs,
+      documentRpcs: document.rpcs,
+    },
   };
 }

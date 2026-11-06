@@ -129,7 +129,7 @@ export function resolveUiAssetVersion(
   try {
     const distDir = resolveUiDistDir(overrideDir, repoRoot);
     const indexPath = path.join(distDir, "index.html");
-    if (!fs.existsSync(indexPath) || !fs.statSync(indexPath).isFile()) {
+    if (!fs.statSync(indexPath).isFile()) {
       return null;
     }
     const hash = createHash("sha1");

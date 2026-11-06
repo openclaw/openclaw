@@ -209,7 +209,7 @@ describe("MemoryOverview", () => {
       "memory-core · hybrid search",
       "Sleep schedule",
       "Europe/Vienna",
-      "Promoted today",
+      "Promoted",
       "21",
       "b10357 (689e227db)",
       "metrics=ready",
@@ -231,7 +231,7 @@ describe("MemoryOverview", () => {
     );
 
     expectText(container, ["Memory is hibernating", "Open Settings"]);
-    expect(container.querySelector(".memory-overview__hero--sleeping")).not.toBeNull();
+    expect(container.querySelector(".memory-overview__status--sleeping")).not.toBeNull();
     expect(container.querySelector("[data-test-lobster]")).not.toBeNull();
     expect(container.querySelector('[data-reading="true"]')).toBeNull();
   });
@@ -305,19 +305,35 @@ describe("MemoryOverview", () => {
       },
     });
 
-    expect(container.querySelector(".memory-overview__hero h2")?.textContent).toBe(
+    expect(container.querySelector(".memory-overview__status h2")?.textContent).toBe(
       neutral ? "Host memory search is unavailable" : "Memory needs attention",
     );
-    expect(container.textContent?.includes("Engine health")).toBe(!neutral);
+    expect(container.textContent?.includes("Embeddings")).toBe(!neutral);
     expect(container.textContent?.includes(diagnostic.error)).toBe(!neutral);
   });
 
-  it("opens the Memories tab from the overview shortcut", () => {
-    const onNavigate = vi.fn();
-    const container = renderOverview({ kind: "idle" }, undefined, { onNavigate });
+  it("states one sweep once when every phase shares its cadence", () => {
+    const payload = fixturePayload();
+    const dreaming = payload.dreaming!;
+    const shared = { cron: "0 3 * * *", nextRunAtMs: 1000, managedCronPresent: true };
+    Object.assign(dreaming.phases.light, shared);
+    Object.assign(dreaming.phases.rem, shared);
+    Object.assign(dreaming.phases.deep, shared);
+    const container = renderOverview({ kind: "ready", payload });
+    expect(container.textContent?.match(/0 3 \* \* \*/g)).toHaveLength(1);
+    expect(container.textContent).not.toContain("Explore memory");
+  });
 
-    findButton(container, /Search memories/)?.click();
-    expect(onNavigate).toHaveBeenCalledWith("memories");
+  it("opens Settings from the hibernating status", () => {
+    const onNavigate = vi.fn();
+    const container = renderOverview(
+      { kind: "idle" },
+      { kind: "off", id: null, availability: "enabled" },
+      { onNavigate },
+    );
+
+    findButton(container, /Open Settings/)?.click();
+    expect(onNavigate).toHaveBeenCalledWith("settings");
   });
 });
 
@@ -376,6 +392,20 @@ describe("Memory overview request presentation", () => {
     f.pending[index]!.resolve(payload(id));
     await waitForSolid(() => expect(f.container.textContent).toContain(id));
   }
+
+  it("loads initial and changed locales without replacing accepted controls or reading again", async () => {
+    const f = fixture(snapshot({ locale: "fr" }));
+    await waitForSolid(() => expect(f.container.textContent).toContain("Réveil de la mémoire"));
+    await settle(f, 0, "accepted-engine");
+    const refresh = findButton(f.container, /^Actualiser l’état$/)!;
+    expect(refresh).toBeDefined();
+    f.update({ locale: "de" });
+    await waitForSolid(() =>
+      expect(findButton(f.container, /^Status aktualisieren$/)).toBe(refresh),
+    );
+    expect(f.container.textContent).toContain("accepted-engine");
+    expect(f.request).toHaveBeenCalledTimes(1);
+  });
 
   it("deduplicates ordinary reads and retains cards while an explicit embedding test runs", async () => {
     const f = fixture();

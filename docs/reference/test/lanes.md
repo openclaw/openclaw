@@ -143,10 +143,13 @@ returns so the caller can rethrow the original failure. A late browser response
 cannot publish a screenshot after that budget expires; test action deadlines and
 caller-owned browser cleanup remain unchanged.
 
-Pages from the shared suite's `withPage` also arm a renderer stall check before the
-test runs. When the renderer misses that read deadline, the public summary's
-`rendererStall` records main-thread busy time by kind and the paused JavaScript
-stack, then resumes the page, within a further three-second budget. A stall that
+Pages from the shared suite's `withPage` also install passive renderer stall
+diagnostics before the test runs. When the renderer misses that read deadline,
+the public summary's `rendererStall` records main-thread busy time by kind within
+a further three-second budget. `OPENCLAW_CAPTURE_UI_PROOF=1` additionally enables
+the debugger before navigation, capturing the paused JavaScript stack and then
+resuming the page. Normal runs avoid the debugger's app-boot overhead; a first
+never-ending stall can lack a stack, so enable proof capture for its replay. A stall that
 ended before a responsive read appears in `browser.longFrames` as frames of at
 least one second with their script attribution. Both keep only bundle paths,
 positions, function names, and listener tag and event names; map positions with

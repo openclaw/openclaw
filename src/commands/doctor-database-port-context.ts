@@ -13,6 +13,7 @@ import {
 } from "../infra/client-credential-restore.js";
 import { DatabasePortError } from "../infra/database-engine/port-command.worker.js";
 import type { PortVerification } from "../infra/database-engine/port.worker.js";
+import type { PostgresPlannerStatistics } from "../infra/database-engine/postgres-planner-statistics.js";
 import {
   resolveDatabaseFamilyEngines,
   listDatabaseEngineStores,
@@ -112,6 +113,7 @@ export const inputsSchema = z.object({
   ),
 });
 export type Context = {
+  plannerStatistics?: Array<{ path: string; result: PostgresPlannerStatistics }>;
   family?: DatabasePortFamily;
   stateDir: string;
   configPath: string;
@@ -304,6 +306,7 @@ export function finalize(ctx: Context, outcome: "ported" | "rolled-back") {
     phase: "complete",
     engine: outcome === "ported" ? current.direction.to : current.direction.from,
     stores: current.targets.map(livePath),
+    plannerStatistics: ctx.plannerStatistics ?? [],
     backup: ctx.directory,
     remainingSqlite:
       ctx.inputs?.outOfScope

@@ -27,8 +27,12 @@ const providerPolicyMocks = vi.hoisted(() => ({
   applyConfigDefaults: vi.fn((params: { config: OpenClawConfig }) => params.config),
 }));
 
+// mock-isolation: Legacy OAuth repair uses fixture callbacks without discovering installed providers.
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProvidersCore: () => resolvePluginProvidersMock(),
+  withPluginProviders: async <T>(
+    _params: unknown,
+    run: (providers: ProviderPlugin[]) => Promise<T>,
+  ) => run(resolvePluginProvidersMock()),
 }));
 
 vi.mock("../agents/auth-profiles/repair.js", () => ({
@@ -116,13 +120,10 @@ it("skips provider discovery without profile state", async () => {
 });
 
 it("removes a provider-declared retired auth profile and config references", async () => {
-  authProfileStoreMock.store = {
-    version: 1,
-    profiles: {
-      "anthropic:claude-cli": oauthProfile("copied-native-access", "copied-native-refresh"),
-      "anthropic:managed": createApiKeyCredential("anthropic", "managed-key"),
-    },
-  };
+  authProfileStoreMock.store = createAuthProfileStoreFixture({
+    "anthropic:claude-cli": oauthProfile("copied-native-access", "copied-native-refresh"),
+    "anthropic:managed": createApiKeyCredential("anthropic", "managed-key"),
+  });
   useProvider({ deprecatedProfileIds: ["anthropic:claude-cli"] });
   providerPolicyMocks.applyConfigDefaults.mockImplementation(({ config }) => ({
     ...config,
@@ -204,12 +205,12 @@ it.each([true, false])(
       { agentDir: undefined, authPath: "/tmp/shared/openclaw-agent.sqlite" },
       { agentDir: secondaryAgentDir, authPath: `${secondaryAgentDir}/openclaw-agent.sqlite` },
     ];
-    candidateMocks.stores.set(secondaryAgentDir, {
-      version: 1,
-      profiles: {
+    candidateMocks.stores.set(
+      secondaryAgentDir,
+      createAuthProfileStoreFixture({
         "anthropic:claude-cli": oauthProfile("copied-native-access", "copied-native-refresh"),
-      },
-    });
+      }),
+    );
     useProvider({ deprecatedProfileIds: ["anthropic:claude-cli"] });
 
     const result = await maybeRepairLegacyOAuthProfileIds({}, makePrompter(accepted, true));

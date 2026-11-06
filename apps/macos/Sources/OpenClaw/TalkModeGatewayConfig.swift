@@ -9,7 +9,6 @@ struct TalkModeGatewayConfigState {
     let apiKey: String?
     let referenceAudioPath: String?
     let referenceText: String?
-    let seamColorHex: String?
 
     var interruptOnSpeech: Bool {
         self.snapshot.interruptOnSpeech ?? true
@@ -37,8 +36,6 @@ enum TalkModeGatewayConfigParser {
             talk, defaultProvider: defaultProvider, defaultSilenceTimeoutMs: defaultSilenceTimeoutMs)
         let activeProvider = common.activeProvider
         let activeConfig = common.providerConfig
-        let ui = snapshot?.config?["ui"]?.dictionaryValue
-        let seamColorHex = ui?["seamColor"]?.stringValue?.nonEmpty
         let voice = activeConfig?["voiceId"]?.stringValue
         let resolvedModel = activeConfig?["modelId"]?.stringValue?.nonEmpty
             ?? (activeProvider == defaultProvider ? defaultModelIdFallback : nil)
@@ -64,7 +61,6 @@ enum TalkModeGatewayConfigParser {
             outputFormat: activeConfig?["outputFormat"]?.stringValue,
             apiKey: resolvedApiKey,
             referenceAudioPath: activeConfig?["referenceAudioPath"]?.stringValue?.nonEmpty,
-            referenceText: activeConfig?["referenceText"]?.stringValue?.nonEmpty,
-            seamColorHex: seamColorHex)
+            referenceText: activeConfig?["referenceText"]?.stringValue?.nonEmpty)
     }
 }

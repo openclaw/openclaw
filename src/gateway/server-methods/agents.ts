@@ -14,7 +14,11 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { validateAgentIdInput } from "../../agents/agent-create.js";
 import { AgentSharedStoreOwnerError } from "../../agents/agent-delete-databases.js";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+} from "../../agents/agent-scope.js";
 import {
   createAgentIdentityConfig,
   normalizeIdentityForFile,
@@ -48,6 +52,7 @@ import {
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { PreparedGatewayModelCatalog } from "../server-model-catalog.types.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "../server-reload-agent-databases.js";
+import { resolveAttendedSessionPermissionDefault } from "../session-create-permission-default.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { listAgentsForGateway } from "../session-utils.js";
 import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
@@ -125,14 +130,19 @@ export const agentsHandlers: GatewayRequestHandlers = {
       const modelCatalogByAgentId = emptyAgentAllowlist
         ? new Map<string, PreparedGatewayModelCatalog | undefined>()
         : context.readPreparedGatewayModelCatalogBatch
-          ? await readPreparedServerMethodModelCatalogs(context, agentIds)
+          ? await readPreparedServerMethodModelCatalogs(context, agentIds, {
+              includeSessionRowPolicy: false,
+            })
           : new Map(
               await Promise.all(
                 agentIds.map(
                   async (agentId) =>
                     [
                       agentId,
-                      await readPreparedServerMethodModelCatalog(context, { agentId }),
+                      await readPreparedServerMethodModelCatalog(context, {
+                        agentId,
+                        includeSessionRowPolicy: false,
+                      }),
                     ] as const,
                 ),
               ),
@@ -165,10 +175,19 @@ export const agentsHandlers: GatewayRequestHandlers = {
       }
       // Grants during enrichment appear on the next request; revocations apply now.
       const allowedAgents = resolveOperatorRolePolicy(client, currentConfig)?.agents;
-      const agents =
+      const agents = (
         allowedAgents && allowedAgents !== "*"
           ? result.agents.filter((agent) => allowedAgents.includes(agent.id))
-          : result.agents;
+          : result.agents
+      ).map((agent) => {
+        const newSessionPermissionMode = resolveAttendedSessionPermissionDefault(
+          resolveAgentConfig(currentConfig, agent.id)?.newSessionPermissionMode,
+          client?.connect.scopes ?? [],
+        );
+        return newSessionPermissionMode === agent.newSessionPermissionMode
+          ? agent
+          : Object.assign(agent, { newSessionPermissionMode });
+      });
       const policy = prepareOperatorModelPresentation({
         cfg: currentConfig,
         policyConfig: context.getCommittedRuntimeConfig?.() ?? currentConfig,

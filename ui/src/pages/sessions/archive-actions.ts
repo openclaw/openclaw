@@ -15,7 +15,8 @@ import type { SessionsPageRequestScope } from "./request-scope.ts";
 
 registerSessionOrganizationEnglish();
 
-type SessionPageArchiveHost = {
+/** Page lifetime adapts to the same archive owner used by sidebar and chat. */
+export function createSessionsArchive(host: {
   captureScope: (
     options?: Pick<SessionsPageRequestScope, "allowDeferred">,
   ) => SessionsPageRequestScope | null;
@@ -31,10 +32,7 @@ type SessionPageArchiveHost = {
     expectedSessionId: string | undefined,
     options: { onConfirmed?: (result: SessionPatchResult) => void; sessionScope?: boolean },
   ) => Promise<SessionsPageMutationResult>;
-};
-
-/** Page lifetime adapts to the same archive owner used by sidebar and chat. */
-export function createSessionsArchive(host: SessionPageArchiveHost) {
+}) {
   async function archive(
     row: GatewaySessionRow,
     hasDescendants = false,
@@ -128,6 +126,7 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
           ),
         });
         showToast({
+          severity: "success",
           message: t("sessionsView.sessionArchived"),
           actionLabel: t("common.undo"),
           onAction: () => {
@@ -155,7 +154,7 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
               })
               .catch((error: unknown) => {
                 if (archiveSessions.isConnectionScopeCurrent(connection)) {
-                  showToast({ message: formatUiError(error) });
+                  showToast({ severity: "error", message: formatUiError(error) });
                 }
               });
           },

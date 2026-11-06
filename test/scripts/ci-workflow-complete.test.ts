@@ -238,6 +238,8 @@ describe("CI check failure collection", () => {
   it.each([
     ["native-i18n", "Check native app generated locale parity", "node_setup"],
     ["control-ui-i18n", "Check Control UI locale parity", "node_setup"],
+    ["build-artifacts", "Verify Control UI i18n source", "node_setup"],
+    ["build-artifacts", "Check Control UI locale parity", "node_setup"],
     ["checks-ui", "Test Control UI", "ui_chromium"],
     ["checks-ui", "Install Playwright WebKit", "node_setup"],
     ["checks-ui", "Test Control UI WebKit overlays and focus", "ui_webkit"],
@@ -374,6 +376,7 @@ describe("native CI failure collection", () => {
       env: {
         ...process.env,
         HISTORICAL_TARGET: "false",
+        IOS_FROZEN_TARGET: "false",
         RUNNER_TEMP: root,
         GITHUB_OUTPUT: path.join(root, "outputs"),
         TRACE: path.join(root, "trace"),
@@ -748,7 +751,7 @@ describe("PR failure reporting", () => {
     }
   });
 
-  it("waits for every workload and uses read-only grants for canonical PRs including forks", () => {
+  it("reports unsuccessful prerequisites with read-only grants for canonical PRs including forks", () => {
     const workflow = readCiWorkflow();
     const report = workflow.jobs["pr-failure-report"];
     expect(report.needs).toEqual(
@@ -767,13 +770,23 @@ describe("PR failure reporting", () => {
         )
         .map(([name]) => name),
     ).toEqual([]);
-    for (const [eventName, headRepository, runAttempt, preflightResult, admitted] of [
-      ["pull_request", "openclaw/openclaw", 1, "success", true],
-      ["pull_request", "contributor/openclaw", 1, "success", true],
-      ["pull_request", "openclaw/openclaw", 2, "success", true],
-      ["pull_request", "openclaw/openclaw", 1, "failure", true],
-      ["push", "openclaw/openclaw", 1, "success", false],
-      ["workflow_dispatch", "openclaw/openclaw", 1, "success", false],
+    for (const [
+      eventName,
+      headRepository,
+      runAttempt,
+      preflightResult,
+      workloadResult,
+      admitted,
+    ] of [
+      ["pull_request", "openclaw/openclaw", 1, "success", "success", false],
+      ["pull_request", "openclaw/openclaw", 1, "success", "skipped", false],
+      ["pull_request", "openclaw/openclaw", 1, "success", "failure", true],
+      ["pull_request", "openclaw/openclaw", 1, "success", "cancelled", true],
+      ["pull_request", "contributor/openclaw", 1, "success", "failure", true],
+      ["pull_request", "openclaw/openclaw", 2, "success", "failure", true],
+      ["pull_request", "openclaw/openclaw", 1, "failure", "skipped", true],
+      ["push", "openclaw/openclaw", 1, "success", "failure", false],
+      ["workflow_dispatch", "openclaw/openclaw", 1, "success", "failure", false],
     ] as const) {
       expect(
         evaluateWorkflowExpression(report.if, {
@@ -781,6 +794,7 @@ describe("PR failure reporting", () => {
           headRepository,
           runAttempt,
           preflightResult,
+          jobResults: { "checks-baseline-ratchets": workloadResult },
           preflightOutputs: { run_checks_node_core_nondist: "false" },
         }),
       ).toBe(admitted);
@@ -790,9 +804,48 @@ describe("PR failure reporting", () => {
       { draft: true },
       { repository: "contributor/openclaw" },
     ]) {
-      expect(evaluateWorkflowExpression(report.if, { ...overrides })).toBe(false);
+      expect(
+        evaluateWorkflowExpression(report.if, {
+          jobResults: { "checks-baseline-ratchets": "failure" },
+          ...overrides,
+        }),
+      ).toBe(false);
     }
   });
+  it.skipIf(process.platform === "win32")(
+    "accepts a green skipped reporter while retaining selected-lane checks",
+    () => {
+      const verify = ciStep("ci-gate", "Verify selected CI lanes");
+      const context = {
+        failureReportResult: "skipped",
+        preflightOutputs: { run_checks_node_core_nondist: "true" },
+      };
+      const jobResults = verify.env?.JOB_RESULTS;
+      if (typeof jobResults !== "string") {
+        throw new Error("CI gate must expose JOB_RESULTS");
+      }
+      const reportRow = expectDefined(
+        jobResults.split("\n").find((line) => line.startsWith("pr-failure-report=")),
+        "failure reporter gate row",
+      ).replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
+        String(evaluateWorkflowExpression(expression, context)),
+      );
+      expect(reportRow).toBe("pr-failure-report=skipped|false");
+      for (const [result, expectedExit] of [
+        ["success", 0],
+        ["skipped", 1],
+      ] as const) {
+        const run = spawnSync("/bin/bash", ["-c", expectDefined(verify.run, "CI gate script")], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            JOB_RESULTS: `preflight=success|true\nsecurity-fast=success|true\nchecks-node-core-test-nondist-shard=${result}|true\n${reportRow}`,
+          },
+        });
+        expect(run.status, run.stdout).toBe(expectedExit);
+      }
+    },
+  );
   it("gates cancelled workflows and drafts", () => {
     const gate = readCiWorkflow().jobs["ci-gate"];
     for (const eventName of ["pull_request", "push", "workflow_dispatch"] as const) {
@@ -954,6 +1007,7 @@ describe("PR failure reporting", () => {
         for (const failureReportResult of ["success", "failure", "skipped"]) {
           const context = {
             runAttempt,
+            jobResults: { "checks-baseline-ratchets": "failure" },
             failureReportResult,
             preflightOutputs: { run_checks_node_core_nondist: String(nodeSelected) },
             failureReportOutputs: { known_main_red_attempt: String(runAttempt) },

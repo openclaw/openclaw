@@ -9,6 +9,7 @@ import {
 } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
+import { isReportableUpdateRun } from "../shared/update-outcome-classification.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -77,7 +78,7 @@ describe("update-startup", () => {
   let resolveNpmChannelTag: (typeof import("./update-check.js"))["resolveNpmChannelTag"];
   let runCommandWithTimeout: (typeof import("../process/exec.js"))["runCommandWithTimeout"];
   let runGatewayUpdateCheckOwner: (typeof import("./update-startup.js"))["runGatewayUpdateCheck"];
-  let createGatewayUpdateCheck: (typeof import("./update-startup.js"))["createGatewayUpdateCheck"];
+  let createGatewayUpdateCheck: (typeof import("./update-startup-scheduler.js"))["createGatewayUpdateCheck"];
   let getUpdateAvailable: (typeof import("./update-status-state.js"))["getUpdateAvailable"];
   let getUpdateEffectiveChannel: (typeof import("./update-startup.js"))["getUpdateEffectiveChannel"];
   let getUpdateSchedule: (typeof import("./update-status-state.js"))["getUpdateSchedule"];
@@ -185,10 +186,10 @@ describe("update-startup", () => {
       ({ runCommandWithTimeout } = await import("../process/exec.js"));
       ({
         runGatewayUpdateCheck: runGatewayUpdateCheckOwner,
-        createGatewayUpdateCheck,
         getUpdateEffectiveChannel,
         resetUpdateAvailableStateForTest,
       } = await import("./update-startup.js"));
+      ({ createGatewayUpdateCheck } = await import("./update-startup-scheduler.js"));
       ({ refreshGatewayUpdateStatus } = await import("./update-status-schedule.js"));
       ({ getUpdateAvailable, getUpdateSchedule } = await import("./update-status-state.js"));
       loaded = true;
@@ -1357,6 +1358,13 @@ describe("update-startup", () => {
     await runAutoUpdateCheckWithDefaults({ cfg: autoConfig() });
 
     expectNoCalls(runCommandWithTimeout, startHandoff, restart);
+    expect(triage).not.toHaveBeenCalled();
+    const run = listUpdateRuns()[0]!;
+    expect(run).toMatchObject({
+      status: "skipped",
+      reason: "managed-service-handoff-unavailable",
+    });
+    expect(isReportableUpdateRun(run)).toBe(false);
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
     expect(getUpdateAvailable()).toMatchObject({ latestVersion: "2.0.0-beta.1" });
     expect((await readRestartSentinel())?.payload).toMatchObject({

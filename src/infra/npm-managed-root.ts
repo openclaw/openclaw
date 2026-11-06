@@ -1,14 +1,14 @@
-import { constants as fsConstants, type Dirent } from "node:fs";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parse as parseYaml } from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import type { NpmSpecResolution } from "./install-source-utils.js";
 import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json-files.js";
@@ -465,15 +465,15 @@ async function isRequiredPlatformPackageComplete(params: {
       continue;
     }
     try {
-      await fs.access(
+      // Completeness is a filesystem fact; a sandbox may deny execution in the stage.
+      const stat = await fs.stat(
         path.join(params.packagePath, "vendor", target.name, "bin", executableFilename),
-        fsConstants.X_OK,
       );
-      return true;
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "EACCES")) {
-        throw error;
+      if (stat.isFile() && (process.platform === "win32" || (stat.mode & 0o111) !== 0)) {
+        return true;
       }
+    } catch (error) {
+      ignoreMissingPath(error);
     }
   }
   return false;
@@ -772,10 +772,9 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   });
   const changed = JSON.stringify(next) !== JSON.stringify(manifest);
   if (changed) {
-    // Planning yields; publish this small manifest without yielding after authority revalidation.
-    params.beforePersistentApply?.();
-    replaceFileAtomicSync({
+    await replaceFileAtomic({
       filePath: manifestPath,
+      assertBeforeMutation: params.beforePersistentApply,
       content: `${JSON.stringify(next, null, 2)}\n`,
       mode: 0o600,
       dirMode: 0o777 & ~process.umask(),

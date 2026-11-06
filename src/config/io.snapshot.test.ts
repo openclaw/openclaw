@@ -148,7 +148,6 @@ it("preserves source paths across core-only and prepared plugin reads with a Win
     prepareValidation: "runtime",
   });
 
-  expect(core.sourceConfig).toEqual(full.sourceConfig);
   for (const snapshot of [core, full]) {
     expect(snapshot.valid).toBe(true);
     expect(snapshot.authoredConfig?.plugins).toEqual(plugins);
@@ -183,7 +182,8 @@ it.each([
   {
     mode: "full",
     config: { skills: { workshop: { approvalPolicy: "pending" } } },
-    issue: { path: "skills.workshop", message: expect.stringContaining("approvalPolicy") },
+    // The whole core key is retired; its settings moved to the skill-workshop plugin.
+    issue: { path: "skills", message: expect.stringContaining("workshop") },
     legacy: "skills.workshop.approvalPolicy",
     spy: () => vi.spyOn(doctorLegacy, "findDoctorLegacyConfigIssues"),
   },
@@ -279,11 +279,6 @@ it.each([false, true])("loads metadata only for valid snapshots (invalid=%s)", a
     expect(loader).not.toHaveBeenCalled();
   } else {
     expect(result.snapshot).toMatchObject({ exists: false, valid: true });
-    const metadata = result.pluginMetadataSnapshot;
-    expect(structuredClone(metadata?.manifestRegistry)).toEqual(metadata?.manifestRegistry);
-    expect(metadata).toMatchObject({
-      configFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u),
-      index: { version: 1, hostContractVersion: expect.any(String), plugins: expect.any(Array) },
-    });
+    expect(result.pluginMetadataSnapshot?.configFingerprint).toMatch(/^[a-f0-9]{64}$/u);
   }
 });

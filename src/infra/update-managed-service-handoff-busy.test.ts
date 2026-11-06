@@ -13,44 +13,43 @@ import {
   installPrivateUpdateHandoffStore,
   writePrivateUpdateHandoffChildGuard,
 } from "../../test/helpers/private-update-handoff-store.js";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { activeManagedServiceUpdateHandoffs } from "./update-managed-service-handoff-current.js";
 import { prepareManagedHandoffLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
-import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
+import {
+  createManagedHandoffLeaseStore,
+  prepareManagedHandoffLeaseStore,
+} from "./update-managed-service-handoff-lease.js";
+import * as legacyHandoffStore from "./update-managed-service-handoff-legacy-store.js";
 import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
 
-const dirs = createTempDirTracker();
+let state: OpenClawTestState | undefined;
 afterEach(async () => {
   for (const owner of activeManagedServiceUpdateHandoffs.values()) {
     await owner.closed;
   }
   activeManagedServiceUpdateHandoffs.clear();
   vi.restoreAllMocks();
+  await state?.cleanup();
+  state = undefined;
   vi.unstubAllEnvs();
-  dirs.cleanup();
 });
 
 it.each([false, true])(
   "reports the actual lease instead of claiming an update is running (cancelled=%s)",
   async (cancelled) => {
-    const root = fs.realpathSync(dirs.make("handoff-busy-"));
-    const install = path.join(root, "install");
-    const temporary = path.join(root, "tmp");
-    const state = path.join(root, "state");
-    for (const directory of [install, temporary, state]) {
-      fs.mkdirSync(directory, { mode: 0o700 });
-    }
-    for (const [key, value] of Object.entries({
-      OPENCLAW_PROFILE: "custody-fixture",
-      HOME: root,
-      USERPROFILE: root,
-      TMPDIR: temporary,
-      OPENCLAW_STATE_DIR: state,
-      OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
-    })) {
-      vi.stubEnv(key, value);
-    }
+    state = await createOpenClawTestState({
+      label: "handoff-busy",
+      env: { OPENCLAW_PROFILE: "custody-fixture" },
+    });
+    const install = state.workspaceDir;
+    const temporary = state.path("tmp");
+    fs.mkdirSync(temporary, { mode: 0o700 });
+    vi.stubEnv("TMPDIR", temporary);
     const { databasePath } = installPrivateUpdateHandoffStore(temporary);
     const store = createManagedHandoffLeaseStore({
       databasePath,
@@ -119,3 +118,47 @@ it.each([false, true])(
     expect(store.read(install)).toEqual(before);
   },
 );
+
+it("refuses a Gateway update while an earlier Gateway's store still holds the installation", async () => {
+  state = await createOpenClawTestState({
+    label: "handoff-earlier-gateway",
+    env: { OPENCLAW_PROFILE: "custody-fixture" },
+  });
+  const install = state.workspaceDir;
+  const temporary = state.path("tmp");
+  fs.mkdirSync(temporary, { mode: 0o700 });
+  vi.stubEnv("TMPDIR", temporary);
+  const { databasePath } = installPrivateUpdateHandoffStore(temporary);
+  // The earlier Gateway kept its lease under its state's tmp, beside the shared store.
+  const earlier = state.path("gateway-tmp");
+  fs.mkdirSync(earlier, { mode: 0o700 });
+  const earlierDatabasePath = path.join(earlier, "managed-update-handoffs.sqlite");
+  vi.spyOn(
+    legacyHandoffStore,
+    "resolveLegacyGatewayManagedUpdateLeaseDatabasePath",
+  ).mockReturnValue(earlierDatabasePath);
+  const earlierStore = await prepareManagedHandoffLeaseStore({
+    databasePath: earlierDatabasePath,
+    serviceManagerEnv: process.env,
+  });
+  const held = earlierStore.acquire(install, "earlier-gateway-update", { kind: "update" });
+  assert(held.kind === "acquired");
+  const before = earlierStore.read(install);
+
+  await expect(
+    startManagedServiceUpdateHandoff({
+      root: install,
+      restartDrainTimeoutMs: 1000,
+      execPath: resolveTestNodeExecPath(),
+      argv1: path.join(install, "openclaw.mjs"),
+      env: process.env,
+      meta: {},
+    }),
+  ).rejects.toThrow(
+    `Another update executor owns this installation in an earlier Gateway's handoff store (${earlierDatabasePath})`,
+  );
+  expect(earlierStore.read(install)).toEqual(before);
+  const shared = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: process.env });
+  expect(shared.read(install)).toMatchObject({ kind: "absent" });
+  expect(earlierStore.release(held.lease)).toBe(true);
+});

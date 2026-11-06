@@ -83,17 +83,24 @@ profiled promotion separate. The synchronous owner phases omit HTTP transport; u
 include it. Neither mode measures Gateway
 event-loop delay.
 
-The store encodes fixed prefixes into private 4 KiB chunks and copies their views
-into a fresh response buffer with ASCII-formatted numbers. Oversized prefixes own
-separate allocations, so clearing them cannot leave a large chunk held by the
-allocator cursor. `scrape.bufferByteLength` records
-that transient allocation; it is not included in sampled V8 heap allocation.
-There is no rendered-series cache. After consuming a render in an owner phase,
+The store encodes fixed prefixes into private 4 KiB chunks. Oversized prefixes
+own separate allocations, so clearing them cannot leave a large chunk held by
+the prefix allocator cursor.
+Each series lazily retains its rendered bytes; removing gauges or resetting the
+store releases their blocks. Changed series use a growing scratch buffer and refill
+their block when its length is unchanged, otherwise replacing it with an exact-size
+block. Every scrape copies the blocks into a fresh response buffer.
+Family HELP/TYPE bytes share the exporter-owned prefix chunks. One header per
+metric name is reused while its winning series' help and type stay unchanged;
+clearing gauges evicts that family's header, and reset clears all headers.
+Report the additional retained blocks alongside allocation savings.
+`scrape.bufferByteLength` records the transient response allocation; it is not
+included in sampled V8 heap allocation. After consuming a render in an owner phase,
 the benchmark releases its private backing store, matching the successful HTTP
 completion lifetime. Owner CPU includes release; the render-latency timer ends
 before release. The HTTP phase releases only after Node's completion callback.
-The scrape workspace reuses its capacity but clears all fragment references after
-encoding; reset releases that capacity and the current prefix chunk. The 1 ms event-loop monitor reports sample counts and tails for each phase;
+The scratch buffer retains only bytes, never pooled Buffer slabs or response
+storage; reset releases its capacity and the current prefix chunk. The 1 ms event-loop monitor reports sample counts and tails for each phase;
 synchronous owner loops normally have no samples.
 
 Use `--updates-per-render <count>` with `--shape` to rotate through that many

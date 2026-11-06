@@ -1188,24 +1188,18 @@ describe("short-term promotion", () => {
         const key = `malformed-${index}`;
         return [
           key,
-          {
+          recallStoreEntryFixture({
             key,
             path: `memory/2026-04-01-malformed-${index}.md`,
-            startLine: 1,
-            endLine: 1,
-            source: "memory",
             snippet: `Malformed timestamp entry ${index}`,
             recallCount: 100 - index,
-            dailyCount: 0,
-            groundedCount: 0,
             totalScore: 1,
             maxScore: 1,
             firstRecalledAt: "not-a-timestamp",
             lastRecalledAt: "not-a-timestamp",
             queryHashes: [],
             recallDays: [],
-            conceptTags: [],
-          },
+          }),
         ];
       }),
     );
@@ -1234,24 +1228,18 @@ describe("short-term promotion", () => {
           path: "memory/2026-04-05-today.md",
           promotedAt: "2026-04-05T09:00:00.000Z",
         }),
-        recent: {
+        recent: recallStoreEntryFixture({
           key: "recent",
           path: "memory/2026-04-05-recent.md",
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
           snippet: "Recent valid timestamp entry",
           recallCount: 1,
-          dailyCount: 0,
-          groundedCount: 0,
           totalScore: 1,
           maxScore: 1,
           firstRecalledAt: "2026-04-05T09:00:00.000Z",
           lastRecalledAt: "2026-04-05T09:00:00.000Z",
           queryHashes: [],
           recallDays: [],
-          conceptTags: [],
-        },
+        }),
       },
     });
 
@@ -1580,19 +1568,13 @@ describe("short-term promotion", () => {
     const snippet = "Gateway binds loopback and port 18789";
     await writeDailyMemoryNote(workspaceDir, "2026-04-01", [snippet]);
     await recordMemoryRecalls(workspaceDir, "gateway host", [
-      {
-        path: relativePath,
-        startLine: 1,
-        endLine: 1,
-        score: 0.92,
-        snippet,
-        source: "memory",
+      memoryRecallResult(relativePath, 1, 1, 0.92, snippet, {
         provenance: {
           originClass: "agent",
           sessionKind: "unknown",
           observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
         },
-      },
+      }),
     ]);
     const ranked = await rankAllCandidates(workspaceDir);
     expect(ranked[0]?.provenance?.originClass).toBe("agent");
@@ -2562,6 +2544,26 @@ describe("short-term promotion", () => {
   });
 
   describe("MEMORY.md budget compaction (#73691)", () => {
+    async function seedDeploymentWindowRecall(workspaceDir: string) {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+        "Keep the Tuesday deployment window in durable memory.",
+      ]);
+      await recordMemoryRecalls(
+        workspaceDir,
+        "deployment window",
+        [
+          memoryRecallResult(
+            "memory/2026-04-29.md",
+            1,
+            1,
+            0.95,
+            "Keep the Tuesday deployment window in durable memory.",
+          ),
+        ],
+        { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
+      );
+    }
+
     async function applyBudgetCompactionPromotion(workspaceDir: string) {
       const nowMs = Date.parse("2026-04-29T10:00:00.000Z");
       await recordRotateCredentialsRecall(workspaceDir);
@@ -2709,23 +2711,7 @@ describe("short-term promotion", () => {
     });
 
     it("defers promotion when preserved content leaves no room in the file budget", async (workspaceDir) => {
-      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
-        "Keep the Tuesday deployment window in durable memory.",
-      ]);
-      await recordMemoryRecalls(
-        workspaceDir,
-        "deployment window",
-        [
-          memoryRecallResult(
-            "memory/2026-04-29.md",
-            1,
-            1,
-            0.95,
-            "Keep the Tuesday deployment window in durable memory.",
-          ),
-        ],
-        { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
-      );
+      await seedDeploymentWindowRecall(workspaceDir);
       const ranked = await rankAllCandidates(workspaceDir);
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
       const oversizedBase = `# Long-Term Memory\n\n${"u".repeat(8_800)}\n`;
@@ -2759,23 +2745,7 @@ describe("short-term promotion", () => {
     });
 
     it("leaves prior promotions intact when fitting would exceed the loss limit", async (workspaceDir) => {
-      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
-        "Keep the Tuesday deployment window in durable memory.",
-      ]);
-      await recordMemoryRecalls(
-        workspaceDir,
-        "deployment window",
-        [
-          memoryRecallResult(
-            "memory/2026-04-29.md",
-            1,
-            1,
-            0.95,
-            "Keep the Tuesday deployment window in durable memory.",
-          ),
-        ],
-        { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
-      );
+      await seedDeploymentWindowRecall(workspaceDir);
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
       const existing = ["2026-04-01", "2026-04-08", "2026-04-15", "2026-04-22"]
         .map(
@@ -3080,14 +3050,7 @@ describe("short-term promotion", () => {
 
       await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
       await recordMemoryRecalls(workspaceDir, "utf16 dreaming lead", [
-        {
-          path: "memory/2026-04-03.md",
-          source: "memory",
-          startLine: 1,
-          endLine: 1,
-          score: 0.9,
-          snippet,
-        },
+        memoryRecallResult("memory/2026-04-03.md", 1, 1, 0.9, snippet),
       ]);
 
       const ranked = await rankAllCandidates(workspaceDir);
@@ -3100,14 +3063,7 @@ describe("short-term promotion", () => {
     it("stores a complete-code-point short-term recall snippet", async (workspaceDir) => {
       const prefix = "y".repeat(testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS - 1);
       await recordMemoryRecalls(workspaceDir, "utf16 recall", [
-        {
-          path: "memory/2026-04-03.md",
-          source: "memory",
-          startLine: 1,
-          endLine: 1,
-          score: 0.9,
-          snippet: `${prefix}🚀tail`,
-        },
+        memoryRecallResult("memory/2026-04-03.md", 1, 1, 0.9, `${prefix}🚀tail`),
       ]);
 
       const entries = Object.values(await readRecallStoreEntries(workspaceDir));
@@ -3121,14 +3077,7 @@ describe("short-term promotion", () => {
       const snippet = `${prefix}🚀tail`;
       await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
       await recordMemoryRecalls(workspaceDir, "utf16 promotion", [
-        {
-          path: "memory/2026-04-03.md",
-          source: "memory",
-          startLine: 1,
-          endLine: 1,
-          score: 0.9,
-          snippet,
-        },
+        memoryRecallResult("memory/2026-04-03.md", 1, 1, 0.9, snippet),
       ]);
       const ranked = await rankAllCandidates(workspaceDir);
 

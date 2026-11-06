@@ -31,6 +31,7 @@ import {
 import {
   appendSqliteTrajectoryRuntimeEvents,
   createTrajectoryEvent,
+  trajectoryEventBytes as eventBytes,
 } from "./runtime-store.test-support.js";
 import type { TrajectoryEvent } from "./types.js";
 
@@ -78,13 +79,6 @@ function appendEvents(
   options: Pick<SqliteTrajectoryRuntimeAppend, "maxRuntimeBytes" | "discardPrevious"> = {},
 ) {
   appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath, ...options }, events);
-}
-
-function eventBytes(events: TrajectoryEvent[], initial = 0) {
-  return events.reduce(
-    (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
-    initial,
-  );
 }
 
 function serialized(event: TrajectoryEvent) {
@@ -387,6 +381,74 @@ describe("SQLite trajectory runtime store", () => {
     appendEvents(events);
     expect(readRows()).toEqual([existing, ...events].map((event, seq) => ({ event, seq })));
   });
+
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
+    "reads only the expired prefix when a full %s window advances",
+    async (encoding) => {
+      await seedEncoding(encoding);
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: encoding === "UTF-8" ? sqlitePath() : storePath,
+      });
+      const event = createTrajectoryEvent({ type: "rolling-window🦞" });
+      const bytes = eventBytes([event]);
+      const append = (
+        events: TrajectoryEvent[],
+        windowFacts?: { nextSeq: number; retainedBytes: number },
+      ) =>
+        appendSqliteTrajectoryRuntimeEventsWithWriter(
+          {
+            sessionId: "session-1",
+            maxRuntimeBytes: bytes * 128,
+            events: events.map(serialized),
+            windowFacts,
+          },
+          database,
+          (operationLabel, write) =>
+            runOpenClawAgentWriteTransaction(
+              write,
+              { agentId: "main", path: database.path },
+              { operationLabel },
+            ),
+        ).receipt.windowFacts;
+      const initial = append(Array.from({ length: 128 }, () => event));
+      const native = requireNativeSqliteDatabase(database.db);
+      const prepare = native.prepare.bind(native);
+      let visited = 0;
+      const spy = vi.spyOn(native, "prepare").mockImplementation((sql) => {
+        const statement = prepare(sql);
+        if (sql.includes('from "trajectory_runtime_events"')) {
+          const iterate = statement.iterate.bind(statement);
+          statement.iterate = (...parameters) => {
+            const iterator: ReturnType<typeof statement.iterate> = Reflect.apply(
+              iterate,
+              statement,
+              parameters,
+            );
+            const next = iterator.next.bind(iterator);
+            iterator.next = (...args) => {
+              const row = next(...args);
+              if (!row.done) {
+                visited++;
+              }
+              return row;
+            };
+            return iterator;
+          };
+        }
+        return statement;
+      });
+      try {
+        expect(append([event], initial)).toEqual({ nextSeq: 129, retainedBytes: bytes * 128 });
+      } finally {
+        spy.mockRestore();
+      }
+      expect(readRows()).toEqual(
+        Array.from({ length: 128 }, (_, index) => ({ event, seq: index + 1 })),
+      );
+      expect(visited).toBe(1);
+    },
+  );
 
   it.each(["0", "1969-12-31T23:59:59.000Z"])(
     "stores Date.parse-compatible trajectory timestamp %s",

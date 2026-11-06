@@ -8,6 +8,7 @@ import {
 import { projectInFlightRunSnapshot } from "../chat-inflight-snapshot.js";
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import type { ChatRunState } from "../server-chat-state.js";
+import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
 import {
   captureGatewayScopeMatcher,
   captureSessionStoreScopeMatcher,
@@ -87,7 +88,8 @@ export type ChatHistoryMethod =
   | "chat.history"
   | "chat.startup"
   | "chat.message.get"
-  | "chat.predict";
+  | "chat.predict"
+  | "chat.pendingInputs.dismiss";
 
 export function respondChatHistoryUnavailable(
   method: ChatHistoryMethod,
@@ -103,4 +105,16 @@ export function respondChatHistoryUnavailable(
       retryAfterMs: 250,
     }),
   );
+}
+
+export function respondChatHistoryReadError(
+  method: ChatHistoryMethod,
+  respond: RespondFn,
+  error: unknown,
+): void {
+  const message = resolveSessionHistoryUnavailableMessage(error);
+  if (message === undefined) {
+    throw error;
+  }
+  respondChatHistoryUnavailable(method, respond, message);
 }

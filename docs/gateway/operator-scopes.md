@@ -29,18 +29,48 @@ require the `node` role.
 
 ## Scope levels
 
-| Scope                     | Meaning                                                                                                                                                       |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operator.read`           | Read-only status, lists, catalog, logs, session reads, retained audit and execution-identity diagnostics, and other non-mutating calls.                       |
-| `operator.sessions.read`  | Read visible sessions, history, and session metadata without general Gateway read access.                                                                     |
-| `operator.sessions.write` | Read visible sessions, organize owned sessions, and start or continue the authenticated person's own work.                                                    |
-| `operator.write`          | Mutating operator actions: sending messages, invoking tools, updating talk/voice settings, node command relay. Also satisfies `operator.read`.                |
-| `operator.admin`          | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals. |
-| `operator.pairing`        | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                            |
-| `operator.approvals`      | Exec and plugin approval APIs.                                                                                                                                |
-| `operator.questions`      | Listing, reading, answering, and resolving interactive questions.                                                                                             |
-| `operator.talk`           | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                               |
-| `operator.talk.secrets`   | Reading Talk configuration with secrets included.                                                                                                             |
+| Scope                     | Meaning                                                                                                                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operator.read`           | Read-only status, lists, catalog, logs, session reads, retained audit and execution-identity diagnostics, and other non-mutating calls.                                         |
+| `operator.sessions.read`  | Read visible sessions, history, and session metadata without general Gateway read access.                                                                                       |
+| `operator.sessions.write` | Read visible sessions, organize owned sessions, and start or continue the authenticated person's own work.                                                                      |
+| `operator.write`          | Mutating operator actions: sending messages, invoking tools, updating talk/voice settings, node command relay. Also satisfies `operator.read`.                                  |
+| `operator.cron`           | Manage owned automations in the Control UI; create conversation-owned automations through an authenticated agent turn. Included in `operator.write`; not global administration. |
+| `operator.admin`          | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals.                   |
+| `operator.pairing`        | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                                              |
+| `operator.approvals`      | Exec and plugin approval APIs.                                                                                                                                                  |
+| `operator.questions`      | Listing, reading, answering, and resolving interactive questions.                                                                                                               |
+| `operator.talk`           | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                                                 |
+| `operator.talk.secrets`   | Reading Talk configuration with secrets included.                                                                                                                               |
+
+`operator.cron` allows a fresh authenticated conversation turn to create automations
+and manage jobs owned by that conversation and account. It does not make the
+requester a Gateway owner. Combine it with `operator.sessions.write` when the
+requester also needs permission to start a conversation; `operator.write` already
+includes both capabilities. Read-only and session-only scopes do not imply
+`operator.cron`.
+
+The agent runtime supplies the authenticated conversation boundary. An authenticated
+human with `operator.cron` can also edit, pause, run, or delete their own automations
+in the Control UI. The Gateway checks the stored human owner again when the change
+is committed. Other people's automations remain read-only; global creation and
+administration still require `operator.admin`. Global scheduler status requires
+`operator.read`.
+
+The **Owner** field under **Agent** shows the human responsible for an automation.
+Its current human owner or an administrator can select another existing profile.
+Transferring ownership pauses the automation, cancels any active occurrence, and
+retires captured credentials and operator authority; it does not lend the previous
+owner's account to the recipient.
+The recipient must select an available inference account or recapture runtime
+authority before resuming model execution.
+Existing jobs inherit a human owner from trusted creator provenance when available.
+Jobs without that provenance remain administrator-managed.
+
+Human ownership does not grant host command execution, arbitrary session routing,
+or bypass tool and approval policies. Scheduled operator continuations retain the
+creator's actual scopes and revalidate their source authority; they do not become
+admin runs.
 
 Personal profile editing is a narrowly self-scoped exception to read-only
 behavior: `operator.read` or `operator.sessions.read` (including their implied
@@ -56,6 +86,10 @@ authenticated durable profile. That person can connect, poll, cancel,
 reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
 and per-agent GitHub changes remain `operator.admin`.
+
+Session-scoped readers can load agent avatar images from the Control UI
+`/avatar/<agentId>` route, which serves the avatar URL that `agent.identity.get`
+already returns to them. Assistant media file reads still require `operator.read`.
 
 Session-scoped readers can read shared GitHub publication options and receipts
 for sessions they can view through `sessions.github.options` and
@@ -87,6 +121,23 @@ configuration changes, Gateway-wide tool invocation, or publication outside
 the own-session shared-account path described above.
 
 Session readers can browse visible conversations and receive their updates.
+Session-only callers cannot open another person's Activity timeline or request
+their per-person activity counts. The Gateway returns `FORBIDDEN`; the Control UI
+shows the restriction and removes previously loaded activity. People and owner
+facets contain only the caller's own profile. Visible shared-session rows and
+their attribution remain available under the existing sharing policy.
+Presence stays visible as a person-only view: who is online, their last activity
+time, and watched sessions the caller can read. Device, network, connection, and
+email details remain `operator.read` only, as does `presence.query`
+([presence](/gateway/protocol/presence#broadcast-event-scoping)).
+Named roles with `operator.read` retain access to other people's activity even
+when a connection requests only session scopes.
+They can inspect a visible session's effective tool names with `tools.effective`.
+The session-only response includes core summaries and preserves policy-filtered
+GitHub action descriptions. It omits other runtime descriptions, configuration
+diagnostics, and MCP connection notices.
+Session visibility and requester authority are checked before returning the preview;
+general Gateway read access still receives the full diagnostic response.
 The Control UI can copy visible history as Markdown. Session writers can rename,
 pin, archive, or restore their own existing conversations. Other people's visible
 sessions remain read-only under these grants, including shared sessions.
@@ -99,6 +150,12 @@ currently read when the session has an admitted project checkout. Unmanaged
 private sandbox file workspaces return `not_git`; their Files browser remains
 available. Existing sharing, agent, and sandbox access rules still apply; no
 general Gateway read grant is needed.
+
+The Control UI waits for the session's projected workspace access before loading
+changes. When the operator role cannot read the host workspace, Review explains
+the restriction without requesting a diff. If the workspace changes during an
+admitted diff read, the Gateway returns retryable `UNAVAILABLE`; refresh Review
+to read the current workspace. Authorization failures remain `FORBIDDEN`.
 
 Session readers can use `sessions.files.list`, `sessions.files.get`, and
 `sessions.files.assets` for files within the workspace admitted to both the
@@ -119,7 +176,16 @@ conversations and unbound documents remain denied. Broad `operator.read` callers
 retain document-ID-only access.
 
 In the Control UI, session writers can use **New Session**, send messages in
-their own conversations, and stop their own active runs. Their model, effort,
+their own conversations, fork from a persisted user message in an owned settled
+conversation, use **Advanced → Fork conversation** on their own conversation,
+and stop their own active runs. Whole-conversation forks preserve the saved
+conversation history; while the source is working, they copy through its last
+completed reply. A whole-conversation fork of a Draft stays Draft unless the
+creation request explicitly selects another audience. If new Draft creation is
+disabled, creating that Draft copy is refused; the existing Draft remains available
+for continued work.
+Forking does not grant access to another creator's conversation
+or change the source's workspace and isolation rules. Their model, effort,
 fast-mode, and non-full permission choices use the same session grant and the
 Gateway's allowed model catalog. Full permission mode, sandbox changes, and
 changes to an existing session's context window still require administrator access.
@@ -129,6 +195,31 @@ Own-work methods, including message sending, ordinary session creation,
 recovery, and forks, accept `operator.sessions.write` where their parameters
 do not require administrator access. Session ownership, current authority,
 agent access, and runtime and sandbox requirements still apply.
+
+Session readers can read visible dashboards and receive their updates and focus
+commands. Session writers can arrange tabs and put widgets on their own
+dashboards without general Gateway read or write access. Core report, progress,
+and website widgets are discoverable with session-read access; plugin-specific
+scopes and widget approvals remain unchanged. Canvas imports require a saved widget
+receipt in the dashboard conversation, with source access retained through the write.
+Broad readers keep their existing document-ID-only access.
+
+For saved summaries, an authorized agent can publish selected results as a
+`session:report`; readers consume the saved session data. For live HTML
+dashboards, session readers can execute an explicitly approved named
+`github.actions.runs` query using only its view ticket and query name. The
+Gateway resolves its fixed repository, workflow, branch, filters, result limit,
+and returned fields. Runtime query overrides are rejected. The flexible
+`board.data.read` binding form requires broader access. A repository-only grant does not approve a
+named query, and changing a definition requires renewed approval under the
+existing policy.
+
+The Gateway authorizes the session from the view ticket and rechecks caller
+access, widget revision and view generation, and the current query grant before
+returning even cached data. Approval deliberately shares matching future and
+private Actions results obtained with the agent's credentials; readers need no
+GitHub repository access of their own. Session visibility alone is not approval.
+Other dashboard host data bindings and actions retain their broader scopes.
 
 Session readers can also use `artifacts.list`, `artifacts.get`, and
 `artifacts.download` for artifacts in a conversation they can currently read.
@@ -199,6 +290,18 @@ ceiling. A committed change still retires the previous access if returning the
 result fails. An authorized self-downgrade receives its response before its
 connection closes.
 
+The Control UI distinguishes a role ceiling from limited browser pairing. When
+the authenticated role does not allow administrator access, its limited-access
+notice explains that device approval cannot grant it and does not offer
+**Request admin**. Ask a Gateway administrator to change the role if more access
+is needed, then reconnect. A role that permits administrator access can still
+request an upgrade for a pairing-limited browser; approval and RPC authorization
+continue to check the current role.
+
+The optional `hello-ok.auth.roleAllowsAdmin` field reports this ceiling for
+presentation. Clients can ignore it; it does not grant access or change RPC
+authorization.
+
 Use `gateway.roles.assignments.byGithubLogin` to declare assignments before a
 person's first login or share the same mapping across Gateways. Keys are GitHub
 logins, matched case-insensitively after trimming; malformed logins and duplicate
@@ -263,9 +366,11 @@ For sessions created by other people, `sessions.others` supports these values:
 - `"write"`: allows participation in foreign sessions. Draft and incognito
   restrictions remain in force.
 
-A person always owns their own sessions. Explicit session membership can raise
-`"view"` or `"suggest"` access for a specific session, and connections already
-holding `operator.admin` retain their administrative session access.
+A person always owns their own sessions. At `"none"`, explicit session membership
+does not grant access to another person's sessions. Membership can raise `"view"`
+or `"suggest"` access for a specific session; `"write"` already permits participation
+without membership. Connections holding `operator.admin` retain their
+administrative session access.
 
 Set `agents: "*"` to allow session creation and agent runs on every agent, list
 agent IDs to allow only those agents, or use an empty array to disallow both.
@@ -277,6 +382,44 @@ Discovery does not grant or revoke access to existing sessions: the role's
 separate session-read policy still governs which sessions the caller can read.
 The Control UI waits for a live agent roster after loading or reconnecting, so
 an older browser roster cannot restore agents excluded by the current role.
+
+### Access program grants
+
+For role-governed people, Standard Access needs no additional grant. Blue and Red
+each require an explicit entry in the role's `accessPrograms.cyber` list:
+
+```json5 validate=false
+// Inside gateway.roles.definitions.maintainer
+accessPrograms: { cyber: ["daybreak_blue", "daybreak_red"] },
+```
+
+Omitting the field or setting `cyber: []` permits neither Blue nor Red. Granting
+Red does not grant Blue, or vice versa. The person's effective role supplies these
+grants through the same explicit assignment, GitHub mapping, and default-role
+rules described above; there is no separate per-person Access assignment.
+
+These grants are independent of `modelPolicy`: an unrestricted model list, model
+wildcards, the old Daybreak model aliases, or `operator.admin` do not grant Access
+to a named role. The selected model still needs model permission. The exact
+provider account and runtime must also advertise the program; provider metadata
+is capability evidence, never an RBAC grant. Catalog choices show only the
+intersection, and direct mutations and execution enforce it server-side.
+
+With live reload enabled, changing these grants retires the role's existing
+source authority. Queued, retained, and recovered work cannot reuse a removed
+grant, and restoring it does not revive revoked authority. New admission is
+required. An unset-selection cyber fallback can retry with Blue only when both
+the role and provider permit Blue; an explicit Standard selection never escalates.
+
+Existing roles are not automatically granted Blue or Red during upgrade.
+Administrators must explicitly add the intended grants. System/shared-secret
+use and deployments without `gateway.roles` keep their existing non-RBAC
+behavior and provider capability checks. This is not a bypass available to a
+role-governed person.
+
+Native runtimes must support exact host-owned dispatch enforcement when a named role restricts either models or Access programs. An unrestricted model list alone does not disable Access enforcement. Incompatible runtimes fail before inference.
+
+### Model policy
 
 Set a role's optional `modelPolicy` to limit the models used by its requests:
 
@@ -335,6 +478,19 @@ Bounded automatic metadata, operator-configured
 inbound media preprocessing, and host-owned execution approval keep their
 existing service authority. Omitting `modelPolicy` preserves the role's existing
 model access, and shared-secret System access is unchanged.
+
+Activity recaps use the owning agent's utility route under the session's assigned
+human owner's model policy, or its authenticated profile creator's policy when
+there is no assigned human owner. Historical profile aliases resolve to the current
+canonical profile before policy is bound. The Gateway checks committed policy before provider
+requests, including retries and fallbacks; denied or revoked work is skipped with
+a logged reason and retains the previous recap. Requesting a refresh still requires
+session write access and never substitutes the viewer's model permissions for the
+session owner's. Assigning a task to an agent or the system does not remove its
+authenticated creator's policy. Sessions without an assigned human owner or
+authenticated profile creator retain Gateway service authority. Cron, subagent,
+and incognito sessions do not generate recaps. Disabling the owning agent's utility
+routing stops all its recap generation. See [Activity tab](/web/control-ui/settings#activity-tab).
 
 Native Codex staff work without a model policy has a limited attribution case
 when qualified native hooks are disabled or unavailable: previously accepted
@@ -540,9 +696,11 @@ dispatch so authorization failures have one standard structured response:
   `operator.write` when `runtimeId` requests runtime-specific command eligibility.
   Session placement methods derive
   their scope from the requested target before schema validation:
-  `sessions.dispatch` needs `operator.write` for `deviceId` and
-  `operator.admin` for `profileId` or a target-less
-  `cloudWorkers.projectProfiles` lookup. `sessions.move` needs `operator.write`
+  `sessions.dispatch` needs `operator.write` for explicit `deviceId`, `autoDevice`,
+  or `profileId`. Cloud profile dispatch additionally requires an administrator
+  or a current role’s `workerProfiles` grant for the session’s verified creator.
+  Setup remains administrator-only. A target-less
+  `cloudWorkers.projectProfiles` lookup requires `operator.admin`. `sessions.move` needs `operator.write`
   for Gateway or device targets and `operator.admin` for profile targets.
   `abandonSource: true` remains `operator.write` but is schema-valid only with
   a Gateway target and runtime-valid only for an exact offline device source.
@@ -550,7 +708,7 @@ dispatch so authorization failures have one standard structured response:
   malformed move target use `operator.write` so the handler can return the
   precise schema error. All three methods retain session ownership,
   participation, and commit-time revalidation fences. `operator.read` alone
-  cannot start, stop, or move a session. Cloud profile allocation and mutation,
+  cannot start, stop, or move a session. Cloud profile setup and configuration,
   pairing and Connect machine, raw `environments.create` or
   `environments.destroy`, incognito sessions, direct `execNode` execution, and
   arbitrary host or node paths remain `operator.admin`.
@@ -580,12 +738,17 @@ dispatch so authorization failures have one standard structured response:
 
 Project RPCs use these scopes:
 
-| Method                                 | Required scope and additional gate                                                                                            |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `projects.list`                        | `operator.sessions.read` or broader read access; only callers satisfying `operator.write` receive `repoRoot` and `originUrl`. |
-| `projects.add`                         | `operator.write` and the `controlPlaneWrite` method flag.                                                                     |
-| `projects.register`, `projects.remove` | `operator.admin`.                                                                                                             |
-| `projects.searchRemote`                | `operator.read`.                                                                                                              |
+| Method                                 | Required scope and additional gate                                                                                                                                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projects.list`                        | `operator.sessions.read` or broader read access receives project names and optional read-safe `repositoryIdentity` (`org/repo`); only callers satisfying `operator.write` receive `repoRoot` and `originUrl`. |
+| `projects.add`                         | `operator.write` and the `controlPlaneWrite` method flag.                                                                                                                                                     |
+| `projects.register`, `projects.remove` | `operator.admin`.                                                                                                                                                                                             |
+| `projects.searchRemote`                | `operator.read`.                                                                                                                                                                                              |
+
+`repositoryIdentity` describes only an already discoverable project, not a clone
+URL or permission to read private repository content. Origins outside the
+configured GitHub host or unsupported clone forms omit it. Remote search,
+repository reads, and publication retain their existing access checks.
 
 Some handlers then apply stricter checks based on the concrete thing being
 approved or mutated:

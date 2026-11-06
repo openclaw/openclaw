@@ -1,10 +1,32 @@
 import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
+import {
+  materializeSkillWorkshopPlugin,
+  moveSkillWorkshopSettings,
+} from "../../../config/skill-workshop-plugin-migration.js";
 import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 
-const ENABLE_AUTO_HINT =
-  "Run `openclaw config set skills.workshop.autonomous.mode auto` to let agents save and update skills automatically (every change is announced and undoable).";
-
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[] = [
+  {
+    id: "plugins.skill-workshop-policy-while-built-in",
+    legacyRules: [
+      {
+        path: ["plugins"],
+        message:
+          'Plugin policy written while Skill Workshop was built in needs migration so Skill Workshop keeps running. Run "openclaw doctor --fix".',
+        match: (_value, root) =>
+          materializeSkillWorkshopPlugin(structuredClone(root)).changes.length > 0,
+      },
+    ],
+    apply: (raw, changes) => {
+      const migrated = materializeSkillWorkshopPlugin(raw);
+      // Marker-only conversion is stamped by the config writer, not an unrelated Doctor repair.
+      if (migrated.changes.length === 0) {
+        return;
+      }
+      Object.assign(raw, migrated.config);
+      changes.push(...migrated.changes);
+    },
+  },
   {
     id: "skills.workshop.autonomous.enabled->mode",
 
@@ -21,39 +43,16 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[
         return;
       }
       if (autonomous.mode === undefined) {
-        autonomous.mode = "off";
-        changes.push(
-          autonomous.enabled === false
-            ? 'Mapped skills.workshop.autonomous.enabled to mode: "off".'
-            : `Mapped skills.workshop.autonomous.enabled to mode: "off" because Skill Workshop proposals were removed. ${ENABLE_AUTO_HINT}`,
-        );
+        // enabled: true meant background reviews that propose changes for review.
+        const mode = autonomous.enabled === false ? "off" : "propose";
+        autonomous.mode = mode;
+        changes.push(`Mapped skills.workshop.autonomous.enabled to mode: "${mode}".`);
       } else {
         changes.push(
           "Removed skills.workshop.autonomous.enabled because autonomous.mode is already set.",
         );
       }
       delete autonomous.enabled;
-    },
-  },
-  {
-    id: "skills.workshop.autonomous.mode-propose->off",
-    legacyRules: [
-      {
-        path: ["skills", "workshop", "autonomous", "mode"],
-        match: (value) => value === "propose",
-        message:
-          'skills.workshop.autonomous.mode "propose" was removed with Skill Workshop proposals; use "off" or "auto". Run "openclaw doctor --fix".',
-      },
-    ],
-    apply: (raw, changes) => {
-      const autonomous = getRecord(getRecord(getRecord(raw.skills)?.workshop)?.autonomous);
-      if (autonomous?.mode !== "propose") {
-        return;
-      }
-      autonomous.mode = "off";
-      changes.push(
-        `Skill Workshop proposals were removed; set skills.workshop.autonomous.mode to "off" (was "propose"). ${ENABLE_AUTO_HINT}`,
-      );
     },
   },
   {
@@ -85,6 +84,20 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[
           "Removed retired skills.workshop.allowSymlinkTargetWrites; Skill Workshop writes only inside its own directory.",
         );
       }
+    },
+  },
+  {
+    // Last: the rules above canonicalize older shapes before the settings move.
+    id: "skills.workshop->plugins.entries.skill-workshop.config",
+    legacyRules: [
+      {
+        path: ["skills", "workshop"],
+        message:
+          'skills.workshop moved to plugins.entries.skill-workshop.config. Run "openclaw doctor --fix".',
+      },
+    ],
+    apply: (raw, changes) => {
+      changes.push(...moveSkillWorkshopSettings(raw));
     },
   },
 ];

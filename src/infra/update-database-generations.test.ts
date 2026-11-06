@@ -7,6 +7,7 @@ import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import * as fileGeneration from "./sqlite-file-generation.js";
 import {
   createSqliteFileGenerationReader,
   readStableSqliteFileGeneration,
@@ -15,10 +16,42 @@ import {
 import * as readOnlyLocation from "./sqlite-readonly-location.js";
 import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
-import { readUpdatePhysicalDatabaseGenerations } from "./update-physical-database-generations.js";
+import {
+  readUnchangedUpdateDatabaseGeneration,
+  readUpdateDatabaseGenerationPair,
+} from "./update-database-generations.js";
+import {
+  readUpdatePhysicalDatabaseGenerations,
+  readUpdatePhysicalDatabaseObservation,
+} from "./update-physical-database-generations.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+function transformBigintStats(transform: (stat: fs.BigIntStats) => fs.BigIntStats) {
+  const fstat = fs.fstatSync;
+  const stat = fs.statSync;
+  vi.spyOn(fs, "fstatSync").mockImplementation((...args) =>
+    args[1]?.bigint ? transform(fstat(args[0], { bigint: true })) : fstat(...args),
+  );
+  vi.spyOn(fs, "statSync").mockImplementation((...args) =>
+    args[1]?.bigint ? transform(stat(args[0], { bigint: true })) : stat(...args),
+  );
+}
+
+function replaceText(bytes: Buffer, from: string, to: string) {
+  const changed = Buffer.from(bytes);
+  const offset = changed.indexOf(from);
+  expect(offset).toBeGreaterThan(0);
+  changed.write(to, offset);
+  return changed;
+}
+
+function withNativeCopying(mode: "auto" | "off", operation: () => Promise<void>) {
+  const previous = getFsSafeNativeConfig();
+  configureFsSafeNative({ mode });
+  return operation().finally(() => configureFsSafeNative(previous));
+}
 
 function generationFixture(layout = "delete") {
   const directory = dirs.make("update-generation-content-");
@@ -63,12 +96,233 @@ function expectedClosedGeneration(file: string): string {
     .digest("hex");
 }
 
+// Hook the final stable read so a real native connection changes the family mid-read.
+function duringGenerationRead(event: () => void) {
+  const read = fileGeneration.readStableSqliteFileGeneration;
+  vi.spyOn(fileGeneration, "readStableSqliteFileGeneration").mockImplementationOnce((...args) => {
+    const generation = read(...args);
+    event();
+    return generation;
+  });
+}
+
+function openReader(file: string) {
+  const database = new DatabaseSync(file, { readOnly: true });
+  database.prepare("SELECT count(*) FROM receipt").get();
+  return database;
+}
+
+it.for([
+  "different path",
+  "same bytes replacement",
+  "symlink to original",
+  "coarse-clock write",
+  "missing main with journal",
+  "torn SHM header",
+  "changing SHM header",
+  "appearing committed SHM header",
+  "linked empty WAL",
+  "linked journal",
+] as const)("does not reuse a successful SQLite receipt after %s", (change, { skip }) => {
+  if (
+    process.platform === "win32" &&
+    (change === "symlink to original" || change.startsWith("linked "))
+  ) {
+    skip(); // File symlinks require privileges on Windows.
+  }
+  const { file, staging } = generationFixture();
+  if (change === "coarse-clock write") {
+    const identity = fs.statSync(file, { bigint: true });
+    const timestamp = BigInt(Date.now() - 5_000) * 1_000_000n;
+    transformBigintStats((stat) => {
+      if (stat.dev === identity.dev && stat.ino === identity.ino) {
+        stat.mtimeNs = timestamp;
+        stat.ctimeNs = timestamp;
+      }
+      return stat;
+    });
+  }
+  const observation = readUpdatePhysicalDatabaseObservation(file);
+  expect(observation.generation.ok).toBe(true);
+  const receipt = observation.sqliteReceipt;
+  if (!receipt) {
+    throw new Error("Expected a successful SQLite receipt before changing its source");
+  }
+  expect(Object.isFrozen(receipt)).toBe(true);
+  expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBe(receipt.generation);
+  let pathname = file;
+  if (change === "different path") {
+    pathname = `${file}.other`;
+    fs.copyFileSync(file, pathname);
+  } else if (change === "same bytes replacement" || change === "symlink to original") {
+    fs.renameSync(file, `${file}.original`);
+    if (change === "symlink to original") {
+      fs.symlinkSync(`${file}.original`, file);
+    } else {
+      fs.copyFileSync(`${file}.original`, file);
+    }
+  } else if (change === "coarse-clock write") {
+    fs.writeFileSync(file, replaceText(fs.readFileSync(file), "before", "after!"));
+  } else if (change === "missing main with journal") {
+    fs.unlinkSync(file);
+    fs.writeFileSync(`${file}-journal`, "retained recovery bytes");
+  } else if (change === "linked empty WAL" || change === "linked journal") {
+    fs.writeFileSync(`${file}.sidecar`, "");
+    fs.symlinkSync(`${file}.sidecar`, `${file}-${change === "linked journal" ? "journal" : "wal"}`);
+  } else {
+    const header = Buffer.alloc(96);
+    // Torn: copy 1 disagrees. Changing: both copies change. Appearing: iChange is nonzero.
+    const appearing = change === "appearing committed SHM header";
+    if (change === "torn SHM header") {
+      header[0] = 1;
+    } else {
+      duringGenerationRead(() => {
+        header[appearing ? 8 : 0] = header[appearing ? 56 : 48] = 1;
+        fs.writeFileSync(`${file}-shm`, header);
+      });
+    }
+    if (!appearing) {
+      fs.writeFileSync(`${file}-shm`, header);
+    }
+  }
+  if (["different path", "same bytes replacement", "coarse-clock write"].includes(change)) {
+    expect(readUnchangedUpdateDatabaseGeneration(pathname, receipt)).toBeUndefined();
+  } else {
+    expect(() => readUnchangedUpdateDatabaseGeneration(pathname, receipt)).toThrow(
+      change === "missing main with journal"
+        ? /absent but retained journal/
+        : change === "torn SHM header"
+          ? /WAL commit header is unavailable or changing/
+          : change === "changing SHM header" || change === "appearing committed SHM header"
+            ? /WAL commit publication could not be verified/
+            : /requires a regular file/,
+    );
+  }
+  expect(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).toHaveBeenCalledTimes(1);
+  expect(fs.readdirSync(staging)).toEqual([]);
+});
+
+it.skipIf(process.platform === "win32").each(["", "-wal", "-journal"] as const)(
+  "rejects a linked family member %s installed during receipt verification",
+  (suffix) => {
+    const { file, staging } = generationFixture();
+    if (suffix) {
+      fs.writeFileSync(file + suffix, "");
+    }
+    const receipt = readUpdatePhysicalDatabaseObservation(file).sqliteReceipt;
+    if (!receipt) {
+      throw new Error("Expected a successful SQLite receipt before replacing its family");
+    }
+    duringGenerationRead(() => {
+      fs.renameSync(file + suffix, `${file + suffix}.original`);
+      fs.symlinkSync(`${file + suffix}.original`, file + suffix);
+    });
+    expect(() => readUnchangedUpdateDatabaseGeneration(file, receipt)).toThrow(
+      /requires a regular file/,
+    );
+    expect(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).toHaveBeenCalledTimes(1);
+    expect(fs.readdirSync(staging)).toEqual([]);
+  },
+);
+
+it.each(["appears", "disappears", "is replaced"] as const)(
+  "reuses a receipt when only an empty WAL %s without a commit header change",
+  (change) => {
+    const { file, staging } = generationFixture(change === "appears" ? "wal-absent" : "wal-empty");
+    const receipt = readUpdatePhysicalDatabaseObservation(file).sqliteReceipt;
+    if (!receipt) {
+      throw new Error("Expected a successful SQLite receipt before the empty WAL transition");
+    }
+    if (change !== "appears") {
+      fs.renameSync(`${file}-wal`, `${file}.empty-wal`);
+    }
+    if (change !== "disappears") {
+      fs.writeFileSync(`${file}-wal`, "");
+    }
+    expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBe(receipt.generation);
+    expect(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).toHaveBeenCalledTimes(1);
+    expect(fs.readdirSync(staging)).toEqual([]);
+  },
+);
+
+it.each([
+  "a non-writing connection opens",
+  "a non-writing connection closes",
+  "the last writer closes after checkpointing its commit",
+] as const)("binds the post-read generation when %s during the read", (event) => {
+  const { file, staging } = generationFixture("wal-absent");
+  const opens = event === "a non-writing connection opens";
+  let connection: DatabaseSync | undefined;
+  if (!opens) {
+    connection = new DatabaseSync(file);
+    if (event === "a non-writing connection closes") {
+      connection.prepare("SELECT count(*) FROM receipt").get();
+    } else {
+      connection.exec("INSERT INTO receipt VALUES ('committed'); PRAGMA wal_checkpoint(TRUNCATE);");
+      // The index this close removes carries commit evidence, but the WAL holds no frames.
+      expect(fs.readFileSync(`${file}-shm`).readUInt32LE(8)).not.toBe(0);
+      expect(fs.statSync(`${file}-wal`).size).toBe(0);
+    }
+  }
+  const expected = expectedClosedGeneration(file);
+  const before = fs.readFileSync(file);
+  duringGenerationRead(() => {
+    if (connection) {
+      connection.close();
+      connection = undefined;
+    } else {
+      connection = openReader(file);
+    }
+  });
+  try {
+    const pair = readUpdateDatabaseGenerationPair([file]);
+    expect(fs.existsSync(`${file}-shm`)).toBe(opens);
+    // The opener's zero-commit index stays bound; its closed equivalent is the alternate.
+    expect(opens ? pair.emptyReaderAlternates[file] : pair.committed[file]).toBe(expected);
+    expect(readUpdateDatabaseGenerationPair([file]).committed).toEqual(pair.committed);
+  } finally {
+    connection?.close();
+  }
+  expect(fs.readFileSync(file)).toEqual(before);
+  expect(fs.readdirSync(staging)).toEqual([]);
+});
+
+it("refuses a generation when a writer commits during the read", () => {
+  const { file, staging } = generationFixture("wal-absent");
+  const writer = new DatabaseSync(file);
+  try {
+    duringGenerationRead(() => writer.exec("INSERT INTO receipt VALUES ('during')"));
+    expect(() => readUpdateDatabaseGenerationPair([file])).toThrow(
+      /SQLite file generation changed while reading/,
+    );
+  } finally {
+    writer.close();
+  }
+  expect(fs.readdirSync(staging)).toEqual([]);
+});
+
+it("reuses a receipt when a reader opens without committing during verification", () => {
+  const { file, staging } = generationFixture("wal-absent");
+  const receipt = readUpdatePhysicalDatabaseObservation(file).sqliteReceipt;
+  if (!receipt) {
+    throw new Error("Expected a successful SQLite receipt before a reader opens");
+  }
+  let reader: DatabaseSync | undefined;
+  duringGenerationRead(() => {
+    reader = openReader(file);
+  });
+  try {
+    expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBe(receipt.generation);
+  } finally {
+    reader?.close();
+  }
+  expect(fs.readdirSync(staging)).toEqual([]);
+});
+
 it.each(["auto", "off"] as const)(
   "retains exact closed generations and source bytes with native copying %s",
   async (mode) => {
-    const previous = getFsSafeNativeConfig();
-    try {
-      configureFsSafeNative({ mode });
+    await withNativeCopying(mode, async () => {
       for (const layout of ["delete", "wal-absent", "wal-empty", "empty-journal", "zero"]) {
         const { file, staging } = generationFixture(layout);
         const before = ["", "-wal", "-journal"].flatMap((suffix) =>
@@ -85,9 +339,7 @@ it.each(["auto", "off"] as const)(
         expect(fs.readdirSync(staging), layout).toEqual([]);
         vi.restoreAllMocks();
       }
-    } finally {
-      configureFsSafeNative(previous);
-    }
+    });
   },
 );
 
@@ -118,10 +370,7 @@ it.each(["auto", "off"] as const)(
   async (mode) => {
     const { file, staging, prepare } = generationFixture();
     const valid = fs.readFileSync(file);
-    const malformed = Buffer.from(valid);
-    const offset = malformed.indexOf("CREATE TABLE receipt");
-    expect(offset).toBeGreaterThan(0);
-    malformed[offset + 3] = "X".charCodeAt(0);
+    const malformed = replaceText(valid, "CREATE TABLE receipt", "CREX");
     fs.writeFileSync(file, malformed);
     let copied = false;
     vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).mockImplementation(
@@ -135,15 +384,11 @@ it.each(["auto", "off"] as const)(
         }
       },
     );
-    const previous = getFsSafeNativeConfig();
-    try {
-      configureFsSafeNative({ mode });
-      await expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(
+    await withNativeCopying(mode, () =>
+      expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(
         /snapshot hash mismatch/,
-      );
-    } finally {
-      configureFsSafeNative(previous);
-    }
+      ),
+    );
     expect(copied).toBe(true);
     expect(fs.readFileSync(file)).toEqual(malformed);
     expect(fs.readdirSync(staging)).toEqual([]);
@@ -171,10 +416,7 @@ it.each(["same-size write", "truncation", "identity replacement"] as const)(
   async (change) => {
     const { file, staging, prepare } = generationFixture();
     const original = fs.readFileSync(file);
-    const changed = Buffer.from(original);
-    const offset = changed.indexOf("before");
-    expect(offset).toBeGreaterThan(0);
-    changed.write("after!", offset);
+    const changed = replaceText(original, "before", "after!");
     vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).mockImplementation(
       (pathname, _staging, ...rest) => {
         if (change === "identity replacement") {
@@ -256,10 +498,7 @@ it.each([
   "after acquisition within a timestamp quantum",
 ] as const)("refuses a same-size write after a source digest %s", async (timing) => {
   const { file, staging, prepare } = generationFixture();
-  const changed = fs.readFileSync(file);
-  const offset = changed.indexOf("before");
-  expect(offset).toBeGreaterThan(0);
-  changed.write("after!", offset);
+  const changed = replaceText(fs.readFileSync(file), "before", "after!");
   const source = fs.statSync(file, { bigint: true });
   const coarse = timing === "after acquisition within a timestamp quantum";
   const now = Date.now();
@@ -332,14 +571,7 @@ it.each(["bigint", "number"] as const)(
       });
       return stat;
     };
-    const fstat = fs.fstatSync;
-    const stat = fs.statSync;
-    vi.spyOn(fs, "fstatSync").mockImplementation((...args) =>
-      args[1]?.bigint ? withoutNanoseconds(fstat(args[0], { bigint: true })) : fstat(...args),
-    );
-    vi.spyOn(fs, "statSync").mockImplementation((...args) =>
-      args[1]?.bigint ? withoutNanoseconds(stat(args[0], { bigint: true })) : stat(...args),
-    );
+    transformBigintStats(withoutNanoseconds);
     const read = createSqliteFileGenerationReader();
     read(file);
     fs.writeFileSync(file, "after!");
@@ -454,8 +686,6 @@ it("invalidates ctime-only source changes across interleaved files", () => {
   const before = read(first);
   const other = read(second);
   fs.writeFileSync(first, "after!");
-  const fstat = fs.fstatSync;
-  const stat = fs.statSync;
   const preserveMtime = (current: fs.BigIntStats) => {
     if (current.dev === before.database.dev && current.ino === before.database.ino) {
       current.mtimeNs = before.database.mtimeNs;
@@ -463,12 +693,7 @@ it("invalidates ctime-only source changes across interleaved files", () => {
     }
     return current;
   };
-  vi.spyOn(fs, "fstatSync").mockImplementation((...args) =>
-    args[1]?.bigint ? preserveMtime(fstat(args[0], { bigint: true })) : fstat(...args),
-  );
-  vi.spyOn(fs, "statSync").mockImplementation((...args) =>
-    args[1]?.bigint ? preserveMtime(stat(args[0], { bigint: true })) : stat(...args),
-  );
+  transformBigintStats(preserveMtime);
   expect(read(first).database.sha256).toBe(createHash("sha256").update("after!").digest("hex"));
   expect(read(second)).toEqual(other);
 });

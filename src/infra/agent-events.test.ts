@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, test, vi }
 import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getAgentEventExecutionContext } from "./agent-event-execution-context.js";
 import {
   type AgentAssistantSourceReceipt,
   type AgentEventPayload,
@@ -336,6 +337,8 @@ test("does not invent or replace producer-owned lifecycle start timestamps", () 
 });
 
 test("keeps hidden routing private while preserving lifecycle persistence identity", () => {
+  const collectDescriptors = vi.spyOn(Object, "defineProperties");
+  const defineProperty = vi.spyOn(Object, "defineProperty");
   const privateRouting = {
     mainSessionRestartRecovery: true,
     projectSessionLifecycle: false,
@@ -373,6 +376,18 @@ test("keeps hidden routing private while preserving lifecycle persistence identi
   });
   for (const key of ["lifecycleGeneration", ...Object.keys(privateRouting)]) {
     expect(Object.keys(event)).not.toContain(key);
+  }
+  // Fixed metadata must not allocate an intermediate descriptor collection per delta.
+  expect(
+    collectDescriptors.mock.calls.filter(([target]) => received.some((entry) => entry === target)),
+  ).toHaveLength(0);
+  for (const target of received) {
+    const descriptors = defineProperty.mock.calls
+      .filter(
+        ([definedEvent, key]) => definedEvent === target && key !== "admitLifecyclePublication",
+      )
+      .map((call) => call[2]);
+    expect(new Set(descriptors).size).toBe(1);
   }
 });
 
@@ -814,6 +829,16 @@ describe("agent event routing after cancellation", () => {
         sessionKey: "agent:first:one",
         sessionId: "before",
       });
+      const routing = getAgentEventExecutionContext()
+        .getStore()!
+        .routingByRun!.get("shared")!.routing;
+      for (let index = 0; index < 3; index++) {
+        sendEvent("shared", "assistant", { delta: "streamed" });
+        expect(
+          getAgentEventExecutionContext().getStore()!.routingByRun!.get("shared")!.routing,
+        ).toBe(routing);
+      }
+      events.length = 0;
       await withGeneration(generation, async () => {
         registerRun("shared", { sessionId: "after-compaction" });
         await Promise.resolve();

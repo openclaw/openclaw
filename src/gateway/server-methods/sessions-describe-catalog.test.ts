@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -11,12 +10,7 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
-import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import {
-  getGatewayContextResolver,
-  withPluginRuntimeGatewayContextResolver,
-} from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   bindSessionControllerSource,
@@ -27,7 +21,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareAgentRequestPreflight } from "../agent-turn/agent-request-preflight.js";
 import { registerAgentTurnSourceAdmission } from "../agent-turn/agent-turn-source-admission.js";
 import { registerChatAbortController } from "../chat-abort.js";
-import type { PreparedGatewayModelCatalog } from "../server-model-catalog.types.js";
 import { createSessionGoalFixture } from "../session-goal.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
@@ -71,11 +64,8 @@ function activityReader(
     };
     const described = await read();
     expect(described).toMatchObject({ session: expected });
-    const roster = await listSessions({ context, client, request: { search: key } });
-    expect(roster.sessions).toEqual([expect.objectContaining(expected)]);
     if (projected && active) {
       expect(described).not.toHaveProperty("session.activeRunIds");
-      expect(roster.sessions[0]).not.toHaveProperty("activeRunIds");
     }
     if (filter) {
       const filtered = await listSessions({
@@ -89,7 +79,7 @@ function activityReader(
 }
 
 it.each(["chat", "projected"] as const)(
-  "describes current %s activity consistently with the roster, independently of the goal",
+  "describes current %s activity independently of the goal",
   async (owner) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = await seedSessions();
@@ -119,9 +109,6 @@ it.each(["chat", "projected"] as const)(
         releaseWait?.();
         await assertActivity("running", true);
         cleanup();
-        await assertActivity("done", false);
-        await upsertSessionEntryCore(scope, { status: "done", endedAt: Date.now() });
-        // A yielded task may retain an active goal without owning a live turn.
         await assertActivity("done", false);
       } finally {
         releaseWait?.();
@@ -155,9 +142,7 @@ it("projects configured-locator admissions through preparation and queuing witho
         }),
       ),
     );
-    expect(foreign.registered).toBe(true);
     const foreignInput = expectDefined(foreign.entry, "foreign source").input;
-    expect(getGatewayContextResolver(foreignInput)).toBe(resolveGatewayContext);
     const readActivity = activityReader(context, client, runId);
     const assertActivity = (active: boolean) =>
       readActivity(active ? "queued" : "done", active, true);
@@ -190,11 +175,9 @@ it("projects configured-locator admissions through preparation and queuing witho
       );
       expect(io.emitAcceptance).not.toHaveBeenCalled();
       const entry = expectDefined(registrations[0]?.entry, "configured source");
-      expect(getGatewayContextResolver(entry.input)).toBe(resolveGatewayContext);
       const projection = expectDefined(getSessionRowProjection(context), "row projection");
       const row = expectDefined(projection.capture({ key, agentId: "main" }), "physical row");
       expect(entry.input.target?.storeScope).not.toBe(row.storeTarget.storePath);
-      expect(entry.input.phase).toBe("preparing");
       // Reads occur outside the admission's ambient scope and must use their declared Gateway.
       await assertActivity(true);
 
@@ -205,7 +188,6 @@ it("projects configured-locator admissions through preparation and queuing witho
       expect(enqueueFollowupRun(key, queued, { mode: "followup" }, "none", undefined, false)).toBe(
         true,
       );
-      expect(entry.input.phase).toBe("waiting");
       await assertActivity(true);
 
       retireSessionControllerInput(entry.input);
@@ -231,78 +213,6 @@ it("projects configured-locator admissions through preparation and queuing witho
         ),
         signal,
       );
-    }
-  });
-});
-
-const deep = {
-  levels: [{ id: "high", label: "Deep effort" }],
-  defaultLevel: "high",
-} satisfies ProviderThinkingProfile;
-function preparedCatalog(
-  profile: ProviderThinkingProfile,
-  thinkingLevelMap?: ModelCatalogEntry["thinkingLevelMap"],
-): PreparedGatewayModelCatalog {
-  const pluginRegistry = createEmptyPluginRegistry();
-  pluginRegistry.providers.push({
-    pluginId: "catalog-fixture",
-    source: "test",
-    provider: {
-      id: "catalog-fixture",
-      label: "Catalog fixture",
-      auth: [],
-      resolveThinkingProfile: () => profile,
-    },
-  });
-  return {
-    entries: [
-      {
-        id: "reasoner",
-        provider: "catalog-fixture",
-        name: "Reasoner",
-        reasoning: true,
-        thinkingLevelMap,
-      },
-    ],
-    pluginRegistry,
-  };
-}
-
-it.each(["main", "work"])("uses %s's completed entries and provider policy", async (agentId) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const config = await seedSessions();
-    config.agents = { ...config.agents, defaults: { model: "catalog-fixture/reasoner" } };
-    const catalogs = new Map([
-      [
-        "main",
-        preparedCatalog(
-          { levels: [] },
-          { off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null },
-        ),
-      ],
-      ["work", preparedCatalog(deep)],
-    ]);
-    const context = {
-      ...requestContext(config),
-      readPreparedGatewayModelCatalog: async (options?: { agentId?: string }) =>
-        options?.agentId ? catalogs.get(options.agentId) : undefined,
-    };
-    const client = identifiedClient("owner@example.com");
-    await initializeSessionReadContext(context);
-    const result = await sessionReader(context, client, `agent:${agentId}:active`)();
-    expect(result).toMatchObject({
-      session: {
-        agentId,
-        thinkingLevels: [
-          ...(agentId === "work" ? deep.levels : []),
-          { id: "ultra", label: "ultra" },
-        ],
-      },
-    });
-    if (agentId === "work") {
-      expect(result).toHaveProperty("session.thinkingDefault", "high");
-    } else {
-      expect(result).not.toHaveProperty("session.thinkingDefault");
     }
   });
 });

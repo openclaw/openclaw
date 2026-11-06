@@ -55,7 +55,7 @@ const sessions = integer(values.sessions, "--sessions", 2);
 const messages = integer(values.messages, "--messages");
 const payloadBytes = integer(values["payload-bytes"], "--payload-bytes");
 const targetIndex = integer(values["target-index"], "--target-index", 0);
-const warmSamples = integer(values["warm-samples"], "--warm-samples");
+const warmSamples = integer(values["warm-samples"], "--warm-samples", 5);
 assert(targetIndex < sessions, "--target-index must be below --sessions");
 const output = path.resolve(values.out);
 const fixture = path.join(output, "fixture");
@@ -202,7 +202,12 @@ if (values["seed-only"]) {
     sessions,
     "Offline backlog must contain every synthetic session",
   );
-  const samples: Array<{ phase: string; elapsedMs?: number; pendingAfter: number }> = [];
+  const samples: Array<{
+    phase: string;
+    outcome: "ok" | "rebuilding";
+    elapsedMs?: number;
+    pendingAfter: number;
+  }> = [];
   const phases: Array<{ phase: string; start: number; end: number }> = [];
   const setPhase = (phase: string) => {
     const now = Date.now();
@@ -341,10 +346,49 @@ if (values["seed-only"]) {
         30_000,
       );
       const timing = started === undefined ? {} : { elapsedMs: performance.now() - started };
-      assert(response.ok, `chat.history failed in ${phase}; inspect gateway.log`);
+      if (!response.ok) {
+        const error = response.error;
+        assert(
+          phase === "cold-read" &&
+            isRecord(error) &&
+            error.code === "UNAVAILABLE" &&
+            error.message === "session history is rebuilding; retry shortly" &&
+            error.retryable === true &&
+            error.retryAfterMs === 250 &&
+            isRecord(error.details) &&
+            error.details.method === "chat.history",
+          `Unexpected chat.history failure in ${phase}; inspect gateway.log`,
+        );
+        samples.push({
+          phase,
+          outcome: "rebuilding",
+          ...timing,
+          pendingAfter: pendingProjections(),
+        });
+        return;
+      }
       assert(isRecord(response.payload) && Array.isArray(response.payload.messages));
+      assert(
+        response.payload.sessionKey === sessionKey(targetIndex),
+        "Unexpected history session key",
+      );
+      assert(
+        response.payload.sessionId === sessionId(targetIndex),
+        "Unexpected history session ID",
+      );
       assert.equal(response.payload.messages.length, 1, "Expected one synthetic history message");
-      samples.push({ phase, ...timing, pendingAfter: pendingProjections() });
+      const message = response.payload.messages[0];
+      assert(isRecord(message), "Expected a synthetic history message object");
+      assert(
+        message.role === ((messages - 1) % 2 ? "assistant" : "user"),
+        "Unexpected message role",
+      );
+      assert(
+        message.content ===
+          `Synthetic projection message ${messages - 1} ${"x".repeat(payloadBytes)}`,
+        "Expected the latest synthetic history message",
+      );
+      samples.push({ phase, outcome: "ok", ...timing, pendingAfter: pendingProjections() });
     };
     await readHistory("cold-read");
     setPhase("drain");
@@ -389,6 +433,10 @@ if (values["seed-only"]) {
         }
       }
     }
+    const coldSample = samples.find((sample) => sample.phase === "cold-read");
+    const warmReadSamples = samples.filter(
+      (sample) => sample.phase.startsWith("warm-read-") && sample.outcome === "ok",
+    );
     const evidence = {
       complete,
       children: gateway?.pid ? [{ name: "gateway", pid: gateway.pid }] : [],
@@ -398,15 +446,17 @@ if (values["seed-only"]) {
       workload: { sessions, messages, payloadBytes, targetIndex, warmSamples },
       reproduced: (requestCounts["cold-read"]?.projectionRequests ?? 0) > 1,
       waitObserved: (requestCounts["cold-read"]?.projectionRequests ?? 0) > 0,
-      earlyReadiness: (samples[0]?.pendingAfter ?? 0) > 0,
+      coldOutcome: coldSample?.outcome,
+      earlyReadiness: coldSample?.outcome === "ok" && coldSample.pendingAfter > 0,
+      completedWarmReads: warmReadSamples.length,
       samples,
       ...(values["counts-only"]
         ? {}
-        : { warmLatencyMs: summarizeNumbers(samples.slice(1).map((sample) => sample.elapsedMs!)) }),
+        : { warmLatencyMs: summarizeNumbers(warmReadSamples.map((sample) => sample.elapsedMs!)) }),
       requestCounts,
       phases,
       caveat:
-        "The polling defect is reproduced only with more than one cold-read projection-status request. One request proves entry but not repeated polling. No timing delay, fake RPC, or production branch was injected. pendingAfter is one external read-only snapshot of this synthetic fixture.",
+        "The polling defect is reproduced only with more than one cold-read projection-status request. One request proves entry but not repeated polling. Only the exact cold projection-rebuilding response is accepted before draining; warm reads must succeed. No timing delay, fake RPC, or production branch was injected. pendingAfter and drain polling use external read-only snapshots of this synthetic fixture, outside Gateway counts.",
     };
     writeFileSync(path.join(output, "evidence.json"), JSON.stringify(evidence, null, 2));
     if (gateway?.pid) {

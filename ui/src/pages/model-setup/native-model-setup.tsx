@@ -13,7 +13,6 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.ts";
 import {
@@ -25,6 +24,7 @@ import {
 } from "../../lib/model-catalog-store.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
+import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import type { captureModelSetupConnection } from "./first-run-setup.ts";
 import { createModelSetupSaving } from "./model-setup-saving.ts";
@@ -227,6 +227,7 @@ export function createNativeModelSetup(options: {
 }
 
 export function NativeModelSetupView(props: { owner: NativeModelSetup }) {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const selected = () =>
     props.owner
       .models()
@@ -236,7 +237,7 @@ export function NativeModelSetupView(props: { owner: NativeModelSetup }) {
       value: `${model.provider}/${model.id}`,
       label: model.name,
       provider: model.provider,
-      detail:
+      description:
         model.available === true
           ? providerDisplayLabel(model.provider)
           : (chatModelUnavailableMessage(model.unavailableReason) ??

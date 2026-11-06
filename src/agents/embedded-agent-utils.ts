@@ -1,6 +1,7 @@
+import { readAssistantThinkingAppend } from "@openclaw/ai/internal/shared";
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
-import type { AssistantMessage } from "../llm/types.js";
+import type { AssistantMessage, ThinkingContent } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
   isAssistantTextContentBlockType,
@@ -56,27 +57,50 @@ export function sanitizeAssistantVisibleStreamText(
   });
 }
 
-export function createAssistantVisibleStreamText(phase?: AssistantPhase) {
+export function createAssistantVisibleStreamText(
+  phase?: AssistantPhase,
+  options?: { preserveTrailingWhitespace?: boolean },
+) {
   return createTextProjection([
     ...assistantVisibleTextFilters(
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
       true,
+      options,
     ),
     ...userFacingTextFilters(false, true),
-    trimTextFilter("both", { preserveCodeIndentation: true }),
+    trimTextFilter(options?.preserveTrailingWhitespace ? "start" : "both", {
+      preserveCodeIndentation: true,
+    }),
   ]);
 }
 
-function finalizeAssistantExtraction(errorContext: boolean, extracted: string): string {
-  return errorContext
-    ? renderUserFacingText(extracted, { errorContext: true })
+function finalizeAssistantExtraction(
+  errorContext: boolean,
+  extracted: string,
+  projection?: ReturnType<typeof createTextProjection>,
+): string {
+  if (errorContext) {
+    return renderUserFacingText(extracted, { errorContext: true });
+  }
+  return projection
+    ? (extracted.startsWith(projection.source)
+        ? projection.append(extracted.slice(projection.source.length), extracted)
+        : projection.replace(extracted)
+      ).text
     : sanitizeUserFacingText(extracted);
 }
 
+export type AssistantTextSource = {
+  content?: unknown;
+  stopReason?: unknown;
+  phase?: unknown;
+};
+
 function prepareEmbeddedAssistantTextForPhase(
-  msg: AssistantMessage,
+  msg: AssistantTextSource,
   requestedPhase: AssistantPhase,
   prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
+  projection?: ReturnType<typeof createTextProjection>,
 ): () => string {
   // Replacement callbacks own their text; source snapshots project inside their callback.
   const nativeToolMarkerBlocks =
@@ -86,11 +110,11 @@ function prepareEmbeddedAssistantTextForPhase(
   const prepareRender = (selectedPhase: AssistantPhase | undefined, renderText: () => string) => {
     const errorContext = msg.stopReason === "error";
     return () => {
-      const extracted = finalizeAssistantExtraction(errorContext, renderText());
+      const extracted = finalizeAssistantExtraction(errorContext, renderText(), projection);
       return selectedPhase === "final_answer" && !extracted.trim() ? "" : extracted;
     };
   };
-  const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
+  const messagePhase = normalizeAssistantPhase(msg.phase);
   if (typeof msg.content === "string") {
     const selectedPhase =
       requestedPhase === "final_answer" && messagePhase !== "final_answer"
@@ -186,7 +210,7 @@ function prepareEmbeddedAssistantTextForPhase(
 
 /** Prepare selected source parts now; render their visible text only when requested. */
 export function prepareAssistantVisibleText(
-  msg: AssistantMessage,
+  msg: AssistantTextSource,
   prepareText?: (
     text: string,
     final: boolean,
@@ -199,7 +223,7 @@ export function prepareAssistantVisibleText(
 
 /** Extract text intended for users, preferring explicit final-answer phase blocks. */
 export function extractAssistantVisibleText(
-  msg: AssistantMessage,
+  msg: AssistantTextSource,
   prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
 ): string {
   return prepareAssistantVisibleText(msg, prepareText)();
@@ -208,8 +232,9 @@ export function extractAssistantVisibleText(
 export function extractAssistantCommentaryText(
   msg: AssistantMessage,
   prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
+  projection?: ReturnType<typeof createTextProjection>,
 ): string {
-  return prepareEmbeddedAssistantTextForPhase(msg, "commentary", prepareText)();
+  return prepareEmbeddedAssistantTextForPhase(msg, "commentary", prepareText, projection)();
 }
 
 export function extractEmbeddedAssistantText(msg: AssistantMessage): string {
@@ -247,6 +272,86 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
     }
   }
   return blocks.join("\n");
+}
+
+/** Project native summaries incrementally while retaining snapshot replacement semantics. */
+export function createAssistantThinkingStream() {
+  let reasoningProjection = createTextProjection([trimTextFilter("both")]);
+  // Keep producer snapshots: comparing reconstructed prefixes would flatten each append.
+  let reasoningRaw: string | undefined;
+  const reasoningPrefixBlocks: string[] = [];
+  let reasoningPrefix = "";
+  let reasoningText = "";
+  return {
+    get text() {
+      return reasoningText;
+    },
+    update(input: string | AssistantMessage["content"], fallback?: string) {
+      let tail: ThinkingContent | undefined;
+      let prefixLength = 0;
+      let prefixUnchanged = typeof input !== "string" && reasoningRaw !== undefined;
+      if (Array.isArray(input)) {
+        for (const block of input) {
+          if (block?.type !== "thinking" || typeof block.thinking !== "string") {
+            continue;
+          }
+          if (tail) {
+            if (reasoningPrefixBlocks[prefixLength] !== tail.thinking) {
+              prefixUnchanged = false;
+              reasoningPrefixBlocks[prefixLength] = tail.thinking;
+            }
+            prefixLength++;
+          }
+          tail = block;
+        }
+      }
+      if (!prefixUnchanged || reasoningPrefixBlocks.length !== prefixLength) {
+        prefixUnchanged = false;
+        reasoningPrefixBlocks.length = prefixLength;
+        reasoningPrefix =
+          prefixLength === 0
+            ? ""
+            : reasoningPrefixBlocks
+                .map((raw) => raw.trim())
+                .filter(Boolean)
+                .join("\n");
+      }
+      const text = typeof input === "string" ? input : (tail?.thinking ?? "");
+      const append =
+        tail && reasoningRaw !== undefined
+          ? readAssistantThinkingAppend(tail, reasoningRaw)
+          : undefined;
+      const previousTail = reasoningProjection.text;
+      const projected =
+        text === reasoningRaw
+          ? { text: previousTail, delta: "" }
+          : append !== undefined
+            ? reasoningProjection.append(append)
+            : reasoningProjection.replace(text);
+      reasoningRaw = typeof input === "string" ? undefined : text;
+      // Only an unchanged prefix plus a producer-proven tail append can extend the
+      // combined summary. Snapshot corrections still replace the complete projection.
+      let delta = prefixUnchanged ? projected.delta : null;
+      if (delta !== null && !previousTail && projected.text && reasoningPrefix) {
+        delta = "\n" + delta;
+      }
+      reasoningText = !reasoningPrefix
+        ? projected.text
+        : delta !== null
+          ? reasoningText + delta
+          : reasoningPrefix + (projected.text ? "\n" : "") + projected.text;
+      if (!reasoningText && fallback?.trim()) {
+        reasoningText = fallback.trim();
+        delta = null;
+        reasoningRaw = undefined;
+        // A fallback is not part of the native snapshot's prefix.
+        reasoningProjection = createTextProjection([trimTextFilter("both")]);
+      }
+      projected.text = reasoningText;
+      projected.delta = delta;
+      return projected;
+    },
+  };
 }
 
 export function formatReasoningMessage(text: string): string {
@@ -330,7 +435,7 @@ function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   };
 
   for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
-    const index = match.index ?? 0;
+    const index = match.index;
     const isClose = match[1]?.includes("/") ?? false;
 
     // Ignore nested opens and unmatched closes.
@@ -399,7 +504,7 @@ export function extractThinkingFromTaggedText(text: string): string {
   let lastIndex = 0;
   let inThinking = false;
   for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
-    const idx = match.index ?? 0;
+    const idx = match.index;
     if (inThinking) {
       result += text.slice(lastIndex, idx);
     }

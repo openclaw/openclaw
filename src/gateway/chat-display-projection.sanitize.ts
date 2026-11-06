@@ -5,8 +5,10 @@ import {
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { prepareAgentRunReplyText } from "../agents/agent-run-terminal-reply.js";
+import { decodeRequesterOrigin } from "../agents/requester-origin.js";
 import { normalizeContextUsage } from "../agents/usage.js";
-import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
+import { buildInboundMediaUriFromPath } from "../media/inbound-media-path.js";
+import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
   isSilentAssistantTranscriptMessage,
@@ -34,10 +36,7 @@ import {
   takeAssistantManagedMediaUrlsForDisplay,
   truncateChatHistoryText,
 } from "./chat-display-projection.helpers.js";
-import {
-  projectWorkspaceResultConflict,
-  WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
-} from "./worker-environments/workspace-conflicts.js";
+import { projectWorkspaceConflictDetails } from "./worker-environments/workspace-conflicts.js";
 
 const MEDIA_PRIVATE_FIELDS = ["data", "blob", "path", "file", "filePath", "localPath"] as const;
 const MEDIA_REFERENCE_FIELDS = ["url", "openUrl", "image_url", "audio_url", "video_url"] as const;
@@ -201,15 +200,17 @@ export function sanitizeChatHistoryContentBlock(
   if (preserveExactToolPayload && Array.isArray(entry.content)) {
     // Some transcripts carry both nested output blocks and their joined text.
     // Keep one representation, and apply the same media privacy rules recursively.
-    const text = entry.content
-      .flatMap((item) => {
-        const value = readRecord(item)?.text;
-        return typeof value === "string" ? [value] : [];
-      })
-      .join("\n");
-    if (entry.text === text) {
-      delete entry.text;
-      changed = true;
+    if (typeof entry.text === "string") {
+      const text = entry.content
+        .flatMap((item) => {
+          const value = readRecord(item)?.text;
+          return typeof value === "string" ? [value] : [];
+        })
+        .join("\n");
+      if (entry.text === text) {
+        delete entry.text;
+        changed = true;
+      }
     }
     const content = entry.content.map((item) =>
       sanitizeChatHistoryContentBlock(item, {
@@ -364,39 +365,6 @@ function sanitizeNumericMetadata(
   return Object.keys(projected).length > 0 ? projected : undefined;
 }
 
-function projectWorkspaceConflictDetails(
-  entry: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  if (entry.role !== "custom" || entry.customType !== WORKSPACE_CONFLICT_TRANSCRIPT_TYPE) {
-    return undefined;
-  }
-  const details = readRecord(entry.details);
-  if (
-    !details ||
-    !Array.isArray(details.paths) ||
-    details.paths.length === 0 ||
-    !details.paths.every(
-      (entryPath): entryPath is string => typeof entryPath === "string" && entryPath.length > 0,
-    ) ||
-    typeof details.stagedResultRef !== "string" ||
-    !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(details.stagedResultRef) ||
-    (details.totalCount !== undefined &&
-      (!Number.isSafeInteger(details.totalCount) ||
-        (details.totalCount as number) < details.paths.length))
-  ) {
-    return undefined;
-  }
-  try {
-    return projectWorkspaceResultConflict(
-      details.paths,
-      details.stagedResultRef,
-      details.totalCount as number | undefined,
-    );
-  } catch {
-    return undefined;
-  }
-}
-
 /** Prepares raw stored text before display transforms, retaining its visible disposition. */
 export function prepareAssistantHistoryMessage(message: unknown): unknown {
   const entry = readObjectRecord(message);
@@ -490,6 +458,18 @@ export function sanitizeChatHistoryMessage(
     delete projectedMeta.modelPromptProjection;
     // Durable delivery facts contain private endpoint bindings, not display data.
     delete projectedMeta.sessionSendDelivery;
+    // Keep only the direct channel/account provenance needed for native-reference
+    // display. Never expose the requester's profile, grants, or endpoint bindings.
+    const origin = decodeRequesterOrigin(projectedMeta.requesterOrigin);
+    const transport = readRecord(projectedMeta.transport);
+    if (
+      entry.role === "user" &&
+      origin?.accountId &&
+      origin.messageProvider &&
+      transport?.channel === origin.messageProvider
+    ) {
+      projectedMeta.transport = { ...transport, accountId: origin.accountId };
+    }
     // Operational requester custody is independent of redacted display identity.
     delete projectedMeta.requesterOrigin;
     delete projectedMeta.chatInputRecovery;
@@ -535,7 +515,16 @@ export function sanitizeChatHistoryMessage(
       readRecord(entry.details)?.errorKind === "state_contention"
         ? { errorKind: "state_contention", diagnostic: STATE_CONTENTION_DIAGNOSTIC }
         : undefined;
-    const projectedDetails = conflictDetails ?? toolResultDetails?.details ?? runFailureDetails;
+    const modelChange =
+      entry.role === "custom" && entry.customType === "session-model-change"
+        ? readRecord(entry.details)
+        : undefined;
+    const modelChangeDetails =
+      typeof modelChange?.from === "string" && typeof modelChange.to === "string"
+        ? { from: modelChange.from, to: modelChange.to }
+        : undefined;
+    const projectedDetails =
+      conflictDetails ?? toolResultDetails?.details ?? runFailureDetails ?? modelChangeDetails;
     if (projectedDetails) {
       entry.details = projectedDetails;
     } else {
@@ -565,19 +554,14 @@ export function sanitizeChatHistoryMessage(
     role === "assistant" && !shouldPreserveAssistantControlReplyText(entry);
 
   const projectText = (text: string) => {
+    const res = truncateChatHistoryText(text, maxChars, preserveExactToolPayload, resultMaxChars);
     const controlStripped = stripAssistantMedia
-      ? stripAssistantMediaDirectivesForDisplay(text, managedMedia.urls)
-      : text;
-    changed ||= controlStripped !== text;
-    const res = truncateChatHistoryText(
-      controlStripped,
-      maxChars,
-      preserveExactToolPayload,
-      resultMaxChars,
-    );
+      ? stripAssistantMediaDirectivesForDisplay(res.text, managedMedia.urls)
+      : res.text;
+    changed ||= controlStripped !== res.text;
     changed ||= res.truncated;
     truncated ||= res.truncated;
-    return res.text;
+    return controlStripped;
   };
   if (typeof entry.content === "string") {
     entry.content = projectText(entry.content);
@@ -705,12 +689,21 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (isProjectedForwardedMessage(entry)) {
     return false;
   }
-  if (resolveAssistantMessagePhase(message) === "commentary") {
-    return !hasAssistantMixedToolVisibleText(message);
-  }
-  return isSilentAssistantTranscriptMessage(message);
+  return resolveAssistantMessagePhase(message) === "commentary"
+    ? !hasAssistantMixedToolVisibleText(message)
+    : isSilentAssistantTranscriptMessage(message);
 }
 
+export function sanitizeChatHistoryMessages(
+  messages: Array<Record<string, unknown>>,
+  maxChars?: number,
+  opts?: { includeCommentaryFallbacks?: boolean; toolResultMaxChars?: number },
+): Array<Record<string, unknown>>;
+export function sanitizeChatHistoryMessages(
+  messages: unknown[],
+  maxChars?: number,
+  opts?: { includeCommentaryFallbacks?: boolean; toolResultMaxChars?: number },
+): unknown[];
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,

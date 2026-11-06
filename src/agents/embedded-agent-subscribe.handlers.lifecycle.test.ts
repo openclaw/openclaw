@@ -257,30 +257,12 @@ describe("embedded lifecycle", () => {
   });
 
   it.each([
-    {
-      name: "ordinary voice",
-      silentExpected: false,
-      mediaUrl: "/tmp/reply.opus",
-      audioAsVoice: true,
-      delivered: true,
-    },
-    {
-      name: "silent image",
-      silentExpected: true,
-      mediaUrl: "/tmp/private.png",
-      audioAsVoice: false,
-      delivered: false,
-    },
-    {
-      name: "silent voice",
-      silentExpected: true,
-      mediaUrl: "/tmp/reply.opus",
-      audioAsVoice: true,
-      delivered: true,
-    },
-  ])(
-    "settles orphaned $name before the terminal event",
-    async ({ silentExpected, mediaUrl, audioAsVoice, delivered }) => {
+    ["ordinary voice", false, "/tmp/reply.opus", true, true],
+    ["silent image", true, "/tmp/private.png", false, false],
+    ["silent voice", true, "/tmp/reply.opus", true, true],
+  ] as const)(
+    "settles orphaned %s before the terminal event",
+    async (_name, silentExpected, mediaUrl, audioAsVoice, delivered) => {
       const onAgentEvent = vi.fn();
       const onBlockReply = vi.fn();
       const ctx = createContext(undefined, { onAgentEvent, onBlockReply });

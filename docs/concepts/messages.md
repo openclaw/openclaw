@@ -81,6 +81,8 @@ Multiple devices/channels can map to the same session, but history is not fully 
 
 If publishing a live transcript update fails after an agent message is saved, OpenClaw keeps the saved message and logs a warning. Reload the session to refresh its transcript; the failed notification is not replayed automatically.
 
+If an accepted chat message never starts its own turn, a later turn can still read it from history. Recovering that input keeps the original message visible without rewriting it into the next message or rebuilding history just to replace it. Provider retries preserve that input alongside the current message. Providers that require alternating roles receive the combined text only when the request is sent; the stored messages remain separate. Deliberately sending the same text again creates another user turn.
+
 If a run fails or times out before an assistant reply is saved, its transcript receives one visible failure notice. Nested runs retain their own failure notices even after the requesting turn has ended.
 
 Failure notices remain in chat history without becoming user instructions in later model requests. This also applies to notices saved by earlier versions; stored transcript bytes remain unchanged.
@@ -232,8 +234,8 @@ The terminal producer prepares the reply once and records whether it is visible 
 
 Conversation policy still controls admission and default reply expectations:
 
-- Direct and accepted group/channel requests normally receive answers. An explicit token-only `NO_REPLY` can end either silently.
-- Mention and access gates still decide which messages reach the agent. `silentReply.group: "allow"` permits optional handling of unaddressed group requests; it is not needed to honor an explicit `NO_REPLY`.
+- Direct and accepted group/channel requests normally receive answers. An explicit token-only `NO_REPLY` can end either silently. The legacy `HEARTBEAT_OK` marker does not request silence: presentation removes it, so it cannot satisfy a required reply.
+- Mention and access gates still decide which messages reach the agent. `silentReply.group: "allow"` permits optional handling of unaddressed group requests; it is not needed to honor an explicit `NO_REPLY`. In `message_tool` mode, optional bot messages get quiet-room participation guidance: stay silent unless there is something useful to add. Explicit bot mentions and required replies keep their normal delivery guidance.
 - [Ambient room events](/channels/ambient-room-events) can remain silent. In `message_tool` visible-reply mode, visible output uses `message(action=send)`. Private subagent completions record the parent's reviewed outcome internally.
 
 Defaults live under `agents.defaults.silentReply.group`; `surfaces.<id>.silentReply.group` can override group policy per surface. Doctor removes the retired `internal` setting during config migration.

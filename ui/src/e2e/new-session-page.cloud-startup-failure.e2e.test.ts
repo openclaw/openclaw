@@ -107,7 +107,7 @@ suite.define(() => {
       await pollLocatorText(retained).toContain(message);
       const working = retained.locator(".chat-working-indicator");
       await pollLocatorText(working).toContain(
-        outcome === "pending" ? "Sending message" : "Provisioning environment",
+        outcome === "pending" ? "Starting…" : "Provisioning environment",
       );
       expect(await retained.textContent()).not.toContain("temporary session was cleaned up");
       expect(page.url()).toBe(route);
@@ -177,6 +177,7 @@ suite.define(() => {
       const diagnostic = `cloud profile was removed\n${"Enrollment detail. ".repeat(80)}\nFinal startup diagnostic.`;
       const gateway = await installMockGateway(page, {
         defaultAgentId: "cloud",
+        subscriptionInitialHistory: !historyFails,
         deferredMethods: ["sessions.dispatch", ...(historyFails ? ["chat.startup"] : [])],
         featureMethods: ["sessions.create", "sessions.dispatch", "chat.startup"],
         workspaceGit: true,
@@ -257,13 +258,13 @@ suite.define(() => {
         const composerDisabled = await chatComposer.isDisabled();
         await failedGroup.waitFor({ state: "visible" });
         await pollLocatorText(pane.locator(".chat-working-indicator")).toContain("Reconnecting");
-        expect(await pane.locator(".agent-chat__welcome").count()).toBe(0);
+        expect(await pane.locator(".agent-chat__welcome, .agent-chat__empty").count()).toBe(0);
         const outbox = pane.locator(".chat-queue__item");
         await outbox.getByText("later ordinary turn", { exact: true }).waitFor();
         await outbox.getByText("Waiting for reconnect", { exact: true }).waitFor();
         expect(await outbox.count()).toBe(1);
         await pollLocatorText(pane.locator(".agent-chat__composer-status-band")).toContain(
-          "The initial message is unresolved.",
+          "The first message is unresolved.",
         );
         await pollLocatorText(failedGroup.locator(".chat-send-status")).toContain(
           "Waiting for reconnect",
@@ -304,8 +305,8 @@ suite.define(() => {
           expect(await pane.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
             "later ordinary turn",
           );
-          await pane.getByRole("status", { name: "Loading chat", exact: true }).waitFor();
-          expect(await pane.locator(".agent-chat__welcome").count()).toBe(0);
+          await pane.getByRole("status", { name: "Loading conversation…", exact: true }).waitFor();
+          expect(await pane.locator(".agent-chat__welcome, .agent-chat__empty").count()).toBe(0);
           expect(await pane.locator(".chat-topbar-notices .chat-error").count()).toBe(0);
 
           await page.evaluate(() =>

@@ -1,3 +1,5 @@
+import type { CronJob } from "../../api/types.ts";
+import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
@@ -28,15 +30,7 @@ export function createAgentViewTestProps(
 ): AgentsViewProps {
   const retired = Promise.withResolvers<void>().promise;
   const data: ReturnType<AgentsViewProps["readData"]> = {
-    agentsList: {
-      defaultId: "alpha",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "alpha", name: "Alpha" },
-        { id: "beta", name: "Beta" },
-      ],
-    },
+    agentsList: agentRoster({ alpha: "Alpha", beta: "Beta" }, "alpha", "per-sender"),
     agentsSelectedId: "beta",
     agentsPanel: "overview",
     requestGeneration: 0,
@@ -67,6 +61,7 @@ export function createAgentViewTestProps(
       channelsLastSuccess: null,
     }),
     access: {
+      canDeleteAgent: true,
       canCreateAgent: true,
       canPatchConfig: true,
       canUpdateConfig: true,
@@ -87,6 +82,7 @@ export function createAgentViewTestProps(
       configLoading: false,
       configSaving: false,
       configFormDirty: false,
+      configAutoSaveStatus: "idle",
       lastError: null,
     },
     channels: {
@@ -149,13 +145,28 @@ export function createAgentViewTestProps(
     onRefresh: () => undefined,
     onCreateAgent: () => undefined,
     onSelectPanel: () => undefined,
-    onConfigReload: async () => undefined,
-    onConfigSave: async () => undefined,
+    onConfigRetry: () => undefined,
     onSetDefault: async () => undefined,
+    onDeleteAgent: () => undefined,
     onTogglePinnedAgent: () => undefined,
     onOpenMemoryImport: () => undefined,
     onOpenMemorySettings: () => undefined,
     onOpenAgentDefaults: () => undefined,
     ...overrides,
   };
+}
+
+export function createCronJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
+  return {
+    id,
+    name: `Scheduled job ${id}`,
+    enabled: true,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    schedule: { kind: "cron", expr: "0 9 * * *" },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "ping" },
+    ...overrides,
+  } as CronJob;
 }

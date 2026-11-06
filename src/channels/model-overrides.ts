@@ -48,7 +48,7 @@ function resolveProviderEntry(
   return (
     modelByChannel?.[normalized] ??
     modelByChannel?.[
-      Object.keys(modelByChannel ?? {}).find((key) => {
+      Object.keys(modelByChannel).find((key) => {
         const normalizedKey = normalizeMessageChannel(key) ?? "";
         return normalizedKey === normalized;
       }) ?? ""

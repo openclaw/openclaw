@@ -15,7 +15,12 @@ import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { tryResolveAmbientOwnerAgentId } from "../../src/agents/agent-scope-config.js";
+import { resolveAgentConfig } from "../../src/agents/agent-scope.js";
+import { isCliProvider } from "../../src/agents/model-selection-cli.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../src/agents/session-runtime-compat.js";
+import { resolveEffectiveAgentRuntime } from "../../src/agents/thinking-runtime.js";
 import { isRuntimeToolAllowed } from "../../src/agents/tool-policy-match.js";
+import type { SessionEntry } from "../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
@@ -29,6 +34,7 @@ import {
 import {
   compareScheduledDecisions,
   type ScheduledDivergence,
+  type ScheduledInferenceRuntimeFacts,
 } from "../../src/cron/execution-context-projection.js";
 import {
   replayScheduledContextFixture,
@@ -39,6 +45,12 @@ import {
   resolveScheduledRequester,
   type ScheduledAdmissionFacts,
 } from "../../src/cron/execution-context.js";
+import { resolveCronCandidateExecution } from "../../src/cron/isolated-agent/candidate-execution.js";
+import {
+  resolveCronModelSelection,
+  resolveCronModelSelectionOwner,
+} from "../../src/cron/isolated-agent/model-selection.js";
+import { resolveCarriedCronModelSelection } from "../../src/cron/isolated-agent/session-carried-model.js";
 import { resolveCronSessionTargetSessionKey } from "../../src/cron/session-target.js";
 import { resolveCronRunToolsAllow } from "../../src/cron/tools-allow.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
@@ -97,6 +109,7 @@ type ReplayRow = {
   principal: string;
   placement?: string;
   ownerCheck: "checked" | "unverified" | "not-needed";
+  inferenceUnresolved?: string;
   divergence: ScheduledDivergence;
 };
 
@@ -108,6 +121,96 @@ function runSessionKeyFor(job: CronStoredJob, agentId: string) {
 }
 
 type ParentRow = NonNullable<ScheduledAdmissionFacts["parentRow"]>;
+
+type ReplayInference =
+  | { runtimes: ScheduledInferenceRuntimeFacts }
+  | { unresolved: string }
+  | undefined;
+
+/**
+ * The runtime a bound job's existing run picks from the entry its cron session copies
+ * (a `current` job's creating conversation, a `session:` job's row). The model comes
+ * from the scheduled-model selection owner the run and capture use; when it cannot be
+ * resolved for the bound provider, the comparison is reported unresolved. A job with a
+ * recorded runtime no longer copies its creating conversation's model, so its scheduled
+ * model is compared with the one the copy selects.
+ */
+export async function replayInferenceRuntimes(
+  job: CronStoredJob,
+  agentId: string,
+  cfg: OpenClawConfig,
+  readRow: (sessionKey: string) => SessionEntry | undefined,
+): Promise<ReplayInference> {
+  const binding = job.inferenceBinding;
+  if (!binding || job.payload.kind !== "agentTurn") {
+    return undefined;
+  }
+  const target = resolveCronSessionTargetSessionKey(job.sessionTarget);
+  const currentRow =
+    job.sessionTarget === "current" && job.sessionKey ? readRow(job.sessionKey) : undefined;
+  const entry = target
+    ? readRow(target)
+    : currentRow
+      ? resolveCarriedCronModelSelection(currentRow)
+      : undefined;
+  const provider = binding.provider;
+  const { payload } = job;
+  const select = async (sessionEntry: Partial<SessionEntry>) => {
+    const owner = await resolveCronModelSelectionOwner({ cfg, agentId, requiredAgentId: agentId });
+    return await resolveCronModelSelection({
+      cfg: owner.config,
+      owner,
+      agentConfigOverride: resolveAgentConfig(owner.config, agentId),
+      agentId,
+      agentDir: owner.agentDir,
+      workspaceDir: owner.workspaceDir,
+      payloadModel: payload.model,
+      sessionEntry,
+      isGmailHook: payload.externalContentSource === "gmail",
+    });
+  };
+  let selected;
+  let scheduled;
+  try {
+    selected = await select(entry ?? {});
+    scheduled = currentRow && binding.runtime ? await select({}) : undefined;
+  } catch (error) {
+    return { unresolved: error instanceof Error ? error.message : String(error) };
+  }
+  if (!selected.ok) {
+    return { unresolved: selected.error };
+  }
+  if (scheduled && !scheduled.ok) {
+    return { unresolved: scheduled.error };
+  }
+  // The existing run refuses a copied model on another provider before it starts.
+  const legacyRefused = selected.provider !== provider;
+  if (legacyRefused && scheduled?.provider !== provider) {
+    return {
+      unresolved: `selected provider ${selected.provider} is not bound provider ${provider}`,
+    };
+  }
+  const model = legacyRefused && scheduled ? scheduled.model : selected.model;
+  const models = scheduled
+    ? {
+        legacy: `${selected.provider}/${selected.model}${legacyRefused ? " (refused: not the bound provider)" : ""}`,
+        context: `${scheduled.provider}/${scheduled.model}`,
+      }
+    : undefined;
+  const deps = { isCliProvider, resolveEffectiveAgentRuntime };
+  const legacy = resolveCronCandidateExecution(
+    {
+      cfg,
+      agentId,
+      provider,
+      model,
+      sessionRuntimeOverride: resolveSessionRuntimeOverrideForProvider({ provider, entry, cfg }),
+      sessionEntry: entry,
+    },
+    deps,
+  ).runtime;
+  return { runtimes: { legacy, ...(models ? { models } : {}) } };
+}
 
 // Keeps the discriminators the builder reads from a stored operator source. A
 // source that does not decode stays undecodable, so the fixture keeps failing.
@@ -123,33 +226,75 @@ function anonymizeOperatorSource(
     return { source: { version: 1 }, executionRevision: "execution-1" } as never;
   }
   const { snapshot } = source;
+  const principal = snapshot.openclawIdPrincipal;
+  const fixtureBase = {
+    profileId: "profile-1",
+    // The builder reads the device kind and member role; identities are replaced.
+    ...(principal
+      ? {
+          openclawIdPrincipal: {
+            ...(principal.kind === "member"
+              ? { kind: principal.kind, accountId: "account-1", role: principal.role }
+              : { kind: principal.kind }),
+            peerKey: `iroh:${"00".repeat(32)}`,
+            authority: {
+              clawId: "claw-1",
+              rootPub: "root-1",
+              listedSeq: 1,
+              ...(principal.authority.ownerDevice ? { ownerDevice: "owner-device-1" } : {}),
+            },
+          },
+        }
+      : {}),
+    scopes: [...snapshot.scopes],
+    assignedRole: snapshot.assignedRole === null ? null : "role",
+    githubLogin: null,
+    grant: null,
+    aliasBindingIds: [],
+  };
+  const fixtureSnapshot =
+    snapshot.sourceIngress === "principal"
+      ? {
+          ...fixtureBase,
+          sourceIngress: "principal" as const,
+          ingress: {
+            pluginId: "plugin-1",
+            audienceId: "audience-1",
+            recoveryId: "issuance-1",
+          },
+          controlUiAdmin: false as const,
+          localOperator: false as const,
+        }
+      : {
+          ...fixtureBase,
+          authPolicy: {
+            generation: "" as const,
+            grantGeneration: "generation",
+            role: "operator" as const,
+            authMethod: snapshot.authPolicy.authMethod,
+          },
+          controlUiAdmin: snapshot.controlUiAdmin,
+          localOperator: snapshot.localOperator,
+          sourceIngress: snapshot.sourceIngress,
+        };
+  const shared = {
+    version: 1 as const,
+    agentId: source.agentId === agentId ? "main" : "other",
+    sourceRunId: "source-run",
+    snapshot: fixtureSnapshot,
+  };
   return {
     executionRevision: "execution-1",
-    source: {
-      version: 1,
-      agentId: source.agentId === agentId ? "main" : "other",
-      sessionKey: key(source.sessionKey),
-      sessionId: "parent-session",
-      ...(source.lifecycleRevision ? { lifecycleRevision: "rev-1" } : {}),
-      sourceRunId: "source-run",
-      snapshot: {
-        profileId: "profile-1",
-        scopes: [...snapshot.scopes],
-        assignedRole: snapshot.assignedRole === null ? null : "role",
-        githubLogin: null,
-        grant: null,
-        aliasBindingIds: [],
-        authPolicy: {
-          generation: "",
-          grantGeneration: "generation",
-          role: "operator",
-          authMethod: snapshot.authPolicy.authMethod,
-        },
-        controlUiAdmin: snapshot.controlUiAdmin,
-        localOperator: snapshot.localOperator,
-        sourceIngress: snapshot.sourceIngress,
-      },
-    },
+    // A device-bound source has no parent conversation to relate.
+    source:
+      source.kind === "gateway"
+        ? { ...shared, kind: "gateway" }
+        : {
+            ...shared,
+            sessionKey: key(source.sessionKey),
+            sessionId: "parent-session",
+            ...(source.lifecycleRevision ? { lifecycleRevision: "rev-1" } : {}),
+          },
   };
 }
 
@@ -447,7 +592,16 @@ async function main() {
         owner,
       );
       const result = buildScheduledExecutionContext(job, facts);
-      const divergence = compareScheduledDecisions(job, facts, result);
+      const inference = await replayInferenceRuntimes(job, agentId, cfg, (sessionKey) => {
+        const row = agentDbs
+          .get(agentId)
+          ?.prepare("select entry_json from session_nodes where session_key = ?")
+          .get(sessionKey) as { entry_json: string } | undefined;
+        return row ? (JSON.parse(row.entry_json) as SessionEntry) : undefined;
+      });
+      const inferenceRuntimes =
+        inference && "runtimes" in inference ? inference.runtimes : undefined;
+      const divergence = compareScheduledDecisions(job, facts, result, inferenceRuntimes);
       rows.push({
         job: job.name || job.id,
         agentId,
@@ -455,6 +609,9 @@ async function main() {
         principal: result.status === "ready" ? result.facts.principal.kind : result.status,
         ...(result.status === "ready" ? { placement: result.facts.placement } : {}),
         ownerCheck,
+        ...(inference && "unresolved" in inference
+          ? { inferenceUnresolved: inference.unresolved }
+          : {}),
         divergence,
       });
       if (args.emitFixtures) {
@@ -466,12 +623,14 @@ async function main() {
           name: "",
           parentRow: fixtureParentRow,
           owner,
+          inferenceRuntimes,
         });
         if (![...fixtures.keys()].includes(shapeKey)) {
           fixtures.set(shapeKey, {
             job: fixtureJob,
             ...(fixtureParentRow ? { parentRow: fixtureParentRow } : {}),
             ...(owner !== undefined ? { owner } : {}),
+            ...(inferenceRuntimes ? { inferenceRuntimes } : {}),
           });
         }
       }
@@ -495,7 +654,8 @@ async function main() {
         process.stdout.write(
           `- ${row.enabled ? "[on] " : "[off]"} ${row.job}: ${row.principal}${row.placement ? `/${row.placement}` : ""} ` +
             `${row.divergence.status}${row.divergence.reason ? ` (${row.divergence.reason})` : ""}` +
-            `${changes ? ` | ${changes}` : ""}${row.ownerCheck === "unverified" ? " | owner check unverified" : ""}\n`,
+            `${changes ? ` | ${changes}` : ""}${row.ownerCheck === "unverified" ? " | owner check unverified" : ""}` +
+            `${row.inferenceUnresolved ? ` | inference runtime unresolved (${row.inferenceUnresolved})` : ""}\n`,
         );
       }
     }

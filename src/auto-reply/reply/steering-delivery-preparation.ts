@@ -1,10 +1,8 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolAuthorityReadCaptureActive,
   recordPreparedToolAuthorityRead,
   type PreparedToolAuthorityRead,
 } from "../../agents/harness/host-private-capabilities.js";
-import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
@@ -35,19 +33,16 @@ function prepareCurrentSteeringRead(assertCurrent: () => void) {
   };
 }
 
-/** Carry terminal-delivery eligibility into the target's final prepared admission. */
+/** Keep the target's execution settings current through steering admission. */
 export function prepareSteeringDelivery(params: {
   agentId: string;
   sessionKey?: string;
   storePath?: string;
-  sessionId?: string;
-  sourceTurnId?: string;
   entry?: SessionEntry;
   assertCurrent: () => void;
 }) {
   let admission:
     | {
-        recoveryDeliveryClaim: Parameters<typeof resolveRestartRecoverySteeringBlockReason>[3];
         matchesExecutionSettings: (entry: SessionEntry | undefined, agentId: string) => boolean;
       }
     | undefined;
@@ -57,31 +52,12 @@ export function prepareSteeringDelivery(params: {
   const matchesExecutionSettings = (entry: SessionEntry | undefined) =>
     admission?.matchesExecutionSettings(entry, params.agentId) ?? true;
   const fallbackEntry = params.entry;
-  const sourceTurnId = (entry: SessionEntry | null | undefined) =>
-    params.sourceTurnId ??
-    normalizeOptionalString(
-      (admission?.recoveryDeliveryClaim ?? entry)?.restartRecoveryDeliverySourceRunId,
-    ) ??
-    "";
-  const assertEntry = (
-    current: Parameters<typeof resolveRestartRecoverySteeringBlockReason>[0],
-  ) => {
+  const assertEntry = (current: SessionEntry | undefined) => {
     params.assertCurrent();
     const entry = current ?? fallbackEntry;
     if (!matchesExecutionSettings(entry)) {
       throw new MessageInjectionTargetUnavailableError(
         "Execution settings changed during steering preparation",
-      );
-    }
-    const reason = resolveRestartRecoverySteeringBlockReason(
-      entry,
-      params.sessionId ?? entry?.sessionId ?? "",
-      sourceTurnId(entry),
-      admission?.recoveryDeliveryClaim,
-    );
-    if (reason) {
-      throw new MessageInjectionTargetUnavailableError(
-        `Terminal source-reply delivery is closed (${reason})`,
       );
     }
   };
@@ -129,7 +105,7 @@ export function prepareSteeringDelivery(params: {
   const assertCurrent = () => {
     params.assertCurrent();
     if (!active || !retained?.isCurrent()) {
-      throw new MessageInjectionTargetUnavailableError("Terminal delivery eligibility changed");
+      throw new MessageInjectionTargetUnavailableError("Steering target changed");
     }
   };
   const prepare = async () => {
@@ -170,13 +146,7 @@ export function prepareSteeringDelivery(params: {
           matches: (before, after) =>
             matchesExecutionSettings(after) &&
             before?.sessionId === after?.sessionId &&
-            before?.lifecycleRevision === after?.lifecycleRevision &&
-            !resolveRestartRecoverySteeringBlockReason(
-              after ?? fallbackEntry,
-              params.sessionId ?? after?.sessionId ?? "",
-              sourceTurnId(after),
-              admission?.recoveryDeliveryClaim,
-            ),
+            before?.lifecycleRevision === after?.lifecycleRevision,
         });
         unregister = registerOpenClawAgentDatabaseAsyncResource({
           agentId: read.database.agentId,

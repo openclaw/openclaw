@@ -52,7 +52,7 @@ export function registerMaintenanceCommands(
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
     .option(
       "--client-credentials",
-      "Prepare only local client credentials (requires --repair --non-interactive)",
+      "Prepare local client credentials and runtime intent (requires --repair --non-interactive)",
       false,
     )
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
@@ -60,6 +60,12 @@ export function registerMaintenanceCommands(
       "--allow-exec",
       "Allow doctor to execute exec SecretRefs while verifying configured secrets",
       false,
+    )
+    .option(
+      "--replace-model <json>",
+      "With --fix: explicitly replace model refs using {from,to,accessProgram} (repeatable)",
+      collectOption,
+      [],
     )
     .option("--deep", "Scan system services for extra gateway installs", false)
     .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
@@ -208,13 +214,25 @@ export function registerMaintenanceCommands(
           opts.json === true,
         );
       }
+      if (opts.replaceModel.length > 0 && !(opts.fix || opts.repair)) {
+        return exitDoctorError(
+          "--replace-model requires --fix or --repair; run --lint first to preview affected references.",
+          opts.json === true,
+        );
+      }
       try {
+        const modelReplacements = opts.replaceModel.length
+          ? (
+              await import("../../commands/doctor/shared/model-replacement.js")
+            ).parseDoctorModelReplacements(opts.replaceModel)
+          : [];
         if (opts.clientCredentials === true) {
           const { prepareStartupClientCredentials } =
             await import("../../commands/startup-client-credentials.js");
           await prepareStartupClientCredentials({
             env: process.env,
             runtime: defaultRuntime,
+            prepareRuntimePins: true,
           });
           if (opts.json === true) {
             defaultRuntime.writeJson({ ok: true });
@@ -239,6 +257,7 @@ export function registerMaintenanceCommands(
           await doctorCommand(
             defaultRuntime,
             {
+              ...(modelReplacements.length ? { modelReplacements } : {}),
               workspaceSuggestions: opts.workspaceSuggestions,
               yes: Boolean(opts.yes),
               repair: Boolean(opts.repair) || Boolean(opts.fix),
@@ -298,6 +317,10 @@ export function registerMaintenanceCommands(
     )
     .option("--update-result <path>", "Include update-failure diagnostics from this JSON artifact")
     .action(async (opts) => {
+      // Triage runs Doctor's inspections; a closed terminal must still remove their copies.
+      if (hasCliProcessScope()) {
+        installCliDoctorSignalExitHandlers();
+      }
       if (opts.json === true && opts.run === true) {
         return exitDoctorError("triage --json cannot be combined with --run.", true);
       }

@@ -35,3 +35,40 @@ it("accepts boolean schema documents", () => {
   expect(never.check({ value: 1 })).toBe(false);
   expect(never.errors({ value: 1 }).length).toBeGreaterThan(0);
 });
+
+it("preserves root-ID reuse unless the consumer requires duplicate rejection", () => {
+  const first = { $id: "https://example.test/result", type: "integer" };
+  const second = { $id: "https://example.test/result", type: "string" };
+  const reuse = createJsonSchemaValidatorProvider({ dialect: "draft7", formats: new Map() });
+  expect(reuse.getValidator(first).check(3)).toBe(true);
+  expect(reuse.getValidator(second).check("wrong")).toBe(false);
+  const strict = createJsonSchemaValidatorProvider({
+    dialect: "draft7",
+    formats: new Map(),
+    duplicateIds: "reject",
+  });
+  const original = strict.getValidator(first);
+  expect(strict.getValidator(first)).toBe(original);
+  expect(() => strict.getValidator(second)).toThrow(/already exists/);
+});
+
+it("admits schemas against a registered metaschema when the consumer requires it", () => {
+  const provider = createJsonSchemaValidatorProvider({
+    dialect: "draft7",
+    formats: new Map(),
+    validateSchema: true,
+  });
+  for (const schema of [
+    { enum: [] },
+    { enum: [1, 1] },
+    { type: "invalid" },
+    { required: ["x", "x"] },
+    { $schema: "https://example.test/unknown-schema" },
+    { $schema: "https://json-schema.org/draft/2020-12/schema" },
+  ]) {
+    expect(() => provider.getValidator(schema)).toThrow();
+  }
+  const schema = { $schema: "http://json-schema.org/draft-07/schema#", type: "integer" };
+  expect(provider.getValidator(schema).check(3)).toBe(true);
+  expect(provider.getValidator(schema).check("wrong")).toBe(false);
+});

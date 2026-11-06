@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
@@ -24,11 +24,9 @@ const mocks = vi.hoisted(() => {
   }));
   const effects = {
     enqueueSystemEvent: vi.fn(),
-    info: vi.fn(),
     mutateConfigFileWithRetry: vi.fn(),
     refreshQueuedFollowupSession: vi.fn(),
     triggerSessionPatchHook: vi.fn(),
-    warn: vi.fn(),
   };
   const placementMocks = {
     getMany: vi.fn(),
@@ -37,26 +35,23 @@ const mocks = vi.hoisted(() => {
   };
   const resetMocks = () => {
     validateRuntime.mockReset().mockReturnValue(undefined);
-    for (const effect of Object.values(effects)) {
-      effect.mockReset();
+    for (const mock of [...Object.values(effects), ...Object.values(placementMocks)]) {
+      mock.mockReset();
     }
     effects.mutateConfigFileWithRetry.mockResolvedValue({ nextConfig: {}, result: "defaults" });
-    placementMocks.getMany.mockReset().mockReturnValue(new Map());
-    placementMocks.prepareRuntimeRefresh
-      .mockReset()
-      .mockImplementation(async (sessionId: string) => {
-        const placement = placementMocks.getMany([sessionId]).get(sessionId);
-        return {
-          placement,
-          assertCurrent: () => {
-            if (placementMocks.getMany([sessionId]).get(sessionId) !== placement) {
-              throw new Error("Session placement changed");
-            }
-          },
-          release: () => {},
-        };
-      });
-    placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReset();
+    placementMocks.getMany.mockReturnValue(new Map());
+    placementMocks.prepareRuntimeRefresh.mockImplementation(async (sessionId: string) => {
+      const placement = placementMocks.getMany([sessionId]).get(sessionId);
+      return {
+        placement,
+        assertCurrent: () => {
+          if (placementMocks.getMany([sessionId]).get(sessionId) !== placement) {
+            throw new Error("Session placement changed");
+          }
+        },
+        release: () => {},
+      };
+    });
   };
   return { effects, placementMocks, resetMocks, prepareRuntime, validateRuntime };
 });
@@ -86,16 +81,6 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   mutateConfigFileWithRetry: mocks.effects.mutateConfigFileWithRetry,
 }));
-vi.mock("../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) =>
-      subsystem === "agents/sticky-model-selection"
-        ? { info: mocks.effects.info, warn: mocks.effects.warn }
-        : actual.createSubsystemLogger(subsystem),
-  };
-});
 // mock-isolation: Placement state is a controlled fixture rather than the live worker registry.
 vi.mock("../gateway/session-worker-placement-context.js", () => ({
   resolveSessionWorkerPlacementContext: () => ({
@@ -105,7 +90,10 @@ vi.mock("../gateway/session-worker-placement-context.js", () => ({
   }),
 }));
 // mock-isolation: Runtime eligibility and worker preparation are tested by their owners.
-vi.mock("../gateway/worker-environments/placement-session-runtime.js", () => ({
+vi.mock("../gateway/worker-environments/placement-capabilities.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../gateway/worker-environments/placement-capabilities.js")
+  >()),
   resolveWorkerPlacementCapabilities:
     mocks.placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities,
 }));
@@ -150,21 +138,9 @@ export function useSelectionStore(prefix: string) {
 
 export function createModelSelectionInputs() {
   const catalog = [
-    {
-      provider: "anthropic",
-      id: "claude-opus-4-6",
-      name: "Claude Opus",
-      contextTokens: 32_000,
-    },
+    { provider: "anthropic", id: "claude-opus-4-6", name: "Opus", contextTokens: 32_000 },
     { provider: "openai", id: "gpt-4o", name: "GPT-4o", contextTokens: 16_000 },
   ] satisfies ModelCatalogEntry[];
-
-  function createRequest(
-    provider: string,
-    model: string,
-  ): InternalApplySessionModelSelectionParams["request"] {
-    return { provider, model, isDefault: false, runtime: { kind: "unchanged" } };
-  }
 
   function createEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
     return { sessionId: "session-1", updatedAt: 1, delivery: { kind: "none" }, ...overrides };
@@ -239,4 +215,12 @@ export function createModelSelectionInputs() {
   }
 
   return { catalog, createEntry, createSelectedEntry, createParams, createFixtureParams };
+}
+
+export function createRequest(
+  provider: string,
+  model: string,
+  overrides: Partial<InternalApplySessionModelSelectionParams["request"]> = {},
+): InternalApplySessionModelSelectionParams["request"] {
+  return { provider, model, isDefault: false, runtime: { kind: "unchanged" }, ...overrides };
 }

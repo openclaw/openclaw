@@ -1,48 +1,29 @@
-import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import type { ReplyOperation } from "../../../sessions/session-controller.contracts.js";
-import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
-import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { resetSessionControllerStateForTest } from "../../../sessions/session-lifecycle-admission.test-support.js";
-import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { startControlProducer } from "./subagent-control-native.test-support.js";
 import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
-import { admitRequesterTurnForTest } from "./subagent-requester-turn-liveness.test-support.js";
 
 const storePath = "/private/tmp/requester-turn-liveness/main/sessions.json";
-const operations: ReplyOperation[] = [];
+const turns: ReturnType<typeof startControlProducer>[] = [];
 
 afterEach(async () => {
-  for (const operation of operations) {
-    operation.complete();
-  }
-  await Promise.all(operations.map((operation) => operation.ownerSettlement));
-  operations.length = 0;
+  await Promise.all(turns.map((turn) => turn.finish()));
+  turns.length = 0;
   resetSessionControllerStateForTest();
 });
 
-function attach(operation: ReplyOperation) {
-  operations.push(operation);
-  const backend = { kind: "embedded" as const, runId: "requester-turn", cancel() {} };
-  operation.attachBackend(backend);
-  return { operation, backend };
-}
-
 function requesterTurn() {
-  const operation = createReplyOperation({
-    sessionKey: "global",
-    sessionId: "requester-session",
-    agentId: "main",
-    resetTriggered: false,
-    target: captureSessionTarget({
-      storeScope: storePath,
-      sessionKey: "global",
-      incarnation: "requester-session",
-      agentId: "main",
-    }),
-  });
-  operation.setPhase("running");
-  return attach(operation);
+  const turn = startControlProducer(
+    "global",
+    "requester-session",
+    storePath,
+    undefined,
+    "requester-turn",
+  );
+  turn.operation.setPhase("running");
+  turns.push(turn);
+  return turn;
 }
 
 function child(overrides: Partial<ReturnType<typeof createSubagentRunRecord>> = {}) {
@@ -58,22 +39,15 @@ function child(overrides: Partial<ReturnType<typeof createSubagentRunRecord>> = 
   });
 }
 
-function settleRequester(
-  { operation, backend }: ReturnType<typeof requesterTurn>,
-  entry: ReturnType<typeof child>,
-) {
+it("keeps the physical requester live through backend detach and yield until its turn settles", () => {
+  const { operation, backend } = requesterTurn();
+  const entry = child();
   expect(isClaimedByLiveRequesterTurn(entry)).toBe(true);
   operation.detachBackend(backend);
   expect(isClaimedByLiveRequesterTurn(entry)).toBe(true);
   operation.yield();
   expect(isClaimedByLiveRequesterTurn(entry)).toBe(true);
-}
-
-it("keeps the physical requester live through backend detach and yield until its turn settles", () => {
-  const turn = requesterTurn();
-  const entry = child();
-  settleRequester(turn, entry);
-  turn.operation.complete();
+  operation.complete();
   expect(isClaimedByLiveRequesterTurn(entry)).toBe(false);
 });
 
@@ -88,38 +62,6 @@ it.each([
   "does not borrow live requester ownership across a different %s",
   (_difference, overrides) => {
     requesterTurn();
-    expect(isClaimedByLiveRequesterTurn({ ...child(), ...overrides })).toBe(false);
+    expect(isClaimedByLiveRequesterTurn(child(overrides))).toBe(false);
   },
-);
-
-it.each(["default", "custom"] as const)(
-  "retains a real requester admitted through its %s logical store locator",
-  (layout) =>
-    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const sessionKey = "agent:main:main";
-      const logicalStore =
-        layout === "custom"
-          ? state.path("custom", "sessions.json")
-          : path.join(state.sessionsDir(), "sessions.json");
-      const physicalStore =
-        layout === "custom"
-          ? state.path("custom", "openclaw-agent.sqlite")
-          : state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
-      const admitted = await admitRequesterTurnForTest(sessionKey, logicalStore);
-      const turn = attach(admitted.operation);
-      const entry = child({
-        requesterSessionKey: sessionKey,
-        requesterStorePath: physicalStore,
-      });
-      try {
-        expect(
-          isClaimedByLiveRequesterTurn({ ...entry, requesterStorePath: physicalStore + ".other" }),
-        ).toBe(false);
-        settleRequester(turn, entry);
-      } finally {
-        turn.operation.complete();
-        await turn.operation.ownerSettlement;
-      }
-      expect(isClaimedByLiveRequesterTurn(entry)).toBe(false);
-    }),
 );

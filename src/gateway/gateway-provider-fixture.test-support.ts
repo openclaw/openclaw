@@ -1,15 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import type { Server, ServerResponse } from "node:http";
 import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
-
-export async function readProviderBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
 
 export async function listenProvider(server: Server): Promise<string> {
   return `${await listenLoopback(server)}/v1`;

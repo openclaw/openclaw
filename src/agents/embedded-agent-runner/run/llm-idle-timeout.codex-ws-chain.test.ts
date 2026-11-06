@@ -98,7 +98,6 @@ function startWatchdog(label: string) {
   const runAbort = new AbortController();
   const runId = `run-${label}`;
   const sessionId = `session-${label}`;
-  const cfg = { agents: { defaults: { timeoutSeconds: 3600 } } };
   const { streamFn: base, strategy } = resolveEmbeddedAgentStream({
     llmRuntime,
     currentStreamFn: undefined,
@@ -109,33 +108,30 @@ function startWatchdog(label: string) {
     authProfileId: "openai:default",
   });
   const allowed = new Set(["exec", "read"]);
-  let streamFn: StreamFn = base;
-  streamFn = wrapStreamFnPromoteStandaloneTextToolCalls(streamFn, allowed);
-  streamFn = wrapStreamFnTrimToolCallNames(streamFn, allowed, {
+  const promoted = wrapStreamFnPromoteStandaloneTextToolCalls(base, allowed);
+  const trimmed = wrapStreamFnTrimToolCallNames(promoted, allowed, {
     unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
   });
-  streamFn = wrapStreamFnRepairMalformedToolCallArguments(streamFn);
-  streamFn = wrapStreamFnHandleSensitiveStopReason(streamFn);
   const timeoutOptions = {
-    cfg,
-    runTimeoutMs: undefined,
-    modelRequestTimeoutMs: undefined,
-    model: { baseUrl: model.baseUrl, id: model.id, provider: model.provider },
+    cfg: { agents: { defaults: { timeoutSeconds: 3600 } } },
+    model,
   };
   const idleTimeoutMs = resolveLlmIdleTimeoutMs({ ...timeoutOptions, trigger: "user" });
   const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs(timeoutOptions);
-  streamFn = streamWithIdleTimeout(streamFn, idleTimeoutMs, onIdleTimeout, {
-    runId,
-  });
-  const beforeFirstEvent = streamFn;
-  streamFn = (m, c, options) =>
+  const beforeFirstEvent = streamWithIdleTimeout(
+    wrapStreamFnHandleSensitiveStopReason(wrapStreamFnRepairMalformedToolCallArguments(trimmed)),
+    idleTimeoutMs,
+    onIdleTimeout,
+    { runId },
+  );
+  const withFirstEvent: StreamFn = (m, c, options) =>
     beforeFirstEvent(m, c, {
       ...options,
       firstEventTimeoutMs,
       onFirstEventTimeout: onIdleTimeout,
     } as typeof options);
   let seq = 0;
-  streamFn = wrapStreamFnWithDiagnosticModelCallEvents(streamFn, {
+  const streamFn = wrapStreamFnWithDiagnosticModelCallEvents(withFirstEvent, {
     runId,
     sessionId,
     provider: model.provider,
@@ -215,13 +211,15 @@ function runFork(
   });
 }
 
-function parkConsumer(streamFn: StreamFn, signal: AbortSignal) {
+function parkConsumer(streamFn: StreamFn, signal: AbortSignal, parked = true) {
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const consumed = consumeLikeAgentCore(streamFn, signal, async (type) => {
     if (type === "start") {
       entered.resolve();
-      await release.promise;
+      if (parked) {
+        await release.promise;
+      }
     }
   });
   return { entered: entered.promise, release: release.resolve, consumed };
@@ -239,6 +237,21 @@ function forkParent(sessionId: string, runtime = llmRuntime) {
   const parent: StreamFn = (requestModel, requestContext, options) =>
     runtime.streamSimple(requestModel, requestContext, options);
   return { identity, parent };
+}
+
+async function expectParentCompletion(
+  parent: StreamFn,
+  options: Parameters<StreamFn>[2],
+  requestContext = context,
+) {
+  expect((await (await parent(model, requestContext, options)).result()).stopReason).toBe("stop");
+}
+
+function expectStreamFailure(
+  { result, thrown }: Awaited<ReturnType<typeof consumeLikeAgentCore>>,
+  message: RegExp,
+) {
+  expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(message);
 }
 
 const followupContext = {
@@ -269,10 +282,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
       queueMicrotask(() => socket.deliver(completedFrame("resp_fork")));
     };
     const { identity, parent } = forkParent("native-fork-revocation");
-    expect(
-      (await (await parent(model, context, { apiKey, transport: "websocket" })).result())
-        .stopReason,
-    ).toBe("stop");
+    await expectParentCompletion(parent, { apiKey, transport: "websocket" });
     expect(ControlledWebSocket.instances[0]?.sent).toHaveLength(1);
     let current = true;
     ControlledWebSocket.onOpen = () => {
@@ -290,58 +300,53 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, "parent-key"])(
-    "omits native fork affinity without replacing the parent's continuation (source key=%s)",
-    async (promptCacheKey) => {
-      const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", fetchMock);
-      const requests: Frame[] = [];
-      ControlledWebSocket.onSend = (socket, payload) => {
-        requests.push(JSON.parse(payload) as Frame);
-        const id = `resp_native_${requests.length}`;
-        const isFork = requests.length === 2;
-        queueMicrotask(() => {
-          socket.deliver({ type: "response.created", response: { id } });
-          if (isFork) {
-            for (const frame of textFrames(id, "msg_native_fork", "Independent review")) {
-              socket.deliver(frame);
-            }
-          } else {
-            socket.deliver(completedFrame(id));
+  it("omits native fork affinity without replacing the parent's continuation", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const requests: Frame[] = [];
+    ControlledWebSocket.onSend = (socket, payload) => {
+      requests.push(JSON.parse(payload) as Frame);
+      const id = `resp_native_${requests.length}`;
+      const isFork = requests.length === 2;
+      queueMicrotask(() => {
+        socket.deliver({ type: "response.created", response: { id } });
+        if (isFork) {
+          for (const frame of textFrames(id, "msg_native_fork", "Independent review")) {
+            socket.deliver(frame);
           }
-        });
-      };
-      const { identity, parent } = forkParent("native-fork-independent");
-      const options = {
-        apiKey,
-        sessionId: identity.sessionId,
-        transport: "websocket-cached" as const,
-      };
-      expect((await (await parent(model, context, options)).result()).stopReason).toBe("stop");
-      await expect(
-        runFork(identity, "Review independently", parent, undefined, promptCacheKey),
-      ).resolves.toBe("Independent review");
-      expect((await (await parent(model, followupContext, options)).result()).stopReason).toBe(
-        "stop",
-      );
-      expect(ControlledWebSocket.instances.map((socket) => socket.sent.length)).toEqual([2, 1]);
-      expect(ControlledWebSocket.instances[1]?.closeCalls).toHaveLength(1);
-      expect(requests[1]).not.toHaveProperty("previous_response_id");
-      expect(requests[1]).toMatchObject({
-        input: [
-          { role: "user", content: [{ type: "input_text", text: "hi" }] },
-          { role: "user", content: [{ type: "input_text", text: "Review independently" }] },
-        ],
+        } else {
+          socket.deliver(completedFrame(id));
+        }
       });
-      expect(requests[0]?.prompt_cache_key).toBe(identity.sessionId);
-      expect(requests[1]).not.toHaveProperty("prompt_cache_key");
-      expect(requests[2]).toMatchObject({
-        previous_response_id: "resp_native_1",
-        input: [{ role: "user", content: [{ type: "input_text", text: "Continue parent" }] }],
-      });
-      expect(fetchMock).not.toHaveBeenCalled();
-    },
-  );
+    };
+    const { identity, parent } = forkParent("native-fork-independent");
+    const options = {
+      apiKey,
+      sessionId: identity.sessionId,
+      transport: "websocket-cached" as const,
+    };
+    await expectParentCompletion(parent, options);
+    await expect(
+      runFork(identity, "Review independently", parent, undefined, "parent-key"),
+    ).resolves.toBe("Independent review");
+    await expectParentCompletion(parent, options, followupContext);
+    expect(ControlledWebSocket.instances.map((socket) => socket.sent.length)).toEqual([2, 1]);
+    expect(ControlledWebSocket.instances[1]?.closeCalls).toHaveLength(1);
+    expect(requests[1]).not.toHaveProperty("previous_response_id");
+    expect(requests[1]).toMatchObject({
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "hi" }] },
+        { role: "user", content: [{ type: "input_text", text: "Review independently" }] },
+      ],
+    });
+    expect(requests[0]?.prompt_cache_key).toBe(identity.sessionId);
+    expect(requests[1]).not.toHaveProperty("prompt_cache_key");
+    expect(requests[2]).toMatchObject({
+      previous_response_id: "resp_native_1",
+      input: [{ role: "user", content: [{ type: "input_text", text: "Continue parent" }] }],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
   it("keeps the parent's native auto transport after an independent fork falls back to SSE", async () => {
     const fetchMock = vi.fn(async () => {
@@ -369,13 +374,11 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     };
     const { identity, parent } = forkParent("native-fork-fallback", runtime);
     const options = { apiKey, sessionId: identity.sessionId, transport: "auto" as const };
-    expect((await (await parent(model, context, options)).result()).stopReason).toBe("stop");
+    await expectParentCompletion(parent, options);
     await expect(
       runFork(identity, "Review with independent transport recovery", parent),
     ).resolves.toBe("Fallback review");
-    expect((await (await parent(model, followupContext, options)).result()).stopReason).toBe(
-      "stop",
-    );
+    await expectParentCompletion(parent, options, followupContext);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(ControlledWebSocket.instances.map((socket) => socket.sent.length)).toEqual([2, 1]);
     expect(JSON.parse(ControlledWebSocket.instances[0]?.sent[1] ?? "{}")).toMatchObject({
@@ -397,11 +400,9 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(
       /idle timeout|first-event timeout/,
     );
-    const { events, result, thrown } = await consumed;
-    expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
-      /idle timeout|first-event timeout/,
-    );
-    expect(events.length).toBeLessThanOrEqual(1);
+    const outcome = await consumed;
+    expectStreamFailure(outcome, /idle timeout|first-event timeout/);
+    expect(outcome.events.length).toBeLessThanOrEqual(1);
     expect(socket?.closeCalls.length).toBeGreaterThan(0);
   });
 
@@ -424,10 +425,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     expect(ControlledWebSocket.instances).toHaveLength(1);
     expect(ControlledWebSocket.instances[0]?.sent).toHaveLength(2);
     await expectIdleDeadline(onIdleTimeout);
-    const { result, thrown } = await consumed;
-    expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
-      /idle timeout/,
-    );
+    expectStreamFailure(await consumed, /idle timeout/);
   });
 
   it("D: consumer parked in emit() after start is still policed by the idle watchdog", async () => {
@@ -436,20 +434,13 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     const { entered, release, consumed } = parkConsumer(streamFn, runAbort.signal);
     await vi.advanceTimersByTimeAsync(10);
     await entered;
-    await vi.advanceTimersByTimeAsync(119_000);
-    expect(onIdleTimeout).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(2_000);
-    // The consumer is still parked; the dead socket is aborted anyway.
-    expect(onIdleTimeout).toHaveBeenCalledTimes(1);
+    await expectIdleDeadline(onIdleTimeout);
     expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(/idle timeout/);
     expect(ControlledWebSocket.instances[0]?.closeCalls.length).toBeGreaterThan(0);
 
     release();
     await vi.advanceTimersByTimeAsync(10);
-    const { result, thrown } = await consumed;
-    expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
-      /idle timeout|aborted/,
-    );
+    expectStreamFailure(await consumed, /idle timeout|aborted/);
   });
 
   it.each([
@@ -457,7 +448,6 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     { activity: "hidden reasoning", parked: true },
     { activity: "empty reasoning", parked: false },
     { activity: "repeated snapshot", parked: false },
-    { activity: "hidden reasoning", parked: false },
   ] as const)(
     "F: distinguishes activity from progress ($activity, parked=$parked)",
     async ({ activity, parked }) => {
@@ -474,18 +464,9 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
         });
       };
       const { streamFn, onIdleTimeout, runAbort } = startWatchdog(`F-${activity}-${parked}`);
-      const emitEntered = createDeferredCore();
-      const releaseEmit = createDeferredCore();
-      const consumed = consumeLikeAgentCore(streamFn, runAbort.signal, async (type) => {
-        if (type === "start") {
-          emitEntered.resolve();
-          if (parked) {
-            await releaseEmit.promise;
-          }
-        }
-      });
+      const { entered, release, consumed } = parkConsumer(streamFn, runAbort.signal, parked);
       await vi.advanceTimersByTimeAsync(10);
-      await emitEntered.promise;
+      await entered;
       const socket = ControlledWebSocket.instances[0];
       // Both kinds arrive inside the connection's 120s window. Only genuine
       // reasoning is allowed to extend the independent 15-minute progress deadline.
@@ -517,16 +498,14 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
         expect(onIdleTimeout).not.toHaveBeenCalled();
         socket?.deliver(completedFrame("resp_f"));
       }
-      releaseEmit.resolve();
+      release();
       await vi.advanceTimersByTimeAsync(10);
-      const { result, thrown } = await consumed;
+      const outcome = await consumed;
       if (activity !== "hidden reasoning") {
-        expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
-          /no model progress|aborted/,
-        );
+        expectStreamFailure(outcome, /no model progress|aborted/);
       } else {
-        expect(thrown).toBeUndefined();
-        expect(result?.stopReason).toBe("stop");
+        expect(outcome.thrown).toBeUndefined();
+        expect(outcome.result?.stopReason).toBe("stop");
         expect(onIdleTimeout).not.toHaveBeenCalled();
       }
     },

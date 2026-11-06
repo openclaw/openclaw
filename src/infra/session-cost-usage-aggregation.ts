@@ -1,11 +1,16 @@
 import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import { publishSessionCostUsageUpdated } from "./session-cost-usage-events.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import type { UsageCostPendingFile } from "./session-cost-usage-worker.types.js";
+
+const logger = createSubsystemLogger("usage-cost-cache");
+// Archive names are immutable, so one warning per file and process stays actionable without flooding.
+const reportedUnreadableFiles = new Set<string>();
 
 export async function refreshCostUsageCacheForAgent(params: {
   config?: OpenClawConfig;
@@ -20,17 +25,19 @@ export async function refreshCostUsageCacheForAgent(params: {
   startMs?: number;
   rebuildRows?: SessionCostUsageRollupRow[];
   sessionActor?: SessionActorStorageBinding;
+  waitForRefresh?: boolean;
 }): Promise<"refreshed" | "busy"> {
   const prepared = prepareUsageCostWorker(params);
   const agentId = normalizeAgentId(params.agentId);
   try {
-    const result = await runUsageCostWorker(prepared, {
+    const operation = {
       kind: "refresh",
       maxFiles: params.maxFiles,
       sessionFiles: params.sessionFiles,
       startMs: params.startMs,
       rebuildRows: params.rebuildRows,
-    });
+    } satisfies Parameters<typeof runUsageCostWorker>[1];
+    const result = await runUsageCostWorker(prepared, operation, params.waitForRefresh);
     if (result.kind === "busy") {
       return "busy";
     }
@@ -42,6 +49,14 @@ export async function refreshCostUsageCacheForAgent(params: {
     }
     if (result.remainingFiles?.length) {
       params.onRemaining?.(result.remainingFiles);
+    }
+    for (const { sessionFile, message } of result.unreadableFiles ?? []) {
+      if (!reportedUnreadableFiles.has(sessionFile)) {
+        reportedUnreadableFiles.add(sessionFile);
+        logger.warn(`kept the last usage for an archive that cannot be decoded: ${message}`, {
+          sessionFile,
+        });
+      }
     }
     return "refreshed";
   } catch (error) {

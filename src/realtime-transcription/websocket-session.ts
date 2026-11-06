@@ -3,6 +3,7 @@ import { toErrorObject, toStringifiedError } from "@openclaw/normalization-core/
 import type WebSocket from "ws";
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
+import { createNodeProxyAgent } from "../infra/net/node-proxy-agent.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { captureWsEventAsync } from "../proxy-capture/runtime.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
@@ -135,7 +136,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 
   close(): void {
-    if (this.closed) {
+    if (this.closed || !this.ensureCurrent()) {
       return;
     }
     this.closed = true;
@@ -187,10 +188,8 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       const ownsSocket = () => ownsGeneration() && this.ws === socket;
 
       const clearConnectTimeout = () => {
-        if (connectTimeout) {
-          clearTimeout(connectTimeout);
-          connectTimeout = undefined;
-        }
+        clearTimeout(connectTimeout);
+        connectTimeout = undefined;
         if (this.cancelConnecting === finishClosedConnect) {
           this.cancelConnecting = undefined;
         }
@@ -264,7 +263,12 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       };
 
       const send = (payload: Buffer | string): boolean => {
-        if (!socket || !ownsSocket() || socket.readyState !== WEBSOCKET_OPEN) {
+        if (
+          !socket ||
+          !ownsSocket() ||
+          socket.readyState !== WEBSOCKET_OPEN ||
+          !this.ensureCurrent()
+        ) {
           return false;
         }
         const payloadBytes =
@@ -284,10 +288,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           if (!ownsSocket()) {
             return;
           }
-          this.closed = true;
-          this.cancelConnecting?.();
-          this.reconnectSupervisor.cancel();
-          this.forceClose(socket);
+          this.abortCurrent();
         },
         failConnect: (error) => {
           if (ownsSocket()) {
@@ -323,7 +324,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           if (settled) {
             return;
           }
-          if (!ownsGeneration() || this.closed) {
+          if (!ownsGeneration() || this.closed || !this.ensureCurrent()) {
             finishClosedConnect();
             return;
           }
@@ -332,7 +333,8 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           socket = new NpmWebSocket(this.currentUrl, {
             headers: connection.headers,
             maxPayload: REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES,
-            ...(proxyAgent ? { agent: proxyAgent } : {}),
+            // Share CIDR bypass and managed proxy trust with other Node transports.
+            agent: proxyAgent ?? createNodeProxyAgent({ mode: "env", targetUrl: connection.url }),
           });
           socket.binaryType = "nodebuffer";
           this.ws = socket;
@@ -405,10 +407,8 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           if (readyForMs >= RECONNECT_STABLE_RESET_MS) {
             this.reconnectSupervisor.reset();
           }
-          if (this.closeTimer) {
-            clearTimeout(this.closeTimer);
-            this.closeTimer = undefined;
-          }
+          clearTimeout(this.closeTimer);
+          this.closeTimer = undefined;
           if (this.closed) {
             this.forceClose(socket);
             return;
@@ -514,14 +514,32 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.queuedBytes = 0;
   }
 
+  private ensureCurrent(): boolean {
+    try {
+      this.options.callbacks.assertCurrent?.();
+      return true;
+    } catch (error) {
+      // Queued audio and reconnects can outlive the request that admitted them.
+      this.abortCurrent();
+      this.emitError(error);
+      return false;
+    }
+  }
+
+  private abortCurrent(): void {
+    this.closed = true;
+    this.cancelConnecting?.();
+    this.reconnectSupervisor.cancel();
+    this.clearQueuedAudio();
+    this.forceClose();
+  }
+
   private forceClose(socket: WebSocket | null | undefined = this.ws): void {
     if (socket !== this.ws) {
       return;
     }
-    if (this.closeTimer) {
-      clearTimeout(this.closeTimer);
-      this.closeTimer = undefined;
-    }
+    clearTimeout(this.closeTimer);
+    this.closeTimer = undefined;
     this.ready = false;
     this.readySinceMs = undefined;
     this.ws = null;

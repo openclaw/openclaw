@@ -140,6 +140,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
       },
       timeout: {
         getRunAbortDeadlineAtMs: () => 123,
+        onRunAbortDeadlineChanged: () => () => {},
         clearTimers: vi.fn(),
       },
     },

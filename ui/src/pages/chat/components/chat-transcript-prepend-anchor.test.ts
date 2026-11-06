@@ -15,7 +15,7 @@ function fixture(scrollHeight = 1600) {
   scroller.getBoundingClientRect = () => rect(100, 500);
   Object.defineProperties(scroller, {
     clientHeight: { value: 500 },
-    scrollHeight: { value: scrollHeight },
+    scrollHeight: { configurable: true, value: scrollHeight },
   });
   scroller.innerHTML =
     '<div class="chat-virtual-row" data-index="4"><div class="chat-bubble" data-message-id="visible"></div></div>';
@@ -36,13 +36,63 @@ function fixture(scrollHeight = 1600) {
     virtualizer,
     instance: virtualizer as unknown as Virtualizer<HTMLDivElement, HTMLElement>,
     messageElements,
-    anchor: new TranscriptPrependAnchor(messageElements),
+    anchor: new TranscriptPrependAnchor(messageElements, vi.fn()),
     measureRows: vi.fn(() => false),
   };
 }
 
 const messages = (...ids: string[]) => new Set(ids);
 afterEach(() => document.body.replaceChildren());
+
+it("stops requesting commits when a reachable scroll correction makes no progress", () => {
+  const { scroller, bubble, virtualizer, instance, anchor, measureRows } = fixture();
+  scroller.scrollTop = 200;
+  anchor.messageKeys = messages("visible");
+  anchor.capture(scroller, false);
+  anchor.messageKeys = messages("older", "visible");
+  anchor.capture(scroller, false);
+  bubble.getBoundingClientRect = () => rect(130, 180);
+  // Model a native scroll command ignored until layout is available.
+  virtualizer.scrollToOffset.mockImplementation(() => {});
+
+  const commits = Array.from({ length: 3 }, () => anchor.update(scroller, instance, measureRows));
+  expect(commits).toEqual([true, true, false]);
+  expect(anchor.messageKey).toBeNull();
+  expect(scroller.scrollTop).toBe(200);
+});
+
+it.each([true, false])(
+  "preserves only an existing end anchor through measured prepend correction (%s)",
+  (following) => {
+    const { scroller, bubble, instance, messageElements, measureRows } = fixture();
+    const endAnchor = new TranscriptEndAnchor(() => {});
+    const anchor = new TranscriptPrependAnchor(messageElements, (before, after) =>
+      endAnchor.recordLayoutCorrection(before, after),
+    );
+    let height = 1600;
+    Object.defineProperty(scroller, "scrollHeight", { get: () => height });
+    scroller.scrollTop = 1100;
+    bubble.getBoundingClientRect = () => rect(1190 - scroller.scrollTop, 180);
+    anchor.messageKeys = messages("visible");
+    anchor.capture(scroller, false);
+    anchor.messageKeys = messages("older", "visible");
+    anchor.capture(scroller, false);
+    if (following) {
+      endAnchor.capture(scroller);
+    }
+
+    // A shrinking range clamps the old end; a later measured prepend restores its message.
+    height = 1583;
+    scroller.scrollTop = 1083;
+    endAnchor.recordLayoutCorrection(1100, 1083);
+    height = 1631;
+    anchor.update(scroller, instance, measureRows);
+    expect(scroller.scrollTop).toBe(1100);
+    const follow = vi.fn();
+    endAnchor.reconcile(scroller, true, false, follow);
+    expect(follow).toHaveBeenCalledTimes(following ? 1 : 0);
+  },
+);
 
 it("preserves a partially visible retained message rather than overscan across measurement and DOM replacement", () => {
   const { scroller, row, bubble, messageElements, virtualizer, instance, anchor, measureRows } =
@@ -53,6 +103,17 @@ it("preserves a partially visible retained message rather than overscan across m
   overscan.getBoundingClientRect = () => rect(-200, 100);
   row.prepend(overscan);
   messageElements.set("above", overscan);
+  const prepared = document.createElement("div");
+  prepared.className = "chat-virtual-row";
+  prepared.dataset.preparedRow = "true";
+  const cached = document.createElement("div");
+  cached.dataset.messageId = "cached";
+  cached.getBoundingClientRect = () => {
+    throw new Error("Prepend must not force layout of a prepared offscreen row");
+  };
+  prepared.append(cached);
+  scroller.prepend(prepared);
+  messageElements.set("cached", cached);
   anchor.messageKeys = messages("above", "visible");
   anchor.capture(scroller, false);
   anchor.messageKeys = messages("older", "above", "visible");
@@ -137,6 +198,21 @@ it.each<[string, string[], string[], boolean, number?, number?, boolean?]>([
   },
 );
 
+it("retires a reader anchor when an explicit scroll command replaces it", () => {
+  const { scroller, instance, anchor, measureRows } = fixture();
+  anchor.messageKeys = messages("visible");
+  anchor.capture(scroller, false);
+  anchor.messageKeys = messages("older", "visible");
+  anchor.capture(scroller, false);
+  expect(anchor.messageKey).toBe("visible");
+
+  anchor.messageKeys = messages("older", "visible", "sent");
+  anchor.capture(scroller, true, true);
+  expect(anchor.messageKey).toBeNull();
+  expect(anchor.update(scroller, instance, measureRows)).toBe(false);
+  expect(measureRows).not.toHaveBeenCalled();
+});
+
 it("keeps the original reader target when another projection commits before restoration", () => {
   const { scroller, bubble, instance, anchor, measureRows } = fixture();
   let contentTop = 290;
@@ -165,7 +241,7 @@ it("preserves native wheel movement after a projection captures the reader", () 
     state: new TranscriptOffsetState(),
     getScrollElement: () => scroller,
     prependAnchor: anchor,
-    endAnchor: new TranscriptEndAnchor(),
+    endAnchor: new TranscriptEndAnchor(() => {}),
     canFollowEnd: () => true,
     isProgrammaticScroll: () => false,
     cancelScroll: () => anchor.clear(),

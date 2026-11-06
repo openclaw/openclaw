@@ -12,7 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
@@ -35,6 +35,7 @@ import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { handleChatSend } from "./chat-send-handler.js";
+import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 export function setClientProfile(
@@ -249,13 +250,19 @@ export function useBrowserFollowupFixture() {
         isWebchatConnect: () => true,
       } as const;
       if (binding) {
-        await handleGatewayRequest({
-          ...request,
-          req: { ...request.req, expectedProfileId: binding.expectedProfileId },
-          signal: binding.signal,
-          sessionMutationCommitGuard: binding.sessionMutationCommitGuard,
-          extraHandlers: { "chat.send": handler },
-        });
+        await handleGatewayRequest(
+          bindInProcessRequestMutationAuthority(
+            {
+              ...request,
+              req: { ...request.req, expectedProfileId: binding.expectedProfileId },
+              signal: binding.signal,
+              sessionMutationCommitGuard: binding.sessionMutationCommitGuard,
+              extraHandlers: { "chat.send": handler },
+            },
+            undefined,
+            undefined,
+          ),
+        );
       } else {
         await withPluginRuntimeGatewayRequestScope(
           { context, isWebchatConnect: request.isWebchatConnect },

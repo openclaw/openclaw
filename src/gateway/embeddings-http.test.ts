@@ -10,11 +10,9 @@ import {
   resetConfigRuntimeState,
 } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import type { EmbeddingInput } from "../plugins/embedding-providers.js";
-import type {
-  MemoryEmbeddingProvider,
-  MemoryEmbeddingProviderAdapter,
-} from "../plugins/memory-embedding-providers.js";
+import type { EmbeddingInput } from "../plugins/embedding-provider-runtime-types.js";
+import type { MemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/registry-contribution-types.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -664,24 +662,20 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       createProvider.mockResolvedValueOnce(makeProvider({ id: "local", model: "local-embed" }));
     }
     // Concurrent provider admission needs distinct connections; each socket owns serial requests.
-    const firstPromise = post(
-      { input: "first" },
-      {
-        connection: "close",
-        ...(modelOverride ? { "x-openclaw-model": "openai/model-a" } : {}),
-      },
-    );
+    const request = (input: string, model: string) =>
+      post(
+        { input },
+        {
+          connection: "close",
+          ...(modelOverride ? { "x-openclaw-model": model } : {}),
+        },
+      );
+    const firstPromise = request("first", "openai/model-a");
     cleanup.requests.push(firstPromise);
     await waitForProviderEntry(cleanup.started, firstPromise);
     expect(closeProvider).toHaveBeenCalledTimes(1);
     const secondEntered = cleanup.watchAdmission();
-    const secondPromise = post(
-      { input: "second" },
-      {
-        connection: "close",
-        ...(modelOverride ? { "x-openclaw-model": "openai/model-b" } : {}),
-      },
-    );
+    const secondPromise = request("second", "openai/model-b");
     cleanup.requests.push(secondPromise);
     await waitForProviderEntry(secondEntered, secondPromise);
     expect(createProvider).toHaveBeenCalledTimes(1);

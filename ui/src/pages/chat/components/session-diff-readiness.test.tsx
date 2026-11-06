@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
+import { useFakeClock } from "../../../test-helpers/fake-clock.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -83,10 +84,7 @@ describe("SessionDiffPanel readiness", () => {
   it.each(["resolve", "reject"])(
     "defers an inactive owner read without holding its sibling's transition: %s",
     async (outcome) => {
-      vi.useFakeTimers();
-      onTestFinished(() => {
-        vi.useRealTimers();
-      });
+      useFakeClock();
       const pending = deferred<SessionsDiffResult>();
       const loader = vi
         .fn<NonNullable<SessionDiffProps["loader"]>>()
@@ -166,10 +164,7 @@ describe("SessionDiffPanel readiness", () => {
   });
 
   it("keeps computing responses pending and retains the last diff during refresh", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
+    useFakeClock();
     const computing = { ...result("feature/test"), computing: true };
     const slow = deferred<SessionsDiffResult>();
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
@@ -218,10 +213,7 @@ describe("SessionDiffPanel readiness", () => {
   });
 
   it("stops computing polls while hidden or inactive and retires them with the request owner", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
+    useFakeClock();
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const loader = vi.fn().mockResolvedValue({ ...result("feature/test"), computing: true });
     const { panel, update, unmount } = mountPanel();

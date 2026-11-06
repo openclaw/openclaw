@@ -215,10 +215,8 @@ it.for(["queued", "pre-commit"] as const)(
   "retires a superseded session while its browser cleanup claim waits (%s)",
   async (barrier, { signal }) => {
     const entry = createRunEntry({ generation: 1, expectsCompletionMessage: false });
-    const loaderEntered = createDeferredCore();
-    const releaseLoader = createDeferredCore();
-    const writeEntered = createDeferredCore();
-    const releaseWrite = createDeferredCore();
+    const loader = createEnteredGate();
+    const write = createEnteredGate();
     const cleanupQueued = createDeferredCore();
     let holdNextWrite = false;
     const cleanupBrowser = vi.fn(async () => {});
@@ -227,15 +225,13 @@ it.for(["queued", "pre-commit"] as const)(
         entry,
         cleanupBrowserSessionsForLifecycleEnd: undefined,
         loadCleanupBrowserSessionsForLifecycleEnd: async () => {
-          loaderEntered.resolve();
-          await releaseLoader.promise;
+          await loader.wait();
           return cleanupBrowser;
         },
         beforeWrite: async () => {
           if (holdNextWrite) {
             holdNextWrite = false;
-            writeEntered.resolve();
-            await releaseWrite.promise;
+            await write.wait();
           }
         },
       },
@@ -258,18 +254,18 @@ it.for(["queued", "pre-commit"] as const)(
     const completion = complete();
     let pendingWrite: Promise<void> | undefined;
     try {
-      await withinTest(loaderEntered.promise, signal);
+      await withinTest(loader.entered, signal);
       holdNextWrite = true;
       if (barrier === "queued") {
         pendingWrite = mutateLifecycleRun(entry, (row) => {
           row.label = "preceding durable write";
         });
-        await withinTest(writeEntered.promise, signal);
+        await withinTest(write.entered, signal);
       }
-      releaseLoader.resolve();
+      loader.release();
       await withinTest(cleanupQueued.promise, signal);
       if (barrier === "pre-commit") {
-        await withinTest(writeEntered.promise, signal);
+        await withinTest(write.entered, signal);
       }
       const successor = createRunEntry({
         runId: "successor-run",
@@ -279,7 +275,7 @@ it.for(["queued", "pre-commit"] as const)(
       });
       controller.options.runs.set(successor.runId, successor);
       expect(controller.newerGenerationOwnsSession(entry)).toBe(true);
-      releaseWrite.resolve();
+      write.release();
       await pendingWrite;
       await expect(completion).resolves.toBeUndefined();
 
@@ -290,8 +286,8 @@ it.for(["queued", "pre-commit"] as const)(
       expect(announce).not.toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
-      releaseLoader.resolve();
-      releaseWrite.resolve();
+      loader.release();
+      write.release();
       await Promise.allSettled([completion, pendingWrite]);
     }
   },

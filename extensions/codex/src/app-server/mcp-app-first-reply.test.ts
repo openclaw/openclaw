@@ -1,5 +1,4 @@
 import path from "node:path";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentHarnessSessionPreparationV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { expect, it, vi } from "vitest";
 import * as bindingConnection from "./binding-connection.js";
@@ -19,8 +18,6 @@ import {
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
 import * as sharedClient from "./shared-client.js";
-import * as lifecycle from "./thread-lifecycle-run.js";
-import * as warmLifecycle from "./thread-lifecycle-warm.js";
 import {
   createAppServerOptions,
   createLifecycleRequest,
@@ -36,12 +33,12 @@ it.each([true, false])(
     const params = createTestParams();
     params.agentId = "main";
     params.permissionMode = "full";
-    const debug = vi.spyOn(embeddedAgentLog, "debug");
     let nextThread = 0;
     params.agentDir = path.join(params.workspaceDir, "agent");
     registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
     const wire = await createLeasedCodexLifecycleHarness({
       agentDir: params.agentDir,
+      codexHome: path.join(params.agentDir, "codex-home"),
       respond: createLifecycleRequest(async (method, requestParams) => {
         if (method === "thread/start") {
           return threadStartResult(++nextThread === 1 ? "app-thread" : "reply-thread");
@@ -83,8 +80,6 @@ it.each([true, false])(
       usesSupervisionConnection: false,
       clientAuthProfileId: null,
     });
-    const starts = vi.spyOn(lifecycle, "startOrResumeThread");
-    const warmReuse = vi.spyOn(warmLifecycle, "tryReuseCodexLiveThread");
     const preparation: AgentHarnessSessionPreparationV1 = {
       version: 1,
       purpose: "mcp-app",
@@ -116,41 +111,12 @@ it.each([true, false])(
       await lease!.runtime.joinCleanup?.();
     }
     try {
-      const outcome = await runCodexAppServerAttempt(params, {
-        pluginConfig,
-        clientFactory: async () => acquire(wire.acquireOptions),
-      }).then(
-        (result) => ({ result }),
-        (error: unknown) => ({ error }),
-      );
-      console.info(
-        "FIRST_REPLY_EVIDENCE",
-        JSON.stringify({
-          retainLease,
-          preliminaryRestrictedFingerprint: Boolean(preliminary?.restrictedThreadConfigFingerprint),
-          preliminaryNativePolicyRestricted: Boolean(preliminary?.nativeToolPolicyRestricted),
-          warmReuseCalls: warmReuse.mock.calls.length,
-          debugReasons: debug.mock.calls.map(([message]) => message),
-          claimed: isCodexAppServerLiveThreadClaimed(wire.client, "app-thread"),
-          protected: isCodexAppServerLiveThreadProtected(wire.client, "app-thread"),
-          lifecycleInputs: starts.mock.calls.map(([input]) => ({
-            hasDeveloperInstructions: Boolean(input.developerInstructions),
-            nativeCodeModeEnabled: input.nativeCodeModeEnabled,
-            dynamicTools: input.dynamicTools.length,
-            configKeys: Object.keys(input.config ?? {}).toSorted(),
-          })),
-          methods: wire.request.mock.calls.map(([method]) => method),
-          error:
-            "error" in outcome && outcome.error instanceof Error
-              ? outcome.error.message
-              : undefined,
-          stack:
-            "error" in outcome && outcome.error instanceof Error
-              ? outcome.error.stack?.split("\n").slice(0, 6)
-              : undefined,
+      await expect(
+        runCodexAppServerAttempt(params, {
+          pluginConfig,
+          clientFactory: async () => acquire(wire.acquireOptions),
         }),
-      );
-      expect(outcome).not.toHaveProperty("error");
+      ).resolves.toBeDefined();
       expect(wire.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true);
     } finally {
       if (retainLease) {

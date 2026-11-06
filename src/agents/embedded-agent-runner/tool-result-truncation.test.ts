@@ -7,6 +7,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
@@ -151,11 +152,7 @@ function realisticSpillPath(dir: string, name: string): string {
 }
 
 function user(text: string): UserMessage {
-  return {
-    role: "user",
-    content: text,
-    timestamp: nextTimestamp(),
-  };
+  return makeUserMessage(text, nextTimestamp());
 }
 
 function assistant(text: string): AssistantMessage {

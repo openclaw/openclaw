@@ -432,13 +432,15 @@ describe("native declaration preparation", () => {
         };
         const producer = setup();
         const consumer = setup();
+        const outputPath = ".artifacts/sdk-command.outputs";
         const cli = (f: typeof producer, operation: string, ...args: string[]) => {
           signal.throwIfAborted();
+          fs.rmSync(path.join(f.root, outputPath), { force: true });
           return command(
             f.root,
             process.execPath,
             ["scripts/ci-sdk-declarations.mts", operation, ...args],
-            { ...process.env, GITHUB_OUTPUT: undefined },
+            { ...process.env, GITHUB_OUTPUT: path.join(f.root, outputPath) },
           );
         };
         const success = (f: typeof producer, operation: string, ...args: string[]) => {
@@ -456,9 +458,12 @@ describe("native declaration preparation", () => {
         const narrowPack = cli(producer, "pack");
         expect(narrowPack.status, narrowPack.stdout + narrowPack.stderr).toBe(1);
         expect(narrowPack.stderr).toContain("Only a current full SDK receipt");
+        expect(producer.has(outputPath)).toBe(false);
         await producer.run();
         success(producer, "pack");
+        const packedOutput = producer.read(outputPath);
         const published = identity(producer);
+        expect(packedOutput).toBe(`cache-key=${published["cache-key"]}\n`);
         const empty = identity(consumer);
         expect(published.fresh).toBe("true");
         expect(empty.fresh).toBe("false");
@@ -469,6 +474,7 @@ describe("native declaration preparation", () => {
         fs.mkdirSync(path.dirname(targetArchive), { recursive: true });
         fs.writeFileSync(targetArchive, archive);
         success(consumer, "restore", "--required");
+        expect(consumer.read(outputPath)).toBe(packedOutput);
         success(consumer, "validate");
         const restored = consumer.snapshot(consumer.recordPath);
         await consumer.selected({ OPENCLAW_CI_SHARED_SDK: "1" });
@@ -501,6 +507,7 @@ describe("native declaration preparation", () => {
           const rejected = cli(consumer, "restore", "--required");
           expect(rejected.status, rejected.stdout + rejected.stderr).toBe(1);
           expect(rejected.stderr).toMatch(/SDK (?:archive|receipt)/u);
+          expect(consumer.has(outputPath)).toBe(false);
           expect(consumer.has(consumer.recordPath)).toBe(false);
         }
 
@@ -512,7 +519,9 @@ describe("native declaration preparation", () => {
         const stale = cli(consumer, "restore", "--required");
         expect(stale.status, stale.stdout + stale.stderr).toBe(1);
         expect(stale.stderr).toContain("different source or toolchain inputs");
+        expect(consumer.has(outputPath)).toBe(false);
         expect(success(consumer, "restore").stdout).toContain("native preparation will run");
+        expect(consumer.has(outputPath)).toBe(false);
         expect(consumer.has(consumer.recordPath)).toBe(false);
         await consumer.run();
         success(consumer, "validate");
@@ -649,6 +658,61 @@ describe("native declaration preparation", () => {
       expect(f.has(".artifacts/dist-artifacts.lock/owner.json")).toBe(false);
     },
   );
+
+  it("rebinds copied plugin dependency links before cold and warm preparation", ({ signal }) =>
+    fixture.run(async () => {
+      const f = createPreparationFixture("all", signal);
+      const previousModules = path.join(f.ancestor, "previous-checkout/node_modules");
+      f.files({
+        [path.join(previousModules, "boundary-private-dep/package.json")]: {
+          name: "boundary-private-dep",
+          types: "index.d.ts",
+        },
+        [path.join(previousModules, "boundary-private-dep/index.d.ts")]:
+          "export declare function consume(callback: (value: number) => number): void;",
+      });
+      const links = f.plugins.map(([id]) => {
+        const output = path.join(f.root, boundaryRoot, "plugins", id);
+        fs.mkdirSync(output, { recursive: true });
+        const link = path.join(output, "node_modules");
+        fs.symlinkSync(previousModules, link, "junction");
+        return { link, target: path.join(f.root, "extensions", id, "node_modules") };
+      });
+      await f.run();
+      const [id, entry] = f.plugins[0];
+      f.write(
+        "consumer.ts",
+        `import { consume } from "./${boundaryRoot}/plugins/${id}/${entry}.js"; consume(value => value.toUpperCase());`,
+      );
+      f.compile([...isolatedCompilerArgs, "--strict", "consumer.ts"]);
+      for (const { link, target } of links) {
+        expect(fs.realpathSync.native(link)).toBe(fs.realpathSync.native(target));
+      }
+      const records = f.plugins.map(([pluginId]) => {
+        const file = `${boundaryRoot}/${pluginId}.json`;
+        return { file, ...f.snapshot(file) };
+      });
+      const stableLinks = links.slice(1).map(({ link }) => ({
+        link,
+        mtimeMs: fs.lstatSync(link).mtimeMs,
+      }));
+      const firstLink = links[0]!;
+      fs.unlinkSync(firstLink.link);
+      fs.symlinkSync(
+        path.join(f.ancestor, "missing-checkout/node_modules"),
+        firstLink.link,
+        "junction",
+      );
+      await f.run();
+      expect(fs.realpathSync.native(firstLink.link)).toBe(fs.realpathSync.native(firstLink.target));
+      f.compile([...isolatedCompilerArgs, "--strict", "consumer.ts"]);
+      for (const { file, bytes, mtimeMs } of records) {
+        expect(f.snapshot(file)).toEqual({ bytes, mtimeMs });
+      }
+      for (const { link, mtimeMs } of stableLinks) {
+        expect(fs.lstatSync(link).mtimeMs).toBe(mtimeMs);
+      }
+    }));
 
   it(
     "preserves outputs on compile failure and prunes obsolete declarations after repair",

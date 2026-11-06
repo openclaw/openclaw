@@ -4,10 +4,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { retainGatewayResponsePayload } from "../../../../packages/gateway-client/src/protocol-request.js";
 import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import type {
   PluginInstallRequest,
   PluginListResult,
@@ -136,20 +137,14 @@ async function mountInventory(
 }
 
 it("flushes a pending config draft before enabling and refreshes afterward", async () => {
+  await import("./settings-view.tsx");
   vi.useFakeTimers();
   let config: Record<string, unknown> = { pending: false };
   let hash = "hash-1";
   const enabled = createPlugin({ enabled: true, state: "enabled" });
   const fixture = runtimeFixture({
     "config.get": () => {
-      return {
-        config,
-        sourceConfig: config,
-        raw: JSON.stringify(config),
-        hash,
-        valid: true,
-        issues: [],
-      };
+      return sourceConfigSnapshot(config, hash);
     },
     "config.set": (params) => {
       config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
@@ -844,7 +839,7 @@ it("requires a fresh install-policy review after reconnect", async () => {
   harness.emit(client, false);
   harness.emit(client, true);
   await clickPluginAction(page, "Continue installation");
-  await waitForText(page, "request a fresh review");
+  await waitForText(page, "request a new review");
   expect(installCalls).toBe(1);
   await clickPluginAction(page, "Install");
   await waitForSolid(() => expect(installCalls).toBe(2));

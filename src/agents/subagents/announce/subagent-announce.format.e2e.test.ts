@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -9,7 +8,7 @@ import {
   type OpenClawConfig,
 } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../../config/sessions/types.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
@@ -30,6 +29,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
+import { expectText } from "../../../test-utils/text-assertions.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { buildAgentInternalEventContext, type AgentInternalEvent } from "../../internal-events.js";
 import {
@@ -72,14 +72,6 @@ type AnnounceParams = Partial<
 >;
 function session(sessionId: string, fields: SessionEntryFixture = {}): SessionEntryFixture {
   return { sessionId, ...fields };
-}
-function expectText(text: string, included: string[], excluded: string[] = []) {
-  for (const part of included) {
-    expect(text).toContain(part);
-  }
-  for (const part of excluded) {
-    expect(text).not.toContain(part);
-  }
 }
 
 function prepareTerminal(rawText: string) {
@@ -148,7 +140,9 @@ function assistantEvent(runId: string, text: string, final?: boolean) {
   };
 }
 
-const sessionConfig = { store: "/tmp/sessions.json" };
+const tempDirs = createTempDirTracker();
+const sessionRoot = tempDirs.make("announce-format-");
+const sessionConfig = { store: path.join(sessionRoot, "sessions.json") };
 let configOverride: OpenClawConfig = { session: sessionConfig };
 const defaultOutcomeAnnounce = {
   childRunId: "run-default",
@@ -385,12 +379,14 @@ describe("subagent announce formatting", () => {
     });
   }
 
-  afterAll(() => {
+  afterAll(async () => {
     announceTesting.setDepsForTest();
     outputTesting.setDepsForTest();
     deliveryTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
     subagentRuns.clear();
+    await closeOpenClawAgentDatabasesAsync(sessionRoot);
+    tempDirs.cleanup();
   });
 
   beforeEach(() => {
@@ -424,7 +420,7 @@ describe("subagent announce formatting", () => {
       },
       ...gatewayDeps,
       readSubagentSessionEntry: (_storePath, sessionKey) => readSessionFixture(sessionKey),
-      resolveSessionStorePathCore: () => "/tmp/sessions.json",
+      resolveSessionStorePathCore: () => sessionConfig.store,
     });
     getGlobalHookRunnerSpy
       .mockReset()
@@ -497,9 +493,7 @@ describe("subagent announce formatting", () => {
     expected: string,
     excluded: string,
   ): Promise<void> {
-    const root = await fs.realpath(
-      await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "announce-real-store-")),
-    );
+    const root = tempDirs.make("announce-real-store-");
     const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
     try {
       await patchSessionEntryCore(
@@ -523,7 +517,6 @@ describe("subagent announce formatting", () => {
       expectText(getAgentCallContext(), ["Stats:", expected], [excluded]);
     } finally {
       await closeOpenClawAgentDatabasesAsync(root);
-      await fs.rm(root, { recursive: true, force: true });
     }
   }
 
@@ -569,7 +562,7 @@ describe("subagent announce formatting", () => {
       outputTokens: 1000,
       totalTokens: 197000,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
     const call = await deliverCompletion({
       childRunId: "run-direct-completion",
@@ -591,9 +584,7 @@ describe("subagent announce formatting", () => {
       taskLabel: "do thing",
       statusLabel: "failed: boom",
       result: findings,
-      statsLine: expect.stringMatching(
-        /tokens 1\.0k \(in 12 \/ out 1\.0k\).*prompt\/cache 197\.0k/,
-      ),
+      statsLine: expect.stringMatching(/tokens 1\.0k \(in 12 \/ out 1\.0k\).*context 197\.0k/),
     });
     expectInputProvenance(call.params, childKey);
     expectText(

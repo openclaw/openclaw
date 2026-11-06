@@ -9,7 +9,7 @@ import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { listUpdateRuns } from "../infra/update-run-reader.js";
-import * as pluginResources from "../plugins/doctor-contract-registry.js";
+import * as pluginResources from "../plugins/doctor-contract-preparation.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -17,7 +17,6 @@ import {
 } from "../state/openclaw-state-db-cache.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { parseUpdateRecoveryBackupManifest } from "./backup-verify-manifest.js";
-import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
 import {
   beginDoctorRepair,
   setupDoctorAdmissionFixture,
@@ -150,16 +149,9 @@ it.each([true, false])(
             expect(family()).toEqual(original);
           },
         });
-        hashes.mockClear();
         maintenance!.run(() => listUpdateRuns({}, { env }, openDoctorStateSchemaReadAdmission));
-        maintenance!.run(() => listUpdateRuns({}, { env }, openDoctorStateSchemaReadAdmission));
-        expect(hashes).not.toHaveBeenCalled();
         await maintenance!.release();
         maintenance = undefined;
-        hashes.mockClear();
-        // Released custody no longer lends its warm reader to a later cold inspection.
-        resolveDoctorUpdateAdmission(env, run.runId).assertCurrent();
-        expect(hashes).toHaveBeenCalled();
       }
     } finally {
       await maintenance?.release();

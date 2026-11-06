@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { hasErrnoCode } from "./errno.js";
 
 export const MAX_SNAPSHOT_ATTEMPTS = 10;
@@ -15,6 +16,27 @@ export function sqliteSnapshotSourceFileSize(pathname: string): number {
       return 0;
     }
     throw error;
+  }
+}
+
+export function assertSqliteSnapshotSpace(pathname: string | null, destination: string): void {
+  if (pathname === null) {
+    return;
+  }
+  const requiredBytes = ["", "-wal", "-journal"].reduce(
+    (bytes, suffix) => bytes + sqliteSnapshotSourceFileSize(pathname + suffix),
+    0,
+  );
+  const space = tryReadDiskSpace(destination);
+  // Private recovery may write cloned pages. Admit the whole family conservatively,
+  // even when the filesystem could initially satisfy the copy with a cheap clone.
+  if (space && space.availableBytes < requiredBytes) {
+    throw Object.assign(
+      new Error(
+        `SQLite read-only snapshot needs ${formatDiskSpaceBytes(requiredBytes)} (${requiredBytes} bytes) near ${destination}, but only ${formatDiskSpaceBytes(space.availableBytes)} (${space.availableBytes} bytes) is available. Free disk space before retrying.`,
+      ),
+      { code: "ENOSPC" },
+    );
   }
 }
 

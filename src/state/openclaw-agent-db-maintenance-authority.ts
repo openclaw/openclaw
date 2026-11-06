@@ -19,7 +19,7 @@ export function assertAgentDatabaseMaintenanceAuthority(
   if (!authority || (expected && authority !== expected)) {
     const ErrorType = authority ? Error : AgentDatabaseMaintenanceRequiredError;
     throw new ErrorType(
-      "Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.",
+      "Agent database migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.",
     );
   }
   authority.assertOwned();

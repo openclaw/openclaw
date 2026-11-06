@@ -3,12 +3,12 @@
 import { createComponent } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type {
-  ControlUiHost,
   ControlUiSurfaceProps,
   ControlUiViewContext,
 } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import { createInertViewHost } from "../../../plugins/control-ui-view.test-support.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -17,14 +17,7 @@ import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 it("passes the raw Tool Search invocation to tool-result plugin replacements", async () => {
   const lifetime = new AbortController();
   // SAFETY: this view fixture never invokes the host service objects.
-  const host = {
-    signal: lifetime.signal,
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as unknown as ControlUiHost;
+  const host = createInertViewHost(lifetime.signal);
   const received: ControlUiViewContext<ControlUiSurfaceProps["tool-result"]>[] = [];
   const reportError = vi.fn();
   const registration = {

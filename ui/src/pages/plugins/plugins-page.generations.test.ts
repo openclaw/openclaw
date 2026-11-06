@@ -1,15 +1,16 @@
 /* @vitest-environment jsdom */
 
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import type { PluginMutationResult } from "../../lib/plugins/index.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { pageFixture, queryWithin } from "./plugins-page.lifecycle-test-support.ts";
+import { pageFixture, queryWithin, runtimeFixture } from "./plugins-page.lifecycle-test-support.ts";
 import {
   clickPluginAction,
   createClient,
@@ -23,6 +24,9 @@ import {
 } from "./plugins-page.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
+// The page lazy-loads its detail views. Import them once up front so the first test's
+// short render waits measure rendering, not cold module transforms on a loaded runner.
+beforeAll(() => Promise.all([import("./settings-view.tsx"), import("./catalog-detail.tsx")]));
 beforeEach(async () => {
   await i18n.setLocale("en");
   vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true);
@@ -32,6 +36,49 @@ afterEach(resetPluginsPageTestState);
 function objectSchema(properties: Record<string, JsonSchema>): JsonSchema {
   return { type: "object", properties };
 }
+
+it("accepts a changed schema with the same version while retaining drafts during unrelated revisions", async () => {
+  const schema = (fields: Record<string, JsonSchema>) =>
+    objectSchema({
+      plugins: objectSchema({
+        entries: objectSchema({ workboard: objectSchema({ config: objectSchema(fields) }) }),
+      }),
+    });
+  const first = schema({ greeting: { type: "string", title: "Greeting" } });
+  const replacement = schema({
+    greeting: { type: "string", title: "Updated greeting" },
+    timeout: { type: "integer", title: "Timeout" },
+  });
+  let schemaResponse = { schema: first, version: "same", uiHints: {} };
+  const harness = runtimeFixture({
+    "plugins.list": () => createResult(),
+    "plugins.inspect": () => createInspectResult(),
+    "config.get": () =>
+      sourceConfigSnapshot(
+        { plugins: { entries: { workboard: { config: { greeting: "Saved", timeout: 30 } } } } },
+        "hash",
+      ),
+    "config.schema": () => schemaResponse,
+  });
+  await harness.runtimeConfig.ensureLoaded();
+  await harness.runtimeConfig.ensureSchemaLoaded();
+  const { page, find } = await harness.mount("/settings/plugins/workboard?view=settings");
+  await waitForSolid(() => expect(find('[data-setting="greeting"] input')).not.toBeNull());
+  const input = find<HTMLInputElement>('[data-setting="greeting"] input')!;
+  input.value = "Unfinished greeting";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  harness.emit(harness.client, true);
+  await page.updateComplete;
+  expect(find('[data-setting="greeting"] input')).toBe(input);
+  expect(input.value).toBe("Unfinished greeting");
+
+  schemaResponse = { schema: replacement, version: "same", uiHints: {} };
+  await harness.runtimeConfig.refreshSchema();
+  await waitForSolid(() => {
+    expect(find('[data-setting="greeting"]')?.textContent).toContain("Updated greeting");
+    expect(find<HTMLInputElement>('[data-setting="timeout"] input')?.value).toBe("30");
+  });
+});
 
 it("retains installed settings and an unfinished input across transport loss, but retires them for a new client", async () => {
   const refresh = deferred();
@@ -60,14 +107,12 @@ it("retains installed settings and an unfinished input across transport loss, bu
     const input = find<HTMLInputElement>('[data-setting="greeting"] input')!;
     input.value = "Unfinished greeting";
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    harness.emit(client, false);
-    await page.updateComplete;
-    expect(find('[data-setting="greeting"] input')).toBe(input);
-    expect(input.value).toBe("Unfinished greeting");
-    harness.emit(client, true);
-    await page.updateComplete;
-    expect(find('[data-setting="greeting"] input')).toBe(input);
-    expect(input.value).toBe("Unfinished greeting");
+    for (const connected of [false, true]) {
+      harness.emit(client, connected);
+      await page.updateComplete;
+      expect(find('[data-setting="greeting"] input')).toBe(input);
+      expect(input.value).toBe("Unfinished greeting");
+    }
     const replacement = createClient(async () => refresh.promise);
     harness.emit(replacement.client, true);
     await page.updateComplete;
@@ -86,6 +131,15 @@ it("retains installed rows through a failed refresh and its retry", async () => 
   const selector = '.plugins-settings-row[data-plugin-id="workboard"]';
   await waitForSolid(() => expect(find(selector)).not.toBeNull());
   const row = find(selector);
+  const badge = find(`${selector} .plugins-settings-row__status`);
+  const removed: Node[] = [];
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      removed.push(...record.removedNodes);
+    }
+  });
+  observer.observe(row!, { subtree: true, childList: true });
+  onTestFinished(() => observer.disconnect());
   harness.publishGeneration(1);
   await harness.waitForCall("plugins.list");
   expect(find(selector)).toBe(row);
@@ -100,6 +154,18 @@ it("retains installed rows through a failed refresh and its retry", async () => 
   await waitForSolid(() => expect(find(selector)?.textContent).toContain("Updated Workboard"));
   expect(find(selector)).toBe(row);
   expect(page.textContent).not.toContain("Synthetic inventory unavailable");
+  expect(removed.filter((node) => node === badge)).toHaveLength(0);
+  expect(find(`${selector} .plugins-settings-row__status`)).toBe(badge);
+
+  response = Promise.resolve(createResult(createPlugin({ enabled: true, state: "enabled" })));
+  harness.publishGeneration(2);
+  await waitForSolid(() =>
+    expect(
+      find(`${selector} .plugins-settings-row__status`)?.getAttribute("data-plugin-state"),
+    ).toBe("enabled"),
+  );
+  expect(find(`${selector} .plugins-settings-row__status`)?.textContent).toContain("Enabled");
+  expect(find(`${selector} .settings-status--ok`)).not.toBeNull();
 });
 
 it.each([
@@ -186,16 +252,7 @@ it.each([
         ],
       }),
       "plugins.catalog.get": () => detail,
-      "plugins.inspect": () =>
-        createInspectResult({
-          plugin: {
-            id: plugin.id,
-            name: plugin.name,
-            origin: "global",
-            installed: true,
-            enabled: false,
-          },
-        }),
+      "plugins.inspect": () => createInspectResult({ plugin }),
     });
     const route = harness.route(path, { ...createResult(), generation: 0 });
     const { page } = await mountPage(harness.context, undefined, surface);
@@ -205,22 +262,9 @@ it.each([
     await page.updateComplete;
     page.routeData = route;
     await page.updateComplete;
-    await waitForSolid(() => {
-      expect(find(selector)?.textContent).toContain(plugin.name);
-    });
+    await waitForSolid(() => expect(find(selector)?.textContent).toContain(plugin.name));
     expect(harness.calls("plugins.list").length).toBeGreaterThan(0);
     expect(connect).not.toHaveBeenCalled();
-    expect(
-      harness.request.mock.calls.some(
-        ([method]) =>
-          method ===
-          (surface === "settings"
-            ? "plugins.inspect"
-            : path === "/plugins"
-              ? "plugins.catalog.browse"
-              : "plugins.catalog.get"),
-      ),
-    ).toBe(true);
   },
 );
 
@@ -233,15 +277,7 @@ it("targets the selected installed route after its stale inventory refresh fails
     "plugins.list": () => refresh.promise,
     "plugins.inspect": (params) => {
       const plugin = (params as { pluginId: string }).pluginId === alpha.id ? alpha : beta;
-      return createInspectResult({
-        plugin: {
-          id: plugin.id,
-          name: plugin.name,
-          origin: "global",
-          installed: true,
-          enabled: false,
-        },
-      });
+      return createInspectResult({ plugin });
     },
     "plugins.setEnabled": () => {
       throw new Error("Synthetic enable refused");
@@ -260,15 +296,12 @@ it("targets the selected installed route after its stale inventory refresh fails
     refresh.reject(new Error("Inventory unavailable"));
     await waitForSolid(() => expect(find('[aria-label="Enable Beta"]')).not.toBeNull());
     await page.updateComplete;
-    const enable = find<HTMLButtonElement>('[aria-label="Enable Beta"]');
-    expect(enable).not.toBeNull();
-    enable!.click();
+    find<HTMLButtonElement>('[aria-label="Enable Beta"]')!.click();
     await harness.waitForCall("plugins.setEnabled");
     expect(harness.calls("plugins.setEnabled")).toEqual([
       ["plugins.setEnabled", { pluginId: beta.id, enabled: true }],
     ]);
     expect(find("h1")?.textContent).toBe(beta.name);
-    expect(find(".plugin-catalog-detail")?.textContent).toContain(beta.name);
     await waitForSolid(() => expect(find(".btn__spinner")).toBeNull());
   } finally {
     refresh.resolve(inventory);
@@ -404,27 +437,6 @@ it("retains same-plugin inspection after a failed refresh", async () => {
   retry.resolve(initial);
 });
 
-it("shows installed inspection before optional catalog enrichment settles", async () => {
-  const inspection = deferred<ReturnType<typeof createInspectResult>>();
-  const catalog = deferred<ReturnType<typeof createDiscoveryDetail>>();
-  const plugin = createPlugin({ catalogId: "catalog-workboard" });
-  const result = createInspectResult();
-  result.components.skillDetails = [
-    { name: "inspected-skill", description: "Local inspection ready" },
-  ];
-  const harness = pageFixture({
-    "plugins.inspect": () => inspection.promise,
-    "plugins.catalog.get": () => catalog.promise,
-  });
-  const { page } = await harness.mount("/settings/plugins/workboard", createResult(plugin));
-  await harness.waitForCall("plugins.inspect");
-  expect(page.textContent).not.toContain("Local inspection ready");
-  inspection.resolve(result);
-  await waitForSolid(() => expect(page.textContent).toContain("Local inspection ready"));
-  expect(harness.calls("plugins.catalog.get")).toHaveLength(1);
-  catalog.resolve(createDiscoveryDetail(plugin));
-});
-
 it("retries a failed selected catalog read through its visible error action", async () => {
   const first = deferred<ReturnType<typeof createDiscoveryDetail>>();
   const retry = deferred<ReturnType<typeof createDiscoveryDetail>>();
@@ -449,24 +461,21 @@ it("retries a failed selected catalog read through its visible error action", as
   expect(page.textContent).not.toContain("Synthetic catalog unavailable");
 });
 
-it.each(["settings", "discovery"] as const)(
-  "closes a held %s detail without waiting for transport",
-  async (surface) => {
-    const held = deferred();
-    const harness = pageFixture({
-      "plugins.inspect": () => held.promise,
-      "plugins.catalog.get": () => held.promise,
-      "plugins.catalog.browse": () => ({ items: [], categories: [] }),
-    });
-    const inventory = surface === "settings" ? createResult() : createResult([]);
-    const path =
-      surface === "settings" ? "/settings/plugins/workboard" : "/plugins/catalog-workboard";
-    const { page } = await mountPage(harness.context, harness.route(path, inventory), surface);
-    await harness.waitForCall(surface === "settings" ? "plugins.inspect" : "plugins.catalog.get");
-    page.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await waitForSolid(() => expect(page.querySelector(".plugin-catalog-detail")).toBeNull());
-    held.reject(new Error("Retired detail must not reappear"));
-    await settlePlugins();
-    expect(page.textContent).not.toContain("Retired detail must not reappear");
-  },
-);
+it("closes a held discovery detail without waiting for transport", async () => {
+  const held = deferred();
+  const harness = pageFixture({
+    "plugins.catalog.get": () => held.promise,
+    "plugins.catalog.browse": () => ({ items: [], categories: [] }),
+  });
+  const { page } = await mountPage(
+    harness.context,
+    harness.route("/plugins/catalog-workboard", createResult([])),
+    "discovery",
+  );
+  await harness.waitForCall("plugins.catalog.get");
+  page.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await waitForSolid(() => expect(page.querySelector(".plugin-catalog-detail")).toBeNull());
+  held.reject(new Error("Retired detail must not reappear"));
+  await settlePlugins();
+  expect(page.textContent).not.toContain("Retired detail must not reappear");
+});

@@ -51,18 +51,38 @@ await Promise.all([
 ]);
 
 const scope = { agentId: "main", sessionKey: "agent:main:main" };
+const reminder = (text: string, wakeMode: "now" | "next-heartbeat" = "next-heartbeat") => ({
+  name: text,
+  enabled: false,
+  deleteAfterRun: false,
+  schedule: { kind: "at" as const, at: new Date(Date.now() + 60_000).toISOString() },
+  sessionTarget: "main" as const,
+  wakeMode,
+  payload: { kind: "systemEvent" as const, text },
+});
+const sessionEntry = () => ({
+  sessionId: "cron-restart-session",
+  lifecycleRevision: "original",
+  permissionMode: "full" as const,
+  updatedAt: Date.now(),
+});
+
+function waitForGate(signal: AbortSignal) {
+  return (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
+    withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
+}
+
+async function resetAfterRestart() {
+  await drainGlobalSingletonLifecycleState("restart");
+  resetSystemEventsForTest();
+}
 
 async function prepareCronSessionFixture(state: OpenClawTestState, onQueued?: () => void) {
   const config = completionConfig(state.workspaceDir);
   setRuntimeConfigSnapshot(config);
   await state.writeConfig(config);
   openOpenClawStateDatabase();
-  await replaceSessionEntry(scope, {
-    sessionId: "cron-restart-session",
-    lifecycleRevision: "original",
-    permissionMode: "full",
-    updatedAt: Date.now(),
-  });
+  await replaceSessionEntry(scope, sessionEntry());
   const storePath = state.statePath("cron", "jobs.json");
   const deps: Omit<CronServiceDeps, "scheduler"> = {
     storePath,
@@ -129,33 +149,16 @@ it.for(["next-heartbeat", "now"] as const)(
           return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
         });
         const foreground = await enqueueForeground("Synthetic foreground work", signal);
+        const gate = waitForGate(signal);
         let replacement: CronService | undefined;
         let running: ReturnType<CronService["run"]> | undefined;
         let afterRestart: Awaited<ReturnType<typeof enqueueForeground>> | undefined;
         try {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              foregroundStarted.promise,
-              foreground.settled,
-              "Foreground work never entered the model",
-            ),
-            signal,
-          );
+          await gate(foregroundStarted.promise, foreground.settled, "Foreground never started");
           await first.start();
-          const job = await first.add({
-            name: "Pending reminder",
-            enabled: false,
-            deleteAfterRun: false,
-            schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
-            sessionTarget: "main",
-            wakeMode,
-            payload: { kind: "systemEvent", text: "Synthetic pending reminder" },
-          });
+          const job = await first.add(reminder("Synthetic pending reminder", wakeMode));
           running = first.run(job.id, "force");
-          await withinTest(
-            awaitGateBeforeSettlement(queued.promise, running, "Cron event never queued"),
-            signal,
-          );
+          await gate(queued.promise, running, "Cron event never queued");
           expect(history(job.id)).toEqual([]);
           expect(peekSystemEventEntries(scope.sessionKey)).toMatchObject([
             { text: "Synthetic pending reminder" },
@@ -172,10 +175,9 @@ it.for(["next-heartbeat", "now"] as const)(
           replacement = createService();
           await replacement.start();
           const interrupted = history(job.id);
-          expect(interrupted).toMatchObject([
-            { status: "error", error: expect.stringMatching(/restart/i) },
+          expect(interrupted).toEqual([
+            expect.objectContaining({ status: "error", error: expect.stringMatching(/restart/i) }),
           ]);
-          expect(interrupted).toHaveLength(1);
           expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
           replacement.stop();
           await replacement.waitForIdle();
@@ -188,9 +190,7 @@ it.for(["next-heartbeat", "now"] as const)(
             status: "completed",
           });
           expect(prompts).toHaveLength(2);
-          expect(prompts.every((prompt) => !prompt.includes("Synthetic pending reminder"))).toBe(
-            true,
-          );
+          expect(prompts.join("\n")).not.toContain("Synthetic pending reminder");
           expect(history(job.id)).toEqual(interrupted);
           expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
         } finally {
@@ -207,8 +207,7 @@ it.for(["next-heartbeat", "now"] as const)(
             first.waitForIdle(),
             replacement?.waitForIdle(),
           ]);
-          await drainGlobalSingletonLifecycleState("restart");
-          resetSystemEventsForTest();
+          await resetAfterRestart();
         }
       },
     );
@@ -222,6 +221,7 @@ it("finishes a queued Cron event only after its adopted turn and transport settl
     { label: "cron-event-settlement", env: { OPENCLAW_TEST_FAST: "0" } },
     async (state) => {
       const { createService, history } = await prepareCronSessionFixture(state);
+      const gate = waitForGate(signal);
       const registry = captureActivePluginRegistrySnapshot();
       const currentRegistry = expectDefined(registry.activeRegistry, "active plugin registry");
       const finished = createDeferred<CronEvent>();
@@ -232,6 +232,10 @@ it("finishes a queued Cron event only after its adopted turn and transport settl
           finished.resolve(event);
         }
       });
+      const expectPending = (jobId: string) => {
+        expect(history(jobId)).toEqual([]);
+        expect(finishedEvents).toEqual([]);
+      };
       const started = createDeferred();
       const releaseModel = createDeferred();
       const sending = createDeferred();
@@ -274,63 +278,35 @@ it("finishes a queued Cron event only after its adopted turn and transport settl
           ],
         });
         await replaceSessionEntry(scope, {
-          sessionId: "cron-restart-session",
-          lifecycleRevision: "original",
-          permissionMode: "full",
+          ...sessionEntry(),
           delivery: normalizeSessionDeliveryState({ context: route }),
-          updatedAt: Date.now(),
         });
         await cron.start();
-        const job = await cron.add({
-          name: "Adopted reminder",
-          enabled: false,
-          deleteAfterRun: false,
-          schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "Synthetic adopted reminder" },
-        });
+        const job = await cron.add(reminder("Synthetic adopted reminder"));
         await expect(cron.enqueueRun(job.id, "force")).resolves.toMatchObject({
           ok: true,
           enqueued: true,
         });
-        await withinTest(
-          awaitGateBeforeSettlement(
-            started.promise,
-            finished.promise,
-            "Cron turn never entered the model",
-          ),
-          signal,
-        );
+        await gate(started.promise, finished.promise, "Cron turn never entered the model");
         expect(prompts).toHaveLength(1);
         expect(prompts[0]).toContain("Synthetic adopted reminder");
         expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
-        expect(history(job.id)).toEqual([]);
-        expect(finishedEvents).toEqual([]);
+        expectPending(job.id);
         releaseModel.resolve();
-        await withinTest(
-          awaitGateBeforeSettlement(
-            sending.promise,
-            finished.promise,
-            "Cron reply never reached transport",
-          ),
-          signal,
-        );
+        await gate(sending.promise, finished.promise, "Cron reply never reached transport");
         expect(sendText).toHaveBeenCalledOnce();
         expect(sendText.mock.calls[0]?.[0]).toMatchObject({
           to: route.to,
           text: "Synthetic report delivered",
         });
-        expect(history(job.id)).toEqual([]);
-        expect(finishedEvents).toEqual([]);
+        expectPending(job.id);
         releaseTransport.resolve();
         await expect(withinTest(finished.promise, signal)).resolves.toMatchObject({
           status: "ok",
           delivered: true,
         });
         await cron.waitForIdle();
-        expect(history(job.id)).toMatchObject([{ status: "ok" }]);
-        expect(history(job.id)).toHaveLength(1);
+        expect(history(job.id)).toEqual([expect.objectContaining({ status: "ok" })]);
         cron.stop();
         await cron.waitForIdle();
         await drainGlobalSingletonLifecycleState("restart");
@@ -346,8 +322,7 @@ it("finishes a queued Cron event only after its adopted turn and transport settl
         releaseTransport.resolve();
         cron.stop();
         await cron.waitForIdle();
-        await drainGlobalSingletonLifecycleState("restart");
-        resetSystemEventsForTest();
+        await resetAfterRestart();
         restoreActivePluginRegistrySnapshot(registry);
       }
     },

@@ -2,6 +2,7 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
 import { channelsAddCommand } from "../commands/channels/add.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import * as configModule from "../config/config.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -14,6 +15,7 @@ import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.js";
 import { createSystemAgentOverviewFixture } from "./overview.fixture.test-support.js";
 import type { SystemAgentOverview } from "./overview.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import { runSystemAgentTui, type SystemAgentTuiOptions } from "./tui-backend.js";
 import { resolveSystemAgentVerifiedInferenceState } from "./verified-inference.js";
@@ -98,17 +100,12 @@ const verifiedConfig = {
 
 function configSnapshot(config: OpenClawConfig) {
   return createConfigFileSnapshot({
-    exists: true,
-    valid: true,
-    path: "/tmp/openclaw.json",
+    ...createTestConfigSnapshot(config),
+    sourceConfig: config,
+    runtimeConfig: config,
     hash: "h",
     raw: null,
     parsed: config,
-    runtimeConfig: config,
-    sourceConfig: config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
   });
 }
 
@@ -142,15 +139,7 @@ async function createVerifiedTuiOptions(
   };
 }
 
-function createRuntime(): RuntimeEnv {
-  return {
-    log: () => undefined,
-    error: () => undefined,
-    exit: (code) => {
-      throw new Error(`exit ${code}`);
-    },
-  };
-}
+const createRuntime = (): RuntimeEnv => createSystemAgentTestRuntime().runtime;
 
 type TestBackend = Omit<TuiBackend, "loadHistory" | "onEvent"> & {
   loadHistory: (opts: { sessionKey: string; limit?: number }) => Promise<{
@@ -162,6 +151,12 @@ type TestBackend = Omit<TuiBackend, "loadHistory" | "onEvent"> & {
   dispose: () => Promise<void>;
   setRequestExitHandler: (handler: () => void) => void;
 };
+
+const testSessionKey = "agent:openclaw:main";
+const send = (backend: TestBackend, message: string) =>
+  backend.sendChat({ sessionKey: testSessionKey, message });
+const history = (backend: TestBackend, limit?: number) =>
+  backend.loadHistory({ sessionKey: testSessionKey, limit });
 
 async function withBackend(
   run: (backend: TestBackend) => Promise<void>,
@@ -226,6 +221,7 @@ describe("runSystemAgentTui", () => {
     resolveVerifiedState.mockClear();
     const runTui = vi.fn(
       async (opts: Parameters<NonNullable<SystemAgentTuiOptions["runTui"]>>[0]) => {
+        expect(resolveVerifiedState).toHaveBeenCalledWith(verified.verifiedInference);
         if (!opts.backend) {
           throw new Error("Expected the system-agent TUI backend");
         }
@@ -246,20 +242,12 @@ describe("runSystemAgentTui", () => {
 
     expect(runTui).toHaveBeenCalledOnce();
     expect(resolveVerifiedState).toHaveBeenCalledOnce();
-    expect(resolveVerifiedState).toHaveBeenCalledWith(verified.verifiedInference);
-    const [resolveOrder] = resolveVerifiedState.mock.invocationCallOrder;
-    const [runTuiOrder] = runTui.mock.invocationCallOrder;
-    if (resolveOrder === undefined || runTuiOrder === undefined) {
-      throw new Error("expected verified route resolution before TUI startup");
-    }
-    expect(resolveOrder).toBeLessThan(runTuiOrder);
     expect(runTui.mock.calls[0]?.[0]).toMatchObject({
       local: true,
       session: "agent:openclaw:main",
       historyLimit: 200,
       config: {},
       title: "openclaw setup",
-      backend: expect.any(Object),
     });
     expect(runTui.mock.calls[0]?.[0].config).toEqual({});
   }, 240_000);
@@ -270,23 +258,14 @@ describe("runSystemAgentTui", () => {
       backend.engine.dispose = async () => undefined;
 
       for (let index = 1; index <= 201; index += 1) {
-        await backend.sendChat({
-          sessionKey: "agent:openclaw:main",
-          message: `message-${index}`,
-        });
+        await send(backend, `message-${index}`);
       }
 
-      const retained = await backend.loadHistory({
-        sessionKey: "agent:openclaw:main",
-        limit: 500,
-      });
+      const retained = await history(backend, 500);
       expect(retained.messages).toHaveLength(200);
       expect(retained.messages[0]?.content[0]?.text).toBe("message-2");
 
-      const tail = await backend.loadHistory({
-        sessionKey: "agent:openclaw:main",
-        limit: 2,
-      });
+      const tail = await history(backend, 2);
       expect(tail.messages.map((entry) => entry.content[0]?.text)).toEqual([
         "message-200",
         "message-201",
@@ -313,13 +292,6 @@ describe("runSystemAgentTui", () => {
       );
       expect(catalogPreparation).not.toHaveBeenCalled();
       expect(runTui).toHaveBeenCalledOnce();
-      expect(runTui).toHaveBeenCalledWith(
-        expect.objectContaining({
-          local: true,
-          session: "agent:openclaw:main",
-          title: "openclaw setup",
-        }),
-      );
     } finally {
       publishedSnapshot.mockRestore();
       catalogPreparation.mockReset();
@@ -328,15 +300,10 @@ describe("runSystemAgentTui", () => {
   });
 
   it("reports the verified model without its auth profile and the effective thinking level", async () => {
-    const config = {
+    const config: OpenClawConfig = {
       ...verifiedConfig,
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-          thinkingDefault: "high",
-        },
-      },
-    } satisfies OpenClawConfig;
+      agents: { defaults: { model: "openai/gpt-5.5", thinkingDefault: "high" } },
+    };
     const profileQualifiedOverview = {
       ...overview,
       defaultModel: "openai/gpt-5.5@openai:setup-test",
@@ -347,9 +314,7 @@ describe("runSystemAgentTui", () => {
     );
 
     await withBackend(async (backend) => {
-      await expect(
-        backend.loadHistory({ sessionKey: "agent:openclaw:main" }),
-      ).resolves.toMatchObject({ thinkingLevel: "high" });
+      await expect(history(backend)).resolves.toMatchObject({ thinkingLevel: "high" });
       await expect(backend.listSessions()).resolves.toMatchObject({
         sessions: [
           {
@@ -386,7 +351,7 @@ describe("runSystemAgentTui", () => {
       const onUnhandled = (reason: unknown) => unhandled.push(reason);
       process.on("unhandledRejection", onUnhandled);
       try {
-        await backend.sendChat({ sessionKey: "agent:openclaw:main", message: "hello" });
+        await send(backend, "hello");
         // Wait for the fire-and-forget response path to emit its final event.
         await new Promise((resolve) => {
           setTimeout(resolve, 50);
@@ -413,11 +378,8 @@ describe("runSystemAgentTui", () => {
       const requestedExit = new Promise<void>((resolve) => {
         backend.setRequestExitHandler(resolve);
       });
-      await backend.sendChat({ sessionKey: "agent:openclaw:main", message: "status please" });
-      await backend.sendChat({
-        sessionKey: "agent:openclaw:main",
-        message: "config set gateway.port 19001",
-      });
+      await send(backend, "status please");
+      await send(backend, "config set gateway.port 19001");
       await requestedExit;
       await new Promise((resolve) => {
         setTimeout(resolve, 0);
@@ -427,15 +389,13 @@ describe("runSystemAgentTui", () => {
     expect(handle).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
     expect(events).toHaveLength(2);
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            state: "error",
-            errorMessage: expect.stringContaining("working inference"),
-          }),
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          state: "error",
+          errorMessage: expect.stringContaining("working inference"),
         }),
-      ]),
+      }),
     );
     expect(events.some((event) => event.payload?.state === "final")).toBe(false);
   });
@@ -502,10 +462,7 @@ describe("runSystemAgentTui", () => {
           const requestedExit = new Promise<void>((resolve) => {
             backend.setRequestExitHandler(resolve);
           });
-          await backend.sendChat({
-            sessionKey: "agent:openclaw:main",
-            message: "open setup wizard",
-          });
+          await send(backend, "open setup wizard");
           await requestedExit;
         },
         { ...verified, setupWorkspace: "/tmp/custom-workspace" },

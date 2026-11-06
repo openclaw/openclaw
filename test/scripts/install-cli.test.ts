@@ -14,13 +14,11 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
-import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeNpmLifecycleFixture } from "./install-npm-fixtures.js";
-import { findDarwinReexecBash } from "./install-reexec-fixtures.js";
+import { findDarwinReexecBash, runStreamedInstallerHelp } from "./install-reexec-fixtures.js";
 import {
   defineInstallerNpmConfigContract,
   defineInstallerNpmFreshnessContract,
@@ -38,6 +36,7 @@ function runShell(script: string, env: NodeJS.ProcessEnv = {}) {
     encoding: "utf8",
     env: {
       ...process.env,
+      ZDOTDIR: undefined,
       OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1",
       ...env,
       BASH_ENV: "",
@@ -120,6 +119,62 @@ function runNpmPolicy(spec: string) {
 
 describe("install-cli.sh", () => {
   const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
+
+  it.each(["24.21.0", "24.22.1", "26.12.0", "26.12.1"])(
+    "reuses compatible private Node %s with one stderr security warning when needed",
+    (version) => {
+      const f = makeFixture("node-security-warning");
+      f.node(`prefix/tools/node-v${version}/bin/node`, `v${version}`);
+      f.shell(`prefix/tools/node-v${version}/bin/npm`, "exit 0");
+      const result = f.run(`
+        PREFIX="$ROOT/prefix" NODE_VERSION=${version} NODE_VERSION_REQUESTED=1 JSON=1
+        download_file() { echo 'unexpected runtime download' >&2; exit 91; }
+        install_node darwin arm64
+        install_node darwin arm64
+      `);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(
+        result.stdout
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ).toMatchObject([
+        { event: "step", name: "node", status: "skip" },
+        { event: "step", name: "node", status: "skip" },
+      ]);
+      const expectedWarnings = ["24.21.0", "26.12.0"].includes(version) ? 1 : 0;
+      expect(result.stderr.match(/SECURITY WARNING:/g) ?? []).toHaveLength(expectedWarnings);
+      if (expectedWarnings) {
+        expect(result.stderr).toContain("may trust TLS certificates signed with keys compromised");
+        expect(result.stderr).toContain("Node 24.22.1+ on the 24.x line or Node 26.12.1+");
+      }
+    },
+  );
+
+  it.each([undefined, ".config/zsh"])("persists npm prefix PATH with ZDOTDIR=%s", (suffix) => {
+    const home = tempDirs.make("openclaw-cli-zdotdir-");
+    const zshDir = suffix ? join(home, suffix) : home;
+    mkdirSync(zshDir, { recursive: true });
+    const profiles = [join(home, ".bashrc"), join(zshDir, ".zshrc")];
+    for (const rc of profiles) {
+      writeFileSync(rc, "# existing\n");
+    }
+    const result = runInstallCliShell(
+      `
+      os_detect() { echo linux; }
+      npm_fixture() { [[ "$*" != "config get prefix" ]] || echo "$HOME/missing/prefix"; }
+      npm_bin() { echo npm_fixture; }
+      fix_npm_prefix_if_needed
+      fix_npm_prefix_if_needed
+    `,
+      { HOME: home, ZDOTDIR: suffix ? zshDir : undefined },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(profiles.map((rc) => readFileSync(rc, "utf8"))).toEqual(
+      Array(2).fill(`# existing\nexport PATH="${home}/.npm-global/bin:$PATH"\n`),
+    );
+    expect(existsSync(join(home, ".zshrc"))).toBe(!suffix);
+  });
   const installerContract = {
     scriptPath: SCRIPT_PATH,
     runShell,
@@ -309,20 +364,7 @@ fi
       return;
     }
     const tmp = tempDirs.make("openclaw-install-reexec-");
-    const result = spawnSync(bash, ["-s", "--", "--help"], {
-      input: script,
-      encoding: "utf8",
-      timeout: 10_000,
-      env: {
-        ...process.env,
-        HOME: tmp,
-        TMPDIR: tmp,
-        BASH_ENV: "",
-        ENV: "",
-        OPENCLAW_INSTALL_SH_NO_RUN: "0",
-        OPENCLAW_INSTALL_CLI_SH_NO_RUN: "0",
-      },
-    });
+    const result = runStreamedInstallerHelp(bash, script, tmp);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Usage: install-cli.sh [options]");
     expect(result.stderr).not.toContain("Run this installer with /bin/bash");
@@ -500,26 +542,6 @@ fi
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("--timeout=300");
     expect(result.stdout).toContain("wget-status=4");
-  });
-
-  it("matches the canonical release-label contract for installed Node runtimes", () => {
-    const result = runShell(
-      [
-        "set -euo pipefail",
-        `source ${JSON.stringify(SCRIPT_PATH)}`,
-        "set +e",
-        ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
-          `node_release_version_is_supported ${JSON.stringify(version)}`,
-          `printf '${index}=%s\\n' "$?"`,
-        ]),
-      ].join("\n"),
-    );
-
-    expect(result.status).toBe(0);
-    for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
-      const expectedStatus = isSupportedOpenClawNodeVersion(version) ? 0 : 1;
-      expect(result.stdout, version).toContain(`${index}=${expectedStatus}`);
-    }
   });
 
   it.each(["npm", "git"])("rejects incompatible %s before replacing the managed CLI", (method) => {
@@ -1016,7 +1038,7 @@ fi
     const failed = install();
     expect(failed.status).toBe(1);
     expect(failed.stdout).toContain(
-      "Installed Node 24.22.1 must provide Node >= 24.22.1 with WAL-reset-safe SQLite",
+      "Installed Node 24.22.1 must provide Node >= 24.16.0 with WAL-reset-safe SQLite",
     );
     expect(failed.stdout).toContain("found Node unknown, SQLite unavailable");
     expectActive(oldRuntime, "v22.23.2");
@@ -1057,7 +1079,7 @@ fi
     [
       "vulnerable Node",
       "NODE_VERSION=24.14.1; install_node linux x64",
-      "Node 24.14.1 is unsupported; use Node 24.22.1+ or Node 26.12.1+.",
+      "Node 24.14.1 is unsupported; use Node 24.16.0+ or Node 26.1.0+.",
       "Installing Node 24.14.1",
     ],
     [

@@ -175,8 +175,7 @@ before parsing another full JSON copy for bounded preview construction. The
 normalized string moves into the same store. Final projection reserves a usable
 reference before allocating the remaining display space to sampled descriptions
 and output; an undisplayable reference is released. Failed admission remains a
-successful partial result with a precise non-retention reason. Headless and
-restart-safe execution do not allocate automatic references.
+successful partial result with a precise non-retention reason. Headless execution does not allocate automatic references.
 
 Catalog teardown, replacement, restriction, and the admitted run's abort clear
 saved data. Appended client tools preserve the same result-store lifetime, including
@@ -199,11 +198,21 @@ committed session-store projection.
 
 The projection is initialized lazily at the first store operation and shares
 the admitted catalog/result-store lifetime. For a persisted session, core uses
-the existing off-thread `SessionManager.openAsync` API to read the full branch
+the off-thread transcript maintenance reader to select store entries on the branch
 ending at the live session's current leaf. This includes custom entries older
 than the live manager's bounded hydration window. An unmatched leaf fails the
 operation rather than exposing a different branch. Subsequent operations use
 the projection, applying this run's own commits without rescanning the branch.
+
+Across admitted runs, core reuses a validated projection only when a fresh read
+matches the physical session identity, transcript rewrite generation, and ordered
+store-entry IDs. The cache retains at most 16 sessions and 8 MiB of accounted
+JSON and metadata; histories above 4,096 entries or 1,024 live keys are not cached.
+Session removal and database shutdown discard retained projections. When the
+cached IDs are a prefix of the current branch, only appended entries are replayed
+into a private copy of the projection. Divergent branches and rewrites replay
+from the beginning through the same validation and budget checks. Loaded values
+remain detached copies, and persisted bytes do not change.
 
 Only a cell that settles `completed` commits its non-empty write set. Core
 appends one `custom` entry with type `openclaw.code-mode-store` through
@@ -217,7 +226,7 @@ or disk cache is created. Replay follows branch ancestry, survives compaction,
 and excludes other branches' writes. Custom entries stay outside model context.
 Loading a flagged value marks the receiving cell's runtime as containing
 network content, preserving the normal untrusted-content wrapper across turns.
-Store operations are unavailable in headless or `restartSafe` execution, or
+Store operations are unavailable in headless execution or
 without a bound session manager. See the
 [guest store contract](/tools/code-mode/guest-api#session-store) for data limits.
 
@@ -247,9 +256,16 @@ bridge as QuickJS. Suspension retains the worker, context, and pending promises;
 `wait` continues that context without replaying the source. Cancellation,
 expiry, terminal results, and shutdown release the retained execution.
 
-After successful completion, Node keeps up to four idle workers for 30 seconds
-to reuse short bursts, then retains one for up to five minutes since its last
-completion. Reuse requires the same runtime entry and heap limit.
+After successful completion, Node keeps up to eight idle workers. Surplus
+workers have a three-minute cooldown from their last completion, so recurring
+bursts reuse recently needed capacity. The most recently completed compatible
+worker remains warm until pressure, health, runtime rotation, or host shutdown
+retires it. The combined nominal warm-heap budget is 512 MiB with the default
+64 MiB per worker, or 8 GiB at the maximum 1 GiB per-worker configuration;
+external allocations are excluded, so this is not an RSS limit.
+Reuse requires the same runtime entry and heap limit. Serial work reuses the
+most recently completed matching worker so surplus workers from an earlier burst
+can expire instead of having their idle deadlines repeatedly reset.
 Reuse stays within the creating Gateway or CLI command lifetime; closing that
 host joins worker retirement. Standalone executor calls without a host close
 their completed worker immediately. Each new cell still gets a fresh VM context.
@@ -270,7 +286,10 @@ outputs stay `unknown`, and declarations do not grant access to additional tools
 Executable cells are plain JavaScript. Code Mode does not load a TypeScript
 compiler, strip annotations, or typecheck the program. The selected engine parses and runs
 the JavaScript directly. Tool calls still use the existing runtime input and
-output validation, policy, and approval owners. A later call can fail after
+output validation, policy, and approval owners. Local input validation keeps the
+tool's provider-neutral contract when a provider requires a projected schema;
+an explicit tool-owner execution contract still takes precedence.
+A later call can fail after
 earlier calls have produced effects, so follow the
 [recovery guidance](/tools/code-mode/quickstart#recover-from-tool-errors) before
 retrying a failed cell.

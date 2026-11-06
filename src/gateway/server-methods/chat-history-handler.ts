@@ -8,9 +8,10 @@ import {
   validateChatHistoryParams,
   validateChatStartupParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { ChatHistoryParams } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveAgentConfig, resolveAgentVerboseDefault } from "../../agents/agent-scope.js";
-import { findModelCatalogEntry } from "../../agents/model-catalog.js";
+import { findModelCatalogEntry } from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import {
   getSubagentSessionListReadSnapshotIdentity,
@@ -22,6 +23,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createChannelMentionProjector } from "../chat-display-projection.channel-mentions.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
@@ -42,7 +44,6 @@ import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.j
 import { registerDeflatedSegment } from "../server/ws-compression.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
-import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
@@ -56,6 +57,7 @@ import { readChatHistoryPage } from "./chat-history-pages.js";
 import {
   resolveEmbeddedAgentRunRecoverySnapshot,
   respondChatHistoryUnavailable,
+  respondChatHistoryReadError,
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
 import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
@@ -65,8 +67,9 @@ import { withChatStartupDiagnostics } from "./chat-server-timing.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
+/** Internal callers carry schema-validated fields and their resolved session target. */
 export async function handleChatHistoryRequest({
   params,
   respond,
@@ -79,7 +82,8 @@ export async function handleChatHistoryRequest({
   acceptsSerializedJson,
   acceptsDeflatedSegments,
   req,
-}: GatewayRequestHandlerOptions & {
+}: Omit<GatewayRequestHandlerOptions, "params"> & {
+  params: ChatHistoryParams;
   method: ChatHistoryMethod;
   retainedTranscript?: {
     sessionId: string;
@@ -87,9 +91,6 @@ export async function handleChatHistoryRequest({
     verifyRetainedState?: () => Promise<boolean>;
   };
 }) {
-  if (!assertValidParams(params, validateChatHistoryParams, method, respond)) {
-    return;
-  }
   const {
     sessionKey,
     limit,
@@ -134,13 +135,6 @@ export async function handleChatHistoryRequest({
   if (!selection) {
     return;
   }
-  const respondReadError = (error: unknown) => {
-    const message = resolveSessionHistoryUnavailableMessage(error);
-    if (message === undefined) {
-      throw error;
-    }
-    respondChatHistoryUnavailable(method, respond, message);
-  };
   try {
     const {
       selectedSession,
@@ -209,6 +203,8 @@ export async function handleChatHistoryRequest({
                 maxChars: effectiveMaxChars,
                 queuedRunIds,
                 cronStorePath: context.cronStorePath,
+                resolveGatewayContext: context.resolveGatewayContext,
+                physicalPaths: rowProjection.physicalPaths,
               },
             ),
           )
@@ -233,6 +229,7 @@ export async function handleChatHistoryRequest({
         ? [{ runId: receipt.runId, consumedByEventId: receipt.consumedByEventId }]
         : [],
     );
+    const projectMentions = createChannelMentionProjector(context, client, canonicalKey);
     let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
     // Internal adapters may inspect message objects before responding.
     const encodeResponse = acceptsSerializedJson && method === req.method;
@@ -269,6 +266,7 @@ export async function handleChatHistoryRequest({
                     ...(pageCursor ? { pageCursor } : {}),
                   },
                   signal,
+                  projectMentions,
                 ),
               {
                 config: cfg,
@@ -281,7 +279,7 @@ export async function handleChatHistoryRequest({
               },
             );
     } catch (error) {
-      respondReadError(error);
+      respondChatHistoryReadError(method, respond, error);
       return;
     }
     if (historyPage.encodedResponse && historyPage.encodedMessagesDeflate) {
@@ -294,6 +292,9 @@ export async function handleChatHistoryRequest({
       ? {
           ...historyPage.encodedResponse,
           messages: new SerializedJsonArray(historyPage.encodedResponse.messages),
+          activity: historyPage.encodedResponse.activity
+            ? new SerializedJsonArray(historyPage.encodedResponse.activity)
+            : undefined,
         }
       : prepareChatHistoryResponsePage(historyPage, {
           entry: historyEntry,
@@ -545,9 +546,10 @@ export async function handleChatHistoryRequest({
                 incognito: entry?.incognito,
               },
               signal,
+              projectMentions,
             );
           } catch (error) {
-            respondReadError(error);
+            respondChatHistoryReadError(method, respond, error);
             return undefined;
           }
           return withReadySessionRows(rowProjection, queries, (publicationRead) => {
@@ -645,13 +647,15 @@ export async function handleChatHistoryRequest({
 }
 
 export const chatHistoryHandlers: GatewayRequestHandlers = {
-  "chat.history": (opts) => handleChatHistoryRequest({ ...opts, method: "chat.history" }),
+  "chat.history": defineValidatedGatewayHandler("chat.history", validateChatHistoryParams, (opts) =>
+    handleChatHistoryRequest({ ...opts, method: "chat.history" }),
+  ),
   "chat.startup": withChatStartupDiagnostics(async (opts) => {
     if (!assertValidParams(opts.params, validateChatStartupParams, "chat.startup", opts.respond)) {
       return;
     }
     if ("sessionKey" in opts.params) {
-      await handleChatHistoryRequest({ ...opts, method: "chat.startup" });
+      await handleChatHistoryRequest({ ...opts, params: opts.params, method: "chat.startup" });
       return;
     }
     const connId = opts.client?.connId?.trim();

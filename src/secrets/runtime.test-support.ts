@@ -9,10 +9,9 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import { buildTestWebSearchProviders as baseProviders } from "./runtime-web-tools-provider.test-support.js";
 // Keep static: compiled-worker preparation belongs at collection, not in a hook or test deadline.
 import { clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } from "./runtime.js";
-
-type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
 
 const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
@@ -36,70 +35,31 @@ export function loadAuthStoreWithProfiles(
   return { version: 1, profiles };
 }
 
-function createTestProvider(
-  id: WebProviderUnderTest,
-  pluginId: string,
-  autoDetectOrder: number,
-): PluginWebSearchProviderEntry {
-  const credentialPath = `plugins.entries.${pluginId}.config.webSearch.apiKey`;
-  return {
-    pluginId,
-    id,
-    label: id,
-    hint: `${id} test provider`,
-    envVars: [`${id.toUpperCase()}_API_KEY`],
-    placeholder: `${id}-...`,
-    signupUrl: `https://example.com/${id}`,
-    autoDetectOrder,
-    credentialPath,
-    inactiveSecretPaths: [credentialPath],
-    getCredentialValue: (searchConfig) => {
-      const provider = searchConfig?.[id];
-      const providerConfig =
-        provider && typeof provider === "object" ? (provider as { apiKey?: unknown }) : undefined;
-      return providerConfig?.apiKey ?? searchConfig?.apiKey;
-    },
-    setCredentialValue: (searchConfigTarget, value) => {
-      const providerConfig =
-        id === "brave"
-          ? searchConfigTarget
-          : ((searchConfigTarget[id] ??= {}) as { apiKey?: unknown });
-      providerConfig.apiKey = value;
-    },
-    getConfiguredCredentialValue: (config) =>
-      (config?.plugins?.entries?.[pluginId]?.config as { webSearch?: { apiKey?: unknown } })
-        ?.webSearch?.apiKey,
-    getConfiguredCredentialFallback:
-      id === "gemini"
-        ? (config) => {
-            const provider = (config?.models?.providers?.google ?? {}) as { apiKey?: unknown };
-            return provider.apiKey !== undefined
-              ? { path: "models.providers.google.apiKey", value: provider.apiKey }
-              : undefined;
-          }
-        : undefined,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
-      const entries = (plugins.entries ??= {});
-      const entry = (entries[pluginId] ??= {}) as { config?: Record<string, unknown> };
-      const config = (entry.config ??= {});
-      const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
-      webSearch.apiKey = value;
-    },
-    resolveRuntimeMetadata:
-      id === "perplexity" ? () => ({ perplexityTransport: "search_api" as const }) : undefined,
-    createTool: () => null,
-  };
-}
-
 export function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
-  return [
-    createTestProvider("brave", "brave", 10),
-    createTestProvider("gemini", "google", 20),
-    createTestProvider("grok", "xai", 30),
-    createTestProvider("kimi", "moonshot", 40),
-    createTestProvider("perplexity", "perplexity", 50),
-  ];
+  return baseProviders()
+    .filter(({ id }) => id !== "duckduckgo")
+    .map((provider) => {
+      const { id } = provider;
+      return Object.assign(provider, {
+        getCredentialValue: (searchConfig) => {
+          const candidate = searchConfig?.[id];
+          const providerConfig =
+            candidate && typeof candidate === "object"
+              ? (candidate as { apiKey?: unknown })
+              : undefined;
+          return providerConfig?.apiKey ?? searchConfig?.apiKey;
+        },
+        setCredentialValue: (searchConfigTarget, value) => {
+          const providerConfig =
+            id === "brave"
+              ? searchConfigTarget
+              : ((searchConfigTarget[id] ??= {}) as { apiKey?: unknown });
+          providerConfig.apiKey = value;
+        },
+        getConfiguredCredentialFallback:
+          id === "gemini" ? provider.getConfiguredCredentialFallback : undefined,
+      } satisfies Partial<PluginWebSearchProviderEntry>);
+    });
 }
 
 export function resetPluginWebSearchProvidersMock() {

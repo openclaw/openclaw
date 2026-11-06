@@ -118,6 +118,9 @@ function assignModelUsageAttrs(
     ["openclaw.model_call.usage.output_tokens", usage.output],
     ["openclaw.model_call.usage.cache_read_input_tokens", usage.cacheRead],
     ["openclaw.model_call.usage.cache_creation_input_tokens", usage.cacheWrite],
+    // Generic consumers add usage buckets, so TTL subsets stay OpenClaw-specific.
+    ["openclaw.model_call.usage.cache_creation_input_tokens_1h", usage.cacheWrite1h],
+    ["openclaw.model_call.usage.cache_creation_input_tokens_5m", usage.cacheWrite5m],
     ["openclaw.model_call.usage.reasoning_output_tokens", usage.reasoningTokens],
     ["openclaw.model_call.usage.prompt_tokens", promptTokens],
     ["openclaw.model_call.usage.total_tokens", usage.total],
@@ -163,11 +166,16 @@ export function assignGenAiModelCallAttrs(
   evt: {
     api?: string;
     model?: string;
+    responseModel?: string;
     observationUnit?: "request" | "turn";
     provider?: string;
   },
 ): void {
   assignGenAiSpanIdentityAttrs(attrs, evt);
+  if (evt.observationUnit !== "turn" && evt.responseModel?.trim()) {
+    // Span-only, with the same redaction as gen_ai.request.model; never a metric label.
+    attrs["gen_ai.response.model"] = redactSensitiveText(evt.responseModel.trim());
+  }
   attrs["openclaw.model_call.observation_unit"] = evt.observationUnit ?? "request";
 }
 

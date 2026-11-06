@@ -28,7 +28,7 @@ const sessionKey = "agent:main:steering-test";
 const sessionId = "steering-session";
 const steered = { steered: true, runId: "steered-run" };
 
-function createApi(allowPromptInjection = true, config: OpenClawConfig = {}) {
+function createApi(allowPromptModification = true, config: OpenClawConfig = {}) {
   const runtime = createPluginRuntime();
   runtime.config.current = () => config;
   const builder = createPluginRegistry({
@@ -41,7 +41,7 @@ function createApi(allowPromptInjection = true, config: OpenClawConfig = {}) {
     origin: "bundled",
   });
   builder.registry.plugins.push(record);
-  const api = builder.createApi(record, { config: {}, hookPolicy: { allowPromptInjection } });
+  const api = builder.createApi(record, { config: {}, hookPolicy: { allowPromptModification } });
   setActivePluginRegistry(builder.registry);
   return {
     record,
@@ -253,7 +253,7 @@ describe("plugin active-run steering", () => {
       }
       const reasons = {
         legacy: "active runtime does not support guarded steering",
-        disabled: "blocked by plugins.entries.steering-plugin.hooks.allowPromptInjection=false",
+        disabled: "blocked by plugins.entries.steering-plugin.hooks.allowPromptModification=false",
       };
       await expect(steer()).resolves.toEqual({
         steered: false,

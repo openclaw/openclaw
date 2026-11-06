@@ -69,13 +69,13 @@ function bindAccessAuthority(
   if (grantId !== undefined && typeof grantId !== "string") {
     throw new TypeError("Gateway access grant identity must be a string");
   }
+  const assertCurrent = () => {
+    authority.assertCurrent();
+  };
   return {
     grantId,
     signal: bindAccessSignal(authority.signal, instance),
-    assertCurrent: () =>
-      instance.run(() => {
-        authority.assertCurrent();
-      }),
+    assertCurrent: () => instance.run(assertCurrent),
   };
 }
 

@@ -14,9 +14,11 @@ import {
 import { captureGitHubPublicationWorkspaceSnapshot } from "../../gateway/github-publication-git-transport.js";
 import { prepareNodeWorkspaceTransferSnapshot } from "../../gateway/worker-environments/node-workspace-transfer-snapshot.js";
 import { prepareWorkerTurnMedia } from "../../gateway/worker-environments/worker-turn-media.js";
+import { prepareWorkspaceReconciliation } from "../../gateway/worker-environments/workspace-manifest-comparison.js";
 import { parseWorkerWorkspaceManifest } from "../../gateway/worker-environments/workspace-manifest.js";
 import { applyStagedWorkerWorkspace } from "../../gateway/worker-environments/workspace-reconcile.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../../gateway/worker-environments/workspace-sync-scripts.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { createStagedInputOwnershipFixture } from "../../media/staged-inputs.test-support.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import {
@@ -130,7 +132,9 @@ it.each(["writable sandbox", "cloud"])(
             quiesceWorkspace: unused,
             stop: unused,
             stageAttachments: async ({ localPath }) => {
-              for (const file of await fs.readdir(localPath, { recursive: true })) {
+              for (const file of (await listDirectoryTreeStrict(localPath)).map(
+                (walkEntry) => walkEntry.relativePath,
+              )) {
                 const source = path.join(localPath, file);
                 if ((await fs.stat(source)).isFile()) {
                   await fs.mkdir(path.dirname(path.join(remote, file)), { recursive: true });
@@ -140,7 +144,8 @@ it.each(["writable sandbox", "cloud"])(
             },
           },
         });
-        inputs = (await fs.readdir(path.join(remote, "media/inbound"), { recursive: true }))
+        inputs = (await listDirectoryTreeStrict(path.join(remote, "media/inbound")))
+          .map((walkEntry) => walkEntry.relativePath)
           .filter((file) => path.basename(file).startsWith("input-"))
           .map((file) => `media/inbound/${file.split(path.sep).join("/")}`);
         inputs.sort((a, b) => {
@@ -239,7 +244,7 @@ it.each(["writable sandbox", "cloud"])(
         stagingRoot: remote,
         baseManifestRef: base.manifestRef,
         currentManifestRef: manifestRef,
-        base: base.manifest,
+        reconciliation: prepareWorkspaceReconciliation(base.manifest, current),
         current,
         acceptance: { kind: "reconcile" },
         journal: {

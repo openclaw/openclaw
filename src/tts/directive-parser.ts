@@ -1,9 +1,9 @@
 import { parseSpeechDirectiveNumberOverride } from "./directive-number.js";
 import type {
   SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
   SpeechModelOverridePolicy,
 } from "./provider-types.js";
+import type { SpeechDirectiveTokenParseResult } from "./tts-runtime-types.js";
 
 type SpeechDirectiveRule = readonly [
   policy: keyof SpeechModelOverridePolicy,

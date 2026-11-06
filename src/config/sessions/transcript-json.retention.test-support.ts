@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { normalizeTranscriptJsonValue } from "./transcript-json.js";
+import { normalizeTranscriptJsonValue } from "./transcript-json-normalize.js";
 
 const MIB = 1024 * 1024;
 const unicode = "🦞\ud800 lone \udfff";

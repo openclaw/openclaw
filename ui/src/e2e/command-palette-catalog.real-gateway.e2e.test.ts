@@ -294,10 +294,15 @@ suite.define(() => {
             }
             await trigger.click();
             await primary.getByRole("listbox").waitFor({ state: "visible" });
-            expect(requests).toHaveLength(requestsBeforeOpen);
+            // A queued publication may overlap opening, but cannot acquire a provider.
+            for (const { params } of requests.slice(requestsBeforeOpen)) {
+              expect(params).toEqual({ view: "configured", agentId: "main" });
+            }
             expect(acquisitions()).toBe(acquisitionsBeforeOpen);
           };
+          const requestsBeforeFirstOpen = requests.length;
           await open();
+          expect(requests).toHaveLength(requestsBeforeFirstOpen);
           await primary
             .locator('[role="option"][data-value="ollama/refresh-fixture:latest"]')
             .waitFor({ state: "visible" });
@@ -437,7 +442,7 @@ suite.define(() => {
     }
   }, 120_000);
 
-  it("shows acquisition failures in Automations while keeping model search quiet and usable", async () => {
+  it("shows acquisition failures in automation editors while keeping model search quiet and usable", async () => {
     const outcomes: unknown[] = [];
     const refresh = async () => {
       const payload = requireRecord(
@@ -456,7 +461,7 @@ suite.define(() => {
     if (typeof browserUrl !== "string") {
       throw new Error("Dashboard did not return a browser handoff");
     }
-    const warning = "Some models could not be refreshed. Open Models to try again.";
+    const warning = "Couldn’t refresh some models. Open Models to try again.";
     try {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         await page.goto(browserUrl);
@@ -481,6 +486,12 @@ suite.define(() => {
           expect.objectContaining({ provider: "ollama", id: "refresh-fixture:latest" }),
         );
         expect(JSON.stringify(failed)).not.toContain("private upstream error body");
+        await automations.locator('[data-test-id="cron-new-task"]').click();
+        await automations.getByText(warning, { exact: true }).waitFor({ state: "visible" });
+        await automations.locator('[data-test-id="cron-back"]').click();
+        await automations.locator('[data-test-id="cron-new-task"]').waitFor({ state: "visible" });
+        expect(await automations.getByText(warning, { exact: true }).count()).toBe(0);
+        await automations.locator('[data-test-id="cron-new-task"]').click();
         await automations.getByText(warning, { exact: true }).waitFor({ state: "visible" });
         await page.keyboard.press("ControlOrMeta+K");
         await page.locator(".cmd-palette__input").fill("refresh-fixture");
@@ -516,7 +527,7 @@ suite.define(() => {
           JSON.stringify({
             providerTraffic,
             outcomes,
-            automationsWarning: true,
+            automationEditorWarning: true,
             paletteWarning: false,
             retainedModelCount: 1,
             successfulEmptyClearedModelAndWarnings: true,
@@ -679,7 +690,7 @@ suite.define(() => {
           await expect.poll(() => rejectedCatalogReplies).toBeGreaterThan(0);
           const status = page
             .locator(".cmd-palette [role=status]")
-            .filter({ hasText: "Model search unavailable" });
+            .filter({ hasText: "Couldn’t search models" });
           await status.waitFor({ state: "visible" });
           expect(await published.count()).toBe(1);
           if (captureEnabled) {

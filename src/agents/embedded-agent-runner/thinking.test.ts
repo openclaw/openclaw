@@ -11,6 +11,7 @@ import {
 import { createQueuedAssistantStream } from "../test-helpers/assistant-event-stream.test-support.js";
 import { sparseAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
+import { collectStreamEvents as collect } from "./run/attempt-stream.test-helpers.js";
 import {
   assessLastAssistantMessage,
   dropReasoningFromHistory,
@@ -183,14 +184,6 @@ function invokeSync(wrapped: StreamFn) {
   }
   return stream;
 }
-async function collect(stream: AsyncIterable<unknown>) {
-  const events: unknown[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
-}
-
 describe("wrapAnthropicStreamWithRecovery", () => {
   const anthropicThinkingError = new Error(
     "thinking or redacted_thinking blocks in the latest assistant message cannot be modified",

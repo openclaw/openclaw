@@ -96,27 +96,54 @@ describe("resolveFollowupDeliveryDecision", () => {
   const finalTarget = { ...sourceReplyTarget, sourceReplyFinal: true };
 
   it.each([
-    { state: undefined, routed: true, delivered: true },
-    { state: "missing", routed: true, delivered: false },
-    { state: undefined, routed: false, delivered: false },
+    {
+      state: undefined,
+      routed: true,
+      outcome: "deduped",
+      text: "Completed.",
+      sourceReplyFinal: undefined,
+    },
+    {
+      state: "missing",
+      routed: true,
+      outcome: "missing",
+      text: "Completed.",
+      sourceReplyFinal: undefined,
+    },
+    {
+      state: undefined,
+      routed: false,
+      outcome: "missing",
+      text: "Completed.",
+      sourceReplyFinal: undefined,
+    },
+    { state: undefined, routed: true, outcome: "deduped", text: "Done", sourceReplyFinal: false },
+    { state: "missing", routed: true, outcome: "missing", text: "Done", sourceReplyFinal: false },
+    { state: undefined, routed: false, outcome: "reply", text: "Done", sourceReplyFinal: false },
+    { state: undefined, routed: true, outcome: "deduped", text: "✅", sourceReplyFinal: false },
+    {
+      state: undefined,
+      routed: true,
+      outcome: "deduped",
+      text: "Completed.",
+      sourceReplyFinal: false,
+    },
   ] as const)(
-    "requires current-source evidence before suppressing a queued duplicate: $state/$routed",
-    async ({ state, routed, delivered }) => {
-      const execution = createSettledExecution("Completed.");
+    "requires current-source evidence before suppressing a queued duplicate: $state/$routed/$text/$sourceReplyFinal",
+    async ({ state, routed, outcome, text, sourceReplyFinal }) => {
+      const execution = createSettledExecution(text);
       execution.outcome.result.sourceReplyDeliveryState = state;
-      execution.outcome.result.messagingToolSentTexts = ["Completed."];
+      execution.outcome.result.messagingToolSentTexts = [text];
       execution.outcome.result.messagingToolSentTargets = routed
-        ? [{ ...sourceReplyTarget, text: "Completed." }]
+        ? [{ ...sourceReplyTarget, text, sourceReplyFinal }]
         : undefined;
-      const decision = await decide(
-        undefined,
-        execution,
-        createAccounting([{ text: "Completed." }]),
-      );
+      const decision = await decide(undefined, execution, createAccounting([{ text }]));
       expect(decision).toMatchObject(
-        delivered
+        outcome === "deduped"
           ? silent
-          : { kind: "deliver", payloads: [{ isError: true, text: expect.any(String) }] },
+          : outcome === "reply"
+            ? { kind: "deliver", payloads: [{ text }] }
+            : { kind: "deliver", payloads: [{ isError: true, text: expect.any(String) }] },
       );
     },
   );
@@ -582,21 +609,23 @@ describe("resolveFollowupDeliveryDecision", () => {
     },
   );
 
-  it("does not let private payloads settle a producer-declared empty message-tool final", async () => {
-    const turn = createTurn();
-    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-
-    const decision = await decide(
-      turn,
-      undefined,
-      createAccounting([{ text: "Private terminal diagnostic." }]),
-    );
-
-    expect(decision).toMatchObject({
-      kind: "retry-source-delivery",
-      run: { strandedReplyRetry: true },
-    });
-  });
+  it.each([false, true])(
+    "does not let private payloads settle an empty message-tool final (progress=%s)",
+    async (progress) => {
+      const turn = createTurn();
+      turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+      const text = "Private terminal diagnostic.";
+      const execution = createSettledExecution();
+      if (progress) {
+        execution.outcome.result.messagingToolSentTargets = [{ ...progressTarget, text }];
+      }
+      const decision = await decide(turn, execution, createAccounting([{ text }]));
+      expect(decision).toMatchObject({
+        kind: "retry-source-delivery",
+        run: { strandedReplyRetry: true },
+      });
+    },
+  );
 });
 
 describe("deliverFollowupDecision", () => {
@@ -642,6 +671,62 @@ describe("deliverFollowupDecision", () => {
     ).rejects.toThrow("Internal event lost its originating delivery owner");
     expect(deliveryState.routeReply).not.toHaveBeenCalled();
     expect(laterDispatcher).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    "uses the retained completion owner only for its channel (matching: %s)",
+    async (matching) => {
+      const source = Object.assign(
+        vi.fn(async () => {}),
+        {
+          ownsCompletion: (channel: string | undefined) => matching && channel === "discord",
+        },
+      );
+      const turn = createTurn();
+      turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: source };
+      deliveryState.routeReply.mockReset();
+      deliveryState.routeReply.mockResolvedValue({ ok: true, delivered: true });
+      deliveryState.followupRoute = { route: "origin" };
+      const payloads = [{ text: "task-correlated answer" }];
+      try {
+        const result = await deliverDecision({
+          turn,
+          defaults: createDefaults(vi.fn()),
+          decision: { kind: "deliver", payloads },
+          runId: "queued-run",
+        });
+        expect(result).toEqual({ kind: "completed", payloads: matching ? payloads : [] });
+        expect(deliveryState.routeReply).toHaveBeenCalledTimes(matching ? 0 : 1);
+        expect(source).not.toHaveBeenCalled(); // The runner publishes the one terminal batch.
+      } finally {
+        deliveryState.followupRoute = undefined;
+      }
+    },
+  );
+
+  it("keeps a silent source event's successor off every automatic route", async () => {
+    const dispatcher = vi.fn(async (_payload: ReplyPayload) => {});
+    const turn = createTurn();
+    turn.queued.run.sessionEventOrigin = { deliver: false };
+    deliveryState.routeReply.mockReset();
+    deliveryState.routeReply.mockResolvedValue({ ok: true, delivered: true });
+    deliveryState.followupRoute = { route: "origin" };
+    try {
+      for (const kind of ["block", "final"] as const) {
+        await expect(
+          deliverDecision({
+            turn,
+            kind,
+            defaults: createDefaults(dispatcher),
+            decision: { kind: "deliver", payloads: [{ text: "Goal progress" }] },
+          }),
+        ).resolves.toEqual({ kind: "completed", payloads: [] });
+      }
+      expect(deliveryState.routeReply).not.toHaveBeenCalled();
+      expect(dispatcher).not.toHaveBeenCalled();
+    } finally {
+      deliveryState.followupRoute = undefined;
+    }
   });
 
   it("keeps dispatcher-only delivery out of a routable origin", async () => {
