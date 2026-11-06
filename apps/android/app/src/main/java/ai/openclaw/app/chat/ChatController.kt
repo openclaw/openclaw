@@ -1308,13 +1308,19 @@ class ChatController internal constructor(
   internal suspend fun loadMoreSessions(): Boolean =
     sessionRosterLoadMutex.withLock {
       val offset = sessionRosterNextOffset ?: return false
-      if (sessionsListArchived || !sessionRosterHasMoreMutable.value) return false
+      if (!sessionRosterHasMoreMutable.value) return false
       val owner = currentCacheScope()
       val ownerAgentId = resolveAgentIdForSessionKey(_sessionKey.value)
       sessionRosterLoadingMoreMutable.value = true
       sessionRosterLoadFailedMutable.value = false
       try {
-        val loaded = fetchSessions(sessionsListLimit ?: SIDEBAR_SESSION_ROSTER_LIMIT, offset = offset, append = true)
+        val loaded =
+          fetchSessions(
+            sessionsListLimit ?: SIDEBAR_SESSION_ROSTER_LIMIT,
+            archived = sessionsListArchived,
+            offset = offset,
+            append = true,
+          )
         if (owner == currentCacheScope() && ownerAgentId == resolveAgentIdForSessionKey(_sessionKey.value)) {
           sessionRosterLoadFailedMutable.value = !loaded
         }
@@ -4843,13 +4849,12 @@ class ChatController internal constructor(
               result.forEach { observeSessionSettings(it) }
               sessionsListArchived = archived
               if (!append && !preserveWindow) sessionsListLimit = requestLimit
-              if (archived) {
-                clearSessionRosterPaging()
-              } else {
-                sessionRosterLoadedLimit = requestLimit?.plus(offset ?: 0)
-                sessionRosterNextOffset = parsed.nextOffset
-                sessionRosterHasMoreMutable.value = parsed.hasMore
-              }
+              // Archived pages keep the same continuation state as the recent
+              // roster so loadMoreSessions can browse further archive pages;
+              // the window refresh path ignores it while an archive is listed.
+              sessionRosterLoadedLimit = requestLimit?.plus(offset ?: 0)
+              sessionRosterNextOffset = parsed.nextOffset
+              sessionRosterHasMoreMutable.value = parsed.hasMore
               val activeOutsideLocalWindow =
                 sessions
                   .drop(MAX_CACHED_SESSIONS)
@@ -5161,7 +5166,9 @@ class ChatController internal constructor(
       val pageSize = limit?.takeIf { it > 0 } ?: sessionsListLimit ?: SIDEBAR_SESSION_ROSTER_LIMIT.takeUnless { requestArchived }
       val loadedLimit =
         sessionRosterLoadedLimit.takeIf {
-          !requestArchived && !sessionsListArchived && (limit == null || limit == sessionsListLimit)
+          // Archived and recent rosters share the same paging state; both keep
+          // members already loaded beyond the first window on a same-scope refresh.
+          limit == null || limit == sessionsListLimit
         }
       fetchSessions(
         limit = loadedLimit?.let { maxOf(it, pageSize ?: it) } ?: pageSize,

@@ -11,6 +11,7 @@ import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
+import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.sessionColor
 import ai.openclaw.app.ui.design.sessionColorNames
@@ -104,6 +105,9 @@ internal fun SessionsScreen(
   val chatSessionKey by viewModel.chatSessionKey.collectAsState()
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+  val rosterHasMore by viewModel.sessionRosterHasMore.collectAsState()
+  val rosterLoadingMore by viewModel.sessionRosterLoadingMore.collectAsState()
+  val rosterLoadFailed by viewModel.sessionRosterLoadFailed.collectAsState()
   val coroutineScope = rememberCoroutineScope()
   val searchFocusRequester = remember { FocusRequester() }
   val keyboardController = LocalSoftwareKeyboardController.current
@@ -407,6 +411,27 @@ internal fun SessionsScreen(
               onRename = { renameSessionTarget = session.toActionTarget(activeGatewayStableId) },
               onNewGroup = { groupSessionTarget = session.toActionTarget(activeGatewayStableId) },
               onDelete = { deleteSessionTarget = session.toActionTarget(activeGatewayStableId) },
+            )
+          }
+        }
+        if (rosterHasMore) {
+          if (rosterLoadFailed) {
+            item(key = "sessions-load-more-error") {
+              Text(
+                text = nativeString("Could not load more sessions. Try again."),
+                style = ClawTheme.type.caption,
+                color = ClawTheme.colors.textMuted,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 10.dp),
+              )
+            }
+          }
+          item(key = "sessions-load-more") {
+            ClawSecondaryButton(
+              text = nativeString(if (rosterLoadingMore) "Loading" else "Load more sessions"),
+              onClick = { if (!rosterLoadingMore) coroutineScope.launch { viewModel.loadMoreChatSessions() } },
+              enabled = !rosterLoadingMore,
+              icon = Icons.Default.KeyboardArrowDown,
+              modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
             )
           }
         }
