@@ -1,8 +1,185 @@
+import assert from "node:assert/strict";
+import type { Page } from "playwright";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { frames, openNavigationDrawer } from "./control-ui-interaction-navigation.ts";
 import { cronLoadedJobCount, interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 import { createNoopOwnerScenarios } from "./control-ui-noop-owner-scenarios.ts";
 import { createNoopPushScenarios } from "./control-ui-noop-push-scenarios.ts";
+
+const providerArtworkPath = "/__openclaw__/provider-icon/example";
+const providerPicker = ".model-providers__defaults openclaw-select-picker";
+const providerArtworkRequests = new WeakMap<Page, { count: number }>();
+
+function installProviderArtworkProbe(pathname: string) {
+  const blobs = new WeakSet<Blob>();
+  const urls = new Set<string>();
+  const counts = { blobs: 0, objectUrls: 0, revokedUrls: 0 };
+  const originalBlob = Response.prototype.blob;
+  Response.prototype.blob = async function () {
+    const blob = await originalBlob.call(this);
+    if (new URL(this.url, location.href).pathname === pathname) {
+      blobs.add(blob);
+      counts.blobs++;
+    }
+    return blob;
+  };
+  const originalCreate = URL.createObjectURL;
+  URL.createObjectURL = function (object) {
+    const url = originalCreate.call(this, object);
+    if (object instanceof Blob && blobs.has(object)) {
+      urls.add(url);
+      counts.objectUrls++;
+    }
+    return url;
+  };
+  const originalRevoke = URL.revokeObjectURL;
+  URL.revokeObjectURL = function (url) {
+    if (urls.delete(url)) {
+      counts.revokedUrls++;
+    }
+    originalRevoke.call(this, url);
+  };
+  window.openclawProviderArtworkProbe = () => ({ ...counts, liveUrls: urls.size });
+}
+
+async function providerArtworkCounts(page: Page) {
+  const counts = await page.evaluate(() => window.openclawProviderArtworkProbe!());
+  return { requests: providerArtworkRequests.get(page)!.count, ...counts };
+}
+
+async function waitForProviderArtwork(page: Page, filtered: boolean) {
+  await page.waitForFunction(
+    ({ selector, filtered }) => {
+      const picker = document.querySelector(selector);
+      const rows = [
+        ...(picker?.querySelectorAll<HTMLElement>('[data-value^="example/model-"]') ?? []),
+      ].filter((row) => row.checkVisibility());
+      const images = [...(picker?.querySelectorAll<HTMLImageElement>("img") ?? [])];
+      return (
+        (filtered ? rows.length === 1 : rows.length > 1) &&
+        rows.every((row) => {
+          const image = row.querySelector("img");
+          return image?.complete && image.naturalWidth > 0;
+        }) &&
+        images.every((image) => image.complete && image.naturalWidth > 0)
+      );
+    },
+    { selector: providerPicker, filtered },
+  );
+}
+
+function createProviderArtworkScenario(): EngineScenario {
+  const source = interactionScenarios.find(({ id }) => id === "provider-model-picker-first-open");
+  const search = interactionScenarios.find(({ id }) => id === "provider-model-picker-search");
+  if (!source || !search) {
+    throw new Error("Missing shared provider picker scenarios");
+  }
+  return {
+    ...source,
+    id: "provider-model-picker-artwork-cycles",
+    explicitOnly: true,
+    diagnostic: "Counts provider artwork HTTP reads, blob reads and object URLs; not timing proof.",
+    expected:
+      "The 1,000-model picker loads shared synthetic provider artwork, filters and reopens without saving or changing selection.",
+    initScript: `;(() => { const __name = (fn) => fn; (${installProviderArtworkProbe.toString()})(${JSON.stringify(providerArtworkPath)}); })();`,
+    fixtureOverrides: (_sandbox, base) => {
+      const presentation = {
+        providerName: "Synthetic Workstation",
+        providerIcon: { source: "asset" as const, url: `${providerArtworkPath}?v=census` },
+      };
+      const models = base.models.map((model) => ({ ...model, ...presentation }));
+      return {
+        models,
+        methodResponses: {
+          "models.list": { models, providerPresentations: { example: presentation } },
+        },
+      };
+    },
+    setup: async (page) => {
+      const requests = { count: 0 };
+      providerArtworkRequests.set(page, requests);
+      await page.route(`**${providerArtworkPath}?v=census`, async (route) => {
+        requests.count++;
+        await route.fulfill({
+          contentType: "image/svg+xml",
+          body: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="#3879df"/></svg>',
+        });
+      });
+    },
+    run: async (page, gateway) => {
+      const picker = page.locator(providerPicker).first();
+      const trigger = picker.locator(".picker-select__trigger");
+      const selected = await trigger.getAttribute("aria-label");
+      const saves = (await gateway.getRequests("config.patch")).length;
+      const before = await providerArtworkCounts(page);
+      await source.run(page, gateway);
+      await waitForProviderArtwork(page, false);
+      const opened = await providerArtworkCounts(page);
+      await search.run(page, gateway);
+      await waitForProviderArtwork(page, true);
+      assert.equal(
+        await picker.locator('[role="option"]:visible').first().getAttribute("data-value"),
+        "example/model-999",
+      );
+      const filtered = await providerArtworkCounts(page);
+      const close = async () => {
+        const input = picker.locator(".picker-select__search");
+        if (await input.isVisible()) {
+          await input.press("Escape");
+          await input.waitFor({ state: "hidden" });
+        }
+        if ((await trigger.getAttribute("aria-expanded")) === "true") {
+          await page.keyboard.press("Escape");
+        }
+        await page.waitForFunction((selector) => {
+          const picker = document.querySelector(selector);
+          const trigger = picker?.querySelector(".picker-select__trigger");
+          return (
+            trigger?.getAttribute("aria-expanded") === "false" &&
+            trigger === document.activeElement &&
+            picker?.querySelectorAll('[role="option"]').length === 0
+          );
+        }, providerPicker);
+      };
+      await close();
+      await source.run(page, gateway);
+      await waitForProviderArtwork(page, false);
+      const reopened = await providerArtworkCounts(page);
+      await close();
+      await frames(page);
+      const closed = await providerArtworkCounts(page);
+      assert.equal(await trigger.getAttribute("aria-label"), selected);
+      assert.equal((await gateway.getRequests("config.patch")).length, saves);
+      return {
+        modelCount: 1_000,
+        openRequests: opened.requests - before.requests,
+        filterRequests: filtered.requests - opened.requests,
+        reopenRequests: reopened.requests - filtered.requests,
+        openBlobReads: opened.blobs - before.blobs,
+        filterBlobReads: filtered.blobs - opened.blobs,
+        reopenBlobReads: reopened.blobs - filtered.blobs,
+        blobReads: closed.blobs - before.blobs,
+        objectUrls: closed.objectUrls - before.objectUrls,
+        revokedUrls: closed.revokedUrls - before.revokedUrls,
+        liveUrlsBefore: before.liveUrls,
+        liveUrlsAfter: closed.liveUrls,
+        selectionPreserved: true,
+        saved: false,
+      };
+    },
+  };
+}
+
+declare global {
+  interface Window {
+    openclawProviderArtworkProbe?: () => {
+      blobs: number;
+      objectUrls: number;
+      revokedUrls: number;
+      liveUrls: number;
+    };
+  }
+}
 
 /** Fixed work spans WebKit's coarse CPU samples; probes also count hot-path operations. */
 export function createEngineActionScenarios(): readonly EngineScenario[] {
@@ -55,6 +232,7 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
     });
   });
   return [
+    createProviderArtworkScenario(),
     ...createNoopPushScenarios(),
     ...createNoopOwnerScenarios(),
     ...(["open", "close"] as const).map((direction): EngineScenario =>
