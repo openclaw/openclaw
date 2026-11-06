@@ -57,12 +57,12 @@ import {
   createControlUiMockGatewayInitScript,
   controlUiSessionUrl,
   controlUiBundledSettingsStorageKey,
-  prepareControlUiMockGatewayScenario,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
   startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../ui/src/test-helpers/control-ui-navigation.ts";
+import { prepareNativePluginMockGatewayScenario } from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import { sidebarPresentationProbe } from "../ui/src/test-helpers/control-ui-sidebar-presentation-probe.test-support.ts";
@@ -1092,7 +1092,7 @@ try {
           sessionPlacement: { requiredProfile: { id: "l247-worker", providerId: "crabbox" } },
         }
       : undefined;
-  const prepared = await prepareControlUiMockGatewayScenario({
+  const prepared = await prepareNativePluginMockGatewayScenario({
     ...fixture.scenario,
     ...(values["details-processes"]
       ? {

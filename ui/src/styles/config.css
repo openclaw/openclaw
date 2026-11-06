@@ -624,11 +624,6 @@
   height: 15px;
 }
 
-.config-accordion-group__icon svg {
-  width: 16px;
-  height: 16px;
-}
-
 @media (forced-colors: active) {
   .settings-accent-swatch__picker {
     color: CanvasText;

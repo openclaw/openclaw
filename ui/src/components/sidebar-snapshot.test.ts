@@ -529,6 +529,44 @@ describe("sidebar snapshot lifecycle", () => {
     ).toBeNull();
   });
 
+  it("cancels a scheduled stale capture when another tab deletes a session", async () => {
+    const live: SidebarSnapshotModel = {
+      ...model,
+      roster: bootRosterSchema.parse({
+        agentId: "main",
+        result: sessionsResult(
+          [
+            { key: "agent:main:cedar", kind: "direct", displayName: "Cedar" },
+            { key: "agent:main:birch", kind: "direct", displayName: "Birch" },
+          ],
+          2,
+        ),
+        groups: [],
+        groupSettings: [],
+        sectionOrder: [],
+      }),
+    };
+    const test = fixture();
+    test.snapshotOwner.connect();
+    disposers.push(() => test.snapshotOwner.disconnect());
+    test.publish();
+    const saved = test.settle(live);
+    await capture(test.snapshotOwner);
+    await saved;
+    test.capture.mockClear();
+
+    test.snapshotOwner.capture();
+    await deleteStoredChatSnapshot(sessionKey);
+    // Cross-tab retirement may precede this tab's live roster update.
+    await vi.advanceTimersByTimeAsync(500);
+    const store = new SessionSnapshotStore();
+    store.connect();
+    disposers.push(() => store.disconnect());
+    const retained = await store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot);
+    expect(retained?.roster?.result.sessions.map(({ key }) => key)).toEqual(["agent:main:birch"]);
+    expect(test.capture).not.toHaveBeenCalled();
+  });
+
   it("does not report an unchanged model saved while its write is pending", async () => {
     const test = fixture();
     const issued = createDeferred();

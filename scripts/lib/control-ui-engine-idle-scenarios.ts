@@ -33,7 +33,7 @@ export function isEngineIdleControl(scenario: EngineScenario): scenario is Engin
 }
 
 /** Same native visibility and CPU window as app idle, without an app or Gateway. */
-export function createEngineIdleControls(): readonly EngineIdleControl[] {
+export function createEngineIdleControls(durationMs = 30_000): readonly EngineIdleControl[] {
   return ["blank", "static"].map((kind): EngineIdleControl => ({
     id: `idle-control-${kind}-hidden`,
     idle: true,
@@ -43,7 +43,7 @@ export function createEngineIdleControls(): readonly EngineIdleControl[] {
     viewports: ["desktop"],
     visibility: "hidden",
     route: kind === "blank" ? "about:blank" : "/__idle-static-control",
-    expected: "A natively hidden control document remains idle for 30 seconds without input.",
+    expected: `A natively hidden control document remains idle for ${durationMs} ms without input.`,
     setup: async (page) => {
       if (kind === "static") {
         await page.route("**/__idle-static-control", (route) =>
@@ -57,7 +57,7 @@ export function createEngineIdleControls(): readonly EngineIdleControl[] {
     prepare: async () => {},
     run: () =>
       new Promise<void>((resolve) => {
-        setTimeout(resolve, 30_000);
+        setTimeout(resolve, durationMs);
       }),
   }));
 }
@@ -181,7 +181,7 @@ export async function verifyEngineIdleClocks(page: Page, gateway: MockGatewayCon
   return checked;
 }
 
-export function createEngineIdleScenarios(): readonly EngineScenario[] {
+export function createEngineIdleScenarios(durationMs = 30_000): readonly EngineScenario[] {
   const pages = createEnginePageScenarios();
   const pageSource = (id: string) => {
     const source = pages.find((scenario) => scenario.id === `page-${id}-leave`);
@@ -242,12 +242,11 @@ export function createEngineIdleScenarios(): readonly EngineScenario[] {
     viewports: ["desktop"],
     settings: { ...source.settings, locale: "en" },
     visibility: hidden ? "hidden" : undefined,
-    expected:
-      "A connected production page retains its route and native visibility for 30 seconds without input.",
+    expected: `A connected production page retains its route and native visibility for ${durationMs} ms without input.`,
     // The wait belongs to Node; a browser timeout would create measured page work.
     run: async () => {
       await new Promise<void>((resolve) => {
-        setTimeout(resolve, 30_000);
+        setTimeout(resolve, durationMs);
       });
     },
   });
