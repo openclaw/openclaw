@@ -1544,3 +1544,65 @@
 .sidebar-identity-menu [data-value^="gateway:"] > .oc-menu-item__check {
   display: none;
 }
+
+/* OpenClaw ID uses the same columns and type scale as every sidebar menu. */
+.sidebar-openclaw-id__initial {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--bg-accent);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.sidebar-openclaw-id__status {
+  display: flex;
+  flex-shrink: 0;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 4px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.sidebar-openclaw-id__lines {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.4;
+}
+
+.sidebar-openclaw-id__detail {
+  color: var(--muted);
+  font-size: calc(12px * var(--control-ui-text-scale));
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.sidebar-openclaw-id__pill,
+.sidebar-openclaw-id__count {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-openclaw-id__pill {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+}
+
+.sidebar-openclaw-id__pill[data-online="true"] {
+  color: var(--ok);
+}
+
+.sidebar-openclaw-id__sign-in {
+  flex: none;
+  width: 100%;
+  margin-block: 4px;
+}

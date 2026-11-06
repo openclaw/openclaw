@@ -292,6 +292,13 @@ bundle time from 621 to 217 seconds. This trades paid compute for shorter releas
 runs; qualification and ordinary screenshot CI retain hosted Ubuntu. See
 [runner evidence and cost](/ci/runners#android-release-runner).
 
+Both Android release destinations restore the shared Gradle user-home cache
+read-only, reusing dependency downloads, compiled scripts, transforms and wrapper
+distributions from main CI. A cache miss or transfer failure keeps the cold build
+path. Release jobs do not save the archive or enable Gradle task-output caching.
+The shared toolchain action's `gradle-cache-mode` override leaves Android SDK
+caching off for these jobs; other callers inherit their existing `cache-mode`.
+
 Android Release E2E adds one hosted Ubuntu KVM job to exact-source, full-scope
 manual validation when Android is selected, matching the iOS qualification
 selection. The final CI gate requires its success. Manual Android Store Release

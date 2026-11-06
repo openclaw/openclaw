@@ -124,6 +124,7 @@ jobs:
         uses: ./.github/actions/setup-android-toolchain
         with:
           cache-mode: off
+          gradle-cache-mode: restore
           install-screenshot-emulators: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.operation == 'release')) && 'true' || 'false' }}
 
       - name: Setup Ruby
