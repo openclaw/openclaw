@@ -19,10 +19,7 @@ const failed = (code: string) => ({
   error: Object.assign(new Error(`spawnSync node ${code}`), { code }),
 });
 
-it.each([
-  ["ETIMEDOUT"],
-  ["ENOENT"],
-] as const)("refuses an incomplete inventory on %s", (code) => {
+it.each([["ETIMEDOUT"], ["ENOENT"]] as const)("refuses an incomplete inventory on %s", (code) => {
   const failure = failed(code);
   vi.spyOn(childProcess, "spawnSync")
     .mockReturnValueOnce(answered(...Array.from({ length: 4096 }, () => false)))
