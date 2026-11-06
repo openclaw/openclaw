@@ -417,12 +417,16 @@ describe("gateway-cli coverage", () => {
     ["diagnostics export", 3000, true],
     ["--port 19097 stability --bundle latest --export", 10_000, true],
     ["diagnostics export", 3000, false],
+    ["--port 19097 stability --bundle latest --export", 10_000, false],
   ] as const)(
     "writes %s export with service-owned snapshots (timeout=%i, JSON=%s)",
     async (command, timeoutMs, json) => {
       callGateway.mockResolvedValue({ ok: true, source: "serving-gateway" });
       const tempDir = tempDirs.make("openclaw-gateway-cli-support-");
-      const outputPath = path.join(tempDir, "diagnostics.zip");
+      const windows = process.platform === "win32";
+      const directory = windows ? "Café\u202e-safe" : "Café\u202e\nline\rreturn\ttab";
+      const outputPath = path.join(tempDir, directory, "diagnostics.zip");
+      fs.mkdirSync(path.dirname(outputPath));
       await withEnvAsync(
         { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
         async () => {
@@ -457,12 +461,19 @@ describe("gateway-cli coverage", () => {
       const output = runtimeLogs.join("\n");
       expect(output).toContain("diagnostics.zip");
       if (json) {
-        expect(output).toContain('"path"');
-        expect(output).toContain('"payloadFree": true');
+        expect(JSON.parse(output)).toMatchObject({
+          path: outputPath,
+          manifest: { privacy: { payloadFree: true } },
+        });
       } else {
+        const displayedPath = path.join(
+          tempDir,
+          windows ? "Café-safe" : "Café\\nline\\rreturn\\ttab",
+          "diagnostics.zip",
+        );
         expect(runtimeLogs).toEqual([
           "Diagnostics export",
-          `Path: ${outputPath}`,
+          `Path: ${displayedPath}`,
           expect.stringMatching(/^Size: /),
           expect.stringMatching(/^Files: \d+$/),
           "Privacy: payload-free stability, sanitized logs/status/health/config",
