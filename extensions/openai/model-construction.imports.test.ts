@@ -2,6 +2,17 @@ import { findSourceImportBackedges } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 
 describe("OpenAI model construction imports", () => {
+  it("loads catalog descriptors without constructing the full provider", async () => {
+    expect(
+      await findSourceImportBackedges("extensions/openai/provider-discovery.ts", [
+        "extensions/openai/openai-provider.ts",
+        "extensions/openai/provider-contract-api.ts",
+        "extensions/openai/shared.ts",
+        "extensions/openai/openai-chatgpt-provider.ts",
+      ]),
+    ).toEqual([]);
+  });
+
   it("loads model route policy without the transport host", async () => {
     expect(
       await findSourceImportBackedges("extensions/openai/provider-policy-api.ts", [

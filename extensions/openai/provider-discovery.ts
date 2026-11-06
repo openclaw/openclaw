@@ -1,3 +1,4 @@
-import { buildOpenAIProvider } from "./openai-provider.js";
+import { buildOpenAIProviderCatalog } from "./openai-provider-catalog.js";
+import { createOpenAIProviderMetadata } from "./provider-metadata.js";
 
-export default buildOpenAIProvider();
+export default { ...createOpenAIProviderMetadata(), ...buildOpenAIProviderCatalog() };

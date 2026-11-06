@@ -1,7 +1,7 @@
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import discoveryProvider from "./provider-discovery.js";
 import { resolveModelRoutes } from "./provider-policy-api.js";
 
 type CatalogOptions = { apiKey?: string; baseUrl?: string; profileId?: string };
@@ -18,7 +18,7 @@ async function runCatalog(response: Response | undefined, options: CatalogOption
     return response;
   });
   try {
-    const result = await buildOpenAIProvider().catalog?.run({
+    const result = await discoveryProvider.catalog?.run({
       resolveProviderAuth: () => ({ mode: "api_key", apiKey, profileId, source: "profile" }),
       resolveProviderApiKey: () => ({ apiKey }),
       config: baseUrl
