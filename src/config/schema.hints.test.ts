@@ -144,20 +144,3 @@ it("preserves authored metadata without deriving tags from field names or tiers"
   expect(hints["channels.authored-metadata-channel.retryLimit"]?.tags).toEqual(["Tuning"]);
   expect(hints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
 });
-
-it("publishes Gmail legacy permission as an advanced non-secret boolean", () => {
-  const { schema, uiHints } = buildConfigSchemaCore();
-  expect(uiHints["hooks.gmail.allowInsecureTokenArgs"]).toMatchObject({
-    label: "Gmail Hook Allow Insecure Token Arguments",
-    advanced: true,
-    help: expect.stringContaining("both the Gmail push token and OpenClaw hook token"),
-  });
-  expect(uiHints["hooks.gmail.allowInsecureTokenArgs"]?.sensitive).not.toBe(true);
-  expect(schema).toMatchObject({
-    properties: {
-      hooks: {
-        properties: { gmail: { properties: { allowInsecureTokenArgs: { type: "boolean" } } } },
-      },
-    },
-  });
-});

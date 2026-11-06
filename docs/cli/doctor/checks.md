@@ -42,6 +42,12 @@ Successful repair removes the resolved finding from the final summary. A repair
 that was skipped or failed keeps its next step visible. Recommended improvements
 do not require stopping a healthy Gateway simply to clear the summary.
 
+## Gmail watcher dependency
+
+For configured Gmail hooks, `core/doctor/gmail-gog` checks whether the selected Gog executable supports child-only token environment sources. It distinguishes an older build, an inconclusive check, and a missing executable. Older or unverifiable Gog keeps working with a watcher warning, but legacy token arguments remain exposed to other local users with process access.
+
+Diagnostic checks leave packages unchanged. Explicit `openclaw doctor --repair` can upgrade a supported Homebrew Gog formula only when the selected executable belongs to it and it is unpinned. Custom wrappers and other installations require manual upgrades. Doctor rechecks actual support after the package operation. Doctor invoked internally by `openclaw update` reports the finding without upgrading Gog. Restart the watcher or Gateway after upgrading; see [Gog compatibility and upgrades](/cli/webhooks#webhooks-gmail-run).
+
 ## Config writes and backups
 
 Update-history inspection and reconciliation are best-effort maintenance. A failure

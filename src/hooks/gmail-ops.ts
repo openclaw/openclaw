@@ -15,8 +15,9 @@ import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { formatCommandResult } from "../process/command-error.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { displayPath } from "../utils.js";
+import { inspectGog, inspectGogUpgrade, upgradeGog, type GogInspection } from "./gmail-gog.js";
 import {
   ensureDependency,
   ensureGcloudAuth,
@@ -44,7 +45,6 @@ import {
   normalizeHooksPath,
   normalizeServePath,
   parseTopicPath,
-  resolveGogExecutable,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
 
@@ -71,9 +71,53 @@ export type GmailRunOptions = GmailCommonOptions & {
 
 const DEFAULT_GMAIL_TOPIC_IAM_MEMBER = "serviceAccount:gmail-api-push@system.gserviceaccount.com";
 
+async function offerGogUpgrade(
+  inspection: GogInspection,
+  signal?: AbortSignal,
+): Promise<GogInspection> {
+  if (inspection.support === "supported" || !process.stdin.isTTY || !process.stdout.isTTY) {
+    return inspection;
+  }
+  const upgrade = await inspectGogUpgrade(inspection, { signal });
+  signal?.throwIfAborted();
+  if (!upgrade.eligible) {
+    defaultRuntime.error(`Gog automatic upgrade unavailable: ${upgrade.reason}`);
+    return inspection;
+  }
+  const { confirm, isCancel } = await import("@clack/prompts");
+  const answer = await confirm({
+    message: stylePromptMessage(
+      "Upgrade Gog with Homebrew to keep Gmail watcher tokens out of process arguments?",
+    ),
+    initialValue: true,
+    signal,
+  });
+  signal?.throwIfAborted();
+  if (isCancel(answer)) {
+    throw new Error("Gmail setup cancelled");
+  }
+  if (!answer) {
+    return await inspectGog({ signal });
+  }
+  const result = await upgradeGog(upgrade, { signal });
+  defaultRuntime.error(result.message);
+  return result.inspection;
+}
+
 export async function runGmailSetup(opts: GmailSetupOptions) {
   await ensureDependency("gcloud", ["--cask", "gcloud-cli"]);
   await ensureDependency("gog", ["gogcli"]);
+  const signal = getAsyncWorkSignal();
+  const inspectedGog = await inspectGog({ signal });
+  const gog = opts.json ? inspectedGog : await offerGogUpgrade(inspectedGog, signal);
+  if (!gog.executable) {
+    throw new Error("gog binary not found; install Gog and retry Gmail setup");
+  }
+  if (gog.support !== "supported") {
+    defaultRuntime.error(
+      `${gog.support === "indeterminate" ? "Could not verify Gog token environment support. " : "Selected Gog lacks token environment support. "}${GMAIL_INSECURE_TOKEN_ARGS_WARNING}`,
+    );
+  }
   if (opts.tailscale !== "off" && !opts.pushEndpoint) {
     await ensureDependency("tailscale", ["tailscale"]);
   }
@@ -181,10 +225,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   await ensureSubscription(projectId, subscription, topicName, pushEndpoint);
 
   const watch = await runCommandWithTimeout(
-    [
-      resolveGogExecutable(),
-      ...buildGogWatchStartArgs({ account: opts.account, label, topic: topicPath }),
-    ],
+    [gog.executable, ...buildGogWatchStartArgs({ account: opts.account, label, topic: topicPath })],
     { timeoutMs: 120_000 },
   );
   if (watch.code !== 0) {
@@ -296,8 +337,6 @@ export async function runGmailService(opts: GmailRunOptions) {
   const runtimeConfig = resolved.value;
   const scheduler = new GatewayScheduler();
   const controller = new AbortController();
-  const completion = createDeferredCore();
-  let fatalError: Error | undefined;
   let shutdownTask: Promise<void> | undefined;
   const detachSignals = () => {
     process.off("SIGINT", shutdown);
@@ -320,10 +359,7 @@ export async function runGmailService(opts: GmailRunOptions) {
       .catch((err: unknown) => {
         defaultRuntime.error(`gmail watcher shutdown failed: ${String(err)}`);
       })
-      .finally(() => {
-        detachSignals();
-        completion.resolve();
-      });
+      .finally(detachSignals);
   };
 
   // Own signals before async startup so cancellation cannot leave a late serve child behind.
@@ -338,37 +374,10 @@ export async function runGmailService(opts: GmailRunOptions) {
     const result = await startGmailWatcherService(runtimeConfig, {
       scheduler,
       signal: controller.signal,
-      confirmInsecureTokenArgs:
-        process.stdin.isTTY && process.stdout.isTTY
-          ? async () => {
-              const { confirm, isCancel } = await import("@clack/prompts");
-              if (controller.signal.aborted) {
-                return false;
-              }
-              const answer = await confirm({
-                message: stylePromptMessage(
-                  `${GMAIL_INSECURE_TOKEN_ARGS_WARNING} Continue with insecure arguments for this run only?`,
-                ),
-                initialValue: false,
-                signal: controller.signal,
-              });
-              return !controller.signal.aborted && !isCancel(answer) && answer;
-            }
-          : undefined,
-      onFatalError: (reason) => {
-        if (controller.signal.aborted) {
-          return;
-        }
-        fatalError = new Error(reason);
-        shutdown();
-      },
+      prepareGog: offerGogUpgrade,
     });
     if (!result.started && !controller.signal.aborted) {
       throw new Error(result.reason ?? "gmail watcher failed to start");
-    }
-    await completion.promise;
-    if (fatalError) {
-      throw fatalError;
     }
   } catch (err) {
     shutdown();

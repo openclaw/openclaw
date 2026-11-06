@@ -1,4 +1,4 @@
-import { expect, it, vi, type Mock } from "vitest";
+import { vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import type { ConfigWriteNotification } from "../config/config.js";
 import { createSnapshot } from "../config/mutate.test-support.js";
@@ -8,11 +8,7 @@ import {
 } from "../config/runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
-import {
-  buildGatewayReloadPlan,
-  type ChannelKind,
-  type GatewayReloadPlan,
-} from "./config-reload-plan.js";
+import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayCronState } from "./server-cron-contract.js";
 import type {
   GatewayPluginReloadResult,
@@ -381,57 +377,4 @@ export function createRecordedChannelHandlers(events: string[]) {
       return new Map();
     }),
   };
-}
-
-export function createGmailConfig(account: string): OpenClawConfig {
-  return {
-    gateway: { reload: {} },
-    hooks: { enabled: true, token: "test-token", gmail: { account } },
-  };
-}
-
-export function registerGmailLegacyPermissionReloadTests(
-  createHandlers: () => Pick<
-    ReturnType<ReloadTestFactories["createGatewayReloadHandlers"]>,
-    "applyHotReload"
-  >,
-  mocks: {
-    stopGmailWatcher: Mock<typeof import("../hooks/gmail-watcher.js").stopGmailWatcher>;
-    startGmailWatcherWithLogs: Mock<
-      typeof import("../hooks/gmail-watcher-lifecycle.js").startGmailWatcherWithLogs
-    >;
-  },
-): void {
-  it.each([false, undefined])("restarts Gmail with revoked legacy permission %j", async (value) => {
-    const initialConfig: OpenClawConfig = {
-      hooks: {
-        enabled: true,
-        token: "test-token",
-        gmail: {
-          account: "me@example.com",
-          allowInsecureTokenArgs: true,
-        },
-      },
-    };
-    const nextConfig: OpenClawConfig = {
-      hooks: {
-        ...initialConfig.hooks,
-        gmail: {
-          ...initialConfig.hooks!.gmail,
-          allowInsecureTokenArgs: value,
-        },
-      },
-    };
-    const { applyHotReload } = createHandlers();
-    const plan = buildGatewayReloadPlan(["hooks.gmail.allowInsecureTokenArgs"]);
-    expect(plan.restartGmailWatcher).toBe(true);
-    await applyHotReload(plan, nextConfig);
-    expect(mocks.stopGmailWatcher).toHaveBeenCalledBefore(mocks.startGmailWatcherWithLogs);
-    expect(mocks.startGmailWatcherWithLogs).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: nextConfig }),
-    );
-    expect(mocks.startGmailWatcherWithLogs.mock.calls[0]![0]).not.toHaveProperty(
-      "confirmInsecureTokenArgs",
-    );
-  });
 }

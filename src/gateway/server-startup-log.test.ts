@@ -148,18 +148,15 @@ describe("gateway startup log", () => {
     },
   );
 
-  it.each(["allowUnsafeExternalContent", "allowInsecureTokenArgs"])(
-    "warns when dangerous config flag %s is enabled",
-    async (flag) => {
-      const { warn } = await startup({
-        cfg: { hooks: { gmail: { [flag]: true } } },
-      });
+  it("warns when dangerous config flags are enabled", async () => {
+    const { warn } = await startup({
+      cfg: { hooks: { gmail: { allowUnsafeExternalContent: true } } },
+    });
 
-      expect(warn.mock.calls).toContainEqual([
-        `security warning: dangerous config flags enabled: hooks.gmail.${flag}=true. Run \`openclaw security audit\`.`,
-      ]);
-    },
-  );
+    expect(warn.mock.calls).toContainEqual([
+      "security warning: dangerous config flags enabled: hooks.gmail.allowUnsafeExternalContent=true. Run `openclaw security audit`.",
+    ]);
+  });
 
   it("warns when a configured channel has no owning plugin", async () => {
     const { warn } = await startup({

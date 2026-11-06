@@ -232,8 +232,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "When true, fetch and include email body content for downstream mapping/agent processing. Keep false unless body text is required, because this increases payload size and sensitivity.",
   "hooks.gmail.allowUnsafeExternalContent":
     "Allows less-sanitized external Gmail content to pass into processing when enabled. Keep disabled for safer defaults, and enable only for trusted mail streams with controlled transforms.",
-  "hooks.gmail.allowInsecureTokenArgs":
-    "Allow positively identified legacy Gog to receive both the Gmail push token and OpenClaw hook token in process arguments, where other local users may read them. Default false; supporting Gog always uses child environment sources. Set false or unset and apply config reload/restart to revoke; restart foreground runs separately.",
   "hooks.gmail.serve":
     "Local callback server settings block for directly receiving Gmail notifications without a separate ingress layer. Enable only when this process should terminate webhook traffic itself.",
   "hooks.gmail.pushToken":

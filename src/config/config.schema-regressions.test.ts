@@ -19,17 +19,6 @@ function validateBinding(agentId: string, entries: Record<string, unknown>) {
 }
 
 describe("config schema regressions", () => {
-  it.each([true, false, undefined, "true", 1, null])(
-    "validates Gmail legacy permission %j",
-    (value) => {
-      const result = validateConfigObject({ hooks: { gmail: { allowInsecureTokenArgs: value } } });
-      expect(result.ok).toBe(value === undefined || typeof value === "boolean");
-      if (result.ok) {
-        expect(result.config.hooks?.gmail?.allowInsecureTokenArgs).toBe(value);
-      }
-    },
-  );
-
   it("accepts and preserves mixed extra memory path entries", () => {
     const extraPaths = [
       "../team-notes",

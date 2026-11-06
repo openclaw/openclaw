@@ -95,7 +95,6 @@ export const HooksGmailSchema = z
     maxBytes: z.number().int().positive().optional(),
     renewEveryMinutes: z.number().int().positive().optional(),
     allowUnsafeExternalContent: z.boolean().optional(),
-    allowInsecureTokenArgs: z.boolean().optional(),
     serve: z
       .strictObject({
         bind: z.string().optional(),

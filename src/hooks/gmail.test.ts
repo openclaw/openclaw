@@ -41,7 +41,6 @@ it("builds watch serve log args without secrets", () => {
     ]),
   );
   const args = buildGogWatchServeLogArgs(result.value);
-  expect(result.value.allowInsecureTokenArgs).toBe(false);
   for (const mode of ["env", "legacy-argv"] as const) {
     const logged = buildGogWatchServeLogArgs(result.value, mode);
     for (const secret of [result.value.pushToken, result.value.hookToken, result.value.hookUrl]) {

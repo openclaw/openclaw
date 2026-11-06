@@ -132,8 +132,6 @@ import {
   createConfigWriteNotification,
   createRecordedChannelHandlers,
   createCronRestartPlan,
-  createGmailConfig,
-  registerGmailLegacyPermissionReloadTests,
   createDirectConfigWriteFixture,
   createDefaultGatewayReloadState,
   createHotReloadHandlerTestParams,
@@ -2786,7 +2784,12 @@ describe("gateway channel hot reload handlers", () => {
 });
 
 describe("gateway Gmail hot reload handlers", () => {
-  registerGmailLegacyPermissionReloadTests(createReloadHandlersForTest, hoisted);
+  function createGmailConfig(account: string): OpenClawConfig {
+    return {
+      gateway: { reload: {} },
+      hooks: { enabled: true, token: "test-token", gmail: { account } },
+    };
+  }
 
   it("retries managed no-op reloads without publishing superseded secret failures", async () => {
     vi.useFakeTimers();

@@ -1,2 +1,2 @@
-# Gmail child credential transport, explicit legacy consent, and lifecycle regression coverage.
-591
+# Gmail secure transport, legacy continuity, Homebrew ownership/upgrades, and Doctor consent regression coverage.
+714

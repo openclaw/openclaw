@@ -562,7 +562,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "hooks.gmail.maxBytes": "Gmail Hook Max Body Bytes",
   "hooks.gmail.renewEveryMinutes": "Gmail Hook Renew Interval (min)",
   "hooks.gmail.allowUnsafeExternalContent": "Gmail Hook Allow Unsafe External Content",
-  "hooks.gmail.allowInsecureTokenArgs": "Gmail Hook Allow Insecure Token Arguments",
   "hooks.gmail.serve": "Gmail Hook Local Server",
   "hooks.gmail.serve.bind": "Gmail Hook Server Bind Address",
   "hooks.gmail.serve.port": "Gmail Hook Server Port",

@@ -42,7 +42,7 @@ describe("security audit gateway exposure findings", () => {
   it("warns on insecure or dangerous flags", () => {
     const cfg: OpenClawConfig = {
       hooks: {
-        gmail: { allowUnsafeExternalContent: true, allowInsecureTokenArgs: true },
+        gmail: { allowUnsafeExternalContent: true },
         mappings: [{ allowUnsafeExternalContent: true }],
       },
       tools: { exec: { applyPatch: { workspaceOnly: false } } },
@@ -51,7 +51,6 @@ describe("security audit gateway exposure findings", () => {
     expect(dangerousFindings.every((finding) => finding.severity === "warn")).toBe(true);
     for (const snippet of [
       "hooks.gmail.allowUnsafeExternalContent=true",
-      "hooks.gmail.allowInsecureTokenArgs=true",
       "hooks.mappings[0].allowUnsafeExternalContent=true",
       "tools.exec.applyPatch.workspaceOnly=false",
     ]) {
@@ -60,16 +59,6 @@ describe("security audit gateway exposure findings", () => {
         snippet,
       ).toBe(true);
     }
-  });
-
-  it.each([false, undefined])("does not report inactive Gmail legacy permission %j", (value) => {
-    expect(
-      audit({ hooks: { gmail: { allowInsecureTokenArgs: value } } }).some(
-        (finding) =>
-          finding.checkId === "config.insecure_or_dangerous_flags" &&
-          finding.detail.includes("allowInsecureTokenArgs"),
-      ),
-    ).toBe(false);
   });
 
   it.each([
