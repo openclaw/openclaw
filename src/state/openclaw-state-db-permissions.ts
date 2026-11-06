@@ -49,8 +49,8 @@ function bestEffortChmodSync(target: string, mode: number): void {
 const PRIVATE_STATE_STORES = Object.freeze([
   // Keep in step with resolveClientCredentialStorePath and
   // resolveDaemonRuntimePinStorePath; openclaw-state-db-permissions.test.ts asserts it.
-  Object.freeze(["client", "credentials.sqlite"]),
-  Object.freeze(["control", "services.sqlite"]),
+  ["client", "credentials.sqlite"],
+  ["control", "services.sqlite"],
 ] as const);
 
 /** Mirrors resolveUpdateCaptureRoot, which is a hard sibling of the state directory. */
