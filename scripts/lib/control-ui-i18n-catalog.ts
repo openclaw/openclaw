@@ -18,6 +18,7 @@ import { registerBrowserEnglish } from "../../ui/src/i18n/locales/en-browser.ts"
 import { registerChatCameraEnglish } from "../../ui/src/i18n/locales/en-chat-camera.ts";
 import { registerChatCiEnglish } from "../../ui/src/i18n/locales/en-chat-ci.ts";
 import { registerChatCommandResultsEnglish } from "../../ui/src/i18n/locales/en-chat-command-results.ts";
+import { registerChatCommandsEnglish } from "../../ui/src/i18n/locales/en-chat-commands.ts";
 import { registerChatComposerMenuEnglish } from "../../ui/src/i18n/locales/en-chat-composer-menu.ts";
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
@@ -57,10 +58,12 @@ import { registerMcpAppEnglish } from "../../ui/src/i18n/locales/en-mcp-app.ts";
 import { registerMcpEnglish } from "../../ui/src/i18n/locales/en-mcp.ts";
 import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.ts";
 import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
+import { registerModelAccountListEnglish } from "../../ui/src/i18n/locales/en-model-account-list.ts";
 import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model-accounts.ts";
 import { registerModelControlsEnglish } from "../../ui/src/i18n/locales/en-model-controls.ts";
 import { registerModelSetupEnglish } from "../../ui/src/i18n/locales/en-model-setup.ts";
 import { registerNativeLinkMenuEnglish } from "../../ui/src/i18n/locales/en-native-link-menu.ts";
+import { registerNewSessionRuntimeEnglish } from "../../ui/src/i18n/locales/en-new-session-runtime.ts";
 import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
 import { registerPermissionErrorsEnglish } from "../../ui/src/i18n/locales/en-permission-errors.ts";
 import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/en-personal-instructions.ts";
@@ -76,6 +79,7 @@ import { registerSecretsStoreEnglish } from "../../ui/src/i18n/locales/en-secret
 import { registerSessionMachineEnglish } from "../../ui/src/i18n/locales/en-session-machine.ts";
 import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSessionNavigationEnglish } from "../../ui/src/i18n/locales/en-session-navigation.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../ui/src/i18n/locales/en-session-organization-shared.ts";
 import { registerSessionOrganizationEnglish } from "../../ui/src/i18n/locales/en-session-organization.ts";
 import { registerSessionPeopleEnglish } from "../../ui/src/i18n/locales/en-session-people.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
@@ -210,7 +214,36 @@ const sourceFiles = [
 ];
 
 export function loadControlUiStartupCatalog(): TranslationMap {
-  return en;
+  // Match the shared and Chat boot registrars, not their whole page namespaces.
+  // Locale preparation must not fetch a page catalog for a few shared leaves.
+  return mergeControlUiTranslationMaps(
+    en,
+    registerChatCommandsEnglish.catalog,
+    registerChatComposerEnglish.catalog,
+    registerChatMessageMetadataEnglish.catalog,
+    registerChatSessionEnglish.catalog,
+    registerChatToolLabelsEnglish.catalog,
+    registerLocalErrorsEnglish.catalog,
+    registerMcpEnglish.catalog,
+    registerModelAccountListEnglish.catalog,
+    registerModelControlsEnglish.catalog,
+    registerNewSessionRuntimeEnglish.catalog,
+    registerSessionNavigationEnglish.catalog,
+    registerSessionOrganizationSharedEnglish.catalog,
+    registerSessionPeopleEnglish.catalog,
+    registerSessionPlacementEnglish.catalog,
+    registerSidebarAttentionEnglish.catalog,
+    registerChatGoalsEnglish.catalog,
+    registerChatMediaEnglish.catalog,
+    registerChatPermissionsEnglish.catalog,
+    registerChatProviderReviewEnglish.catalog,
+    registerChatQuestionsEnglish.catalog,
+    registerCodeBlocksEnglish.catalog,
+    registerFilePreviewEnglish.catalog,
+    registerMcpAppEnglish.catalog,
+    registerPermissionErrorsEnglish.catalog,
+    registerSessionMachineEnglish.catalog,
+  );
 }
 
 export function loadControlUiSourceCatalog(): TranslationMap {

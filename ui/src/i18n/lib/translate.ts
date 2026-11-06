@@ -51,6 +51,7 @@ class I18nManager {
   private pendingLocaleShouldPersist = true;
   // Only the latest selection may update retry state or become active after an async chunk load.
   private localeRequestGeneration = 0;
+  private localeChange: Promise<void> | undefined;
   // One chunk import per locale may be active. Settlement removes it so a
   // disconnected/failed load remains retryable on the next connected transition.
   private inFlightLocaleLoads = new Map<Locale, Promise<TranslationMap | null>>();
@@ -97,7 +98,7 @@ class I18nManager {
       }
       return;
     }
-    void this.applyLocale(locale, false, shouldPersist);
+    void (this.localeChange = this.applyLocale(locale, false, shouldPersist));
   }
 
   public getLocale(): Locale {
@@ -109,11 +110,14 @@ class I18nManager {
   }
 
   public async prepareLocale(): Promise<void> {
-    let locale;
+    let change;
     do {
-      locale = this.locale;
-      await this.prepareCatalog(locale);
-    } while (locale !== this.locale);
+      change = this.localeChange;
+      if (change) {
+        await change;
+      }
+      await this.prepareCatalog(this.locale);
+    } while (change !== this.localeChange);
   }
 
   private prepareCatalog(locale: Locale): Promise<void> | undefined {
@@ -128,12 +132,12 @@ class I18nManager {
     return resolveNavigatorLocale(language ?? "");
   }
 
-  public async setLocale(locale: Locale) {
-    return this.applyLocale(locale, false, true);
+  public setLocale(locale: Locale) {
+    return (this.localeChange = this.applyLocale(locale, false, true));
   }
 
-  public async useSystemLocale() {
-    return this.applyLocale(this.getSystemLocale(), false, false);
+  public useSystemLocale() {
+    return (this.localeChange = this.applyLocale(this.getSystemLocale(), false, false));
   }
 
   private async applyLocale(locale: Locale, retrying: boolean, shouldPersist: boolean) {
@@ -201,7 +205,7 @@ class I18nManager {
     const target = this.pendingLocale;
     const shouldPersist = this.pendingLocaleShouldPersist;
     this.pendingLocale = null;
-    void this.applyLocale(target, true, shouldPersist);
+    void (this.localeChange = this.applyLocale(target, true, shouldPersist));
   }
 
   public setLocaleLoadRecovery(recovery: LocaleLoadRecovery | undefined): void {

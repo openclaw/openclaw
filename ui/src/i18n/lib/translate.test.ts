@@ -76,6 +76,33 @@ it("prepares registered English namespaces before publishing a locale without lo
   expect(manager.translateActive("common.connected")).toBeUndefined();
 });
 
+it.each(["loaded", "failed"] as const)(
+  "prepares the saved locale before route readiness (%s)",
+  async (outcome) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    localStorage.setItem("openclaw.i18n.locale", "de");
+    const entry = deferred<TranslationMap | null>();
+    loadTranslation.mockReturnValueOnce(entry.promise);
+    manager = createI18nManagerForTesting(loadTranslation);
+    let ready = false;
+    const preparation = manager.prepareLocale().then(() => {
+      ready = true;
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(ready).toBe(false);
+    if (outcome === "loaded") {
+      entry.resolve(german);
+    } else {
+      entry.reject(offline);
+    }
+    await preparation;
+    expect(manager.getLocale()).toBe(outcome === "loaded" ? "de" : "en");
+    expect(manager.getRequestedLocale()).toBe("de");
+  },
+);
+
 it("keeps late namespace results scoped to their locale and retries a failed namespace", async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   const page = deferred<{ default: TranslationMap }>();

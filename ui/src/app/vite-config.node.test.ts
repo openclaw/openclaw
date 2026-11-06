@@ -15,6 +15,7 @@ import {
 } from "../../../scripts/lib/control-ui-i18n-catalog-values.ts";
 import {
   loadControlUiSourceCatalog,
+  loadControlUiStartupCatalog,
   readControlUiSourceCatalog,
 } from "../../../scripts/lib/control-ui-i18n-catalog.ts";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
@@ -30,6 +31,7 @@ import controlUiViteConfig, {
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
+import { getLazyLocaleCatalog } from "../i18n/lib/locale-catalog.ts";
 import type { TranslationMap } from "../i18n/lib/types.ts";
 import { en } from "../i18n/locales/en.ts";
 
@@ -682,12 +684,61 @@ it("keeps specific tsconfig aliases ahead of broad package aliases", () => {
 it("composes the complete source without registering runtime English", () => {
   const before = structuredClone(en);
   const source = loadControlUiSourceCatalog();
+  const startup = loadControlUiStartupCatalog();
   const flat = flattenTranslations(source);
   expect(en).toEqual(before);
   expect(source).not.toBe(en);
+  expect(startup).not.toBe(en);
   expect(source.configView).not.toBe(en.configView);
   expect(flat.get("activity.title")).toBe("Activity");
   expect(flat.get("configView.sections.cron")).toBe("Automations");
+});
+
+it("packs Chat boot fragments without loading their optional page siblings", async () => {
+  const { load } = await localeHooks();
+  await withoutMemory(async () => {
+    const { catalog, loadNamespace } = await executeLocale(
+      load,
+      await loadLocaleSource(load),
+      true,
+    );
+    const initial = flattenTranslations(catalog);
+    const bootKeys = [
+      "runtimeErrors.permissionDenied",
+      "notificationErrors.unavailable",
+      "nativeDeviceEditError",
+      "filePreview.emptyTitle",
+      "mcpApp.errors.requestFailed",
+      "worktrees.title",
+      "newSession.placementStartFailed",
+      "mcpServers.add",
+      "mcpPage.noServers",
+      "profilePage.modelAccounts.inventoryFailed",
+      "chat.goals.start",
+    ];
+    for (const key of bootKeys) {
+      expect(initial.get(key), key).toBeTypeOf("string");
+    }
+    await getLazyLocaleCatalog(catalog)?.prepare(loadControlUiStartupCatalog());
+    const prepared = flattenTranslations(catalog);
+    for (const key of [
+      "newSession.messagePlaceholder",
+      "worktrees.cleanNow",
+      "profilePage.access.admin",
+      "chat.sessionDetails.environment",
+      "commandPalette.newSessionSettings",
+    ]) {
+      expect(prepared.has(key), key).toBe(false);
+    }
+    expect(catalog.configHints).toBeUndefined();
+    await loadNamespace("newSession");
+    expect(flattenTranslations(catalog).get("newSession.messagePlaceholder")).toBe(
+      "What should this session work on?",
+    );
+    expect(flattenTranslations(catalog).get("newSession.placementStartFailed")).toBe(
+      "Couldn’t start this session. Retry setup. {error}",
+    );
+  });
 });
 
 it("includes every English dependency in the raw source-hash input", async () => {
