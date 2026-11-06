@@ -943,6 +943,7 @@ if (runCheckPlan && proposedCheckScope?.types) {
         path.posix.normalize(file) === file &&
         !file.includes("\\") &&
         (isTestLineAllocationPath(file) ||
+          (budgetOnlyFallback && facts.surface === "docs") ||
           (["source", "package", "ui", "extension"].includes(facts.surface) &&
             (budgetOnlyFallback || (facts.isTestOnly && facts.isChangedLaneTest))))
       );

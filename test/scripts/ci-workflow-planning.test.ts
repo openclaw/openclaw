@@ -13840,6 +13840,12 @@ describe("shared test-source check execution", () => {
       "ui/src/selection.test.ts",
       "config/test-lines-allocations/selection-proof.txt",
     ],
+    [
+      "src/selection.ts",
+      "src/selection.test.ts",
+      "docs/selection.md",
+      "config/test-lines-allocations/selection-proof.txt",
+    ],
   ])("keeps full guards and selects compiler consumers for %j", (...changedPaths) => {
     const graphs = ["core", "extensions-test"];
     const manifest = runManifest(changedPaths, graphs);
@@ -13880,6 +13886,7 @@ describe("shared test-source check execution", () => {
     [
       "src/shared.test-support.ts",
       "src/runtime.ts",
+      "docs/selection.md",
       "config/test-lines-allocations/selection-proof.txt",
     ],
     ["src/shared.test-support.ts", "tsconfig.json"],
