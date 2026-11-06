@@ -45,7 +45,7 @@ it("excludes measurement setup from action long tasks without moving the initial
   // evaluate callbacks in jsdom; these are the only Page methods the API uses.
   const page = {
     addInitScript: async () => {},
-    evaluate: async (expression: string | ((value?: number) => unknown), value?: number) =>
+    evaluate: async (expression: string | ((value?: unknown) => unknown), value?: unknown) =>
       typeof expression === "string" ? runInThisContext(expression) : expression(value),
   } as unknown as Page;
   await installControlUiPageObserver(page);
@@ -72,4 +72,62 @@ it("excludes measurement setup from action long tasks without moving the initial
     longestLongTaskMs: 327,
   });
   document.body.lastElementChild?.remove();
+});
+
+it("counts only interval assets completed by route readiness and retains the later waterfall", async () => {
+  vi.stubGlobal("PerformanceObserver", TaskObserver);
+  const clock = vi.spyOn(performance, "now").mockReturnValue(100);
+  const resource = (name: string, startTime: number, responseEnd: number) => ({
+    name: `http://127.0.0.1/assets/${name}`,
+    entryType: "resource",
+    startTime,
+    duration: responseEnd - startTime,
+    toJSON: () => ({ name, startTime, responseEnd }),
+    requestStart: startTime + 1,
+    responseStart: responseEnd - 1,
+    responseEnd,
+    nextHopProtocol: "http/1.1",
+    encodedBodySize: 10,
+    transferSize: 310,
+  });
+  vi.spyOn(performance, "getEntriesByType").mockReturnValue([
+    resource("preloaded.js", 180, 240),
+    ...Array.from({ length: 7 }, (_, index) => resource(`${index}.js`, 210 + index, 260)),
+    resource("late.css", 230, 340),
+    resource("image.png", 240, 270),
+    resource("after.js", 420, 450),
+  ]);
+  // SAFETY: Execute the serialized observer and its evaluate callbacks in this test realm.
+  const page = {
+    addInitScript: async () => {},
+    evaluate: async (expression: string | ((value?: unknown) => unknown), value?: unknown) =>
+      typeof expression === "string" ? runInThisContext(expression) : expression(value),
+  } as unknown as Page;
+  await installControlUiPageObserver(page);
+  await resetControlUiPageObserver(page);
+  // A navigation task begins before its own browser-local asset timestamp.
+  TaskObserver.current.pending.push(task(150, 100));
+  clock.mockReturnValue(400);
+  await finishControlUiPageObserver(page);
+
+  const observation = await readControlUiPageObserver(page, 100, 300, 200);
+  expect(observation).toMatchObject({
+    longTaskCount: 1,
+    longestLongTaskMs: 100,
+    assetRequests: 8,
+    assetRequestsCompletedByReady: 7,
+    assetEncodedBytesCompletedByReady: 70,
+    http1AssetConnectionWavesByReady: 2,
+  });
+  expect(observation.assets.at(-1)).toEqual({
+    name: "/assets/late.css",
+    startMs: 30,
+    requestMs: 31,
+    responseMs: 139,
+    endMs: 140,
+    protocol: "http/1.1",
+    encodedBodyBytes: 10,
+    transferBytes: 310,
+    completedByReady: false,
+  });
 });
