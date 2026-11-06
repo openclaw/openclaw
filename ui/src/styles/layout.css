@@ -4191,6 +4191,11 @@ html.openclaw-native-web-chrome
   width: 72%;
   height: 72%;
 }
+
+.sidebar-agent-card__avatar > .gateway-identity-placeholder svg {
+  width: 100%;
+  height: 100%;
+}
 .sidebar-connection-skeleton {
   padding: 18px 14px;
   pointer-events: none;
