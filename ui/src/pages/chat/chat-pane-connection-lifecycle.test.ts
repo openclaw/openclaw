@@ -294,6 +294,28 @@ describe("chat pane connection lifecycle", () => {
     },
   );
 
+  it("does not reuse a live observer from a retired connection", async () => {
+    let available = true;
+    const h = reconnectPane(
+      { messages: [], sessionId: "reconnected" },
+      {
+        "sessions.messages.subscribe": (params: { key: string }) => {
+          if (!available) {
+            throw new Error("New connection admission failed");
+          }
+          return { key: params.key };
+        },
+      },
+    );
+    await expect(syncSelectedSessionMessageSubscription(h.state)).resolves.toBe(true);
+    available = false;
+    disconnect(h.pane);
+    expect(h.state.chatSessionMessageSubscription).toBeNull();
+    h.pane.applyGatewaySnapshot(h.pane.context.gateway.snapshot);
+    await expect(syncSelectedSessionMessageSubscription(h.state)).resolves.toBe(false);
+    expect(h.state.chatSessionMessageSubscription).toBeNull();
+  });
+
   it("uses a snapshot hydrated during connect preparation for the pipelined delta", async () => {
     const h = openingPane();
     const snapshot = {

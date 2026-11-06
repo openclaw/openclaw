@@ -1,2 +1,2 @@
-126
-# Cover exhausted admission, terminal denial, foreground/manual upgrade recovery, and preservation of a usable same-session observer until replacement admission succeeds.
+148
+# Cover exhausted admission, terminal denial, foreground/manual upgrade recovery, usable-lease retention, and disposal of retired-connection handles before reacquisition.
