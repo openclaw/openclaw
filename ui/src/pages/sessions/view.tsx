@@ -1,6 +1,7 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createDeferred, createMemo, Errored, isPending, Loading, Repeat, Show } from "solid-js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ContextNewSessionAction } from "../../components/solid/new-session-link.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
@@ -20,8 +21,8 @@ import { sessionsTableColumnCount } from "./session-row.tsx";
 import { SessionWindow, type SessionEntry } from "./session-window.tsx";
 import { SessionsAdvancedFilters } from "./sessions-filters.tsx";
 import { TranscriptSearchForm, TranscriptSearchResults } from "./transcript-search-view.tsx";
-import type { SessionsProps } from "./view-types.ts";
 import "../../styles/sessions.css";
+import type { SessionsProps } from "./view-types.ts";
 
 registerSessionMenuEnglish();
 
@@ -322,10 +323,9 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
   }
   function SelectAllOnPage() {
     return (
-      <input
-        type="checkbox"
+      <Checkbox
         checked={allSelected()}
-        prop:indeterminate={selectedOnPage() > 0 && !allSelected()}
+        indeterminate={selectedOnPage() > 0 && !allSelected()}
         onChange={() => {
           const update = allSelected() ? props.onDeselectPage : props.onSelectPage;
           update(paginated().map((r) => r.key));

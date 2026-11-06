@@ -178,7 +178,7 @@ export function parseBrowserNonNegativeIntegerOption(raw: string, flag: string):
 export async function callBrowserRequest<T>(
   opts: BrowserParentOpts,
   params: BrowserRequestParams,
-  extra?: { timeoutMs?: number },
+  extra?: { timeoutMs?: number; interruptible?: boolean },
 ): Promise<T> {
   const query = normalizeQuery(params.query);
   const path = normalizeBrowserRequestPath(params.path);
@@ -191,7 +191,10 @@ export async function callBrowserRequest<T>(
   // These GET options persist captures or clear records; retain their accepted receipt.
   const hasSideEffect =
     parseBooleanValue(sideEffectOption, { truthy: ["true", "1", "yes"] }) === true;
-  const signal = params.method === "GET" && !hasSideEffect ? getAsyncWorkSignal() : undefined;
+  const signal =
+    params.method === "GET" && !hasSideEffect && extra?.interruptible !== false
+      ? getAsyncWorkSignal()
+      : undefined;
   signal?.throwIfAborted();
   const resolvedTimeout =
     typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)

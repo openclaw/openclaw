@@ -692,8 +692,15 @@ openclaw-terminal-panel {
     }
   }
 
-  * {
-    scrollbar-width: thin;
+  @supports not selector(::-webkit-scrollbar) {
+    * {
+      scrollbar-color: var(--scrollbar-thumb) transparent;
+      scrollbar-width: thin;
+    }
+
+    *:hover {
+      scrollbar-color: var(--scrollbar-thumb-near) transparent;
+    }
   }
 
   ::-webkit-scrollbar {
@@ -709,14 +716,17 @@ openclaw-terminal-panel {
   ::-webkit-scrollbar-thumb {
     background: var(--scrollbar-thumb);
     background-clip: content-box;
-    border: var(--scrollbar-thumb-inset) solid transparent;
+    border: var(--scrollbar-thumb-inset, calc(var(--scrollbar-size) / 4)) solid transparent;
     border-radius: var(--radius-full);
   }
 
-  ::-webkit-scrollbar-thumb:hover,
   :hover::-webkit-scrollbar-thumb {
-    background: var(--scrollbar-thumb-hover);
-    background-clip: content-box;
+    background-color: var(--scrollbar-thumb-near);
+  }
+
+  ::-webkit-scrollbar-thumb:hover,
+  ::-webkit-scrollbar-thumb:active {
+    background-color: var(--scrollbar-thumb-hover);
   }
 }
 @keyframes tp-upload-progress {

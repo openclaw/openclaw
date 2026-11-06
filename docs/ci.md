@@ -8,6 +8,12 @@ read_when:
   - You are changing ClawSweeper dispatch or GitHub activity forwarding
 ---
 
+Blacksmith Linux x64 jobs now request their measured physical size. The planner
+retains its historical profiles and timing keys: 4/8/16/32 profiles select
+2/2/4/8-vCPU runners at admission, raised when a group requires more memory.
+Windows, ARM, hosted routing, coverage, and concurrency remain unchanged.
+See [runner allocation evidence](/ci/routing-costs#blacksmith-physical-allocation).
+
 CI continues during Full Release Validation; the legacy release-priority variable
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.

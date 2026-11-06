@@ -1030,14 +1030,9 @@ openclaw-pending-session-create {
   justify-content: space-between;
   gap: 8px;
 }
-.context-usage__header {
-  min-height: 20px;
-}
-.context-usage__context-value {
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 650;
-  white-space: nowrap;
+/* The panel's own gutter already insets the heading. */
+.oc-menu-heading.context-usage__header {
+  padding-inline: 0;
 }
 .context-usage__open {
   display: flex;
@@ -2244,7 +2239,6 @@ button.chat-pr__diff {
 }
 
 .chat-pr__checks-pill:focus-visible,
-.chat-ci__automation-checkbox:focus-visible,
 .chat-ci__automation-retry:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -2362,13 +2356,6 @@ button.chat-pr__diff {
   opacity: 0.6;
 }
 
-.chat-ci__automation-checkbox {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-  cursor: var(--cursor-action);
-}
-
 .chat-ci__automation-label,
 .chat-ci__name {
   min-width: 0;
@@ -2453,7 +2440,6 @@ openclaw-chat-ci-details {
   max-height: min(420px, 52dvh);
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
 }
 
 .chat-ci__job {
@@ -3188,7 +3174,6 @@ openclaw-chat-ci-details {
   padding: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
   border: none;
   border-radius: 0;
   outline: none;

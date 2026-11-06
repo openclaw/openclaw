@@ -40,18 +40,19 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 
 - Use the smallest runner that completes the required workload reliably. Keep
   short control jobs hosted and ordinary trusted development proof local.
-- Treat the 32-class as an exception, not a default or generic retry. Record the
+- Treat physical 8-vCPU and larger runners as exceptions, not a default or generic retry. Record the
   command and measured peak memory, a smaller-runner OOM, or a controlled
   comparison showing lower total billed cost. Low CPU use alone does not prove
   a memory-heavy job can move down. Preserve resource-based worker limits.
-- Routine OpenClaw Testboxes use the 16-class with a 60-minute total-job
+- Routine OpenClaw Testboxes use the 4-class with a 60-minute total-job
   default, including hydration. Keep the 15-minute idle ceiling. Shorter
   deadlines are welcome for known short commands; do not request four hours
   automatically or upsize only to obtain more time. Select
   `.github/workflows/ci-check-high-memory-testbox.yml` explicitly only for a
   named memory-heavy command; see `docs/reference/test/remote-proof.md`.
   That workflow has at most four concurrent leases inside the shared 32-slot
-  Testbox pool. All Testbox profiles cap idle time at 15 minutes.
+  Testbox pool. The high-memory profile uses 8 vCPUs; both profiles preserve
+  their pre-November 3 physical CPU and RAM. All Testbox profiles cap idle time at 15 minutes.
 - Allocate through the current OpenClaw wrapper with workflow ref `main`;
   the source capsule preserves the checkout being tested. Do not dispatch an
   old workflow ref to bypass spending limits. Queue age is checked before
