@@ -11,6 +11,7 @@ import {
 import type { ProviderDecisionOutcomeV2 } from "../decisions/provider-outcomes.js";
 import type { DecisionProviderV2 } from "../decisions/provider-types.js";
 import type { DecisionBatchV2 } from "../decisions/types-v2.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import type { ModelRequestHeaders } from "../llm/types.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import {
@@ -144,7 +145,7 @@ export async function executeOpenAIDecision(
     );
     try {
       if (!response.ok) {
-        await response.body?.cancel();
+        void cancelUnreadResponseBody(response);
         if (response.status === 401 || response.status === 403) {
           return { status: "unavailable", reason: "authentication" };
         }

@@ -38,6 +38,11 @@ type ClawRouterDecisionCatalogExecution = Pick<
   };
 };
 
+/** Starts error-body cancellation without waiting for transport cleanup to settle. */
+export function discardClawRouterErrorBody(response: Response): void {
+  void response.body?.cancel().catch(() => {});
+}
+
 export async function evaluateClawRouterDecision(
   batch: DecisionBatchV2,
   context: DecisionProviderContextV2,
@@ -161,7 +166,7 @@ async function prepareClawRouterDecisionCatalog(
     let rows: readonly unknown[];
     try {
       if (!response.ok) {
-        await response.body?.cancel();
+        discardClawRouterErrorBody(response);
         const seconds = parseRetryAfterHeaderSeconds(response.headers.get("retry-after"));
         return {
           status: "unavailable",
