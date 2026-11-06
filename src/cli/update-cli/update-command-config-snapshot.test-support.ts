@@ -62,7 +62,13 @@ export async function runUpdateSnapshotIsolationProof(
   }
   const writeFile = fsp.writeFile.bind(fsp);
   const copyFile = fsp.copyFile.bind(fsp);
+  const rename = fsp.rename.bind(fsp);
+  const rm = fsp.rm.bind(fsp);
+  const unlink = fs.unlink;
   const openSync = fs.openSync.bind(fs);
+  let failure: "write" | "rename" | undefined =
+    selection === "home" ? "write" : selection === "state" ? "rename" : undefined;
+  let visibleDuringWrite: string | undefined;
   for (const name of [
     "appendFile",
     "chmod",
@@ -107,13 +113,41 @@ export async function runUpdateSnapshotIsolationProof(
   fsp.writeFile = async (file, ...args) => {
     checkTarget(file);
     writes.push(file);
-    return writeFile(file, ...args);
+    if (failure === "write") {
+      assert.ok(typeof args[0] === "string");
+      await writeFile(file, args[0].slice(0, 20), args[1]);
+      visibleDuringWrite = await fsp.readFile(configB + ".pre-update", "utf8");
+      throw new Error("injected partial snapshot write");
+    }
+    await writeFile(file, ...args);
+    if (failure) {
+      visibleDuringWrite = await fsp.readFile(configB + ".pre-update", "utf8");
+    }
   };
   fsp.copyFile = async (source, destination, ...args) => {
     checkTarget(source);
     checkTarget(destination);
     writes.push(destination);
     return copyFile(source, destination, ...args);
+  };
+  fsp.rename = async (source, destination) => {
+    checkTarget(source);
+    checkTarget(destination);
+    if (failure === "rename") {
+      throw new Error("injected snapshot rename failure");
+    }
+    return rename(source, destination);
+  };
+  // Node's rm uses the callback unlink API internally; retain the same path guard.
+  fs.unlink = new Proxy(unlink, {
+    apply(target, thisArg, args) {
+      checkTarget(args[0]);
+      return Reflect.apply(target, thisArg, args);
+    },
+  });
+  fsp.rm = async (file) => {
+    checkTarget(file);
+    return rm(file);
   };
   fs.openSync = (file, flags, ...args) => {
     assert.ok(flags === "r" || flags === 0, "Only read-only opens are allowed");
@@ -125,6 +159,9 @@ export async function runUpdateSnapshotIsolationProof(
   const outside = path.join(root, "..", "synthetic-outside-snapshot-fixture");
   await assert.rejects(() => fsp.writeFile(outside, "must never be written"));
   await assert.rejects(() => fsp.copyFile(configA, outside));
+  await assert.rejects(() => fsp.rename(configA, outside));
+  await assert.rejects(() => fsp.rename(outside, configA));
+  await assert.rejects(() => fsp.rm(outside));
   assert.deepEqual(writes, []);
 
   const { CONFIG_PATH } = await import("../../config/paths.js");
@@ -145,7 +182,30 @@ export async function runUpdateSnapshotIsolationProof(
     applyCliProfileEnv({ profile: "snapshot-proof" });
     assert.equal(process.env.OPENCLAW_CONFIG_PATH, configB);
   }
+  if (failure) {
+    checkTarget(configB + ".pre-update");
+    await writeFile(configB + ".pre-update", "synthetic-old-backup-B\n", { mode: 0o600 });
+    await createUpdateConfigSnapshot();
+    assert.equal(visibleDuringWrite, "synthetic-old-backup-B\n", failure);
+    assert.equal(await fsp.readFile(configB + ".pre-update", "utf8"), "synthetic-old-backup-B\n");
+    assert.deepEqual(
+      fs.readdirSync(path.dirname(configB)).filter((name) => name.endsWith(".tmp")),
+      [],
+    );
+    console.log(
+      "Preserved old snapshot after " + failure + " failure; retrying in the same process",
+    );
+    failure = undefined;
+  }
   await createUpdateConfigSnapshot();
+  assert.equal(await fsp.readFile(configB + ".pre-update", "utf8"), sourceB);
+  const writeCount = writes.length;
+  checkTarget(configB);
+  await writeFile(configB, "synthetic-later-config\n");
+  await createUpdateConfigSnapshot();
+  assert.equal(writes.length, writeCount, "later calls must keep the first successful snapshot");
+  assert.equal(await fsp.readFile(configB + ".pre-update", "utf8"), sourceB);
+  await writeFile(configB, sourceB);
   console.log(JSON.stringify({ selection, importedConfig: CONFIG_PATH, configB, writes, blocked }));
   for (const [file, content] of sources) {
     assert.equal(await fsp.readFile(file, "utf8"), content, `Unselected file changed: ${file}`);
@@ -154,7 +214,11 @@ export async function runUpdateSnapshotIsolationProof(
   if (process.platform !== "win32") {
     assert.equal(fs.statSync(`${configB}.pre-update`).mode & 0o777, 0o600);
   }
-  assert.deepEqual(writes, [`${configB}.pre-update`]);
+  assert.equal(writes.length, selection === "home" || selection === "state" ? 2 : 1);
+  for (const file of writes) {
+    assert.equal(path.dirname(file), path.dirname(configB));
+    assert.notEqual(file, configB + ".pre-update");
+  }
   assert.deepEqual(blocked, []);
   assert.deepEqual(
     new Set(fs.readdirSync(root, { recursive: true, encoding: "utf8" })),
