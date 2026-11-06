@@ -304,8 +304,18 @@ it.each([true, false])(
 
 it("releases layout observation when a banner replaces the input", async () => {
   vi.useFakeTimers();
-  const { container, props: initial } = renderComposer({}, true);
+  const container = createComposerContainer();
+  container.className = "chat-pane-cache__pane chat-pane-cache__pane--visible";
+  document.body.append(container);
+  const initial = props({ incognito: true });
+  renderComposerInto(container, initial);
   const input = container.querySelector<HTMLElement>(".agent-chat__input")!;
+  expect(container.getAttribute("data-incognito")).toBe("true");
+  renderComposerInto(container, { ...initial, incognito: false });
+  expect(container.hasAttribute("data-incognito")).toBe(false);
+  expect(container.querySelector(".agent-chat__input")).toBe(input);
+  renderComposerInto(container, initial);
+  expect(container.getAttribute("data-incognito")).toBe("true");
   let top = 100;
   vi.spyOn(input, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, top, 400, 48));
   window.dispatchEvent(new Event("resize"));
@@ -317,6 +327,7 @@ it("releases layout observation when a banner replaces the input", async () => {
     disabledBanner: { kind: "composer-replacement", text: "This session is archived." },
   });
   expect(container.querySelector(".agent-chat__input")).toBeNull();
+  expect(container.hasAttribute("data-incognito")).toBe(false);
   top = 200;
   window.dispatchEvent(new Event("resize"));
   await vi.advanceTimersByTimeAsync(20);
@@ -325,6 +336,7 @@ it("releases layout observation when a banner replaces the input", async () => {
   renderComposerInto(container, initial);
   const replacement = container.querySelector<HTMLElement>(".agent-chat__input")!;
   expect(replacement).not.toBe(input);
+  expect(container.getAttribute("data-incognito")).toBe("true");
   vi.spyOn(replacement, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 300, 400, 48));
   window.dispatchEvent(new Event("resize"));
   await vi.advanceTimersByTimeAsync(20);

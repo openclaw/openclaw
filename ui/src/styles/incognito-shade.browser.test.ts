@@ -19,7 +19,7 @@ fixture.describe("Incognito pane shade", () => {
           css,
           `<div class="chat-split-view__cell">
         <div class="chat-pane-cache">
-          <openclaw-chat-pane id="private" class="chat-pane-cache__pane">
+          <openclaw-chat-pane id="private" class="chat-pane-cache__pane" data-incognito="true">
             <div class="agent-chat__input" data-incognito="true"></div>
           </openclaw-chat-pane>
           <openclaw-chat-pane id="regular" class="chat-pane-cache__pane chat-pane-cache__pane--visible">
@@ -42,6 +42,8 @@ fixture.describe("Incognito pane shade", () => {
           expect(await background("#private")).toContain("linear-gradient");
           expect(await background("#regular")).toBe("none");
           expect(await background(".chat-split-view__cell")).toBe("none");
+          await page.locator("#private").evaluate((pane) => pane.removeAttribute("data-incognito"));
+          expect(await background("#private")).toBe("none");
         },
       );
     },

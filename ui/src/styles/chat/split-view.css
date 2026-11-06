@@ -22,7 +22,7 @@
 
 /* Only the displayed pane owns the shade: cached Incognito chats must not tint
    the regular chat that replaces them. Pending creation uses the same host. */
-.chat-pane-cache__pane--visible:has(.agent-chat__input[data-incognito="true"]) {
+.chat-pane-cache__pane.chat-pane-cache__pane--visible[data-incognito="true"] {
   --chat-header-tint: var(--text-strong);
   --chat-header-tint-strength: 7%;
 
@@ -38,7 +38,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
 
 /* Dark mode deepens the canvas rather than adding a glow. */
 :root[data-theme-mode="dark"]
-  .chat-pane-cache__pane--visible:has(.agent-chat__input[data-incognito="true"]) {
+  .chat-pane-cache__pane.chat-pane-cache__pane--visible[data-incognito="true"] {
   --chat-header-tint: black;
   --chat-header-tint-strength: 32%;
 }

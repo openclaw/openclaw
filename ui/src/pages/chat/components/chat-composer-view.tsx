@@ -1,5 +1,5 @@
 import { dynamic } from "@solidjs/web";
-import { createMemo, createSignal, lazy, Show } from "solid-js";
+import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
 import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
 import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { McpAppResources } from "../../../components/mcp-app-resources.tsx";
@@ -437,6 +437,17 @@ export function renderChatComposerView(
               createBackgroundLayoutRef("composer"),
             ]}
           >
+            <Show when={props.incognito}>
+              {() => {
+                // The mounted input owns the tint, including replacement by a banner or question.
+                onSettled(() => {
+                  const pane = state.composerInput?.closest(".chat-pane-cache__pane");
+                  pane?.setAttribute("data-incognito", "true");
+                  return () => pane?.removeAttribute("data-incognito");
+                });
+                return undefined;
+              }}
+            </Show>
             {context().menus.slashMenuVisible ? (
               <ChatLazyBoundary onClose={() => state.slashMenu.reset()}>
                 <SlashMenu
