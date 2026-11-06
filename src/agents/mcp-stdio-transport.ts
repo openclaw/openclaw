@@ -131,6 +131,11 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
           ? { assertCurrent: this.docker.assertCurrent }
           : { abortSignal: this.startupAbort.signal }),
         stderrDestination: this.stderrStream,
+        // Matches the Claude CLI process owner (extensions/anthropic/cli-process.ts):
+        // without this, losing the owning host leaves the anchor waiting on a
+        // lineage-closed receipt that can never arrive, so it retires decisively
+        // instead of only on a best-effort basis.
+        terminateOnHostLoss: true,
       });
       this.process = child;
       child.onError((error) => this.notifyError(error));
