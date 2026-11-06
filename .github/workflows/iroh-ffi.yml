@@ -99,12 +99,16 @@ jobs:
           wc -c target/release/libopenclaw_iroh_ffi.so
           sha256sum target/release/libopenclaw_iroh_ffi.so
 
+      - name: Setup Android toolchain
+        if: matrix.platform == 'android'
+        uses: ./.github/actions/setup-android-toolchain
+
       - name: Build Android ABIs and check 16 KiB alignment
         if: matrix.platform == 'android'
         run: |
           set -euo pipefail
-          sdkmanager 'ndk;28.2.13676358'
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --install 'ndk;28.2.13676358'
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/28.2.13676358"
           cargo install cargo-ndk --version 3.5.4 --locked
           scripts/build-android.sh
 
