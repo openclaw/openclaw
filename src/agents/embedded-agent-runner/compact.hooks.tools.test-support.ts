@@ -17,10 +17,6 @@ function createMockToolDefinitions(tools: unknown[] = []) {
 
 export function mockCompactHooksTools(createTools: typeof createOpenClawCodingToolsInternal) {
   // mock-isolation: Supply fixture tools without constructing the full runtime surface.
-  vi.doMock("../agent-tools.js", () => ({
-    createOpenClawCodingTools: createTools,
-    createOpenClawCodingToolsInternal: createTools,
-  }));
   vi.doMock("../agent-tools.async.js", () => ({
     createOpenClawCodingToolsInternalAsync: async (...args: Parameters<typeof createTools>) =>
       createTools(...args),
