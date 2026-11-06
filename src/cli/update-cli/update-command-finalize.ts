@@ -22,9 +22,11 @@ import {
 import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
+import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
   acknowledgeAbandonedUpdateRun,
   getUpdateRun,
+  listUpdateRuns,
   reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
@@ -58,6 +60,7 @@ import {
   readPostCorePreUpdateSourceConfig,
   readUpdateConfigFileSnapshot,
 } from "./update-command-config.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
@@ -86,6 +89,7 @@ import {
   UpdateFinalizationLifecycle,
   type UpdateFinalizationPhase,
 } from "./update-finalization-lifecycle.js";
+import { restoreRepairGateway } from "./update-repair-service.js";
 import {
   reportRetainedUpdateCustody,
   type RetainedUpdateCustodyReport,
@@ -347,6 +351,9 @@ async function updateFinalizeCommandInternal(
   retained?: RetainedUpdateCustodyReport,
 ): Promise<() => Promise<void>> {
   const { root, nodeRunner, preFinalizeConfig, requestedChannel, channel } = prepared;
+  const interruptedGateway = recoveryRunIds.length
+    ? findUpdateGatewayStop(listUpdateRuns({ limit: 100 }))
+    : undefined;
   let doctorWarnings: string[] = [];
   const onDoctorWarnings = (warnings: string[]) => {
     doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([...doctorWarnings, ...warnings]);
@@ -496,6 +503,36 @@ async function updateFinalizeCommandInternal(
       (result) => result,
     );
 
+    const gateway =
+      interruptedGateway && pluginUpdate.status !== "error" && !retained
+        ? await lifecycle.run("gatewayRestoration", async (phase) => {
+            const restore = (assertCurrent: () => void) =>
+              restoreRepairGateway({
+                originalRunId: interruptedGateway.runId,
+                repairRunId: invokingRunId,
+                root,
+                config: configSnapshot.config,
+                env: resolveServiceRefreshEnv(process.env, tryProcessCwd()),
+                json: Boolean(opts.json),
+                phase: { ...phase, assertCurrent },
+                timeoutMs: lifecycle.budget("gatewayRestoration"),
+              });
+            if (lifecycle.handoff) {
+              return await restore(phase.assertCurrent);
+            }
+            return await withUpdateCommandExecutor(invokingRunId, async (executor) => {
+              const fence = await executor.enter(root);
+              return await restore(() => {
+                phase.assertCurrent();
+                fence.assertCurrent();
+              });
+            });
+          })
+        : undefined;
+    if (gateway?.warning) {
+      onDoctorWarnings([gateway.warning]);
+    }
+
     const reconciledRuns: string[] = [];
     const result = {
       status:
@@ -512,7 +549,8 @@ async function updateFinalizeCommandInternal(
           ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
           : null) ??
         channel,
-      restart: false,
+      restart: gateway?.restart ?? false,
+      ...(gateway?.verification ? { verification: gateway.verification } : {}),
       ...(recoveryRunIds.length ? { reconciledRuns } : {}),
       ...retained,
       phaseTimings: lifecycle.phaseTimings,
@@ -574,6 +612,11 @@ async function updateFinalizeCommandInternal(
           }
         } else {
           defaultRuntime.log(theme.error("Update finalization failed."));
+        }
+        if (!opts.json && gateway?.verification) {
+          defaultRuntime.log(
+            `Managed Gateway ${gateway.restart ? "started and " : ""}verified after update repair.`,
+          );
         }
         lifecycle.complete(result.status === "error" ? 1 : 0);
         if (failure) {

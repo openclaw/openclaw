@@ -24,6 +24,7 @@ import {
   needsPostCoreRepair,
   isFreshUnacknowledgedAbandonedUpdateRun,
 } from "../../infra/update-run-activity.js";
+import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
   acknowledgeAbandonedUpdateRun,
   createUpdateRun,
@@ -220,14 +221,19 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     ? Math.min(...recoveryRuns.map((run) => run.createdAtMs))
     : undefined;
   const history = inspectNewerRecoveryHistory(recoverySinceMs, recentRuns);
+  const interruptedGateway = findUpdateGatewayStop(recentRuns);
   const recoveryRunIds = [
     ...new Set(
       [...recoveryRuns, ...historicalRuns, ...history.postCoreRuns].map((run) => run.runId),
     ),
   ];
+  if (interruptedGateway && !recoveryRunIds.includes(interruptedGateway.runId)) {
+    recoveryRunIds.push(interruptedGateway.runId);
+  }
 
   if (
     handoff ||
+    interruptedGateway ||
     opts.channel !== undefined ||
     opts.acceptCapabilities ||
     recoverySinceMs === undefined ||

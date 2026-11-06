@@ -188,6 +188,8 @@ export async function readManagedHandoffRepairFacts(
   }));
   for (const run of runs) {
     if (
+      // Child leases are owned by their run; adoption drops a dead updater from the drivers.
+      run.runId === lease.owner ||
       recordedUpdateRunDrivers(run).some((driver) =>
         owners.some((owner) => sameUpdateRunDriver(driver, owner)),
       )

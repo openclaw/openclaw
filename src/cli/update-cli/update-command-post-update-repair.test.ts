@@ -5,6 +5,8 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
+import { resolveGatewayService } from "../../daemon/service.js";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as stateSchemas from "../../infra/update-candidate-state.js";
@@ -20,17 +22,14 @@ import {
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
+import { registerUnverifiedDefinitionRecoveryTests } from "./update-command-definition-recovery.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import * as freshDoctor from "./update-command-fresh-doctor.js";
 import { createPostUpdateRepairFixture } from "./update-command-post-update-repair.test-support.js";
 import { registerCurrentCoreRuntimeRefreshTests } from "./update-command-post-update-runtime-refresh.test-support.js";
 import { finishUpdate } from "./update-command-post-update.js";
-import {
-  registerUnverifiedDefinitionRecoveryTest,
-  successfulPluginUpdate,
-  taskRecovery,
-} from "./update-command-post-update.test-support.js";
+import { successfulPluginUpdate, taskRecovery } from "./update-command-post-update.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
@@ -83,10 +82,14 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
     sourceConfig: asResolvedSourceConfig({}),
   }),
 }));
-vi.mock("../../daemon/service.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
-  readGatewayServiceState: mocks.readService,
-}));
+vi.mock("../../daemon/service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../daemon/service.js")>();
+  return {
+    ...actual,
+    readGatewayServiceState: mocks.readService,
+    resolveGatewayService: vi.fn(actual.resolveGatewayService),
+  };
+});
 vi.mock("../daemon-cli/restart-health-probe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon-cli/restart-health-probe.js")>()),
   resolveGatewayRestartProbeContext: async () => ({ config: {} }),
@@ -150,6 +153,15 @@ const fixture = () => createPostUpdateRepairFixture(dirs.make("post-update-repai
 describe("post-activation failure settlement without inference", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      dirs.make("post-update-repair-native-"),
+    );
+    vi.mocked(resolveGatewayService)
+      .mockReset()
+      .mockImplementation(
+        (await vi.importActual<typeof import("../../daemon/service.js")>("../../daemon/service.js"))
+          .resolveGatewayService,
+      );
     const verification = await vi.importActual<typeof import("./update-command-verification.js")>(
       "./update-command-verification.js",
     );
@@ -181,6 +193,7 @@ describe("post-activation failure settlement without inference", () => {
       rolledBack: false,
     }));
     mocks.restart.mockImplementation(async (params) => {
+      params.onGatewayStartAttempted?.();
       if (!mocks.restart.mock.calls.slice(0, -1).length) {
         if (params.opts.run) {
           recordUpdateRunPhase(params.opts.run.runId, "verifying", undefined, {
@@ -295,7 +308,7 @@ describe("post-activation failure settlement without inference", () => {
 
   registerCurrentCoreRuntimeRefreshTests(fixture, mocks);
 
-  registerUnverifiedDefinitionRecoveryTest({
+  registerUnverifiedDefinitionRecoveryTests({
     fixture,
     makeHome: () => dirs.make("update-definition-recovery-unverified-"),
     mocks,
@@ -645,6 +658,7 @@ describe("post-activation failure settlement without inference", () => {
     "database-restored",
     "source-rollback-failed",
     "migration-required",
+    "migration-verified",
     "migration-incomplete",
     "migration-refused",
     "current-core-parked",
@@ -656,14 +670,19 @@ describe("post-activation failure settlement without inference", () => {
     "recovers the installed Gateway only for an owned stop and settled Doctor (%s)",
     async (receipt) => {
       const params = fixture();
-      mocks.version = "2026.9.7";
-      const root = path.join(params.opts.run!.env!.OPENCLAW_STATE_DIR!, "candidate");
+      const swap =
+        receipt === "migration-verified"
+          ? await createRetainedPackageSwap(params.opts.run!.env!.OPENCLAW_STATE_DIR!)
+          : undefined;
+      mocks.version = swap ? "2.0.0" : "2026.9.7";
+      const root =
+        swap?.packageRoot ?? path.join(params.opts.run!.env!.OPENCLAW_STATE_DIR!, "candidate");
       await fs.mkdir(root, { recursive: true });
       await fs.writeFile(
         path.join(root, "package.json"),
         JSON.stringify({ name: "openclaw", version: mocks.version }),
       );
-      await fs.mkdir(path.join(root, "dist"));
+      await fs.mkdir(path.join(root, "dist"), { recursive: true });
       await fs.writeFile(path.join(root, "dist/index.js"), "export {};\n");
       const scratch = path.join(root, "tmp");
       await fs.mkdir(scratch);
@@ -675,9 +694,10 @@ describe("post-activation failure settlement without inference", () => {
       const recovered =
         receipt === "settled" ||
         receipt === "migration-required" ||
+        receipt === "migration-verified" ||
         receipt === "current-core-parked" ||
         receipt === "current-core-rollback-refused";
-      let agentVersion = 21;
+      let agentVersion = receipt === "migration-verified" ? 23 : 21;
       const doctor = vi.spyOn(freshDoctor, "runUpdateFinalizationDoctorInFreshProcess");
       if (migration) {
         params.candidateSchemaVersions = { state: 18, agent: 23 };
@@ -743,6 +763,18 @@ describe("post-activation failure settlement without inference", () => {
           },
         ],
       };
+      if (receipt === "migration-verified") {
+        params.packageTransaction = swap?.transaction;
+        params.result.steps = [
+          {
+            name: "verifying",
+            command: "gateway verification",
+            cwd: root,
+            durationMs: 1,
+            exitCode: null,
+          },
+        ];
+      }
       const settledStep = {
         name: "doctor process settlement",
         command: "settle doctor process groups",
@@ -758,7 +790,7 @@ describe("post-activation failure settlement without inference", () => {
                   "Doctor timed out; all tracked process groups stopped. Run `openclaw update repair`.",
               },
       };
-      if (receipt !== "missing") {
+      if (receipt !== "missing" && receipt !== "migration-verified") {
         params.result.steps.push(settledStep);
       }
       const unsettledReason =
@@ -830,10 +862,19 @@ describe("post-activation failure settlement without inference", () => {
             await convergence.beforeDoctor?.();
             if (receipt === "current-core-data-at-risk") {
               params.result.steps.push(...failureSteps);
-              throw new DoctorMaintenanceRefusalError("State is unreadable", {
-                kind: "data-at-risk",
-                reason: "unreadable-state",
-              });
+              throw new DoctorMaintenanceRefusalError(
+                "State is unreadable",
+                {
+                  kind: "data-at-risk",
+                  reason: "unreadable-state",
+                },
+                {
+                  failureFacts: Array.from({ length: 5 }, () => ({
+                    check: "doctor",
+                    code: "doctor-failed",
+                  })),
+                },
+              );
             }
             return {
               resultWithPostUpdate: {
@@ -865,7 +906,9 @@ describe("post-activation failure settlement without inference", () => {
         running: mocks.healthy,
         runtime: { ...state.runtime, status: mocks.healthy ? "running" : "stopped" },
       }));
-      mocks.restartCommand.mockImplementation(async () => {
+      vi.mocked(resolveGatewayService).mockReturnValue(createMockGatewayService());
+      mocks.restartCommand.mockImplementation(async (restart, action) => {
+        restart.onGatewayStartAttempted?.(action);
         if (migration) {
           expect(agentVersion).toBe(23);
         }
@@ -905,7 +948,12 @@ describe("post-activation failure settlement without inference", () => {
                       service: "healthy",
                       version: mocks.version,
                     }
-                  : { serviceRestartSafe: false },
+                  : {
+                      serviceRestartSafe: false,
+                      ...(receipt === "current-core-data-at-risk"
+                        ? { dataAtRisk: "unreadable-state" }
+                        : {}),
+                    },
               ),
         );
       });
@@ -919,7 +967,7 @@ describe("post-activation failure settlement without inference", () => {
         );
       }
       if (migration) {
-        expect(doctor).toHaveBeenCalledOnce();
+        expect(doctor).toHaveBeenCalledTimes(receipt === "migration-verified" ? 0 : 1);
       }
       const report = getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env });
       expect(report?.verification.serviceRunning).toBe(untouched ? undefined : recovered);
@@ -927,9 +975,15 @@ describe("post-activation failure settlement without inference", () => {
       const rendered = renderUpdateRunReport(report!).lines.join("\n");
       if (migration) {
         expect(report?.status).toBe("failed");
-        expect(
-          report?.steps.find((step) => step.step === "post-install verification")?.failureFacts,
-        ).toContainEqual(expect.objectContaining({ code: "authority-check-failed" }));
+        if (receipt === "migration-verified") {
+          expect(report?.steps).toContainEqual(
+            expect.objectContaining({ step: "package-backup-retention", exitCode: 1 }),
+          );
+        } else {
+          expect(
+            report?.steps.find((step) => step.step === "post-install verification")?.failureFacts,
+          ).toContainEqual(expect.objectContaining({ code: "authority-check-failed" }));
+        }
       }
       if (migration && !recovered) {
         expect(rendered).toContain("openclaw doctor --fix");

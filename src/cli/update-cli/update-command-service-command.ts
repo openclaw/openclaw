@@ -153,7 +153,7 @@ export async function runUpdatedInstallGatewayCommand(
     onWarnings?: (warnings: string[]) => void;
     /** Receives each completed probe or child phase with its measured wall time. */
     onTimedStep?: (step: UpdateStepResult) => void;
-    onGatewayStartAttempted?: () => void;
+    onGatewayStartAttempted?: (action?: "install" | "restart") => void;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   },
   action: "install" | "restart",
@@ -261,7 +261,7 @@ export async function runUpdatedInstallGatewayCommand(
     bindChild?: (pid: number, argv?: readonly string[]) => void,
   ) => {
     const argv = [nodeRunner, entrypoint, ...args, ...(grant ? ["--update-executor", "run"] : [])];
-    params.onGatewayStartAttempted?.();
+    params.onGatewayStartAttempted?.(action);
     return await runSettledGatewayCommand(argv, {
       ...(grant
         ? {
@@ -366,7 +366,7 @@ export async function runUpdatedInstallGatewayCommand(
       : "unverified";
   }
   const operation = installing ? "refresh" : action;
-  const message = `updated install ${operation} failed (${entrypoint}): ${formatCommandFailure(res.stdout, res.stderr)}`;
+  const message = `updated install ${operation} failed: ${formatCommandFailure(res.stdout, res.stderr)} (${entrypoint})`;
   if (
     exited &&
     res.code === 1 &&

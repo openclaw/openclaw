@@ -64,7 +64,8 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
   resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
 }));
 
-export function useManagedServiceHandoffLifecycleFixture() {
+export function useManagedServiceHandoffLifecycleFixture(nativeCoordinator = false) {
+  const originalTempDir = process.env.TMPDIR;
   const tempDirs = createManagedHandoffTempDirTracker();
   const managedProcessCleanups = new Set<() => Promise<void>>();
   const mockedHandoffLeaseCleanups = new Set<() => void>();
@@ -76,7 +77,16 @@ export function useManagedServiceHandoffLifecycleFixture() {
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-coordinator-")),
     );
     tempDirs.add(coordinatorDir);
-    resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
+    let coordinator = coordinatorDir;
+    if (nativeCoordinator) {
+      process.env.TMPDIR = coordinatorDir;
+      coordinator = path.join(
+        coordinatorDir,
+        process.getuid ? "openclaw-" + process.getuid() : "openclaw",
+      );
+      await fs.mkdir(coordinator, { mode: 0o700 });
+    }
+    resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinator);
     forceKillChildProcessTreeMock.mockReset();
     spawnMock.mockReset();
     spawnMock.mockImplementation((_command: string, args: string[]) => {
@@ -132,6 +142,13 @@ export function useManagedServiceHandoffLifecycleFixture() {
       mockedChildren.clear();
       await closeStateDatabaseForTest();
       await tempDirs.cleanup();
+      if (nativeCoordinator) {
+        if (originalTempDir === undefined) {
+          delete process.env.TMPDIR;
+        } else {
+          process.env.TMPDIR = originalTempDir;
+        }
+      }
     }
   });
 
