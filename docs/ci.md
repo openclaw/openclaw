@@ -218,6 +218,26 @@ Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows
 
 Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focused lifecycle coverage. Successful current iOS builds run SwiftLint and SwiftFormat once through their required Xcode prebuild phases; a standalone fallback retains both checks after failed or skipped builds and for historical or frozen targets. Debug builds select their simulator before compiling, overlap its boot and SimSlim preparation with compilation, and join preparation before either focused simulator test group. Preparation failures or a timed-out join fail the job with its log; test selection and build settings stay unchanged. Current smoke builds prepare testing products once with `build-for-testing`; the voice cleanup and lifecycle groups separately reuse those products with `test-without-building`. Historical targets and other phases retain their existing build actions. Managed attachment UI/export, Watch operation, and Watch delivery UI suites retain every assertion in full manual/release validation. Main-tier simulator builds use the native architecture without indexing or verbose test diagnostics; logs and xcresult bundles remain available. A coalesced scheduled iOS cancellation can leave `openclaw/ci-gate` green with a notice delegating iOS proof to a later scheduled job; it does not validate the canceled revision, and the workflow can still be canceled. Genuine failures remain red. Screenshot capture runs for its own changed inputs and full manual/release validation. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
 
+iOS Store Release reuses its locked Fastlane gems through `ruby/setup-ruby`'s
+Bundler cache for trusted `main` upload jobs. The action keys gems by runner
+OS and architecture, Ruby, bundle configuration, and the lockfile; it still runs
+a frozen install on a hit and installs normally on a miss or cache-transfer
+failure. Generated Bundler configuration stays in the runner's temporary
+directory, and its absolute gem path lets the detached release worktree reuse
+the installed bundle without copying gems or dirtying the source checkout. Both mobile
+release entry points separately log elapsed time for the clean-checkout check
+and the current-main fetch, including failed checks, without logging arguments
+or credentials.
+
+For a non-publishing notes/archive contention comparison, run
+`node scripts/bench-ios-release-note-overlap.mjs --root CLEAN_SOURCE --plan PLAN.json --output IGNORED_DIR --samples 5`
+with `OPENAI_API_KEY` available. The plan schema is documented in the helper;
+freeze the source SHA and release identity before running. It interleaves warm
+serial and overlapping samples using the same generated inputs and isolated
+compilation caches. Results include timings, task counts, compilation replay
+hits/misses, and resource samples. Archives are unsigned: this does not validate
+signing, export, upload, or hosted-runner performance.
+
 Store and TestFlight archives share an optional Xcode compilation cache, separated
 by Xcode build, runner OS, and architecture. The release job restores the latest
 matching compiler storage and saves an immutable run-specific snapshot after a
