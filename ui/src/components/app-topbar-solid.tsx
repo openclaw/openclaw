@@ -3,6 +3,8 @@ import { Show } from "solid-js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import wordmarkDarkText from "../assets/brand/openclaw-horizontal-dark-text.svg";
+import wordmarkLightText from "../assets/brand/openclaw-horizontal-light-text.svg";
 import type { GatewayStatus as GatewayStatusKind } from "../lib/gateway-status.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -84,9 +86,26 @@ defineSolidBridge<Props>(
               when={!props.floating}
               fallback={
                 <>
-                  {/* A new title is a new element, so route changes never register as a layout shift. */}
-                  <Show when={props.pageTitle} keyed>
-                    {(title) => <span class="topbar-page-title">{title}</span>}
+                  <Show
+                    when={props.navigationLocked}
+                    fallback={
+                      <Show when={props.pageTitle} keyed>
+                        {(title) => <span class="topbar-page-title">{title}</span>}
+                      </Show>
+                    }
+                  >
+                    <span class="topbar-connection-brand">
+                      <img
+                        class="topbar-connection-brand__light"
+                        src={wordmarkDarkText}
+                        alt="OpenClaw"
+                      />
+                      <img
+                        class="topbar-connection-brand__dark"
+                        src={wordmarkLightText}
+                        alt="OpenClaw"
+                      />
+                    </span>
                   </Show>
                 </>
               }

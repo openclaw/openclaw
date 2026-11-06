@@ -49,7 +49,9 @@ suite.define(() => {
               .count(),
           ).toBe(0);
           expect(await page.locator(".topnav-shell__actions").first().isVisible()).toBe(false);
-          expect(await page.getByText("OpenClaw", { exact: true }).first().isVisible()).toBe(true);
+          expect(await page.getByRole("img", { name: "OpenClaw", exact: true }).isVisible()).toBe(
+            true,
+          );
         }
         const shell = await page.locator("openclaw-app-shell").elementHandle();
         expect(shell).not.toBeNull();

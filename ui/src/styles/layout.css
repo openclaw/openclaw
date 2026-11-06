@@ -4115,20 +4115,10 @@ html.openclaw-native-web-chrome
   width: 48px;
   height: 48px;
   margin-bottom: 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  color: var(--accent);
 }
-.gateway-connection-view__mark .session-run-spinner {
-  width: 22px;
-  height: 22px;
-}
-.gateway-connection-view__dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--muted);
+.gateway-connection-view__mark svg {
+  width: 100%;
+  height: 100%;
 }
 
 .gateway-connection-view h1 {
@@ -4178,7 +4168,7 @@ html.openclaw-native-web-chrome
 }
 
 .gateway-identity-placeholder[data-kind="agent"] {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: none;
 }
 
 .gateway-identity-placeholder svg {
@@ -4233,4 +4223,25 @@ html.openclaw-native-web-chrome
 /* Keep the header geometry still; reveal its controls once they can act. */
 .topbar--navigation-locked :is(.topbar-nav-toggle, .topnav-shell__actions) {
   visibility: hidden;
+}
+
+.topbar-connection-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.topbar-connection-brand img {
+  width: 140px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.topbar-connection-brand__light,
+:root[data-theme-mode="light"] .topbar-connection-brand__dark {
+  display: none;
+}
+
+:root[data-theme-mode="light"] .topbar-connection-brand__light {
+  display: block;
 }
