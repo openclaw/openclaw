@@ -2223,12 +2223,14 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .chat-controls__model-menu {
+  box-shadow: none;
   min-height: 0;
   width: min(340px, calc(100vw - 24px));
   max-height: min(400px, var(--auto-size-available-height, calc(100vh - 96px)));
 }
 
 /* The outer surface owns elevation so scrolling never clips the shadow to a square. */
+.chat-controls__model-picker > .chat-picker-overlay,
 .chat-controls__effort-picker > .chat-picker-overlay {
   border-radius: var(--menu-radius);
   corner-shape: superellipse(1.5);
