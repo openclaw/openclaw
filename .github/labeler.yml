@@ -612,6 +612,10 @@
           - "extensions/databricks/**"
           - "docs/providers/databricks.md"
           - "docs/plugins/reference/databricks.md"
+"extensions: deep-research":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deep-research/**"
 "extensions: deepgram":
   - changed-files:
       - any-glob-to-any-file:
