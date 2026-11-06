@@ -13,7 +13,7 @@ const inside = (root, file) => file === root || file.startsWith(`${root}${path.s
 const inputLimit = 32 * 1024 * 1024;
 const fileLimit = 4 * 1024 * 1024;
 const references = {
-  current: "b5ce3884115051d91e715f4d44458442847213843cd52f8dee7a741ac0e74a3c",
+  current: "9bdbd59d6ad656ac4f6a6a44bed09ff41c86f2e2ead4cd0ba867ae84e463ddb8",
   historical: "5f2cc18f26292c6bcaf0cdaad22e25a872814865540d7e3a1311287b6812bca2",
 };
 
@@ -32,70 +32,76 @@ export function readInstalledTerminalReference(role, encoded) {
 const applications = {
   "sqlite-session": {
     entry: "dist/infra/sqlite-readonly-location.worker.js",
-    entrySha256: "3567231dc54d04a5b8a22df640cfff43f5b202ebd4a772db7f75bb6fdbb075b3",
-    sha256: "4f98f670025bac6c3991bdad503319724b7ae10a6518d5ebd7c0b4366e35ee63",
+    entrySha256: "7744f53075399a0b189768ca4f52d2d5a9a94117534eb841a5e78168e19457ad",
+    sha256: "f18ccbdd52778aff54bc98cd572ae1e410a5483f604af84bc6f1b0bd2d1fc582",
     dynamic: {
       "dist/infra/sqlite-readonly-location.worker.js": {
-        sha256: "3567231dc54d04a5b8a22df640cfff43f5b202ebd4a772db7f75bb6fdbb075b3",
+        sha256: "7744f53075399a0b189768ca4f52d2d5a9a94117534eb841a5e78168e19457ad",
         imports: [
           [
-            29982,
-            30056,
-            "./sqlite-readonly-startup-metadata-live-read.worker-qR6iY__p.mjs",
-            "dist/infra/sqlite-readonly-startup-metadata-live-read.worker-qR6iY__p.mjs",
-          ],
-          [
-            30143,
             30230,
-            "./sqlite-readonly-deferred-plugin-session-transcript-read.worker-CGdhZqwB.mjs",
-            "dist/infra/sqlite-readonly-deferred-plugin-session-transcript-read.worker-CGdhZqwB.mjs",
+            30304,
+            "./sqlite-readonly-startup-metadata-live-read.worker-BKQhbPZQ.mjs",
+            "dist/infra/sqlite-readonly-startup-metadata-live-read.worker-BKQhbPZQ.mjs",
           ],
           [
-            30321,
-            30402,
-            "./sqlite-readonly-agent-delete-session-store-safety.kernel-DaCFk0MH.mjs",
-            "dist/infra/sqlite-readonly-agent-delete-session-store-safety.kernel-DaCFk0MH.mjs",
+            30391,
+            30478,
+            "./sqlite-readonly-deferred-plugin-session-transcript-read.worker-B3lTPl0b.mjs",
+            "dist/infra/sqlite-readonly-deferred-plugin-session-transcript-read.worker-B3lTPl0b.mjs",
           ],
           [
-            30493,
-            30558,
-            "./sqlite-readonly-sqlite-page-cache.worker-CXR43xtW.mjs",
-            "dist/infra/sqlite-readonly-sqlite-page-cache.worker-CXR43xtW.mjs",
+            30569,
+            30650,
+            "./sqlite-readonly-agent-delete-session-store-safety.kernel-cYWnaHvb.mjs",
+            "dist/infra/sqlite-readonly-agent-delete-session-store-safety.kernel-cYWnaHvb.mjs",
           ],
           [
-            30634,
-            30710,
-            "./sqlite-readonly-package-update-activation-immutable-CAPWIInM.mjs",
-            "dist/infra/sqlite-readonly-package-update-activation-immutable-CAPWIInM.mjs",
+            30741,
+            30806,
+            "./sqlite-readonly-sqlite-page-cache.worker-Cep7HxYd.mjs",
+            "dist/infra/sqlite-readonly-sqlite-page-cache.worker-Cep7HxYd.mjs",
           ],
           [
-            37443,
-            37511,
-            "./sqlite-readonly-sqlite-snapshot-reclamation-DKDr8AXw.mjs",
-            "dist/infra/sqlite-readonly-sqlite-snapshot-reclamation-DKDr8AXw.mjs",
+            30879,
+            30951,
+            "./sqlite-readonly-database-store-live-read.worker-BBIlWu8L.mjs",
+            "dist/infra/sqlite-readonly-database-store-live-read.worker-BBIlWu8L.mjs",
           ],
           [
-            47433,
-            47485,
-            "./sqlite-readonly-sqlite-json-C7fKJvoB.mjs",
-            "dist/infra/sqlite-readonly-sqlite-json-C7fKJvoB.mjs",
+            31035,
+            31111,
+            "./sqlite-readonly-package-update-activation-immutable-DNbTxfDw.mjs",
+            "dist/infra/sqlite-readonly-package-update-activation-immutable-DNbTxfDw.mjs",
           ],
           [
-            47562,
-            47625,
-            "./sqlite-readonly-sqlite-snapshot-source-CbiWomKB.mjs",
-            "dist/infra/sqlite-readonly-sqlite-snapshot-source-CbiWomKB.mjs",
+            37844,
+            37912,
+            "./sqlite-readonly-sqlite-snapshot-reclamation-v1-EEEUw.mjs",
+            "dist/infra/sqlite-readonly-sqlite-snapshot-reclamation-v1-EEEUw.mjs",
+          ],
+          [
+            47834,
+            47886,
+            "./sqlite-readonly-sqlite-json-DCh1yqz4.mjs",
+            "dist/infra/sqlite-readonly-sqlite-json-DCh1yqz4.mjs",
+          ],
+          [
+            47963,
+            48026,
+            "./sqlite-readonly-sqlite-snapshot-source-D9p4N87r.mjs",
+            "dist/infra/sqlite-readonly-sqlite-snapshot-source-D9p4N87r.mjs",
           ],
         ],
       },
-      "dist/infra/sqlite-readonly-startup-metadata-live-read.worker-qR6iY__p.mjs": {
-        sha256: "d5278adfb366e1acb80ed10f98bb252ce4fb9ba3af5aaa33dd32e23e18a73c80",
+      "dist/infra/sqlite-readonly-startup-metadata-live-read.worker-BKQhbPZQ.mjs": {
+        sha256: "a3cf389e009f2b0df7761079d69eaab752879dfa9b97e719236be564703c9b59",
         imports: [
           [
-            5885,
-            5951,
-            "./sqlite-readonly-update-run-admission.read-CTz0dcoy.mjs",
-            "dist/infra/sqlite-readonly-update-run-admission.read-CTz0dcoy.mjs",
+            3986,
+            4052,
+            "./sqlite-readonly-update-run-admission.read-DpWekCuB.mjs",
+            "dist/infra/sqlite-readonly-update-run-admission.read-DpWekCuB.mjs",
           ],
         ],
       },
@@ -103,19 +109,19 @@ const applications = {
   },
   "finalizer-check": {
     entry: "dist/infra/update-migrated-finalize.worker.js",
-    entrySha256: "b7781dbb5039c37c3b72bf3f1bea6cd1e13954e3881e953e7a9acdebbb2d1e1c",
-    sha256: "4115d02171e53ff4868d36ba117bee8149fa0bd626d01beb878badfb20fb17e3",
+    entrySha256: "bc5f2151795c9774a5942389895e35969d5821369a54f8ba634085b1597a21fd",
+    sha256: "c6a6f9e83ef02840349ac8221e73f102bc67df68fb4db4e10d9c75c229a32cf7",
     dynamic: {
       "dist/infra/update-migrated-finalize.worker.js": {
-        sha256: "b7781dbb5039c37c3b72bf3f1bea6cd1e13954e3881e953e7a9acdebbb2d1e1c",
-        imports: [[10739, 10769, "../cli/daemon-cli.js", "dist/cli/daemon-cli.js"]],
+        sha256: "bc5f2151795c9774a5942389895e35969d5821369a54f8ba634085b1597a21fd",
+        imports: [[10941, 10971, "../cli/daemon-cli.js", "dist/cli/daemon-cli.js"]],
       },
     },
   },
   "heartbeat-sqlite": {
     entry: "dist/state/openclaw-state-lease-heartbeat.worker.js",
-    entrySha256: "2316d7d37ab745598aa49fcfcdb1d999fc9a75bc510a1d1507001b57f00dd2f8",
-    sha256: "c4c7200db2052f13d8cb60bf6e7c76bf5e0323c35010b000b508c5c6a8768c4e",
+    entrySha256: "3c92419304ead7844a4883dc63cee58b0fd508a204588fbf225ea0a44846c2a0",
+    sha256: "cd1d9838d1abb20b1e6be511565b8bacbee70be646a3305c9a55dd8b96851f3e",
     // The observed clone-safe SQLite selection excludes the PostgreSQL loader.
     // No nested Worker initiates the GC-profile request/response callback.
     dynamic: {},
