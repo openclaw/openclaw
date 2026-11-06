@@ -29,6 +29,7 @@ it.each([
   },
 ])("reports runner memory from the real workflow ($name)", (fixture) => {
   const root = tempDirs.make("ci-runner-memory-");
+  writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
   if (!fixture.missing) {
     for (const file of [
       "scripts/lib/process-memory.mts",
