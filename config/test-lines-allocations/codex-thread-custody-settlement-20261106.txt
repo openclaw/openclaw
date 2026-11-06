@@ -1,2 +1,2 @@
-316
-# Native background revocation, pending registration/Stop, uncertain close, retry, and deferred thread handoff regressions.
+588
+# Native custody settlement plus live-peer selective termination and stale inventory/retry final-effect proof.

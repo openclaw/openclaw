@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   claimCodexAppServerLiveThread,
@@ -35,6 +37,7 @@ import {
   nativeProviderConfig,
   sendNativeResponse,
 } from "./thread-native.test-support.js";
+import * as stdioTransport from "./transport-stdio.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 vi.unmock("node:child_process");
@@ -54,11 +57,14 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
     "context refresh",
     "context refresh with plugin rotation",
     "source cancellation",
+    "source completion during inventory",
+    "source completion before retry",
   ] as const)(
     "%s permits continuation without disturbing sibling ownership",
     { timeout: 90_000 },
     async (scenario, context) => {
       const backgroundWork = scenario !== "publication failure";
+      const sourceIsolation = scenario.startsWith("source ");
       const rotatingAfterCleanup = scenario === "context refresh with plugin rotation";
       const contextRefresh = scenario === "context refresh" || rotatingAfterCleanup;
       const publicationFailure = scenario.includes("publication failure");
@@ -74,6 +80,9 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       vi.stubEnv("HOME", native.env.HOME);
       vi.stubEnv("CODEX_HOME", native.codexHome);
       let backgroundRequested = false;
+      let backgroundCallId = "native-background-command";
+      let backgroundCommand =
+        "echo BACKGROUND_READY; while [ ! -f finish-background ]; do /bin/sleep 0.1; done; echo BACKGROUND_DONE";
       let providerRequests = 0;
       const providerFailures: unknown[] = [];
       const port = await listenForNativeResponses(context, (request, response) => {
@@ -97,10 +106,10 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
             const item = launch
               ? {
                   type: "function_call",
-                  call_id: "native-background-command",
+                  call_id: backgroundCallId,
                   name: "exec_command",
                   arguments: JSON.stringify({
-                    cmd: "echo BACKGROUND_READY; while [ ! -f finish-background ]; do /bin/sleep 0.1; done; echo BACKGROUND_DONE",
+                    cmd: backgroundCommand,
                     shell: "/bin/bash",
                     login: false,
                     yield_time_ms: 1000,
@@ -134,6 +143,96 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         sandbox: "danger-full-access" as const,
       };
       const agentDir = path.join(root, "agent");
+      const physicalTerminations: { threadId: string; processId: string }[] = [];
+      const rejectedIngress = createDeferred<{
+        id: number | string;
+        threadId: string;
+        processId: string;
+      }>();
+      let releaseRejectedIngress: (() => void) | undefined;
+      let rejectTermination = scenario === "source completion before retry";
+      if (sourceIsolation) {
+        const createTransport = stdioTransport.createStdioTransport;
+        vi.spyOn(stdioTransport, "createStdioTransport").mockImplementation(
+          (options, env, current, onSpawn) =>
+            createTransport(options, env, current, (child) => {
+              const nativeOutput = child.stdout;
+              const output = new PassThrough();
+              nativeOutput.pipe(output);
+              nativeOutput.once("error", (error) => output.destroy(error));
+              child.stdout = output;
+              context.onTestFinished(() => {
+                nativeOutput.unpipe(output);
+                output.destroy();
+              });
+              const write = child.stdin.write.bind(child.stdin);
+              vi.spyOn(child.stdin, "write").mockImplementation(
+                (
+                  chunk: unknown,
+                  encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
+                  callback?: (error?: Error | null) => void,
+                ) => {
+                  const text =
+                    typeof chunk === "string"
+                      ? chunk
+                      : chunk instanceof Uint8Array
+                        ? new TextDecoder().decode(chunk)
+                        : "";
+                  const frame: unknown = JSON.parse(text);
+                  const done =
+                    typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
+                  const params =
+                    isJsonObject(frame) && isJsonObject(frame.params) ? frame.params : undefined;
+                  const termination =
+                    isJsonObject(frame) &&
+                    frame.method === "thread/backgroundTerminals/terminate" &&
+                    params &&
+                    typeof params.threadId === "string" &&
+                    typeof params.processId === "string"
+                      ? { threadId: params.threadId, processId: params.processId }
+                      : undefined;
+                  if (
+                    termination &&
+                    rejectTermination &&
+                    isJsonObject(frame) &&
+                    (typeof frame.id === "number" || typeof frame.id === "string")
+                  ) {
+                    rejectTermination = false;
+                    const id = frame.id;
+                    releaseRejectedIngress = () => {
+                      output.write(
+                        JSON.stringify({
+                          id,
+                          error: { code: -32001, message: "Server overloaded" },
+                        }) + "\n",
+                      );
+                      releaseRejectedIngress = undefined;
+                    };
+                    rejectedIngress.resolve({ id, ...termination });
+                    done?.();
+                    return true;
+                  }
+                  const written = (error?: Error | null) => {
+                    if (!error && termination) {
+                      physicalTerminations.push(termination);
+                    }
+                    done?.(error);
+                  };
+                  return typeof encodingOrCallback === "string"
+                    ? write(chunk, encodingOrCallback, written)
+                    : write(chunk, written);
+                },
+              );
+              onSpawn?.(child);
+            }),
+        );
+      }
+      let pauseInventory = false;
+      let inventorySnapshot: unknown;
+      const inventoryEntered = createDeferred<void>();
+      const inventoryReleased = createDeferred<void>();
+      const terminationSettled = createDeferred<void>();
+      let terminationFailure: unknown;
       const client = await createIsolatedCodexAppServerClient({
         startOptions: appServer.start,
         agentDir,
@@ -152,7 +251,24 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         const threadId =
           isJsonObject(params) && typeof params.threadId === "string" ? params.threadId : undefined;
         requests.push({ method, threadId });
-        return originalRequest(method, params, options);
+        const pending = originalRequest(method, params, options);
+        if (method === "thread/backgroundTerminals/terminate") {
+          return pending
+            .catch((error: unknown) => {
+              terminationFailure = error;
+              throw error;
+            })
+            .finally(() => terminationSettled.resolve());
+        }
+        return pending.then((result) => {
+          if (pauseInventory && method === "thread/backgroundTerminals/list") {
+            pauseInventory = false;
+            inventorySnapshot = result;
+            inventoryEntered.resolve();
+            return inventoryReleased.promise.then(() => result);
+          }
+          return result;
+        });
       });
       const params = {
         ...createParams(path.join(root, "session.jsonl"), native.cwd),
@@ -199,7 +315,7 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       const sourceAbort = new AbortController();
       const sourceReleased = vi.fn();
       const authority = new CodexNativeProcessAuthority(
-        scenario === "source cancellation"
+        sourceIsolation
           ? {
               ...params.hostCapabilities,
               retainSourceAuthority: () => ({
@@ -217,6 +333,9 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       context.onTestFinished(() => authority.release());
       const commands = new Map<string, string | null>();
       const commandFinished = createDeferred<JsonObject>();
+      const peerCommands = new Map<string, string | null>();
+      const peerFinished = createDeferred<JsonObject>();
+      let collectingCommands = commands;
       const completions = new Map<string, ReturnType<typeof createDeferred<JsonObject>>>();
       client.addNotificationHandler((notification) => {
         if (!isJsonObject(notification.params)) {
@@ -237,28 +356,36 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         ) {
           const item = event.item;
           if (notification.method === "item/started" && typeof item.id === "string") {
-            commands.set(item.id, typeof item.processId === "string" ? item.processId : null);
+            collectingCommands.set(
+              item.id,
+              typeof item.processId === "string" ? item.processId : null,
+            );
           } else if (notification.method === "item/completed") {
-            commandFinished.resolve(item);
+            if (typeof item.id === "string" && commands.has(item.id)) {
+              commandFinished.resolve(item);
+            }
+            if (typeof item.id === "string" && peerCommands.has(item.id)) {
+              peerFinished.resolve(item);
+            }
           }
         }
       });
-      const runTurn = async (threadId: string, bindBackgroundSource = false) => {
+      const runTurn = async (threadId: string, source?: CodexNativeProcessAuthority) => {
         const done = createDeferred<JsonObject>();
         completions.set(threadId, done);
         const started = await client.request("turn/start", {
           threadId,
           input: [{ type: "text", text: "Run the native continuation proof.", text_elements: [] }],
         });
-        if (bindBackgroundSource) {
-          authority.bindTurn(client, threadId, started.turn.id);
+        if (source) {
+          source.bindTurn(client, threadId, started.turn.id);
         }
         const completed = await done.promise;
         expect(completed.status).toBe("completed");
         return started.turn.id;
       };
       const first = await startOrResumeThread(common);
-      const firstTurnId = await runTurn(first.threadId, backgroundWork);
+      const firstTurnId = await runTurn(first.threadId, backgroundWork ? authority : undefined);
       if (backgroundWork) {
         expect(commands.size).toBe(1);
         const consume = await readCodexRetainedBackgroundCommands({
@@ -300,26 +427,171 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
             ),
         ).toEqual([]);
       };
-      if (scenario === "source cancellation") {
-        sourceAbort.abort(new Error("retained source revoked"));
-        expect(sourceReleased).not.toHaveBeenCalled();
-        expect(isCodexAppServerLiveThreadProtected(client, first.threadId)).toBe(true);
-        await commandFinished.promise;
-        await vi.waitFor(() => expect(sourceReleased).toHaveBeenCalledOnce());
-        expect(isCodexAppServerLiveThreadProtected(client, first.threadId)).toBe(false);
-        expect(authority.commands.size).toBe(0);
-        const inventory = await client.request("thread/backgroundTerminals/list", {
-          threadId: first.threadId,
-        });
-        expect(inventory.data).toEqual([]);
-        expect(requests.slice(before)).toContainEqual({
-          method: "thread/backgroundTerminals/terminate",
-          threadId: first.threadId,
-        });
-        sibling!.assertCurrent();
-        await runTurn(siblingBinding.threadId);
-        expectNoRequests(["thread/unsubscribe"], siblingBinding.threadId);
-        expect(providerFailures).toEqual([]);
+      if (sourceIsolation) {
+        const peerAbort = new AbortController();
+        const peerReleased = vi.fn();
+        const peer = new CodexNativeProcessAuthority(
+          {
+            ...params.hostCapabilities,
+            retainSourceAuthority: () => ({
+              signal: peerAbort.signal,
+              assertCurrent: () => peerAbort.signal.throwIfAborted(),
+              release: peerReleased,
+            }),
+          },
+          (error) => {
+            throw error;
+          },
+          false,
+        );
+        context.onTestFinished(() => peer.release());
+        try {
+          collectingCommands = peerCommands;
+          backgroundCallId = "native-peer-command";
+          backgroundCommand =
+            "echo SOURCE_B_READY; while [ ! -f probe-source-b ]; do /bin/sleep 0.1; done; echo SOURCE_B_ALIVE > source-b-alive; while [ ! -f finish-source-b ]; do /bin/sleep 0.1; done; echo SOURCE_B_DONE";
+          backgroundRequested = false;
+          const peerTurnId = await runTurn(first.threadId, peer);
+          expect(peerTurnId).not.toBe(firstTurnId);
+          expect(peerCommands.size).toBe(1);
+          const consumePeer = await readCodexRetainedBackgroundCommands({
+            client,
+            threadId: first.threadId,
+            turnId: peerTurnId,
+            commands: peerCommands,
+            authority: peer,
+            assertCurrent: () => peer.assertCurrent(),
+            signal: common.signal,
+            timeoutMs: 10_000,
+          });
+          expect(consumePeer().size).toBe(1);
+          peer.release();
+          const beforeCancel = await client.request("thread/backgroundTerminals/list", {
+            threadId: first.threadId,
+          });
+          const original = beforeCancel.data.find(({ itemId }) => commands.has(itemId));
+          const other = beforeCancel.data.find(({ itemId }) => peerCommands.has(itemId));
+          if (!original || !other) {
+            throw new Error("Both sources must own real live native commands");
+          }
+          expect(original.processId).not.toBe(other.processId);
+          pauseInventory = scenario === "source completion during inventory";
+          sourceAbort.abort(new Error("retained source A revoked"));
+          expect(sourceReleased).not.toHaveBeenCalled();
+          if (scenario === "source completion during inventory") {
+            await inventoryEntered.promise;
+            expect(inventorySnapshot).toMatchObject({
+              data: expect.arrayContaining([
+                expect.objectContaining({ itemId: original.itemId, processId: original.processId }),
+                expect.objectContaining({ itemId: other.itemId, processId: other.processId }),
+              ]),
+            });
+            await fs.writeFile(path.join(native.cwd, "finish-background"), "finish\n");
+            await commandFinished.promise;
+            inventoryReleased.resolve();
+          } else if (scenario === "source completion before retry") {
+            expect(await rejectedIngress.promise).toMatchObject({
+              threadId: first.threadId,
+              processId: original.processId,
+            });
+            await fs.writeFile(path.join(native.cwd, "finish-background"), "finish\n");
+            await commandFinished.promise;
+            if (!releaseRejectedIngress) {
+              throw new Error("Missing held ingress rejection");
+            }
+            releaseRejectedIngress();
+          }
+          await commandFinished.promise;
+          await terminationSettled.promise;
+          await vi.waitFor(() => expect(sourceReleased).toHaveBeenCalledOnce());
+          expect(authority.commands.size).toBe(0);
+          expect(peerReleased).not.toHaveBeenCalled();
+          expect(peer.commands.size).toBe(1);
+          peer.assertCurrent();
+          expect(isCodexAppServerLiveThreadProtected(client, first.threadId)).toBe(true);
+          const inventory = await client.request("thread/backgroundTerminals/list", {
+            threadId: first.threadId,
+          });
+          expect(inventory.data.map(({ itemId, processId }) => ({ itemId, processId }))).toEqual([
+            { itemId: other.itemId, processId: other.processId },
+          ]);
+          if (scenario === "source cancellation") {
+            await vi.waitFor(() =>
+              expect(physicalTerminations).toEqual([
+                { threadId: first.threadId, processId: original.processId },
+              ]),
+            );
+          } else {
+            expect(terminationFailure).toMatchObject({
+              message: "Native command settled before termination",
+            });
+            expect(physicalTerminations).toEqual([]);
+          }
+          expect(physicalTerminations.some(({ processId }) => processId === other.processId)).toBe(
+            false,
+          );
+          expect(
+            requests
+              .slice(before)
+              .some(({ method }) => method === "thread/backgroundTerminals/clean"),
+          ).toBe(false);
+          await expect(
+            fs.readFile(path.join(native.cwd, "source-b-alive"), "utf8"),
+          ).rejects.toMatchObject({ code: "ENOENT" });
+          await fs.writeFile(path.join(native.cwd, "probe-source-b"), "probe\n");
+          await vi.waitFor(async () =>
+            expect(await fs.readFile(path.join(native.cwd, "source-b-alive"), "utf8")).toBe(
+              "SOURCE_B_ALIVE\n",
+            ),
+          );
+          await fs.writeFile(path.join(native.cwd, "finish-source-b"), "finish\n");
+          await peerFinished.promise;
+          await vi.waitFor(() => expect(peerReleased).toHaveBeenCalledOnce());
+          expect(peer.commands.size).toBe(0);
+          expect(isCodexAppServerLiveThreadProtected(client, first.threadId)).toBe(false);
+          sibling!.assertCurrent();
+          await runTurn(siblingBinding.threadId);
+          expectNoRequests(["thread/unsubscribe"], siblingBinding.threadId);
+          expect(providerFailures).toEqual([]);
+          // Synthetic ownership metadata only, never native commands or provider payloads.
+          console.info(
+            "native-custody-proof",
+            JSON.stringify({
+              scenario,
+              clientId: client.getInstanceId(),
+              threadId: first.threadId,
+              sourceA: {
+                turnId: firstTurnId,
+                itemId: original.itemId,
+                processId: original.processId,
+              },
+              sourceB: { turnId: peerTurnId, itemId: other.itemId, processId: other.processId },
+              physicalTerminations,
+              staleGuardRejected: scenario !== "source cancellation",
+              peerHeartbeatAfterSourceASettled: true,
+              finalReceipts: { A: true, B: true },
+              sourceReleases: {
+                A: sourceReleased.mock.calls.length,
+                B: peerReleased.mock.calls.length,
+              },
+            }),
+          );
+        } finally {
+          await Promise.all(
+            ["finish-background", "probe-source-b", "finish-source-b"].map((name) =>
+              fs.writeFile(path.join(native.cwd, name), "finish\n"),
+            ),
+          );
+          inventoryReleased.resolve();
+          releaseRejectedIngress?.();
+          await racePromiseWithAbortSignal(
+            Promise.all([
+              commandFinished.promise,
+              ...(peerCommands.size ? [peerFinished.promise] : []),
+            ]),
+            AbortSignal.timeout(5_000),
+          );
+        }
         return;
       }
       let publicationClaimed = false;
