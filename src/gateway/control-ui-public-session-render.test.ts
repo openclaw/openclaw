@@ -244,11 +244,12 @@ describe("public session document", () => {
     expect(skeleton.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
     expect(skeleton.querySelectorAll(".list-row")).toHaveLength(4);
     expect(pending.match(/<script/g)).toHaveLength(1);
-    // The busy tile is decorative; the status text stays the announced part.
-    const busy = pendingMain.querySelector(".entry-status .busy")!;
-    expect(busy.getAttribute("aria-hidden")).toBe("true");
-    // A failed check drops the tile; the title leads.
-    expect(pending).toContain('[data-entry-pending]:has(.login[style*="visible"]) .busy{display:none}');
+    // The spinner is decorative; the status text stays the announced part.
+    const spinner = pendingMain.querySelector(".entry-status h1 .entry-spin")!;
+    expect(spinner.getAttribute("aria-hidden")).toBe("true");
+    // A failed check offers Reload; the script reloads in place so the fragment survives.
+    expect(pendingMain.querySelector(".entry-actions [data-public-reload]")?.textContent).toBe("Reload");
+    expect(pending).toContain('[data-entry-pending]:has(.login[style*="visible"]) .entry-actions{display:flex}');
     expect(pendingMain.querySelector(".entry-status p")?.textContent).toBe("Checking access…");
     expect(pending).toContain(
       "[data-entry-pending] .app-skeleton{display:none}</style></noscript>",

@@ -133,7 +133,7 @@ const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
     else if(response.type==="opaqueredirect"||response.status===401||response.status===403)showUnavailable(pending);
     else probeFailed();
   }).catch(probeFailed);
-  document.addEventListener("click",event=>{const login=event.target.closest?.("#session-login");if(login)login.hash=location.hash});
+  document.addEventListener("click",event=>{const login=event.target.closest?.("#session-login");if(login)login.hash=location.hash;if(event.target.closest?.("[data-public-reload]"))location.reload()});
   let timer,etag="",running=false,retryAt=0,following=false;
   const enabled=()=>document.querySelector("main[data-public-refresh='true']")!==null;
   const transcript=()=>document.querySelector(".transcript");
@@ -327,13 +327,19 @@ h1{margin:0 0 16px;color:var(--text-strong);font-size:clamp(30px,5vw,40px);font-
 @supports(corner-shape:superellipse(1.5)){.rail-button,.rail-new{border-radius:12.5px;corner-shape:superellipse(1.5)}}
 [data-entry-pending]{min-height:100svh;background:var(--app-content)}@media(min-width:901px){[data-entry-pending]{padding-inline-start:310px}}
 @media(max-width:900px){[data-entry-pending] .app-skeleton{display:none}[data-entry-pending] .topbar{position:relative;height:56px}[data-entry-pending] .brand{position:absolute;top:16.6px;left:calc(50% - 83.3px)}[data-entry-pending] .wordmark{height:25.25px}}
-/* The access check takes the Gateway startup page's status block and top bar (control-ui-availability.ts). */
-[data-entry-pending]{position:relative}[data-entry-pending] .page{width:auto;margin:0;padding:0 20px}[data-entry-pending] .article-head{display:grid;place-items:center;flex:1;min-height:100svh;margin:0;padding:48px 32px;border:0}[data-entry-pending] .entry-status{width:min(100%,480px);padding-bottom:9vh}
-.busy{display:grid;place-items:center;width:48px;height:48px;margin-bottom:28px;border:1px solid var(--tile-edge);border-radius:14px;background:var(--tile);color:var(--app-create)}.busy svg{display:block;width:22px;height:22px;animation:busy-spin 1.6s linear infinite}@keyframes busy-spin{to{transform:rotate(360deg)}}[data-entry-pending]:has(.login[style*="visible"]) .busy{display:none}
-[data-entry-pending] .entry-status h1{margin:0;color:var(--entry-ink);font:600 clamp(24px,2.5vw,32px)/1.2 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:-.035em;text-wrap:balance}[data-entry-pending] .entry-status .intro{max-width:42ch;margin:16px 0 68px;color:var(--entry-muted);font:12px/1.7 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:-.01em}
-@media(min-width:901px){[data-entry-pending] .topbar{position:absolute;top:0;inset-inline:310px 0;height:53px;padding:0 12px}[data-entry-pending] .brand{display:none}[data-entry-pending] .login{margin-inline-start:auto}}
-@media(max-width:900px){[data-entry-pending] .page{padding:0 4px}[data-entry-pending] .topbar{height:53px}[data-entry-pending] .article-head{min-height:calc(100svh - 64px);margin-top:11px}}
-@media(max-width:640px){[data-entry-pending] .article-head{padding:32px 24px}[data-entry-pending] .entry-status{padding-bottom:6vh}}@media(prefers-reduced-motion:reduce){.busy svg{animation:none}}`;
+[data-entry-pending]{position:relative}[data-entry-pending] .page{position:relative;width:auto;min-height:100svh;margin:0;padding:0}[data-entry-pending] .article-head{margin:0;padding:0;border:0}
+/* Every status page shares one anatomy: a left-aligned column whose title holds a fixed height a little above centre. */
+[data-entry-pending] .entry-status{position:absolute;top:34%;left:50%;width:min(440px,calc(100% - 48px));transform:translateX(-50%)}
+[data-entry-pending] .entry-status h1{position:relative;margin:0;color:var(--entry-wordmark);font-size:22px;font-weight:600;line-height:28px;letter-spacing:-.01em;text-wrap:balance}
+.entry-spin{position:absolute;top:7px;inset-inline-start:-26px;color:var(--app-create)}.entry-spin svg{display:block;width:14px;height:14px;animation:entry-spin .9s linear infinite}@keyframes entry-spin{to{transform:rotate(360deg)}}
+[data-entry-pending] .entry-status .intro{max-width:none;margin:6px 0 0;color:var(--entry-muted);font-size:14px;line-height:21px;text-wrap:pretty}
+.entry-actions{display:none;align-items:center;gap:8px;min-height:32px;margin-top:20px}[data-entry-pending]:has(.login[style*="visible"]) .entry-actions{display:flex}
+[data-entry-pending] .button{height:32px;padding:0 14px;border:0;border-radius:12px;font:inherit;font-size:13px;font-weight:500}[data-entry-pending] .button span[aria-hidden]{display:none}
+[data-entry-pending] .login{background:color-mix(in srgb,var(--app-active-ink) 11%,var(--app-content));color:var(--app-active-ink)}[data-entry-pending] .login:hover{background:color-mix(in srgb,var(--app-active-ink) 15%,var(--app-content));color:var(--app-active-ink)}
+@media(min-width:901px){[data-entry-pending] .topbar{position:absolute;top:10px;inset-inline-end:16px;z-index:1;height:auto;padding:0}[data-entry-pending] .brand{display:none}}
+@media(max-width:900px){[data-entry-pending] .topbar{height:56px;padding:0 12px}[data-entry-pending] .login{margin-inline-start:auto}[data-entry-pending] .entry-status{top:30%;left:24px;right:24px;width:auto;transform:none}[data-entry-pending] .entry-status h1{font-size:20px;line-height:26px}.entry-spin{display:none}}
+@media(max-width:900px),(pointer:coarse){[data-entry-pending] .button{height:36px;padding:0 16px;border-radius:13px;font-size:14px}}
+@media(prefers-reduced-motion:reduce){.entry-spin svg{animation-duration:3s}}`;
 
 export function publicSessionTitle(title: string): string {
   return (
@@ -494,7 +500,7 @@ ${PUBLIC_SESSION_STYLES}
 <svg class="defs" aria-hidden="true" focusable="false"><linearGradient id="openclaw-shell" x1="0" y1="0" x2="1" y2="1"><stop offset="0" class="shell-light"/><stop offset="1" class="shell-dark"/></linearGradient></svg>
 ${entryPending ? APP_SHELL_SKELETON_HTML : ""}<div class="page">
 <header class="topbar"><a class="brand" href="https://openclaw.ai" rel="noreferrer noopener">${OPENCLAW_WORDMARK_SVG}</a>${entryLink}</header>
-<header class="article-head">${entryPending ? '<div class="entry-status" role="status"><div class="busy" aria-hidden="true"><svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="2" focusable="false"><circle cx="11" cy="11" r="10" opacity=".2"/><circle cx="11" cy="11" r="10" pathLength="100" stroke-dasharray="26 74" stroke-linecap="round"/></svg></div><h1>' + copyMarkup("loadingConversation") + '</h1><p class="intro">' + copyMarkup("checkingAccess") + '</p></div><div class="entry-result">' : ""}${eyebrow}<h1 dir="auto">${params.unavailable ? copyMarkup("unavailableTitle") : !stripInternalMetadataForDisplay(params.title).trim() ? copyMarkup("sharedConversation") : title}</h1><p class="intro">${
+<header class="article-head">${entryPending ? '<div class="entry-status" role="status"><h1><span class="entry-spin" aria-hidden="true"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" focusable="false"><circle cx="7" cy="7" r="6.25" opacity=".2"/><circle cx="7" cy="7" r="6.25" pathLength="100" stroke-dasharray="26 74" stroke-linecap="round"/></svg></span>' + copyMarkup("loadingConversation") + '</h1><p class="intro">' + copyMarkup("checkingAccess") + '</p><div class="entry-actions"><button class="button primary" type="button" data-public-reload>' + copyMarkup("reload") + '</button></div></div><div class="entry-result">' : ""}${eyebrow}<h1 dir="auto">${params.unavailable ? copyMarkup("unavailableTitle") : !stripInternalMetadataForDisplay(params.title).trim() ? copyMarkup("sharedConversation") : title}</h1><p class="intro">${
     params.unavailable
       ? copyMarkup("unavailable")
       : `<strong>${copyMarkup("sharedEveryone")}</strong> ${copyMarkup(isLatest ? "liveDescription" : "pageDescription")}${entryLink ? " " + copyMarkup("logInFull") : ""}`
