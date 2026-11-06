@@ -582,6 +582,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       "release-context.mjs",
       "release-version.mjs",
       "ci-ios-smoke-plan.mjs",
+      "ci-blacksmith-capacity.mjs",
       "ci-skills-python-plan.mjs",
       "changed-path-facts.mjs",
     ]) {

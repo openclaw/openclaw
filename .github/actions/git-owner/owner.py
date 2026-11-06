@@ -474,6 +474,7 @@ def checkout_harness(sha):
     # Preflight imports these siblings by file-relative paths.
     preflight_scripts = (
         "scripts/ci-build-manifest.mjs",
+        "scripts/lib/ci-blacksmith-capacity.mjs",
         "scripts/ci-adaptive-priors.mjs",
         "scripts/lib/actions-artifact-archive.mjs",
         "scripts/lib/changed-path-facts.mjs",
