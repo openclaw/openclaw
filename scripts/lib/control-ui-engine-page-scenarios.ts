@@ -115,6 +115,7 @@ type TerminalOutputSnapshot = {
 };
 declare global {
   interface Window {
+    openclawEngineTerminalSelectionAtMs: number;
     openclawEngineTerminalOutput: {
       reset: () => void;
       read: () => TerminalOutputSnapshot | null;
@@ -2150,6 +2151,25 @@ export function createEnginePageScenarios(
         ...definition,
         ready: "openclaw-terminal-page .tp-session-menu .tp-session.is-current",
       };
+      const setupSelectionTiming = async (page: Page) => {
+        await outputCommon.setup(page);
+        await page.addInitScript((selector) => {
+          window.openclawEngineTerminalSelectionAtMs = 0;
+          document.addEventListener(
+            "click",
+            (event) => {
+              if (
+                event.isTrusted &&
+                event.target instanceof Element &&
+                event.target.closest(selector)
+              ) {
+                window.openclawEngineTerminalSelectionAtMs = performance.now();
+              }
+            },
+            { capture: true, passive: true },
+          );
+        }, firstCreateDefinition.ready);
+      };
       const outputEvidence = async (page: Page, target: PageDefinition) => {
         await page.evaluate(() => window.openclawEngineTerminalOutput.reset());
         const timing = await measureVisit(page, "terminal", target);
@@ -2160,6 +2180,14 @@ export function createEnginePageScenarios(
         }
         const output = await waitForTerminalOutput(page);
         assert(output.visibleAtMs >= timing.startedAtMs);
+        const pickerSelectedAtMs = target.pathname
+          ? null
+          : await page.evaluate(() => window.openclawEngineTerminalSelectionAtMs);
+        if (pickerSelectedAtMs !== null) {
+          assert(
+            pickerSelectedAtMs >= timing.startedAtMs && pickerSelectedAtMs <= output.visibleAtMs,
+          );
+        }
         await page.locator("openclaw-terminal-page .tp-composer input").waitFor();
         const readyAtMs = Math.max(timing.readyAtMs, output.visibleAtMs);
         return {
@@ -2169,6 +2197,9 @@ export function createEnginePageScenarios(
           visitReadyAtMs: readyAtMs,
           firstOutputDrawMs: output.drawnAtMs - timing.startedAtMs,
           firstOutputVisibleMs: output.visibleAtMs - timing.startedAtMs,
+          ...(pickerSelectedAtMs === null
+            ? {}
+            : { pickerSelectionToOutputMs: output.visibleAtMs - pickerSelectedAtMs }),
           canvasWidth: output.width,
           canvasHeight: output.height,
           syntheticTerminal: true,
@@ -2177,6 +2208,7 @@ export function createEnginePageScenarios(
       const firstCreate: EngineScenario = {
         ...outputCommon,
         id: "page-terminal-first-create-visit",
+        setup: setupSelectionTiming,
         expected:
           "From a settled origin, the first Terminal visit creates exactly one shell and reveals its rendered synthetic banner.",
         prepare: boot,
@@ -2231,6 +2263,7 @@ export function createEnginePageScenarios(
       const outputRevisit: EngineScenario = {
         ...outputCommon,
         id: "page-terminal-first-output-revisit",
+        setup: setupSelectionTiming,
         expected:
           "Return from settled About to the first shell's rendered replay without opening another shell.",
         prepare: async (page, gateway) => {
