@@ -64,6 +64,8 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     addProviderOpen: false,
     addProviderId: "",
     addProviderKey: "",
+    addStartChat: null,
+    onAddStartChat: () => undefined,
     installedAgents: undefined,
     onRefresh: () => undefined,
     onOpenKeyEditor: () => undefined,

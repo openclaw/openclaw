@@ -2138,8 +2138,8 @@ EOF
     ["24.21.0", ">=24.22.1 <25 || >=26.12.1", true],
     ["24.22.1", ">=24.22.1 <25 || >=26.12.1", false],
     ["24.21.0", ">=24.16.0 <25 || >=26.1.0", false],
-    ["24.21.0", "", true],
-    ["26.12.0", "", true],
+    ["24.21.0", "", false],
+    ["26.12.0", "", false],
     ["26.12.1", "", false],
   ])(
     "selects a package-compatible runtime for Node %s and engines %s",
@@ -2169,6 +2169,13 @@ EOF
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toContain("package install reached");
       expect(result.stdout.includes("runtime upgraded")).toBe(upgrade);
+      const warnings = result.stderr.match(/SECURITY WARNING:/g) ?? [];
+      expect(warnings).toHaveLength(!upgrade && ["24.21.0", "26.12.0"].includes(version) ? 1 : 0);
+      expect(result.stdout).not.toContain("SECURITY WARNING:");
+      if (warnings.length) {
+        expect(result.stderr).toContain("may trust TLS certificates signed with keys compromised");
+        expect(result.stderr).toContain("Node 24.22.1+ on the 24.x line or Node 26.12.1+");
+      }
     },
   );
 

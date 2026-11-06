@@ -38,7 +38,7 @@ import {
 import type { MessageActionDetails } from "./chat-message-markdown.types.ts";
 import { GroupMessageReactions } from "./chat-message-reaction-chips-view.tsx";
 import { messageReactionOptions } from "./chat-message-reaction-model.ts";
-import { ChatSendStatus } from "./chat-message-send-status-view.tsx";
+import { ChatSendStatus, ChatSteerNow } from "./chat-message-send-status-view.tsx";
 import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 import type { AssistantMessageDisclosure } from "./chat-message-text-view.tsx";
 import { MessageMeta } from "./chat-message-timestamp-view.tsx";
@@ -434,6 +434,10 @@ function FramedMessage(props: { frame: MessageGroupFrame; item: GroupMessage; in
           <ReplyLineConnector line={line()} avatar={frame().hasAvatar} elements={replyElements} />
         </div>
       </Show>
+      <ChatSteerNow
+        input={frame().options.pendingSteer?.(props.item.message)}
+        onSend={options().onSteerNow}
+      />
       <Show when={showActions()}>
         {(_actions) => {
           const media = createMediaQuerySource(

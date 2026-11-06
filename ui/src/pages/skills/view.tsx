@@ -272,7 +272,7 @@ function SkillsToolbar(props: {
 }
 
 function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
-  const verdict = () => verdictForSkill(props.skill, props.view.state.clawhubVerdicts);
+  const verdict = createMemo(() => verdictForSkill(props.skill, props.view.state.clawhubVerdicts));
   const status = () => {
     latest(props.view.readClawHubVerdicts);
     return verdictStatus(verdict(), isPending(props.view.readClawHubVerdicts));

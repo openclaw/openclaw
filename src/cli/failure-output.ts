@@ -300,6 +300,7 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
       : isUpdateCommand ||
         isPluginUpdateCommand ||
         isNodeRunCommand ||
+        commandPath[0] === "connect" ||
         isForegroundGatewayRunArgv(argv);
     return [
       `[openclaw] ${options.title}`,
