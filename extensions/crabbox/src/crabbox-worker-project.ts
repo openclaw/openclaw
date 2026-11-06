@@ -105,7 +105,8 @@ export async function prepareCrabboxProjectFiles(params: {
   id: string;
   timeoutMs: () => number;
   signal?: AbortSignal;
-  inspectPrepared?: true;
+  inspectPrepared?: { baseCommit?: string };
+  snapshotBaseCommit?: string;
   recordRecipePreparation?: (metadata: RecipePreparation) => Promise<void>;
   setupSecrets?: Readonly<Record<string, SecretRef>>;
   assertCurrent?: () => void;
@@ -150,11 +151,13 @@ export async function prepareCrabboxProjectFiles(params: {
       throw new Error("Enrolled project cannot verify its completed workspace");
     }
     await params.project.inspectPreparedWorkspace({
+      baseCommit: params.inspectPrepared.baseCommit,
       runScript: (input, signal) => run(leaseRunArgs(params), signal, () => input),
     });
     return undefined;
   }
   return await params.project.prepare({
+    snapshotBaseCommit: params.snapshotBaseCommit,
     ...(params.recordRecipePreparation
       ? { recordRecipePreparation: params.recordRecipePreparation }
       : {}),

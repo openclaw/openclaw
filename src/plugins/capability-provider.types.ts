@@ -189,6 +189,8 @@ export type WorkerNodeRuntimePreparation = WorkerNodeBootstrapAccess & {
     tlsFingerprint?: string;
     /** Core-owned location within the installed node package, outside dist and enrollment state. */
     packageRelativePath: string;
+    /** Exact worker identity for preparing reusable expanded code before enrollment. */
+    build?: { bundleHash: string; openclawVersion: string; protocolFeatures: readonly string[] };
   };
 };
 
@@ -443,10 +445,14 @@ export type WorkerProvider = {
         assertCurrent: () => void;
         /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
         inspectPreparedWorkspace?: (transport: {
+          /** Completed base recorded before enrollment, including a reused snapshot. */
+          baseCommit?: string;
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
         }) => Promise<void>;
         /** Bound to this preparation attempt; retained callbacks reject after it closes. */
         prepare: (transport: {
+          /** Selected snapshot's completed base; the host decides whether it may be reused. */
+          snapshotBaseCommit?: string;
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
           /** Render using this provider command's remaining budget before repository code runs. */
           runScriptWithBudget?: (
@@ -459,6 +465,8 @@ export type WorkerProvider = {
         }) => Promise<{
           seedKey: string;
           cacheHit: boolean;
+          /** Actual completed base, potentially older than a moving default branch. */
+          baseCommit?: string;
           /** New completed setup must enter the reusable image before enrollment. */
           captureRequired?: true;
           /** Detected setup is best effort; this allocation must remain cold on failure. */

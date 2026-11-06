@@ -193,7 +193,10 @@ describe("prepared node workspace ownership", () => {
   it("verifies completed setup at first bind and preserves later session edits on replay and restart", async () => {
     const f = await fixture(true);
     expect(f.registration.preparedManifestRef).not.toBe(f.registration.sourceManifestRef);
+    const capture = vi.spyOn(workspaceCommands, "captureManifest");
     await f.runtime.prepare(f.registration);
+    expect(capture).not.toHaveBeenCalled();
+    await expect(f.runtime.exec(f.command)).rejects.toThrow("does not own");
     await fsp.writeFile(path.join(f.workspaceDir, "source.txt"), "changed while ready\n");
     await expect(f.runtime.prepare(binding)).rejects.toThrow("does not match its manifest");
     expect(
@@ -202,7 +205,9 @@ describe("prepared node workspace ownership", () => {
     ).toBe("available");
     await fsp.writeFile(path.join(f.workspaceDir, "source.txt"), "setup changed source\n");
     const bound = await f.runtime.prepare(binding);
+    expect(capture).toHaveBeenCalledTimes(2); // One rejected claim, then the successful claim.
     expect(bound).toMatchObject({
+      baseCommit: f.baseCommit,
       sourceManifestRef: f.registration.sourceManifestRef,
       preparedManifestRef: f.registration.preparedManifestRef,
     });
@@ -347,13 +352,15 @@ describe("prepared node workspace ownership", () => {
     const controller = new AbortController();
     const captured = createDeferred();
     const released = createDeferred();
-    const capture = workspaceCommands.captureManifest;
-    vi.spyOn(workspaceCommands, "captureManifest").mockImplementationOnce(async (params) => {
-      const result = await capture(params);
-      captured.resolve();
-      await released.promise;
-      return result;
-    });
+    const read = workspaceCommands.readWorkspaceManifest;
+    vi.spyOn(workspaceCommands, "readWorkspaceManifest").mockImplementationOnce(
+      async (...params) => {
+        const result = await read(...params);
+        captured.resolve();
+        await released.promise;
+        return result;
+      },
+    );
     const registration = f.runtime.prepare(f.registration, controller.signal);
     const registrationResult = registration.then(
       () => "registered",

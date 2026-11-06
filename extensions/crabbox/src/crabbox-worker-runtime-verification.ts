@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 export type CrabboxRuntimeInstallationIdentity = {
   nodeBootstrap: {
@@ -10,7 +11,12 @@ export type CrabboxRuntimeInstallationIdentity = {
     openclawVersion: string;
     enabledPluginIds: readonly string[];
   };
-  workerBundle: { sha256: string; bytes: number; packageRelativePath: string };
+  workerBundle: {
+    sha256: string;
+    bytes: number;
+    packageRelativePath: string;
+    build?: { bundleHash: string; openclawVersion: string; protocolFeatures: readonly string[] };
+  };
 };
 
 /** A completed install result, never live authority or permission to skip native verification. */
@@ -121,6 +127,13 @@ export const CRABBOX_RUNTIME_VERIFICATION_SOURCE = `
     return true;
   };
 
+  const prepareExpandedWorker = (verifyOnly = false) => {
+    if (!workerBundle?.build) return;
+    const input = JSON.stringify({ build: workerBundle.build, archive: { sha256: workerBundle.sha256, bytes: workerBundle.bytes } });
+    const result = spawnSync(process.execPath, [cli, "node", "prepare-worker-bundle", "--input", input, ...(verifyOnly ? ["--verify-only"] : [])], { env: nodeEnv, encoding: "utf8", timeout: ${CRABBOX_SETUP_TIMEOUT_MS} });
+    if (result.status !== 0) throw subprocessError("Cloud worker expanded bundle preparation failed", result);
+  };
+
   // Project only verification/publication already completed by the installer.
   const reportRuntimeInstallation = (disposition) => {
     const line = "openclaw.runtime-installed:" + JSON.stringify({
@@ -131,7 +144,7 @@ export const CRABBOX_RUNTIME_VERIFICATION_SOURCE = `
       openclawVersion: bootstrap.openclawVersion, enabledPluginIds: bootstrap.enabledPluginIds,
     },
     workerBundle: { sha256: workerBundle.sha256, bytes: workerBundle.bytes,
-      packageRelativePath: workerBundle.packageRelativePath },
+      packageRelativePath: workerBundle.packageRelativePath, ...(workerBundle.build ? { build: workerBundle.build } : {}) },
     });
     if (Buffer.byteLength(line, "utf8") > 16384) throw new Error("Runtime installation result exceeds its size limit");
     console.log(line);

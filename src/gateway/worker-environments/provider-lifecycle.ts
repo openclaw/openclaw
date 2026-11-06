@@ -696,12 +696,17 @@ export function createWorkerProviderLifecycle(
     }
   };
 
-  const { createWithProfile, prepareIntent, prepareRetention, assertPreparedIntentCurrent } =
-    createWorkerProviderIntent({
-      ...options,
-      providerFor,
-      resumeProvision,
-    });
+  const {
+    createWithProfile,
+    prepareIntent,
+    prepareRetention,
+    assertPreparedIntentCurrent,
+    preparedRepositorySource,
+  } = createWorkerProviderIntent({
+    ...options,
+    providerFor,
+    resumeProvision,
+  });
 
   return {
     inspectTurnLease: leaseInspection.inspectTurnLease,
@@ -717,6 +722,7 @@ export function createWorkerProviderLifecycle(
     prepareIntent,
     prepareRetention,
     assertPreparedIntentCurrent,
+    preparedRepositorySource,
     resumePrepared: createPreparedWorkerRecovery({
       ...options,
       expirePrepared,

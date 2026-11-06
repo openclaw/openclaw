@@ -482,6 +482,13 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
   };
   return {
     project,
+    // Only fresh default-branch requests can reuse a snapshot's completed revision.
+    ...(!expected &&
+    !request.baseCommit &&
+    typeof metadata.defaultBranch === "string" &&
+    [metadata.defaultBranch, `heads/${metadata.defaultBranch}`].includes(requestedRef)
+      ? { snapshotStart: true as const }
+      : {}),
     setupRecipe,
     recipe,
     assertCurrent,

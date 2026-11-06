@@ -55,6 +55,7 @@ export async function prepareWorkerProviderProject(params: {
         }
       : undefined,
     setupAuthorized: true,
+    snapshotStart: repository?.snapshotStart,
     signal: params.signal,
     requireCurrent: () => {
       params.requireCurrent();
