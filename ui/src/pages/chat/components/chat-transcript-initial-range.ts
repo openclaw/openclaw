@@ -188,7 +188,7 @@ export class TranscriptInitialRange {
     // Start lookahead with reader motion, before the first large step can expose
     // unpainted rows. Keep both sides while arriving row estimates settle.
     return this.normalRange(
-      { ...range, overscan: Math.max(this.isReaderMoving() ? 6 : 0, range.overscan) },
+      { ...range, overscan: this.isReaderMoving() ? 6 : range.overscan },
       this.rowIndexes,
     );
   }
