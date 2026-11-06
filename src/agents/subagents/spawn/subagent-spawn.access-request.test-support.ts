@@ -18,6 +18,7 @@ import { getPreparedModelRuntimeMocks } from "../../prepared-model-runtime.test-
 import { installSpawnAccessCodex } from "./subagent-spawn.access-codex.test-support.js";
 import {
   createBoundSpawnInvocation,
+  createSpawnOperatorSource,
   type NativePluginSpawnTestOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
@@ -42,7 +43,10 @@ export function registerAccessRequestSpawnCases(
         .spyOn(agentScope, "resolveSessionAgentIds")
         .mockImplementation(actualScope.resolveSessionAgentIds);
       onTestFinished(() => resolver.mockRestore());
-      const bound = await options.createBoundParent();
+      const source = createSpawnOperatorSource("access-admin", ["operator.admin"], {
+        rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
+      });
+      const bound = await options.createBoundParent(source.authority);
       await upsertSessionEntryCore(
         { storePath: bound.storePath, sessionKey: options.parentSessionKey },
         { cyberAccessProgram: selection === "inherited" ? program : undefined },
@@ -375,6 +379,12 @@ export function registerAccessRequestSpawnCases(
               meta: { agentMeta: { agentHarnessId: "codex" } },
               payloads: expect.arrayContaining([
                 expect.objectContaining({ text: "Completed as account-a" }),
+              ]),
+            });
+          } else {
+            expect(completed).toMatchObject({
+              payloads: expect.arrayContaining([
+                expect.objectContaining({ text: "Access child completed" }),
               ]),
             });
           }
