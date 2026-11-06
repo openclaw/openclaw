@@ -32,6 +32,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import type { AgentAssistantSourceReceipt } from "../../infra/agent-events.types.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as mediaFetch from "../../media/fetch.js";
 import {
@@ -155,6 +156,9 @@ it.for([
         ? [mediaUrl, `${mediaUrl}/second`]
         : [mediaUrl];
     const mixed = scenario === "mixed-text" || scenario === "mixed-media";
+    const assistantTranscriptSource: AgentAssistantSourceReceipt = {
+      itemId: "progress-assistant-occurrence",
+    };
     const finalMediaUrl = scenario === "mixed-media" ? `${mediaUrl}/final` : undefined;
     const authoredUrls = [...mediaUrls, ...(finalMediaUrl ? [finalMediaUrl] : [])];
     const finalText = "Final result";
@@ -188,14 +192,15 @@ it.for([
       storePath: (await loadSessionEntryAsync("agent:main:commentary", { agentId: "main" }))
         .storePath,
     };
-    await replaceSessionEntry(scope, {
+    const sessionEntry = {
       sessionId: scope.sessionId,
       lifecycleRevision: "initial",
       updatedAt: 1,
       ...(localMedia
         ? { spawnedCwd: worktree, spawnedBy: "agent:main:main", sessionRoot: worktree }
         : {}),
-    });
+    };
+    await replaceSessionEntry(scope, sessionEntry);
     const readManaged = () => listManagedImageRecordEntries({ sessionKey: scope.sessionKey });
     // Prepare the shared media store before the download-sequencing checks.
     expect(await readManaged()).toEqual([]);
@@ -235,6 +240,7 @@ it.for([
       session: {
         ...scope,
         backingSessionId: scope.sessionId,
+        entry: sessionEntry,
         cfg,
         clientRunId: runId,
         sessionLoadOptions: { agentId: "main" },
@@ -371,7 +377,12 @@ it.for([
           throw new Error("Expected prepared assistant");
         }
         expectedContent = structuredClone(message.content);
-        appendTranscriptMessageSync(scope, { eventId: "progress-row", message });
+        const appended = appendTranscriptMessageSync(scope, { eventId: "progress-row", message });
+        expect(appended).toMatchObject({ ok: true });
+        if (!appended.ok || !appended.value) {
+          throw new Error("Expected committed commentary message");
+        }
+        assistantTranscriptSource.committedMessageId = appended.value.messageId;
         await publishTranscriptUpdate(scope, { message, messageId: "progress-row", runId });
         if (scenario === "cache-miss") {
           return;
@@ -483,6 +494,7 @@ it.for([
               { text: finalText, ...(finalMediaUrl ? { mediaUrls: [finalMediaUrl] } : {}) },
               {
                 assistantMessageIndex: 1,
+                assistantTranscriptSource,
                 ...(finalMediaUrl ? { assistantTranscriptMediaUrls: [finalMediaUrl] } : {}),
               },
             ),
@@ -537,7 +549,7 @@ it.for([
         expect(cleanupSettled).toBe(true);
       }
       if (mixed) {
-        expect(readMessage()).toMatchObject({ content: expectedContent });
+        expect(readMessage().content).toEqual(expectedContent);
         expect(readMessages()).toHaveLength(1);
         const finalContent = displayBlocks(readDisplayed());
         expect(finalContent.filter((block) => block?.type === "image")).toHaveLength(

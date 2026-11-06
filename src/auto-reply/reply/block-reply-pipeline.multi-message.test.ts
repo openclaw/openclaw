@@ -37,6 +37,61 @@ function finalPayloads(pipeline: ReturnType<typeof createBlockReplyPipeline>, te
   });
 }
 
+function sourceBlock(text: string, itemId: string, mediaUrl?: string) {
+  return setReplyPayloadMetadata(
+    { text, ...(mediaUrl ? { mediaUrl, mediaUrls: [mediaUrl] } : {}) },
+    { assistantMessageIndex: 1, assistantTranscriptSource: { itemId } },
+  );
+}
+
+it.each([
+  { coalescing: false, sourceRanges: false },
+  { coalescing: true, sourceRanges: false },
+  { coalescing: false, sourceRanges: true },
+  { coalescing: true, sourceRanges: true },
+])("delivers distinct occurrences reusing the same index and content (%j)", async (scenario) => {
+  const { pipeline, sent } = createPipeline(scenario.coalescing);
+  for (const itemId of ["first", "retry"]) {
+    const payload = sourceBlock("Same answer", itemId);
+    if (scenario.sourceRanges) {
+      setReplyPayloadMetadata(payload, {
+        blockSourceText: "Same answer",
+        blockSourceRange: [0, 11],
+      });
+    }
+    pipeline.enqueue(payload);
+    // Replaying this occurrence must not send it again.
+    pipeline.enqueue(payload);
+  }
+  await pipeline.flush({ force: true });
+  expect(sent).toEqual(["Same answer", "Same answer"]);
+  expect(pipeline.hasSentPayload(sourceBlock("Same answer", "successor"))).toBe(false);
+  expect(pipeline.hasSentExactPayload?.(sourceBlock("Same answer", "successor"))).toBe(false);
+  expect(pipeline.hasSentPayload({ text: "Same answer" })).toBe(false);
+});
+
+it.each(["stream", "direct"] as const)(
+  "keeps a later occurrence's caption and reused image after %s delivery",
+  async (route) => {
+    const { pipeline } = createPipeline();
+    const earlier = sourceBlock("Same answer", "first", "/tmp/reused.png");
+    if (route === "stream") {
+      pipeline.enqueue(earlier);
+      await pipeline.flush({ force: true });
+    }
+    const { replyPayloads } = await buildReplyPayloads({
+      payloads: [sourceBlock("Same answer", "retry", "/tmp/reused.png")],
+      blockStreamingEnabled: route === "stream",
+      blockReplyPipeline: route === "stream" ? pipeline : null,
+      directBlockDeliveries: route === "direct" ? [{ payload: earlier, outcome: "delivered" }] : [],
+      replyToMode: "off",
+    });
+    expect(replyPayloads).toEqual([
+      expect.objectContaining({ text: "Same answer", mediaUrls: ["/tmp/reused.png"] }),
+    ]);
+  },
+);
+
 it("recognizes each fully-streamed message across a multi-message turn", async () => {
   const { pipeline, sent } = createPipeline();
 

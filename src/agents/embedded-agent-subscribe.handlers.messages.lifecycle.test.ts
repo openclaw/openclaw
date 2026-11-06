@@ -1,5 +1,8 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readAgentAssistantSource } from "../infra/agent-events.js";
 import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
+import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import { consumePendingAssistantReplyDirectivesIntoReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import { extractAssistantStreamSnapshot } from "./embedded-agent-subscribe.handlers.messages.snapshot.js";
 import {
@@ -37,6 +40,40 @@ const endText = (
 ) => endMessage(ctx, { message: { ...textMessage(text), ...extra } });
 
 describe("handleMessageEnd", () => {
+  it("gives identical non-reasoning responses distinct source identities at reused indices", async () => {
+    const ctx = createMessageEndContext();
+    const handleEvent = createEmbeddedAgentSessionEventHandler(ctx);
+    const messages = Array.from({ length: 2 }, () =>
+      makeAgentAssistantMessage({
+        timestamp: 1,
+        content: [
+          {
+            type: "text",
+            text: "Same answer.",
+            textSignature: JSON.stringify({ v: 1, id: "same-item", phase: "final_answer" }),
+          },
+        ],
+      }),
+    );
+    const originalBytes = messages.map((message) => JSON.stringify(message));
+    const sourceIds: string[] = [];
+    for (const message of messages) {
+      ctx.state.assistantMessageIndex = 4;
+      const started = structuredClone(message);
+      await handleEvent({ type: "message_start", message: started });
+      const source = expectDefined(readAgentAssistantSource(started), "assistant source receipt");
+      const itemId = expectDefined(source.itemId, "assistant source occurrence ID");
+      expect(itemId).not.toBe("");
+      sourceIds.push(itemId);
+      await handleEvent({ type: "message_end", message });
+      await ctx.state.pendingEventChain;
+      expect(readAgentAssistantSource(message)).toBe(source);
+    }
+    expect(new Set(sourceIds).size).toBe(2);
+    expect(messages.map((message) => JSON.stringify(message))).toEqual(originalBytes);
+    expect(ctx.log.debug).not.toHaveBeenCalled();
+  });
+
   it("preserves malformed final text across streamed and final delivery", async () => {
     const ctx = createMessageEndContext({ onAgentEvent, onBlockReply });
     const text = "answer ending [";

@@ -479,6 +479,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       return;
     }
     if (
+      (options?.assistantMessageIndex !== undefined && !payload.isReasoning) ||
       assistantTranscriptMediaUrls.length > 0 ||
       getReplyPayloadMetadata(payload)?.assistantMediaFailures?.length
     ) {
