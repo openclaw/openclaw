@@ -247,11 +247,8 @@ describe("public session document", () => {
     // The busy tile is decorative; the status text stays the announced part.
     const busy = pendingMain.querySelector(".entry-status .busy")!;
     expect(busy.getAttribute("aria-hidden")).toBe("true");
-    // A failed check stops the tile on the muted dot instead of hiding it.
-    expect(busy.querySelector(".busy-dot")).not.toBeNull();
-    expect(pending).toContain(
-      '[data-entry-pending]:has(.login[style*="visible"]) .busy-dot{display:block}',
-    );
+    // A failed check drops the tile; the title leads.
+    expect(pending).toContain('[data-entry-pending]:has(.login[style*="visible"]) .busy{display:none}');
     expect(pendingMain.querySelector(".entry-status p")?.textContent).toBe("Checking access…");
     expect(pending).toContain(
       "[data-entry-pending] .app-skeleton{display:none}</style></noscript>",
