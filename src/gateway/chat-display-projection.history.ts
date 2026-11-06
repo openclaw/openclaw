@@ -408,6 +408,7 @@ function shouldHideProjectedHistoryMessage(
     roleContent.role === "user" &&
     provenance?.kind === "internal_system" &&
     (provenance.sourceTool === "exec" ||
+      provenance.sourceTool === "restart" ||
       provenance.sourceTool === "cron_failure_repair" ||
       provenance.sourceTool === "tool_handoff")
   ) {
@@ -448,7 +449,7 @@ function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
   return roleContent?.role === "user" && isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT);
 }
 
-/** Hidden heartbeat or exec input that must keep the next reply in its own turn. */
+/** Hidden heartbeat, exec, or restart input keeps the next reply in its own turn. */
 export function isProjectedHistoryTurnBoundaryMessage(message: unknown): boolean {
   if (isHeartbeatHistoryTurnBoundaryMessage(message)) {
     return true;
@@ -462,7 +463,7 @@ export function isProjectedHistoryTurnBoundaryMessage(message: unknown): boolean
   return (
     roleContent?.role === "user" &&
     provenance?.kind === "internal_system" &&
-    provenance.sourceTool === "exec"
+    (provenance.sourceTool === "exec" || provenance.sourceTool === "restart")
   );
 }
 

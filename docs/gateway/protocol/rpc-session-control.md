@@ -58,6 +58,10 @@ Model-catalog reads in `sessions.create`, `sessions.patch`, `sessions.patchMany`
 
 Session list orders update incrementally as committed session metadata changes. Each request still applies current visibility, activity, and time filters before pagination. Archived sessions retain their list position when their display rows are released from memory.
 
+Participant `sessions.changed` events report changes to participant identities or
+their ordering. Repeated contributions that update only internal counts and
+prompt timestamps do not emit another participant notice.
+
 Project recents batch repository-workspace reads using the selected sessions’ physical agent owners.
 Project and session-catalog listings consume committed session metadata without
 waiting for unrelated runtime-ownership or display-row preparation. Uncertain
@@ -117,7 +121,8 @@ a terminal result no longer blocks a new request.
 - Automatic read acknowledgements use `unread: false` with `expectedMarkedUnreadAt` (`null` asserts no manual marker). `sessions.patchMany` carries this expectation on each target; a newer manual unread marker makes that target a successful no-op. A guarded acknowledgement cannot include another mutation.
 - `sessions.patch { snoozedUntil }` sets a future positive integer wake time in epoch milliseconds; `null` clears snooze. The Gateway stamps `snoozedAt` when the wake time changes, preserving it for an identical value. Snooze accepts active sessions eligible for pinning and rejects the same protected targets as archive, plus archived and child sessions. It keeps the session active and its pin intact, without lifecycle drains, automation disabling, worktree transitions, or work-admission changes. Pinning or archiving clears snooze. Real user/channel interaction and a completed run that updates user-facing activity also clear it; system events and preserved-state runs do not. Session rows expose `snoozedUntil` and `snoozedAt`, so clients compare the wake time to their own clock. Time expiry emits no event and leaves stale fields until a later write clears them; explicit snooze and wake patches publish the normal `sessions.changed` event with reason `patch`. `sessions.list` does not filter by snooze.
 - `sessions.assignOwner` (`operator.write`) reassigns the session's mutable owner to a person or configured agent (`{ key, owner: { type, id } }`). It requires an identified caller (authenticated profile or trusted agent identity), authorizes by session visibility, and records `assignedBy`/`assignedAt` on the row's `owner` field. The write-once `createdActor` and creator-anchored sharing authority are unchanged; see [Multi-user mode](/concepts/multi-user#assigning-an-owner).
-- `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance. Explicit `agentId` values that cannot identify an agent are rejected before reset cleanup or mutation; they never fall back to the default agent. `sessions.reset` accepts an optional `expectedSessionId` from `sessions.list` or `sessions.describe`. If that session ID is no longer current when the reset enters its lifecycle fence, the Gateway rejects the request before interrupting work with `INVALID_REQUEST` and `error.details.reason: "session-changed"`; re-read the session before deciding whether to retry. Omitting the field preserves unconditional reset behavior. The guard does not reject changes that keep the same session ID, including metadata edits or another reset-in-place.
+- `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance. Explicit `agentId` values that cannot identify an agent are rejected before reset cleanup or mutation; they never fall back to the default agent. Manual transcript trimming streams stored events, retaining the requested tail and any background-result payloads it references rather than loading the entire transcript into memory. `sessions.reset` accepts an optional `expectedSessionId` from `sessions.list` or `sessions.describe`. If that session ID is no longer current when the reset enters its lifecycle fence, the Gateway rejects the request before interrupting work with `INVALID_REQUEST` and `error.details.reason: "session-changed"`; re-read the session before deciding whether to retry. Omitting the field preserves unconditional reset behavior. The guard does not reject changes that keep the same session ID, including metadata edits or another reset-in-place.
+- `sessions.delete` with `archivedOnly: true` requires an existing session to be archived, including when deletion enters its lifecycle fence. For an otherwise deletable key, a missing session succeeds with `deleted: false`, just as deletion without `archivedOnly` does. Explicit `expectedSessionId`, `expectedLifecycleRevision`, or `expectedSessionUpdatedAt` preconditions still reject a missing or changed session with `INVALID_REQUEST` and `error.details.reason: "session-changed"`; re-read the session before retrying.
 - `sessions.get` returns `{ messages }` containing recent messages from the OpenClaw-owned stored transcript for the selected session. It does not import external CLI transcripts. Use `sessions.describe` for session metadata and `chat.history` for the display-normalized conversation.
 - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. Its `sessionInfo` uses the same aggregate `hasActiveRun` and optional complete-exact `activeRunIds` semantics as `sessions.list`. `chat.history` is display-normalized for UI clients: inline directive tags, plain-text tool-call XML payloads (`<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens are stripped. Stored assistant visibility honors display, phase, and final-source facts first, then omits raw assistant text that trims to uppercase `NO_REPLY`; lowercase and wrapped forms remain visible. User text is never classified as silence. Oversized rows can be replaced with placeholders.
   For eligible Claude CLI bindings, `chat.history` merges external transcript messages with local messages. These merged snapshots remain byte-bounded; a terminal snapshot does not guarantee complete conversation history.
@@ -134,12 +139,55 @@ a terminal result no longer blocks a new request.
 
 - `sessions.create` with `fork: true` checks the parent transcript against the child's selected runtime capacity and authored model caps. Native runtimes do not borrow the same model's API capacity. When the selected runtime has no known or configured capacity, the existing 100,000-token fork limit applies; oversized parents return `INVALID_REQUEST` before copying history.
 - `sessions.create.fastMode` accepts `true`, `false`, or `"auto"` and persists that speed override before the initial turn starts.
+- `sessions.create.idempotencyKey` binds one creation request to its authenticated principal or device in the selected agent store for five minutes after commit. Retries with the same parameters replay the original session, including after a Gateway restart; changed parameters are rejected. Replay checks current access and refuses a deleted or reset session incarnation, even when reset retained its session ID. Renaming the original label does not change this binding. Replay does not prepare a workspace, allocate a worker, or send the initial message again. A restarted Gateway returns `creationReplayed: true` and `runStarted: false`: this means the replay started no new turn, not that the original turn never started. Inspect the returned session before retrying its work; worker recovery uses the existing dispatch/recovery operations. Incognito remains memory-only. After retention expires, reuse is a new request; retries should retain their original agent/store selection.
 - `sessions.create.label` claims an explicit label within the physical session store, including archived sessions. Labels are trimmed and case-sensitive. Concurrent creations with distinct keys cannot claim the same label: the losing request receives `INVALID_REQUEST` with `label already in use: <label>` and must choose another label. A rejected fork does not retain copied history. Agents configured to share a store share its label namespace; separate stores do not.
 - `sessions.title.prepare` (`{ agentId, message, model?, catalogId?, incognito? }`, `operator.write`, rate-limited as a control-plane write) returns `{ title }` from the selected agent's utility model only, without creating or renaming a session; it returns `title: null` for incognito, empty, slash-command, or unavailable-utility input and never falls back to the primary model. A client passes a ready result as `sessions.create.displayName`: a presentation title stored like a generated first-message title, so it is not unique, never claims `label`, and is ignored when adopting an existing key.
 - `sessions.activitySummary.ensure` (`{ sessions: [{ key, agentId? }] }`, 1–20 entries, `operator.write`) requests bounded background recap generation for sessions the caller may modify. The entire batch is authorized before any generation is queued. It returns `{ sessions: [{ key, agentId, activitySummary }] }` immediately, with `activitySummary.state` set to `current`, `stale`, `updating`, or `unavailable` and optional cached `text` and `updatedAt`. Generation uses the owning agent's utility route under the session owner's committed operator model policy, independently of the caller's policy. Denied or revoked work is skipped with a logged reason and retains the previous recap, as do other generation failures. Sessions without an assigned human owner or authenticated profile creator retain service authority. `sessions.changed` invalidates the row as work completes. `sessions.list` includes these read-only projections only with `includeActivitySummary: true`, adding caller-specific `activitySummary.canEnsure`. Clients require that flag and `operator.write` before requesting generation; accepted generation responses return `canEnsure: true`. This permission flag is not persisted in the recap cache. Ordinary listings do not request model generation. See [Activity session recaps](/reference/database-schemas/layout#activity-session-recaps) for persistence and lifecycle semantics.
 - `sessions.create.titleSource` optionally supplies up to 1,000 characters of the submitted topic when the first turn will be sent separately, such as after cloud dispatch. On a new interactive session without an initial turn, it starts ordinary background title generation without delaying creation or starting a task. Existing names keep precedence; incognito sessions and adoption of an existing session ignore this input. Completion emits `sessions.changed` with reason `chat.title`.
 
 - `sessions.create.surface` optionally accepts `"plugin-dock"` for an operator-created conversation owned by a plugin dock. It persists the immutable `createdSurface` marker; `createdVia`, the authenticated human creator, sharing, and sandbox policies retain their ordinary operator behavior. Omitting it keeps the existing creation behavior. Trusted spawn and other internal creation contracts cannot be replaced by this option. Adopting an existing session preserves its original creation surface and provenance.
+
+### Chat input reconciliation
+
+`chat.steerNow` accelerates an already accepted steer without stopping its run.
+Pass `{ sessionKey, sessionId, runId, agentId? }`, using the pending input's
+submission `runId`. The method requires current session write access
+(`operator.write`, or `operator.sessions.write` for the caller's own session).
+It targets the exact run that accepted that input; a replaced session is rejected.
+
+The result is `{ status, tools }`. `interrupted` means safe tool cancellation was
+requested; tool cleanup and the recorded interruption result still precede
+steering delivery. `idle` means no running tool needed cancellation. `blocked`
+lists running tools that cannot safely be interrupted, and changes nothing.
+`unavailable` means the selected runtime cannot perform the action. `settled`
+means this input no longer has pending steering work. Repeated requests cannot
+interrupt later tools. Confirm consumption through the normal input receipts.
+
+Pending `chat.history` items expose `steerNow: { status: "available" | "blocked",
+tools: string[] }` only while the captured runtime owns the steer. An empty
+blocked tool list indicates an unsupported runtime. Clients offer **Send now**
+only for `available`; blocked state should explain why the input must wait.
+`sessions.changed` with reason `agent.input.steering` refreshes this projection.
+
+The `chat-input-custody-v1` server capability advertises `chat.send.queueMode`
+(`steer`, `followup`, `collect`, `interrupt`) and exact input receipts. It does not
+promise active-backend injection or mid-response model steering: input that
+cannot join an active run may wait for a later turn.
+
+Query `chat.history.inputRunIds` for the selected current session:
+
+| Result                                                              | Meaning                                                         |
+| ------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `inputReceipts: [{ runId, state: "pending", queued?, cancelled? }]` | Retained input not yet consumed.                                |
+| `inputReceipts: [{ runId, state: "consumed", consumedByEventId }]`  | Input consumed by the identified event.                         |
+| `inputConsumptions`                                                 | Consumed-only compatibility projection for existing v4 clients. |
+
+Pending display pages are separate from the transcript and exact receipt query.
+A `started` acknowledgment is not consumption. Keep uncertain input and its
+original idempotency key until reconciled; a missing receipt does not prove
+consumption or justify a new send identity. Idempotency retention is bounded.
+On RPC rejection, preserve the input and show the error rather than silently
+changing the requested queue policy.
 
 ### Existing folders on paired devices
 

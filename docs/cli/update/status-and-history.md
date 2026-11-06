@@ -408,8 +408,10 @@ When a history request needs a read-only snapshot, the Gateway prepares it
 asynchronously so other requests can continue. The snapshot preserves the source
 database and its sidecar files. The Gateway's `update.status` reads its two run
 records through the already-open database when available, avoiding full-database
-copies on each poll. Cold status reads prepare one private snapshot. When
-diagnostics are enabled, status requests lasting at least one second log phase
+copies on each poll. Ordinary status reads use a native read-only connection;
+explicit artifact-preserving inspection, including `openclaw update status`,
+retains private snapshots when required. When diagnostics are enabled, status
+requests lasting at least one second log phase
 durations for sentinel refresh, checkout refresh, install identity, reconciliation,
 history, and response.
 

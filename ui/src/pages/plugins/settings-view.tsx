@@ -1,11 +1,14 @@
 import type { JSX } from "@solidjs/web";
 import { Errored, Loading, Show, createMemo } from "solid-js";
+import { flattenConfigLeafFields } from "../../components/config-form.leaf-fields.ts";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
   SettingsPage,
+  SettingsSection,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
@@ -20,7 +23,6 @@ import { PluginInstallAction, type PluginInstallActionProps } from "./install-ac
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
-  renderPluginCompatibilityNotices,
   renderPluginContentCapabilities,
   renderPluginMetadata,
   renderPluginPublisher,
@@ -33,8 +35,8 @@ import {
 } from "./plugin-row-message.tsx";
 import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
+import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 import {
-  flattenPluginSettingsFields,
   pluginSettingsNodeOptions,
   PluginSettingsEditor,
   type PluginSettingsEditorProps,
@@ -80,6 +82,9 @@ export type DetailProps = SharedProps &
   PluginSettingsEditorModel & {
     resolveCredential?: PluginSettingsEditorProps["resolveCredential"];
     onAskPlugin?: () => void;
+    onSelectPrompt?: (prompt: string) => void;
+    promptBusy?: boolean;
+    promptBlockedReason?: string | null;
     mcpLoginBusy?: boolean;
     canMcpLogin?: boolean;
     onMcpLogin?: (serverName: string) => void;
@@ -114,6 +119,14 @@ function PluginConnectionAction(props: {
   const verb = () => CONNECTION_VERBS[props.kind][props.ready ? 1 : 0];
   return (
     <>
+      {props.ready ? (
+        <span class="plugin-connection-status" role="status">
+          <Icon name="check" />
+          {t(
+            props.kind === "Account" ? "pluginsPage.auth.connected" : "pluginsPage.auth.configured",
+          )}
+        </span>
+      ) : null}
       <button
         type="button"
         class="btn btn--sm oc-action oc-action-secondary"
@@ -123,14 +136,6 @@ function PluginConnectionAction(props: {
       >
         {t(`pluginsPage.auth.${verb()}`)}
       </button>
-      {props.ready ? (
-        <span class="plugin-connection-status" role="status">
-          <Icon name="check" />
-          {t(
-            props.kind === "Account" ? "pluginsPage.auth.connected" : "pluginsPage.auth.configured",
-          )}
-        </span>
-      ) : null}
     </>
   );
 }
@@ -141,28 +146,32 @@ function permissionSettings(options: DetailProps): PluginSettingsEditorProps["pe
       loading: true,
     };
   }
-  const fields =
+  const fields: PluginSettingsField[] =
     options.hostControlsSchema && options.configValue
       ? resolveConfigObjectFields({
           schema: options.hostControlsSchema,
           value: pluginEntryValue(options.configValue, options.pluginId),
           path: ["plugins", "entries", options.pluginId],
           ...pluginSettingsNodeOptions(options),
-        }).fields.flatMap((field) => flattenPluginSettingsFields(field, String(field.path.at(-1))))
+        }).fields.flatMap((field) => flattenConfigLeafFields(field, String(field.path.at(-1))))
       : [];
   for (const field of fields) {
     const key = field.path[4];
     if (
       field.path[3] !== "hooks" ||
       field.path.length !== 5 ||
-      (key !== "allowPromptInjection" && key !== "allowConversationAccess")
+      (key !== "allowPromptModification" && key !== "allowConversationAccess")
     ) {
       continue;
     }
-    const labelKey = key === "allowPromptInjection" ? "promptContextAccess" : "conversationAccess";
+    const labelKey =
+      key === "allowPromptModification" ? "promptContextAccess" : "conversationAccess";
     field.label = t(`pluginsPage.${labelKey}`);
     field.help = t(`pluginsPage.${labelKey}Description`);
-    field.effectiveValue = options.inspection.grants.hooks[key].effective;
+    field.effectiveValue =
+      options.inspection.grants.hooks[
+        key === "allowPromptModification" ? "allowPromptInjection" : key
+      ].effective;
   }
   return {
     fields,
@@ -209,7 +218,6 @@ function PluginNotices(props: DetailProps) {
         </div>
       ) : null}
       {renderPluginRowMessage(props.messages[pluginRowKey(props.pluginId)])}
-      {renderPluginCompatibilityNotices(plugin()?.compatibilityNotices, true)}
     </>
   );
 }
@@ -221,7 +229,9 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
     <>
       {!props.connected && !props.result ? (
         <SettingsPage carapace={true}>
-          <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace={true} />
+          <SettingsSection carapace={true}>
+            <SettingsUnavailable message={t("pluginsPage.connectToManage")} />
+          </SettingsSection>
         </SettingsPage>
       ) : props.error && !props.result ? (
         <SettingsPage carapace={true}>
@@ -234,7 +244,7 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
       ) : !plugin()?.installed ? (
         <SettingsPage carapace={true}>
           <a
-            class="btn btn--sm oc-action oc-action-secondary"
+            class="btn btn--sm oc-action oc-action-secondary plugins-settings-back"
             href={props.backHref}
             onClick={(event) => {
               event.preventDefault();
@@ -347,6 +357,24 @@ function PluginOverview(props: DetailProps): JSX.Element {
           />
         }
         identity={renderPluginPublisher(catalog(), props.inspection?.overview?.publisherName)}
+        recommendations={
+          <PluginRecommendedPrompts
+            id={plugin().id}
+            name={plugin().name}
+            prompts={
+              plugin().recommendedPrompts ??
+              props.inspection?.overview?.recommendedPrompts ??
+              catalog()?.detail.recommendedPrompts
+            }
+            iconUrl={props.iconUrls[plugin().id] ?? catalogIcon().src}
+            registerIcon={props.registerIcon}
+            onIconError={() => props.onIconError(plugin().id)}
+            busy={Boolean(props.busy[pluginRowKey(plugin().id)]) || props.promptBusy}
+            disabled={Boolean(props.promptBlockedReason)}
+            disabledReason={props.promptBlockedReason}
+            onSelect={props.onSelectPrompt}
+          />
+        }
         titleAction={
           <Show
             when={Boolean(props.installProgress)}

@@ -8,7 +8,7 @@
 // use scripts/perf/team-shape-stress.ts against already-built revisions.
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import {
@@ -17,7 +17,7 @@ import {
   isAsyncWorkScopeActiveHere,
   runOutsideAsyncWorkScope,
 } from "../../src/shared/async-work-scope.js";
-import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -81,9 +81,6 @@ function enter(index: number, run: () => Promise<void>): Promise<void> {
     ? emitter.run(run)
     : contexts[index]!.run(index, () => enter(index + 1, run));
 }
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((total, child) => total + allocated(child), 0);
-}
 const inspector = new Session();
 try {
   await enter(0, () => stream(10_000));
@@ -114,7 +111,7 @@ try {
       deliveries,
       elapsedMs,
       mainThreadCpuUsPerEvent: (cpu.user + cpu.system) / events,
-      allocatedBytesPerEvent: profile ? allocated(profile.head) / events : undefined,
+      allocatedBytesPerEvent: profile ? sumSampledHeapBytes(profile.head) / events : undefined,
       rss: process.memoryUsage().rss,
       heapUsed: process.memoryUsage().heapUsed,
     }),

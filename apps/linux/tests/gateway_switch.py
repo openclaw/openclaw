@@ -657,7 +657,7 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
         click("Open chat", role="link")
         wait("Custodian chat", "heading")
         click("Show unavailable provider", role="link")
-        wait("Your AI needs a little help", "heading")
+        wait("Couldn’t connect your AI", "heading")
         self.capture("card-unavailable")
         click("Open AI setup")
         wait("Local model setup", "heading")

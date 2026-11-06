@@ -93,7 +93,7 @@ export async function loginOpenAICodex(options: {
   onAuth: (info: { url: string; instructions?: string }) => Promise<void> | void;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   // Manual entry races the browser callback; either can complete the login.
-  onManualCodeInput: () => Promise<string>;
+  onManualCodeInput: (callback: { listening: boolean }) => Promise<string>;
   originator?: string;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -146,7 +146,7 @@ export async function loginOpenAICodex(options: {
     });
     // Closing the server after manual entry can reject the losing callback wait.
     void callbackPromise?.catch(() => undefined);
-    const manualPromise = options.onManualCodeInput().then(
+    const manualPromise = options.onManualCodeInput({ listening: server !== undefined }).then(
       (input) => parseAuthorizationCode(input, state),
       (err: unknown) => {
         throw err instanceof Error ? err : new Error(String(err));

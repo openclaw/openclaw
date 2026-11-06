@@ -25,7 +25,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { transformSync } from "esbuild";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
-import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { summarizeDurationDistribution } from "../lib/perf-duration-distribution.ts";
 
 const { values } = parseArgs({
@@ -182,11 +182,9 @@ async function measure(owner, pair, order, wireSha256) {
     await nextTurn();
     gc.disconnect();
     loop.disable();
-    const sampled = (node) =>
-      node.selfSize + node.children.reduce((sum, child) => sum + sampled(child), 0);
     const sampledBytes =
       values.mode === "allocation"
-        ? sampled((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+        ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
         : null;
     assert.equal(hash(await run(owner)), wireSha256);
     global.gc();

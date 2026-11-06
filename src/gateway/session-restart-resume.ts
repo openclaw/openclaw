@@ -16,7 +16,10 @@ import {
   interruptOrphanedSessionPendingInputs,
   listOrphanedSessionPendingInputTargets,
 } from "../config/sessions/session-pending-input-withdrawal.js";
-import { derivePersistedSessionLifecyclePatch } from "../config/sessions/session-run-lifecycle-projection.js";
+import {
+  derivePersistedSessionLifecyclePatch,
+  restartResumeSkipReason,
+} from "../config/sessions/session-run-lifecycle-projection.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
@@ -29,14 +32,10 @@ import {
   hasAgentRunContextExecutionOwner,
   listLiveAgentRunIds,
 } from "../infra/agent-run-registry.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
-import {
-  isAcpSessionKey,
-  isCronSessionKey,
-  isSubagentSessionKey,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getSessionControllerEntryForOperation } from "../sessions/session-controller.identity.js";
 import { findSessionControllerOperationByRunId } from "../sessions/session-controller.queries.js";
 import {
@@ -49,11 +48,12 @@ import { withAgentInputRecovery } from "../state/agent-database-preparation-cont
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { recordRestartResumeFailure } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 const GATEWAY_RESTART_RESUME_TEXT =
-  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
+  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue. Child runs do not resume independently. Inspect their saved work; send a fresh instruction to the same retained child session when appropriate. A stopped execution is not a yielded pause, and restarting it does not transfer workspace or publication ownership.";
 const BACKGROUND_EXEC_STOPPED_TEXT =
   "Background exec processes were stopped; rerun them if still needed.";
 // Old shutdown bumped updatedAt, but abandoned cycles can survive for weeks. Limit adoption
@@ -69,22 +69,6 @@ type SessionIdentity = {
   hadBackgroundExec?: true;
   needsResume: boolean;
 };
-
-function restartResumeSkipReason(sessionKey: string, entry?: InternalSessionEntry) {
-  if (isCronSessionKey(sessionKey)) {
-    return "cron";
-  }
-  if (isAcpSessionKey(sessionKey) || entry?.acp || entry?.modelSelectionLocked) {
-    return "external-owner";
-  }
-  if (isSubagentSessionKey(sessionKey)) {
-    return "subagent";
-  }
-  if (entry?.archivedAt !== undefined) {
-    return "archived";
-  }
-  return undefined;
-}
 
 /** Snapshot only live owners after admission closes, before shutdown aborts them. */
 export async function persistRunningSessionsForRestart(params: {
@@ -208,71 +192,74 @@ async function persistRunningSessions(
   }
   // The replacement owner resolves each selector. Do not rediscover every store
   // before allowing the first marker write to commit.
-  for (const batch of selectors.values()) {
-    assertCurrent();
-    const first = batch[0];
-    if (!first) {
-      continue;
-    }
-    const selected = new Map(batch.map((session) => [session.sessionKey, session]));
-    const preserveQueued = await applySessionEntryReplacements<
-      Array<{ session: SessionIdentity; preserve: () => void }>
-    >({
-      agentId: first.agentId,
-      storePath: first.storePath,
-      sessionKeys: batch.map((session) => session.sessionKey),
-      requireWriteSuccess: true,
-      assertCommitAllowed: assertCurrent,
-      update: async (entries) => {
-        const replacements: Array<{ sessionKey: string; entry: InternalSessionEntry }> = [];
-        const preserve: Array<{ session: SessionIdentity; preserve: () => void }> = [];
-        for (const session of batch) {
-          summary.record(session.agentId, session.sessionKey, "session-missing");
-        }
-        for (const { sessionKey, entry } of entries) {
-          assertCurrent();
-          const session = selected.get(sessionKey);
-          if (!session) {
-            continue;
+  const writes = await Promise.allSettled(
+    [...selectors.values()].map(async (batch) => {
+      assertCurrent();
+      const first = batch[0];
+      if (!first) {
+        return;
+      }
+      const selected = new Map(batch.map((session) => [session.sessionKey, session]));
+      const preserveQueued = await applySessionEntryReplacements<
+        Array<{ session: SessionIdentity; preserve: () => void }>
+      >({
+        agentId: first.agentId,
+        storePath: first.storePath,
+        sessionKeys: batch.map((session) => session.sessionKey),
+        requireWriteSuccess: true,
+        assertCommitAllowed: assertCurrent,
+        update: async (entries) => {
+          const replacements: Array<{ sessionKey: string; entry: InternalSessionEntry }> = [];
+          const preserve: Array<{ session: SessionIdentity; preserve: () => void }> = [];
+          for (const session of batch) {
+            summary.record(session.agentId, session.sessionKey, "session-missing");
           }
-          const skip =
-            restartResumeSkipReason(sessionKey, entry) ??
-            (session.sessionId && session.sessionId !== entry.sessionId
-              ? "session-changed"
-              : undefined);
-          summary.record(session.agentId, sessionKey, skip ?? "persistence-incomplete");
-          if (skip) {
-            continue;
-          }
-          const queued = await captureSessionQueuedInputsForRestart({
-            ...session,
-            storePath: first.storePath,
-            sessionId: entry.sessionId,
-          });
-          if (!session.needsResume && queued.queuedInputIds.length === 0) {
-            summary.record(session.agentId, sessionKey, "reply-completed");
-            continue;
-          }
-          replacements.push({
-            sessionKey,
-            entry: {
-              ...entry,
-              resumeAfterRestart: {
-                queuedInputIds: queued.queuedInputIds,
-                ...(session.hadBackgroundExec ? { hadBackgroundExec: true } : {}),
+          for (const { sessionKey, entry } of entries) {
+            assertCurrent();
+            const session = selected.get(sessionKey);
+            if (!session) {
+              continue;
+            }
+            const skip =
+              restartResumeSkipReason(sessionKey, entry) ??
+              (session.sessionId && session.sessionId !== entry.sessionId
+                ? "session-changed"
+                : undefined);
+            summary.record(session.agentId, sessionKey, skip ?? "persistence-incomplete");
+            if (skip) {
+              continue;
+            }
+            const queued = await captureSessionQueuedInputsForRestart({
+              ...session,
+              storePath: first.storePath,
+              sessionId: entry.sessionId,
+            });
+            if (!session.needsResume && queued.queuedInputIds.length === 0) {
+              summary.record(session.agentId, sessionKey, "reply-completed");
+              continue;
+            }
+            replacements.push({
+              sessionKey,
+              entry: {
+                ...entry,
+                resumeAfterRestart: {
+                  queuedInputIds: queued.queuedInputIds,
+                  ...(session.hadBackgroundExec ? { hadBackgroundExec: true } : {}),
+                },
               },
-            },
-          });
-          preserve.push({ session, preserve: queued.preserve });
-        }
-        return { result: preserve, replacements };
-      },
-    });
-    for (const { session, preserve } of preserveQueued) {
-      summary.record(session.agentId, session.sessionKey, "marked");
-      preserve();
-    }
-  }
+            });
+            preserve.push({ session, preserve: queued.preserve });
+          }
+          return { result: preserve, replacements };
+        },
+      });
+      for (const { session, preserve } of preserveQueued) {
+        summary.record(session.agentId, session.sessionKey, "marked");
+        preserve();
+      }
+    }),
+  );
+  throwIfSettledRejected(writes, "Restart marker persistence failed");
 }
 
 type RestartResumeParams = {
@@ -355,9 +342,6 @@ async function prepareRestartStore(
       ({ entry }) => entry.resumeAfterRestart || entry.mainRestartRecovery || entry.lifecycleRunId,
     );
     signal.throwIfAborted();
-    if (entries.some(({ entry }) => entry.resumeAfterRestart)) {
-      recovery.allowUnmarked = false;
-    }
   } catch (error) {
     signal.throwIfAborted();
     recovery.allowUnmarked = false;
@@ -439,7 +423,7 @@ export async function prepareAgentRestartRecovery(
   };
 }
 
-/** Markers admit immediately; crash adoption requires a Gateway-wide marker decision. */
+/** Recover markers and unfinished predecessor runs without reviving older orphans. */
 export async function resumeMarkedSessions(params: RestartResumeParams): Promise<void> {
   const recovery = getRestartRecovery(params.context);
   const stores: PreparedRestartStore[] = [];
@@ -461,13 +445,12 @@ export async function resumeMarkedSessions(params: RestartResumeParams): Promise
     const { context, signal } = params;
     const preparation = context.agentDatabaseStartup;
     if (context.restartResumeWindow && recovery.allowUnmarked && preparation) {
-      // Markers in any store veto crash adoption. Preparation captures them before
-      // publishing database readiness; it does not wait for input recovery here.
+      // Failed preparation prevents adoption; markers in other stores may represent
+      // only a partial shutdown and do not dispose of this store's unfinished runs.
       const agentIds = listConfiguredSessionStoreAgentIds(context.getRuntimeConfig());
       const prepared = await Promise.allSettled(
         agentIds.flatMap(
-          (agentId) =>
-            preparation.waitForAgentPreparation(agentId, { signal, forWrite: true }) ?? [],
+          (agentId) => preparation.waitForAgentPreparation(agentId, { signal }) ?? [],
         ),
       );
       if (
@@ -607,6 +590,8 @@ async function resumeRestartStore(
         }
         const { entry, marker } = resumed;
         const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
+        const runId = snapshotEntry.lifecycleRunId ?? entry.lastRunId;
+        let admissionStage = "principal";
         const skip = restartResumeSkipReason(sessionKey, entry);
         if (skip) {
           summary.record(agentId, sessionKey, skip);
@@ -622,8 +607,10 @@ async function resumeRestartStore(
             agentId,
             sessionKey,
             sessionId: entry.sessionId,
+            preserveRecordedSource: true,
             assertCurrent: () => signal.throwIfAborted(),
           });
+          admissionStage = "target";
           const captured = await captureSessionEventTargetForHost(agentId, sessionKey, {
             operatorAuthority: authority?.authority,
             assertCurrent: () => signal.throwIfAborted(),
@@ -631,6 +618,7 @@ async function resumeRestartStore(
           if (captured.sessionId !== entry.sessionId) {
             throw new Error("Session changed before restart resume admission");
           }
+          admissionStage = "session-event";
           const receipt = withPluginRuntimeGatewayContextResolver(
             context.resolveGatewayContext,
             () =>
@@ -663,15 +651,23 @@ async function resumeRestartStore(
             });
           const accepted = await receipt.accepted;
           if (!accepted.ok) {
-            throw new Error(accepted.error);
+            throw accepted.cause ?? new Error(accepted.error);
           }
           summary.record(agentId, sessionKey, "resumed");
         } catch (error) {
           if (signal.aborted) {
             throw error;
           }
-          log.warn(`Skipped restart resume for ${sessionKey}: ${String(error)}`);
           summary.record(agentId, sessionKey, "admission-failed");
+          await recordRestartResumeFailure({
+            target: { ...target, agentId, sessionKey },
+            entry,
+            runId,
+            admissionStage,
+            error,
+            signal,
+            log,
+          });
         }
         // Each accepted sender retains its own admission even when the owner cannot resume.
         await continueSessionQueuedInputs(

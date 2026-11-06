@@ -8,6 +8,7 @@ import {
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { isNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -20,6 +21,7 @@ import {
 } from "./config-reload-plan.js";
 import { isCustomPluginUiEnabled } from "./control-ui-plugin-policy.js";
 import { GATEWAY_EVENTS } from "./events.js";
+import { startOpenClawIdPeopleEvents } from "./openclaw-id/people-events.js";
 import {
   indexPluginNodeCapabilitySurfaces,
   reconcileClientPluginNodeCapabilities,
@@ -132,14 +134,6 @@ export async function finishGatewayStartup(params: {
     "gateway.ws-imports",
     () => import("./server/ws-connection.js"),
   );
-  if (workerEnvironmentService) {
-    await startWorkerHumanPresence({
-      clients,
-      service: workerEnvironmentService,
-      log,
-      registerSidecar: registerGatewayLifetimeSidecars,
-    });
-  }
   await startupTrace.measure("gateway.ws-attach", () =>
     attachGatewayWsConnectionHandler({
       wss: runtime.wss,
@@ -152,6 +146,7 @@ export async function finishGatewayStartup(params: {
       pluginSurfaceScheme: gatewayTls.enabled ? "https" : "http",
       getPluginNodeCapabilities,
       getResolvedAuth,
+      gatewayExposure: { bindHost, tailscaleMode: runtime.tailscaleMode },
       getRequiredSharedGatewaySessionGeneration: sharedGatewaySessionGenerationState.reader,
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
@@ -178,6 +173,9 @@ export async function finishGatewayStartup(params: {
   startupTrace.mark("http.bound");
   // Join independent preparation before channels start or failure cleanup retires its owners.
   const requestRuntimeReady = runtime.ensureRequestRuntimeReady().then(() => {
+    // Readiness is also the performance collector's evidence boundary. Flush the
+    // terminal events for request-runtime spans before /readyz can become green.
+    flushDiagnosticsTimeline();
     kernel.setDispatchReady(true);
     if (databaseStartupAdmission && !opts.updateCanary && !lifecycle.closePreludeStarted) {
       activateGatewayAgentDatabaseStartup({
@@ -333,6 +331,16 @@ export async function finishGatewayStartup(params: {
             if (lifecycle.closePreludeStarted) {
               return null;
             }
+            // Presence maintenance consumes registered repository capabilities. Reset
+            // crash-left presence after plugin attachment but before worker recovery.
+            if (workerEnvironmentService) {
+              await startWorkerHumanPresence({
+                clients,
+                service: workerEnvironmentService,
+                log,
+                registerSidecar: registerGatewayLifetimeSidecars,
+              });
+            }
             databasePreparationReady.resolve(); // Plugins are attached; worker recovery awaits admission.
             return workerPlacementRuntime
               ? await workerPlacementRuntime.startRuntime({
@@ -361,6 +369,10 @@ export async function finishGatewayStartup(params: {
       ),
     ),
   );
+  // The post-attach span ends inside startupTrace.measure(), but its timeline
+  // event is batched. Flush it before markSidecarsReady() can make /readyz green;
+  // performance collectors stop their startup interval at that response.
+  flushDiagnosticsTimeline();
   postAttachSpanSettled = true;
   if (postAttachSidecarsReady && sidecarStartup !== "defer") {
     kernel.markSidecarsReady();
@@ -389,6 +401,32 @@ export async function finishGatewayStartup(params: {
   }
   postAttachRuntimeReturned = true;
   activateScheduledServicesWhenReady();
+  registerGatewayLifetimeSidecars(
+    startOpenClawIdPeopleEvents({
+      clients,
+      service: runtime.openclawIdService,
+      broadcastToConnIds,
+      log,
+    }),
+  );
+  runtime.openclawIdService.bindEffects(async () => {
+    const [{ createOpenClawIdRemovalEffects }, { createOpenClawIdMemberActivity }] =
+      await Promise.all([
+        import("./openclaw-id/removal-effects.js"),
+        import("./openclaw-id/member-activity.js"),
+      ]);
+    return {
+      ...createOpenClawIdRemovalEffects({
+        clients: () => clients.authorityClients,
+        context: () => gatewayRequestContext,
+        log,
+      }),
+      describeActivity: createOpenClawIdMemberActivity({ clients: () => clients }).describe,
+    };
+  });
+  void runtime.openclawIdService
+    .reconcileRuntimePolicy()
+    .catch((error: unknown) => log.warn(`openclaw-id: start failed: ${String(error)}`));
 
   const { startManagedGatewayConfigReloader } = await import("./server-reload-managed.js");
   const assertRuntimeSecurityConfig = (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) => {
@@ -533,6 +571,7 @@ export async function finishGatewayStartup(params: {
       }
       const reconciled = await Promise.allSettled([
         runtime.hostDesktopService.reconcileRuntimePolicy(),
+        runtime.openclawIdService.reconcileRuntimePolicy(),
         runtime.gatewayComputerService.reconcileRuntimePolicy(),
         workerEnvironmentService?.reconcileDesktopPolicy(),
         runtime.nodeDesktopService.reconcileRuntimePolicy(),
@@ -651,6 +690,7 @@ export async function finishGatewayStartup(params: {
           await cleanupGatewayRetiredPluginArtifacts({
             log,
             startupInstallPaths,
+            startupConfig: cfgAtStart,
             signal: runtime.connectionWork.signal,
             assertCurrent: () => {
               if (lifecycle.closePreludeStarted) {

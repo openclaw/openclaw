@@ -26,7 +26,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
-import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -232,8 +232,6 @@ try {
   }
   const result = await run(0);
   assert(Object.isFrozen(result[0]));
-  const sampledBytes = (node) =>
-    node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
   const report = {
     workload: values.workload,
     mode: values.mode,
@@ -258,8 +256,8 @@ try {
     },
     allocation: profile
       ? {
-          sampledBytes: sampledBytes(profile.head),
-          bytesPerOperation: sampledBytes(profile.head) / operations,
+          sampledBytes: sumSampledHeapBytes(profile.head),
+          bytesPerOperation: sumSampledHeapBytes(profile.head) / operations,
         }
       : null,
     counts: values.mode === "counts" ? { warmupNewRows, newRows, cloneCalls, hashCalls } : null,

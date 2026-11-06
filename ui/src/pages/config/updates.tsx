@@ -42,6 +42,7 @@ import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { RecordedAttempt } from "./updates-recorded-attempt.tsx";
+import { UpdatesSchedule } from "./updates-schedule.tsx";
 import { UpdatesStatus } from "./updates-status.tsx";
 import {
   UPDATES_CHANNELS,
@@ -145,7 +146,6 @@ function DeviceUpdates(props: {
                 title={t("updates.device.automatic")}
                 checked={checked()}
                 saving={saving()}
-                description={saving() ? t("common.saving") : undefined}
                 onChange={(value) => void changeAutomatic(value)}
               />
             </Loading>
@@ -172,15 +172,18 @@ registerEnglishCatalog(registerUpdateActionsEnglish);
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-function Timestamp(props: { timestampMs: number; nowMs?: number }) {
+function Timestamp(props: { timestampMs: number; nowMs?: number; showRelative?: boolean }) {
   const relative = () =>
     formatTimeAgo(Math.max(0, (props.nowMs ?? Date.now()) - props.timestampMs));
   return (
     <SettingsValue
       value={
         <time datetime={new Date(props.timestampMs).toISOString()} title={relative()}>
-          {formatDateTimeMs(props.timestampMs, { dateStyle: "medium", timeStyle: "short" })}{" "}
-          <span class="muted">· {relative()}</span>
+          {formatDateTimeMs(props.timestampMs, { dateStyle: "medium", timeStyle: "short" })}
+          <Show when={props.showRelative}>
+            {" "}
+            <span class="muted">· {relative()}</span>
+          </Show>
         </time>
       }
     />
@@ -366,6 +369,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
       channel,
       autoEnabled:
         typeof auto?.enabled === "boolean" ? auto.enabled : (schedule?.autoEnabled ?? false),
+      expression: typeof auto?.schedule === "string" ? auto.schedule : undefined,
       extendedStable: channel === "extended-stable",
     };
   };
@@ -473,6 +477,13 @@ function GatewayUpdates(props: UpdatesViewProps) {
           }
           onChange={props.onAutomaticUpdatesChange}
         />
+        <Show when={!settings().extendedStable && !devPackageInstall()}>
+          <UpdatesSchedule
+            expression={settings().expression}
+            disabled={props.configBusy || checksDisabled() || !settings().autoEnabled}
+            onChange={(expression) => props.onAutomaticScheduleChange(expression)}
+          />
+        </Show>
       </SettingsSection>
       <SettingsSection title={t("updates.page.statusTitle")}>
         <SettingsRow
@@ -582,7 +593,13 @@ function GatewayUpdates(props: UpdatesViewProps) {
           {(currentRun) => (
             <SettingsRow
               title={t("updates.page.lastProgress")}
-              control={<Timestamp timestampMs={currentRun().updatedAtMs} nowMs={props.nowMs} />}
+              control={
+                <Timestamp
+                  timestampMs={currentRun().updatedAtMs}
+                  nowMs={props.nowMs}
+                  showRelative
+                />
+              }
             />
           )}
         </Show>

@@ -1,14 +1,17 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { sanitizeInlineImageDataUrl } from "openclaw/plugin-sdk/inline-image-data-url-runtime";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   composeProviderStreamWrappers,
   mergeTransportHeaders,
   createPayloadPatchStreamWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
+  wrapProviderPayloadHook,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { asOptionalRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveXaiFastModelId } from "./fast-mode.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { isXaiGrokProxyBaseUrl } from "./provider-catalog.js";
@@ -45,7 +48,7 @@ function createXaiGrokOAuthHeadersWrapper(
   };
 }
 
-const XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content";
+const xaiReasoning = buildProviderStreamFamilyHooks("xai-responses-reasoning");
 
 function isReplayableInputImagePart(part: Record<string, unknown>): boolean {
   if (part.type !== "input_image") {
@@ -180,23 +183,82 @@ function normalizeXaiResponsesToolResultPayload(
 function createXaiToolPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model }) => {
     normalizeXaiResponsesToolResultPayload(payload, model);
-    if (!model.reasoning || asOptionalRecord(model.compat)?.supportsReasoningEffort === false) {
-      // Only current flagship Grok models advertise configurable effort.
-      delete payload.reasoning;
-      delete payload.reasoningEffort;
-      delete payload.reasoning_effort;
-    }
-    // All reasoning xAI models should still request + later replay encrypted_content.
-    if (!isXaiProviderId(model.provider) || model.api !== "openai-responses" || !model.reasoning) {
-      return;
-    }
-    const existing = payload.include;
-    const include = filterStringEntries(existing);
-    if (!include.includes(XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE)) {
-      include.push(XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE);
-    }
-    payload.include = include;
   });
+}
+
+async function normalizeXaiGifPayload(payload: Record<string, unknown>) {
+  const originalInput = payload.input;
+  if (!Array.isArray(originalInput)) {
+    return payload;
+  }
+  let input: unknown[] | undefined;
+  for (let index = 0; index < originalInput.length; index += 1) {
+    const record = asOptionalRecord(originalInput[index]);
+    const key = record?.type === "function_call_output" ? "output" : "content";
+    const parts = record?.[key];
+    if (!Array.isArray(parts)) {
+      continue;
+    }
+    let content: unknown[] | undefined;
+    for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
+      const image = asOptionalRecord(parts[partIndex]);
+      if (image?.type !== "input_image") {
+        continue;
+      }
+      const source = asOptionalRecord(image.source);
+      const url =
+        typeof image.image_url === "string"
+          ? image.image_url
+          : source?.type === "base64" &&
+              typeof source.media_type === "string" &&
+              typeof source.data === "string"
+            ? `data:${source.media_type};base64,${source.data}`
+            : undefined;
+      const canonical = url && sanitizeInlineImageDataUrl(url);
+      if (!canonical?.startsWith("data:image/gif;base64,")) {
+        continue;
+      }
+      // Encode the first frame in this request projection, never in retained history.
+      const { resizeToJpeg } = await import("openclaw/plugin-sdk/media-runtime");
+      const bytes = await resizeToJpeg({
+        buffer: Buffer.from(canonical.slice(canonical.indexOf(",") + 1), "base64"),
+        maxSide: 1200,
+        quality: 85,
+      });
+      const data = bytes.toString("base64");
+      content ??= [...parts];
+      content[partIndex] =
+        typeof image.image_url === "string"
+          ? { ...image, image_url: `data:image/jpeg;base64,${data}` }
+          : { ...image, source: { ...source, media_type: "image/jpeg", data } };
+    }
+    if (content) {
+      input ??= [...originalInput];
+      input[index] = { ...record, [key]: content };
+    }
+  }
+  return input ? { ...payload, input } : payload;
+}
+
+function createXaiGifCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!isXaiProviderId(model.provider) || model.api !== "openai-responses") {
+      return underlying(model, context, options);
+    }
+    return underlying(model, context, {
+      ...options,
+      onPayload: wrapProviderPayloadHook(
+        options?.onPayload,
+        (payload, replacement) => {
+          const selected = asOptionalRecord(replacement === undefined ? payload : replacement);
+          return selected ? normalizeXaiGifPayload(selected) : replacement;
+        },
+        undefined,
+        true,
+      ),
+    });
+  };
 }
 
 export function wrapXaiProviderStream(
@@ -208,7 +270,9 @@ export function wrapXaiProviderStream(
   return composeProviderStreamWrappers(
     ctx.streamFn,
     (streamFn) => createXaiGrokOAuthHeadersWrapper(streamFn, runtime?.clientVersion),
+    (streamFn) => xaiReasoning.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn ?? streamSimple,
     createXaiToolPayloadCompatibilityWrapper,
+    createXaiGifCompatibilityWrapper,
     Boolean(
       extraParams &&
       (Object.hasOwn(extraParams, "fastMode") || Object.hasOwn(extraParams, "fast_mode")),

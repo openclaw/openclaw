@@ -33,7 +33,6 @@ import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   classifyGatewayOwnerProcessNamespace,
   describeGatewayLockHolder,
-  GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   GatewayLockNamespaceError,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
@@ -46,8 +45,8 @@ import { captureGatewayStateOwner, type StateDatabaseSchemaLease } from "./gatew
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import type { EngineConnection } from "./sql-connection.js";
+import { sqliteExtendedResultCode } from "./sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
-import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import type { AsyncPreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
@@ -157,6 +156,7 @@ export async function assertGatewayOwnerLeaseStopped(
         signal,
         // Offline custody follows restored files; cached read admission can retain the old inode.
         expectedSourceIdentity: readDatabasePathIdentitySync(pathname),
+        reuse: true,
       });
       authority.assertCurrent();
       releaseSnapshot = retainSnapshotTempDirectory(
@@ -212,18 +212,6 @@ export async function assertGatewayOwnerLeaseStopped(
   );
 }
 
-/** An owner this process cannot verify keeps the snapshot read instead of failing the read. */
-function hasVerifiedLiveStateOwner(env?: NodeJS.ProcessEnv): boolean {
-  try {
-    return hasVerifiedLiveSqliteOwner(resolveOpenClawStateSqlitePath(env));
-  } catch (error) {
-    if (error instanceof GatewayLockNamespaceError) {
-      return false;
-    }
-    throw error;
-  }
-}
-
 export function readGatewayOwnerLease(
   params: {
     env?: NodeJS.ProcessEnv;
@@ -235,23 +223,27 @@ export function readGatewayOwnerLease(
 ): GatewayOwnerLeaseIdentity | undefined {
   const operation = ({ db }: { db: EngineConnection }) =>
     readGatewayOwnerLeaseFromDatabase(db, params.port);
-  return params.current || params.openStateSchemaReadAdmission
-    ? withExistingOpenClawStateDatabaseCurrentReadOnly(
-        operation,
-        {
-          env: params.env,
-          // Synchronous lifecycle guards need one current row, not a copy of the live database.
-          allowNativeRead:
-            !isStatePostgres() &&
-            !params.openStateSchemaReadAdmission &&
-            !isArtifactPreservingStateRead() &&
-            hasVerifiedLiveStateOwner(params.env)
-              ? true
-              : undefined,
-        },
-        params.openStateSchemaReadAdmission,
-      )
-    : withExistingOpenClawStateDatabaseReadOnly(operation, { env: params.env });
+  if (!params.current && !params.openStateSchemaReadAdmission) {
+    return withExistingOpenClawStateDatabaseReadOnly(operation, { env: params.env });
+  }
+  // Reading the current lease needs no write authority, even when its owner is unknown.
+  const allowNativeRead =
+    !isStatePostgres() && !params.openStateSchemaReadAdmission && !isArtifactPreservingStateRead()
+      ? true
+      : undefined;
+  try {
+    return withExistingOpenClawStateDatabaseCurrentReadOnly(
+      operation,
+      { env: params.env, allowNativeRead },
+      params.openStateSchemaReadAdmission,
+    );
+  } catch (error) {
+    // SQLITE_READONLY_ROLLBACK needs private recovery; cleanup aggregates must still fail.
+    if (!allowNativeRead || isLiveStateRead() || sqliteExtendedResultCode(error) !== 776) {
+      throw error;
+    }
+    return withExistingOpenClawStateDatabaseCurrentReadOnly(operation, { env: params.env });
+  }
 }
 
 /** Descriptive inspection awaits the existing read owner instead of blocking native lifecycle guards. */
@@ -265,9 +257,8 @@ export async function readGatewayOwnerLeaseAsync(
       : (params.signal ?? callerSignal),
   );
   const context = captureOpenClawStateReadWorkerContext({ env: params.env });
-  const live =
-    !isStatePostgres() && !isArtifactPreservingStateRead() && hasVerifiedLiveStateOwner(params.env);
-  const read = () =>
+  const live = !isStatePostgres() && !isArtifactPreservingStateRead();
+  const read = (native?: true) =>
     executeExistingOpenClawStateRead(
       { env: params.env },
       { type: "gatewayOwnerLease.read", schemaMaintenance: false },
@@ -275,12 +266,20 @@ export async function readGatewayOwnerLeaseAsync(
         context,
         current: true,
         signal,
-        live: live ? true : undefined,
+        live: native,
         snapshotPreparation: "awaited",
         preferIndependentWarmRead: true,
       },
     );
-  const reply = live ? await read() : await withArtifactPreservingStateReads(read);
+  const reply = await (live ? read(true) : withArtifactPreservingStateReads(read)).catch(
+    (error: unknown) => {
+      // Only hot-journal recovery needs a private source; cleanup failures must still fail.
+      if (!live || isLiveStateRead() || sqliteExtendedResultCode(error) !== 776) {
+        throw error;
+      }
+      return withArtifactPreservingStateReads(read);
+    },
+  );
   signal?.throwIfAborted();
   context.maintenanceScope?.assertReadAdmission();
   context.admission.assertCurrent();
@@ -386,10 +385,8 @@ export function acquireGatewayOwnerLease(params: {
         leaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
         acquiredAt: expiresAt - STARTUP_MIGRATION_LEASE_TTL_MS,
         expiresAt,
-        // Keep holder diagnostics fresh even when its process namespace is not visible.
-        heartbeatMs: Math.floor(
-          Math.min(STARTUP_MIGRATION_LEASE_TTL_MS, GATEWAY_OWNER_HEARTBEAT_STALE_MS) / 3,
-        ),
+        // Heartbeat age is diagnostic; process evidence, not age, governs recovery.
+        heartbeatMs: Math.floor(STARTUP_MIGRATION_LEASE_TTL_MS / 3),
         ...(processOwner.startedAt === null
           ? { processOwner: { identity: processOwner, env: resolveDiagnosticProcessEnv(env) } }
           : {}),

@@ -25,6 +25,8 @@ type Props = {
   onOpenPalette: (() => void) | undefined;
   /** Phone pages: title in the header, joined action pill, and the shared reconnect notice. */
   floating: boolean;
+  /** A settings subpage: the menu button goes up a level instead. */
+  onBack: (() => void) | undefined;
   pageTitle: string;
   registerPageActions: ((slot: HTMLElement) => () => void) | undefined;
 };
@@ -41,16 +43,32 @@ defineSolidBridge<Props>(
     return (
       <header class={["topbar", { "topbar--floating": props.floating }]}>
         <div class="topnav-shell">
-          <openclaw-tooltip
-            prop:content={props.navDrawerOpen ? t("nav.collapse") : t("nav.expand")}
+          <Show
+            when={props.floating && props.onBack}
+            fallback={
+              <openclaw-tooltip
+                prop:content={props.navDrawerOpen ? t("nav.collapse") : t("nav.expand")}
+              >
+                <MobileNavToggle
+                  class="topbar-nav-toggle"
+                  open={props.navDrawerOpen}
+                  status={props.floating ? undefined : props.gatewayStatus?.kind}
+                  onToggle={(trigger) => props.onToggleDrawer?.(trigger)}
+                />
+              </openclaw-tooltip>
+            }
           >
-            <MobileNavToggle
-              class="topbar-nav-toggle"
-              open={props.navDrawerOpen}
-              status={props.floating ? undefined : props.gatewayStatus?.kind}
-              onToggle={(trigger) => props.onToggleDrawer?.(trigger)}
-            />
-          </openclaw-tooltip>
+            <openclaw-tooltip prop:content={t("common.back")}>
+              <button
+                type="button"
+                class="mobile-nav-toggle topbar-nav-toggle topbar-back"
+                aria-label={t("common.back")}
+                onClick={() => props.onBack?.()}
+              >
+                <Icon name="chevronLeft" />
+              </button>
+            </openclaw-tooltip>
+          </Show>
           <div class="topnav-shell__content" onMouseDown={beginNativeWindowDrag}>
             <Show
               when={!props.floating}
@@ -137,6 +155,7 @@ defineSolidBridge<Props>(
       onToggleDrawer: { default: undefined, attribute: false },
       onOpenPalette: { default: undefined, attribute: false },
       floating: { default: false, attribute: false },
+      onBack: { default: undefined, attribute: false },
       pageTitle: { default: "", attribute: false },
       registerPageActions: { default: undefined, attribute: false },
     },

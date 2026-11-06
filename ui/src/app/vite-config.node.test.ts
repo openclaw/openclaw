@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { JSDOM } from "jsdom";
 import { build, createServer, type Alias } from "vite";
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -194,6 +195,56 @@ async function localeHooks(aliases: Alias[] = []) {
   return { buildStart, resolveId, load, watchChange };
 }
 
+it.each([
+  { language: "en-US", saved: "ar", dir: "rtl" },
+  { language: "fa-IR", saved: null, dir: "rtl" },
+  { language: "ar-EG", saved: "en", dir: "ltr" },
+  { language: "ar-EG", saved: "invalid", dir: "rtl" },
+  { language: "ar-EG", saved: null, dir: "rtl", blocked: true },
+])("sets $dir before the document body for $language and saved $saved", async (sample) => {
+  const server = await createServer({
+    configFile: false,
+    logLevel: "silent",
+    plugins: [controlUiLocaleModulesPlugin()],
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true, hmr: false, watch: null },
+  });
+  let html: string;
+  try {
+    html = await server.transformIndexHtml(
+      "/",
+      '<html lang="en"><head><script>window.bootLocale={dir:document.documentElement.dir,lang:document.documentElement.lang,body:document.body};</script></head><body></body></html>',
+    );
+  } finally {
+    await server.close();
+  }
+  const page = new JSDOM(html, {
+    url: "https://gateway.example/",
+    runScripts: "dangerously",
+    beforeParse(window) {
+      Object.defineProperty(window.navigator, "language", { value: sample.language });
+      if (sample.blocked) {
+        Object.defineProperty(window, "localStorage", {
+          get() {
+            throw new Error("denied");
+          },
+        });
+      } else if (sample.saved) {
+        window.localStorage.setItem("openclaw.i18n.locale", sample.saved);
+      }
+    },
+  });
+  try {
+    expect(Reflect.get(page.window, "bootLocale")).toEqual({
+      dir: sample.dir,
+      lang: "en",
+      body: null,
+    });
+  } finally {
+    page.window.close();
+  }
+});
+
 async function loadLocaleSource(
   load: Awaited<ReturnType<typeof localeHooks>>["load"],
   id: string = baseLocaleId,
@@ -321,7 +372,7 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
   expect(brotliDecompressSync(variants[0]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
   expect(gunzipSync(variants[1]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
   expect(createHash("sha256").update(variants[1]!.source).digest("hex")).toBe(
-    "aabdc80dc704c3abc609a76c6ac3e9ae872cf023770c6ea5fbb29ffe56adfcab",
+    "60e4687fc5820ca008c163772ca7f2c11787042a29b21615e43beebd8eb30198",
   );
   // No timestamp, filename, or host OS field may make the pinned gzip bytes host-dependent.
   expect(variants[1]!.source.subarray(0, 10).toString("hex")).toBe("1f8b08000000000002ff");
@@ -586,7 +637,7 @@ it.each([
   ).toThrow(`${key} ${error}`);
 });
 
-it.each(["agent-id", "error-coercion", "expect"])(
+it.each(["agent-id", "error-coercion", "expect", "stringified-error"])(
   "resolves internal source aliases for %s",
   (subpath) => {
     const aliases = resolveSourcePackageAliasesForVite();

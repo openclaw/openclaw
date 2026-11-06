@@ -30,7 +30,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
-import { registerSkillUsageTracking } from "../skills/workshop/skill-usage.js";
+import { registerSkillUsageTracking } from "../skills/runtime/skill-usage.js";
 import { pruneExpiredArtifactDownloads } from "./artifact-download-grants.js";
 import {
   captureThawRestartTargets,
@@ -437,6 +437,21 @@ export function startGatewayMaintenanceTimers(params: {
   });
 
   const skillUsageCleanup = registerSkillUsageTracking();
+
+  scheduleMedia("sqlite-snapshots", async () => {
+    try {
+      const { reclaimAbandonedSqliteSnapshots } =
+        await import("../infra/sqlite-snapshot-reclamation.js");
+      const result = await reclaimAbandonedSqliteSnapshots(mediaScheduler.signal);
+      if (result.removed || result.skipped) {
+        params.logHealth.info(
+          `SQLite snapshot cleanup: removed ${result.removed} directories (${result.bytes} bytes); retained ${result.skipped} busy, recent, or unrecognized directories`,
+        );
+      }
+    } catch (error) {
+      params.logHealth.error(`SQLite snapshot cleanup failed: ${formatError(error)}`);
+    }
+  });
 
   schedulePeriodic("dedupe", 60_000, () => {
     const AGENT_RUN_SEQ_MAX = 10_000;

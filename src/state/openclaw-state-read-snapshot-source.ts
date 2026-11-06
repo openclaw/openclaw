@@ -11,11 +11,13 @@ import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
 } from "../infra/gateway-state-owner-record.js";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  createSqliteLifecycleAggregateError,
+  SqliteSnapshotCleanupError,
+} from "../infra/sqlite-lifecycle-errors.js";
 import {
   deferSqliteSnapshotCleanupAfterRead,
   retainSnapshotTempDirectory,
-  SqliteSnapshotCleanupError,
 } from "../infra/sqlite-readonly-location-cleanup.js";
 import type {
   AsyncPreparedSqliteReadOnlyLocation,
@@ -119,6 +121,7 @@ export async function prepareOpenClawStateReadSnapshotSource({
         preserveSourceArtifacts,
         signal: admissionSignal,
         expectedSourceIdentity: preserveSourceArtifacts ? captured.identity : undefined,
+        reuse: true,
       });
       // Sync readers must publish the same source without waiting for a Promise reaction.
       materialization = mapRetainedOperation(preparation, (location) => {
@@ -216,8 +219,11 @@ export async function prepareOpenClawStateReadSnapshotSource({
           preserveSourceArtifacts: true,
           signal: admissionSignal,
           expectedSourceIdentity: admission.identity,
+          reuse: true,
         });
         prepared = await preparation.result;
+        // A borrowed image settles at once, so cancellation has not been observed yet.
+        admissionSignal.throwIfAborted();
       } else {
         prepared = await prepareSqliteReadOnlyLocation(pathname, {
           preserveSourceArtifacts: artifactPreserving,

@@ -64,6 +64,37 @@
  * A public repository fixture should be exported with git archive at a pinned
  * revision before passing --fixture-source; never import a live operator workspace.
  * First creation has cold owner/template state, not an evicted OS page cache.
+ * --fake-builder-removal-ms 36000 substitutes a process-backed Podman fixture:
+ * creation, termination and removal have persistent engine state. The builder
+ * ignores SIGTERM: stop waits its default ten-second grace (or --time), while
+ * kill terminates immediately. Calls record argv and start/completion timestamps.
+ * Use with --acceleration --sandbox-backend podman --serial-turns --fresh-only.
+ * Installation takes the real source-only fallback. Registry/housekeeping and
+ * filesystem preparation remain real; this does not qualify Podman or btrfs.
+ * Run separate fresh processes in A/A then ABAB order, at least five per arm.
+ * Retirement is nested inside template.build; never add those durations together.
+ * --owner-switch checks that another session at the same commit reuses the template.
+ * --head-advance cold|prewarm advances HEAD with identical source before that second
+ * session. The prewarm arm runs the existing background preparation owner first;
+ * its cost is reported separately. Compare two cold controls then five interleaved
+ * pairs: request-path template builds must change from one to zero, checkout HEAD
+ * must match, and prewarm plus request total cost must remain within measured spread.
+ * --head-change source|lockfile makes that advance change a tracked source file or
+ * the frozen lockfile. --expected-head-builds 0|1 checks incremental reuse versus
+ * full rebuild. Compare fresh baseline and candidate dependency fingerprints outside
+ * timing. --partial-clone uses a local blob:none origin for the fixture checkout.
+ * --source-dependent-install adds a postinstall that copies the changed source
+ * into node_modules: its marker must differ when an unsafe refresh skips hooks.
+ * --crash-builder interrupts the fixture's outstanding rm after the first prepare,
+ * then exits without finalizers. Reopen that same --output with --recover-builder
+ * --fake-builder-removal-ms 36000 to prove startup cleanup from persisted state.
+ * --creation-contender starts an unrelated real managed checkout when the first
+ * cold template build begins. Its latency/phases and the combined owner cost
+ * expose global allocation head-of-line blocking. Use --serial-turns --fresh-only
+ * --acceleration with a native dependency fixture; run two identical controls
+ * and five counterbalanced baseline/candidate pairs. Child CPU is excluded.
+ * Add --owner-switch --head-advance cold to start the contender on other-first,
+ * after warming both creation owners, while a new commit still needs a cold template.
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -98,10 +129,19 @@ const { values } = parseArgs({
     "fixture-source": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
     "owner-switch": { type: "boolean", default: false },
+    "creation-contender": { type: "boolean", default: false },
+    "head-advance": { type: "string" },
+    "head-change": { type: "string" },
+    "expected-head-builds": { type: "string" },
+    "partial-clone": { type: "boolean", default: false },
+    "source-dependent-install": { type: "boolean", default: false },
     "fresh-only": { type: "boolean", default: false },
     acceleration: { type: "boolean", default: false },
     "sandbox-backend": { type: "string", default: "docker" },
     "sandbox-image": { type: "string" },
+    "fake-builder-removal-ms": { type: "string" },
+    "crash-builder": { type: "boolean", default: false },
+    "recover-builder": { type: "boolean", default: false },
     "sibling-worktrees": { type: "string", default: "0" },
     revision: { type: "string" },
     mode: { type: "string", default: "owner" },
@@ -152,6 +192,10 @@ if (values["freeze-source"]) {
   }
   // Both arms execute this same measurement program, including its worker instrumentation.
   fs.copyFileSync(fileURLToPath(import.meta.url), path.join(destination, scriptRelative));
+  fs.copyFileSync(
+    new URL("./sandbox-builder-engine-fixture.ts", import.meta.url),
+    path.join(destination, "scripts/perf/sandbox-builder-engine-fixture.ts"),
+  );
 
   const digest = createHash("sha256");
   let fileCount = 0;
@@ -255,8 +299,47 @@ assert(!values["fixture-source"] || serialTurns);
 assert(!values["owner-switch"] || serialTurns);
 assert(!values["fresh-only"] || serialTurns);
 assert(!values.acceleration || serialTurns);
+assert(
+  !values["head-change"] ||
+    (values["head-advance"] && ["source", "lockfile"].includes(values["head-change"])),
+);
+assert(
+  values["expected-head-builds"] === undefined ||
+    ["0", "1"].includes(values["expected-head-builds"]),
+);
+assert(!values["partial-clone"] || serialTurns);
+assert(!values["source-dependent-install"] || values["head-change"] === "source");
+assert(
+  !values["creation-contender"] ||
+    (serialTurns &&
+      values["fresh-only"] &&
+      values.acceleration &&
+      (!values["owner-switch"] || values["head-advance"] === "cold")),
+);
+assert(
+  !values["head-advance"] ||
+    (["cold", "prewarm"].includes(values["head-advance"]) &&
+      values["owner-switch"] &&
+      values["fresh-only"] &&
+      values.acceleration),
+);
 assert(["docker", "podman"].includes(values["sandbox-backend"]));
 assert(!values["sandbox-image"] || values.acceleration);
+const fakeBuilderRemovalMs =
+  values["fake-builder-removal-ms"] === undefined
+    ? undefined
+    : Number(values["fake-builder-removal-ms"]);
+assert(
+  fakeBuilderRemovalMs === undefined ||
+    (Number.isSafeInteger(fakeBuilderRemovalMs) &&
+      fakeBuilderRemovalMs >= 0 &&
+      (values["recover-builder"] ||
+        (values.acceleration && values["sandbox-backend"] === "podman"))),
+);
+assert(!(values["crash-builder"] && values["recover-builder"]));
+assert(
+  !(values["crash-builder"] || values["recover-builder"]) || fakeBuilderRemovalMs !== undefined,
+);
 const siblingWorktrees = Number(values["sibling-worktrees"]);
 assert(Number.isSafeInteger(siblingWorktrees) && siblingWorktrees >= 0);
 assert(!siblingWorktrees || serialTurns);
@@ -311,9 +394,9 @@ if (values["lease-sources"]) {
   Error.stackTraceLimit = 32;
 }
 const output = path.resolve(values.output);
-fs.mkdirSync(output, { recursive: reuseFixture });
+fs.mkdirSync(output, { recursive: reuseFixture || values["recover-builder"] });
 for (const name of ["home", "tmp", "repo"]) {
-  fs.mkdirSync(path.join(output, name), { recursive: reuseFixture });
+  fs.mkdirSync(path.join(output, name), { recursive: reuseFixture || values["recover-builder"] });
 }
 if (values["agent-storage-dir"] && !reuseFixture) {
   const agentStorage = path.resolve(values["agent-storage-dir"]);
@@ -435,11 +518,51 @@ process.env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
     GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
   },
 });
+const fakeBuilderEngine =
+  fakeBuilderRemovalMs === undefined
+    ? undefined
+    : (await import("./sandbox-builder-engine-fixture.ts")).installSandboxBuilderEngineFixture(
+        output,
+        fakeBuilderRemovalMs,
+        values["recover-builder"],
+      );
+if (values["recover-builder"]) {
+  const recoveredConfig = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+  (await import("../../src/config/runtime-snapshot.js")).setRuntimeConfigSnapshot(recoveredConfig);
+  const state = await import("../../src/state/openclaw-state-db.js");
+  state.openOpenClawStateDatabase();
+  const lifecycle = await import("../../src/agents/sandbox/registry-lifecycle.js");
+  const before = fakeBuilderEngine!.snapshot();
+  assert(before.remaining.length > 0, "Recovery needs a persisted interrupted builder");
+  const started = performance.now(),
+    cpuBefore = process.cpuUsage();
+  const close = lifecycle.prepareSandboxRegistryClose();
+  await lifecycle.maybeRunSandboxRegistryHousekeeping(async () => {});
+  await close.drain();
+  const cpu = process.cpuUsage(cpuBefore);
+  const recovery = {
+    before,
+    after: fakeBuilderEngine!.snapshot(),
+    elapsedMs: performance.now() - started,
+    processCpuMs: (cpu.user + cpu.system) / 1000,
+  };
+  fs.writeFileSync(path.join(output, "builder-recovery.json"), JSON.stringify(recovery, null, 2));
+  await state.closeOpenClawStateDatabaseAsync();
+  assert.equal(recovery.after.remaining.length, 0, "Startup leaked an interrupted builder");
+  console.log(JSON.stringify(recovery));
+  process.exit(0);
+}
 const repo = path.join(output, "repo"),
   canonical = path.join(output, "canonical");
 const git = (...args: string[]) =>
   execFileSync("git", ["-C", repo, ...args], {
-    env: process.env,
+    env: values["head-change"]
+      ? {
+          ...process.env,
+          GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z",
+          GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
+        }
+      : process.env,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
@@ -469,9 +592,30 @@ if (reuseFixture) {
     for (let i = 0; i < files; i++) {
       fs.writeFileSync(path.join(repo, `file-${i}.txt`), `synthetic ${i}\n`.padEnd(fileBytes, "."));
     }
+    if (fakeBuilderEngine) {
+      fs.writeFileSync(
+        path.join(repo, "package.json"),
+        '{"name":"synthetic-builder","private":true}\n',
+      );
+      fs.writeFileSync(path.join(repo, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    }
   }
   // An exported repository may contain deliberately tracked ignored fixtures.
   git("add", ...(values["fixture-source"] ? ["--force"] : []), ".");
+  if (values["source-dependent-install"]) {
+    const input = git("ls-files", "src/").trim().split("\n")[0];
+    assert(input, "Source-dependent install needs a tracked src/ file");
+    const manifest = path.join(repo, "package.json");
+    const pkg = JSON.parse(fs.readFileSync(manifest, "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    pkg.scripts = {
+      ...pkg.scripts,
+      postinstall: `node -e 'require("node:fs").copyFileSync(${JSON.stringify(input)}, "node_modules/source-dependent.txt")'`,
+    };
+    fs.writeFileSync(manifest, JSON.stringify(pkg) + "\n");
+    git("add", "package.json");
+  }
   git("commit", "--quiet", "-m", "Synthetic workspace");
   if (values["fixture-source"]) {
     // Compare checkout bytes after Git's committed attributes have normalized the import.
@@ -480,6 +624,15 @@ if (reuseFixture) {
       fs.rmSync(path.join(repo, name), { recursive: true, force: true });
     }
     git("checkout-index", "--all", "--force");
+  }
+  if (values["partial-clone"]) {
+    git("config", "uploadpack.allowFilter", "true");
+    const upstream = path.join(output, "upstream");
+    fs.renameSync(repo, upstream);
+    execFileSync("git", ["clone", "--quiet", "--filter=blob:none", `file://${upstream}`, repo]);
+    git("config", "user.name", "Synthetic fixture");
+    git("config", "user.email", "fixture@example.invalid");
+    assert.equal(git("config", "remote.origin.partialclonefilter").trim(), "blob:none");
   }
   git("worktree", "add", "--quiet", "-b", "fixture", canonical);
   for (let i = 0; i < siblingWorktrees; i++) {
@@ -515,6 +668,7 @@ const config: OpenClawConfig = {
     entries: { main: { workspace: repo } },
     defaults: {
       sandbox: {
+        ...(values["head-advance"] ? { mode: "all" as const } : {}),
         backend: values["sandbox-backend"],
         docker: { image: values["sandbox-image"] },
       },
@@ -564,6 +718,9 @@ const state = await import("../../src/state/openclaw-state-db.js");
 const agent = await import("../../src/state/openclaw-agent-db.js");
 (await import("../../src/config/runtime-snapshot.js")).setRuntimeConfigSnapshot(config);
 state.openOpenClawStateDatabase();
+const sandboxRegistryClose = fakeBuilderEngine
+  ? (await import("../../src/agents/sandbox/registry-lifecycle.js")).prepareSandboxRegistryClose()
+  : undefined;
 if (values.mode !== "maintenance" && !reuseFixture) {
   await (
     await import("../../src/agents/worktrees/registry.js")
@@ -799,6 +956,43 @@ measurement: try {
     fs.writeFileSync(path.join(canonical, sentinel), "canonical-only excluded bytes\n");
     const turns: unknown[] = [];
     const mutations = new Map<string, string | null>();
+    let createContender: (() => Promise<unknown>) | undefined;
+    if (values["creation-contender"]) {
+      const contenderRepo = path.join(output, "contender-repo");
+      fs.mkdirSync(contenderRepo);
+      const contenderGit = (...args: string[]) =>
+        execFileSync("git", ["-C", contenderRepo, ...args], { env: process.env });
+      contenderGit("init", "--quiet", "-b", "main");
+      contenderGit("config", "user.name", "Synthetic fixture");
+      contenderGit("config", "user.email", "fixture@example.invalid");
+      fs.writeFileSync(path.join(contenderRepo, "README.md"), "independent checkout\n");
+      contenderGit("add", ".");
+      contenderGit("commit", "--quiet", "-m", "Synthetic contender");
+      const { ManagedWorktreeService } = await import("../../src/agents/worktrees/service.js");
+      const service = new ManagedWorktreeService({ getConfig: () => config });
+      if (values["owner-switch"]) {
+        await service.create({ repoRoot: contenderRepo, name: "warmup", baseRef: "HEAD" });
+      }
+      createContender = async () => {
+        const spans: Record<string, number> = {};
+        const started = performance.now();
+        const record = await withDiagnosticsTimelineObserver(
+          (name, _attributes, duration) => {
+            const begin = performance.now();
+            return () => {
+              spans[name] = (spans[name] ?? 0) + (duration ?? performance.now() - begin);
+            };
+          },
+          () => service.create({ repoRoot: contenderRepo, name: "contender", baseRef: "HEAD" }),
+        );
+        const elapsedMs = performance.now() - started;
+        assert.equal(
+          fs.readFileSync(path.join(record.path, "README.md"), "utf8"),
+          "independent checkout\n",
+        );
+        return { elapsedMs, spans };
+      };
+    }
     const measureTurn = async (phase: string, prepare = prepareWorkspace) => {
       acquisitions = scans = probes = 0;
       manifestReads.length = 0;
@@ -811,8 +1005,25 @@ measurement: try {
         totalBefore = process.cpuUsage();
       const allocationBefore = getHeapStatistics().total_allocated_bytes;
       const started = performance.now();
+      const buildStarted = Promise.withResolvers<void>();
+      let contenderStarted = false;
+      // Construct this continuation outside preparation's closure-bound authority.
+      const contender =
+        phase === (values["owner-switch"] ? "other-first" : "first") && createContender
+          ? buildStarted.promise.then(createContender)
+          : undefined;
+      void contender?.catch(() => {});
       const measuredWorkspace = await withDiagnosticsTimelineObserver(
         (name, _attributes, durationMs) => {
+          if (
+            contender &&
+            name.endsWith(".template.build") &&
+            durationMs === undefined &&
+            !contenderStarted
+          ) {
+            contenderStarted = true;
+            buildStarted.resolve();
+          }
           const begin = performance.now();
           return () => {
             const span = (spans[name] ??= { count: 0, totalMs: 0 });
@@ -821,7 +1032,15 @@ measurement: try {
           };
         },
         () => withWorktreePreparationTiming("sandbox", prepare),
-      );
+      ).catch(async (error: unknown) => {
+        if (contenderStarted) {
+          await Promise.allSettled([contender]);
+        }
+        throw error;
+      });
+      const projectionElapsedMs = performance.now() - started;
+      assert(!contender || contenderStarted, "Cold template build never started contender");
+      const contenderResult = await contender;
       const elapsedMs = performance.now() - started;
       const cpu = process.threadCpuUsage(cpuBefore),
         total = process.cpuUsage(totalBefore);
@@ -838,6 +1057,7 @@ measurement: try {
       const result = {
         phase,
         elapsedMs,
+        ...(contender ? { projectionElapsedMs, contender: contenderResult } : {}),
         mainCpuMs: (cpu.user + cpu.system) / 1000,
         processCpuMs: (total.user + total.system) / 1000,
         allocatedBytes,
@@ -853,6 +1073,7 @@ measurement: try {
         hostLoad: loadBefore,
         hostLoadAfter: loadavg(),
         spans,
+        ...(fakeBuilderEngine ? { engine: fakeBuilderEngine.snapshot() } : {}),
       };
       turns.push(result);
       console.log(JSON.stringify(result));
@@ -860,6 +1081,18 @@ measurement: try {
         assert(
           spans["worktree.sandbox.templateApply"],
           "Requested template proof fell back before cloning; check filesystem, lockfile, and image",
+        );
+      }
+      if (values["head-advance"] && phase === "other-first") {
+        assert.equal(
+          spans["attempt.setup.sandbox.workspace_selection.prepare.reconcile.template.build"]
+            ?.count ?? 0,
+          values["expected-head-builds"] === undefined
+            ? values["head-advance"] === "cold"
+              ? 1
+              : 0
+            : Number(values["expected-head-builds"]),
+          "Fresh request template build count must match the selected proof arm",
         );
       }
       if (prepare !== prepareWorkspace) {
@@ -886,6 +1119,13 @@ measurement: try {
       return measuredWorkspace;
     };
     await measureTurn("first");
+    if (values["crash-builder"]) {
+      const interruptedPids = await fakeBuilderEngine!.interruptRemoval();
+      const crash = { turns, interruptedPids, engine: fakeBuilderEngine!.snapshot() };
+      fs.writeFileSync(path.join(output, "builder-crash.json"), JSON.stringify(crash, null, 2));
+      console.log(JSON.stringify({ builderCrash: crash }));
+      process.exit(0);
+    }
     for (let i = 0; i < requests; i++) {
       await measureTurn(`unchanged-${i + 1}`);
     }
@@ -934,7 +1174,41 @@ measurement: try {
       snapshotBytes: number;
       reads: typeof manifestReads;
     }> = [];
+    let advancedTree: string | undefined;
+    let advancedCommit: string | undefined;
+    let dependencyFingerprint: string | undefined;
+    let dependencyFiles = 0;
+    let dependencyBytes = 0;
+    let sourceDependentInstallMatches: boolean | undefined;
     if (values["owner-switch"]) {
+      if (values["head-advance"]) {
+        const changed =
+          values["head-change"] === "lockfile"
+            ? "pnpm-lock.yaml"
+            : regularFiles.find((entry) => entry.startsWith("src/"));
+        if (values["head-change"]) {
+          assert(changed, "Source-change proof needs a tracked src/ file");
+          fs.appendFileSync(
+            path.join(repo, changed),
+            values["head-change"] === "lockfile"
+              ? "\n# Synthetic HEAD advance\n"
+              : "\n// Synthetic HEAD advance\n",
+          );
+          git("add", "--", changed);
+        }
+        git("commit", "--quiet", "--allow-empty", "-m", "Synthetic HEAD advance");
+        if (values["head-advance"] === "prewarm") {
+          const { prewarmLocalWorkspaceTemplates } =
+            await import("../../src/gateway/worker-environments/local-workspace-prewarm.js");
+          await measureTurn("head-prewarm", async () => {
+            await prewarmLocalWorkspaceTemplates({
+              getConfig: () => config,
+              signal: new AbortController().signal,
+            });
+            return repo;
+          });
+        }
+      }
       const otherKey = `${sessionKey}:other`;
       const otherCanonical = path.join(output, "other-canonical");
       git("worktree", "add", "--quiet", "-b", "other", otherCanonical);
@@ -1002,12 +1276,74 @@ measurement: try {
         });
       }
       assert(otherProjection);
+      assert.equal(
+        execFileSync("git", ["-C", otherProjection, "rev-parse", "HEAD"], {
+          encoding: "utf8",
+        }).trim(),
+        git("rev-parse", "HEAD").trim(),
+        "Fresh projection must retain the selected checkout commit",
+      );
       for (const entry of inventory) {
         assert.deepEqual(
           readFixtureEntry(otherProjection, entry),
           readFixtureEntry(repo, entry),
           `Fresh template projection differs from its committed source: ${entry}`,
         );
+      }
+      advancedTree = git("rev-parse", "HEAD^{tree}").trim();
+      advancedCommit = git("rev-parse", "HEAD").trim();
+      assert.equal(
+        execFileSync("git", ["-C", otherProjection, "rev-parse", "HEAD^{tree}"], {
+          encoding: "utf8",
+        }).trim(),
+        advancedTree,
+      );
+      const dependencies = createHash("sha256");
+      const walk = (directory: string) => {
+        for (const entry of fs.readdirSync(directory).toSorted()) {
+          if (entry === ".git") {
+            continue;
+          }
+          const target = path.join(directory, entry);
+          const stat = fs.lstatSync(target);
+          const relative = path.relative(otherProjection!, target);
+          if (stat.isDirectory()) {
+            walk(target);
+          } else if (relative.split(path.sep).includes("node_modules")) {
+            dependencies.update(relative).update(String(stat.mode & 0o777));
+            let content = stat.isSymbolicLink()
+              ? Buffer.from(fs.readlinkSync(target))
+              : fs.readFileSync(target);
+            dependencyFiles++;
+            dependencyBytes += content.length;
+            // pnpm's install/validation times are metadata, not dependency-tree content.
+            if (entry === ".modules.yaml" || entry === ".pnpm-workspace-state-v1.json") {
+              content = Buffer.from(
+                content
+                  .toString()
+                  .replace(
+                    /^(\s*"?(?:prunedAt|lastValidatedTimestamp|recordedAtNs|mtimeNs|ctimeNs)"?:).*$/gmu,
+                    "$1 <timestamp>",
+                  ),
+              );
+            }
+            dependencies.update(content);
+          }
+        }
+      };
+      walk(otherProjection);
+      dependencyFingerprint = dependencies.digest("hex");
+      if (values["source-dependent-install"]) {
+        sourceDependentInstallMatches = fs
+          .readFileSync(path.join(otherProjection, "node_modules/source-dependent.txt"))
+          .equals(
+            fs.readFileSync(
+              path.join(
+                repo,
+                regularFiles.find((entry) => entry.startsWith("src/"))!,
+              ),
+            ),
+          );
       }
     }
     const sourceFile = path.join(root, "checkpoint-source.json");
@@ -1019,8 +1355,13 @@ measurement: try {
         source: values["fixture-source"] ?? null,
         siblingWorktrees,
         acceleration: values.acceleration,
+        headAdvance: values["head-advance"] ?? null,
+        headChange: values["head-change"] ?? null,
+        partialClone: values["partial-clone"],
+        sourceDependentInstall: values["source-dependent-install"],
         sandboxBackend: sandbox.backend,
         sandboxImage: sandbox.docker.image,
+        fakeBuilderRemovalMs,
         filesystemType: fs.statfsSync(output).type,
         pageCache: "not evicted by this benchmark",
       },
@@ -1030,6 +1371,12 @@ measurement: try {
       turns,
       ownerSwitch,
       fingerprint: fingerprint.digest("hex"),
+      advancedTree,
+      advancedCommit,
+      dependencyFingerprint,
+      dependencyFiles,
+      dependencyBytes,
+      sourceDependentInstallMatches,
       correctness:
         "all accepted file bytes, symlink targets, types and deletions match; ignored host file excluded",
       retainedMemory: globalThis.gc ? await collectRetainedMemory() : null,
@@ -1291,6 +1638,22 @@ measurement: try {
   await heartbeatDone;
   process.off("worker", observeWorker);
   await server?.close({ reason: "synthetic checkpoint measurement complete" });
+  if (sandboxRegistryClose) {
+    const before = performance.now();
+    const cpuBefore = process.cpuUsage();
+    const allocatedBefore = getHeapStatistics().total_allocated_bytes;
+    await sandboxRegistryClose.drain();
+    const cpu = process.cpuUsage(cpuBefore);
+    const cleanup = {
+      drainMs: performance.now() - before,
+      processCpuMs: (cpu.user + cpu.system) / 1000,
+      allocatedBytes: getHeapStatistics().total_allocated_bytes - allocatedBefore,
+      engine: fakeBuilderEngine!.snapshot(),
+    };
+    fs.writeFileSync(path.join(output, "builder-cleanup.json"), JSON.stringify(cleanup, null, 2));
+    console.log(JSON.stringify({ builderCleanup: cleanup }));
+    assert.equal(cleanup.engine.remaining.length, 0, "Builder survived registry shutdown drain");
+  }
   await agent.closeOpenClawAgentDatabasesAsync();
   await state.closeOpenClawStateDatabaseAsync();
   await (await import("../../src/shared/global-singleton.js")).drainGlobalSingletonLifecycleState();

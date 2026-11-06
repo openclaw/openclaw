@@ -20,7 +20,7 @@ const DEFAULT_USAGE_CACHE_TTL_MS = 60_000;
 
 export type ProviderUsageStatus = Pick<
   ProviderUsageSnapshot,
-  "windows" | "summary" | "plan" | "billing" | "accountEmail"
+  "windows" | "summary" | "plan" | "billing" | "accountEmail" | "authProfileId"
 >;
 
 type ProviderUsageCacheIdentity = {
@@ -96,6 +96,7 @@ function mapProviderUsage(usage: UsageSummary, previous?: Map<string, ProviderUs
       ...(snap.plan ? { plan: snap.plan } : {}),
       ...(snap.billing?.length ? { billing: snap.billing } : {}),
       ...(snap.accountEmail ? { accountEmail: snap.accountEmail } : {}),
+      ...(snap.authProfileId ? { authProfileId: snap.authProfileId } : {}),
     });
   }
   return usageByProvider;
@@ -294,17 +295,19 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
     return { updatedAt: params.now, providers: [] };
   }
   const { matching, needsRefresh, refreshParams } = resolveProviderUsageCacheRead(params);
-  if (matching && !needsRefresh) {
-    return matching.summary;
+  let summary = matching?.summary;
+  if (!matching || needsRefresh) {
+    const refresh = scheduleProviderUsageRefresh(refreshParams);
+    if (!matching && params.coldRead !== "refresh-marker") {
+      summary = await refresh;
+    } else {
+      void refresh.catch(() => {});
+    }
   }
-  const refresh = scheduleProviderUsageRefresh(refreshParams);
-  if (matching) {
-    void refresh.catch(() => {});
-    return matching.summary;
+  if (!summary) {
+    return { updatedAt: params.now, providers: [], refreshing: true };
   }
-  if (params.coldRead !== "refresh-marker") {
-    return await refresh;
-  }
-  void refresh.catch(() => {});
-  return { updatedAt: params.now, providers: [], refreshing: true };
+  // This public RPC does not share models.authStatus’s gated profile identity.
+  const providers = summary.providers.map(({ authProfileId: _authProfileId, ...usage }) => usage);
+  return { ...summary, providers };
 }

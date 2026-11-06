@@ -20,7 +20,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -196,9 +196,7 @@ try {
       let allocatedBytes;
       if (values.allocations) {
         const { profile } = await inspector.post("HeapProfiler.stopSampling");
-        const sum = (node) =>
-          node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
-        allocatedBytes = sum(profile.head);
+        allocatedBytes = sumSampledHeapBytes(profile.head);
         inspector.disconnect();
       }
       await Promise.all(sample.timers);

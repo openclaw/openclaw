@@ -18,15 +18,36 @@ Headless node-host commands terminated by an operating-system signal include the
 
 ## Host memory protection
 
-On Linux, Gateway-hosted exec commands have a default memory bound across the command's process tree, including foreground, PTY, and background execution. The bound is the smaller of one quarter of host memory (or the process's cgroup memory constraint) and half the memory remaining after the Gateway's own resident usage. There is no fixed ceiling, so the bound scales with available host capacity. No configuration is required.
+On Linux, Gateway-hosted foreground, PTY, background, and durable exec commands share one automatic workload memory budget. A single command can use the unused allowance; starting more commands does not multiply it. No configuration is required.
 
-OpenClaw samples resident memory plus swapped private pages and kills the owned process tree when it exceeds the bound. Sampling starts within one second. Trees below half their bound are sampled every five seconds; usage at or above half the bound, or a newly discovered descendant, restores the one-second interval. A fast runaway from a previously quiet tree can therefore take about six seconds to be detected and killed, including sampling overhead. The tool reports `memory-limit`, the observed usage, and the applied limit in MiB; background `process` polling and logs retain the diagnostic. Reduce concurrency or input size, split the work, or move it to a separately resource-limited worker.
+The RAM allowance starts from physical memory or the Gateway's cgroup constraint, whichever is smaller. On cgroup v2, OpenClaw checks the current group and its visible ancestors for RAM and swap limits, including a parent service or slice above a delegated Gateway. OpenClaw targets reserves of the larger of 256 MiB or one eighth of that capacity for the host, plus the larger of one eighth or 1.5 times the Gateway's resident usage for the Gateway. On small hosts, the shared RAM allowance preserves the former single-command allowance: the smaller of one quarter of capacity and half the RAM left after the Gateway's resident usage, rounded down by less than 1 MiB. The resulting RAM budget uses whole MiB so the kernel retains the same limit between commands. Swap has a separate allowance: the smallest of configured host swap, the inherited swap limit, and one quarter of that capacity. Swap does not enlarge the RAM allowance. The budget is held stable during the Gateway lifetime.
 
-Concurrent watchers share a sampling clock and procfs reads within each tick. OpenClaw follows every thread's children from watched roots, so unrelated host processes add no census work and descendants remain covered if they move to another cgroup while retaining their ancestry. A shared tick can bring another watcher's sample forward by less than one second. Pending reads do not block unrelated watchers; each tick reads fresh kernel facts.
+The shared sampler counts resident RAM and swapped private pages separately across registered command trees, including retained durable units. Overlapping watched roots count each PID once. Durable usage comes from the unit's cgroup, so descendants remain counted after its initial shell exits and after Gateway adoption. Units already running before an upgrade retain their existing unit limits until they finish, while their usage also counts toward the shared sampled budget.
 
-This is a sampled safeguard, not a kernel-enforced ceiling: rapid allocations can overshoot it, shared resident pages may count more than once across processes, and concurrent commands do not share an aggregate budget. Virtual address reservations are not counted. Ordinary child execution retains a tree owner for reparented descendants. PTY monitoring follows the live command's descendants only; daemonized children that reparent outside that tree are not covered. Use `background: true` without PTY for supervised long-running work instead of shell daemonization. Sandbox backends retain their own limits. This watchdog does not apply to remote `host=node`, Codex-native shell commands, or non-Linux hosts.
+Each new durable unit also has hard RAM and swap bounds equal to the entire shared allowance. This provides a kernel backstop for one unit while the sampler enforces the combined budget.
 
-Durable commands apply the same computed bound through the systemd unit's `MemoryMax` instead of the sampler. The kernel bounds the unit's cgroup, including its descendants. Each durable command has its own bound; commands do not share an aggregate budget.
+With writable Linux service delegation, ordinary exec commands also share a `memory.high` soft limit equal to the full RAM allowance in their existing `agent-exec` cgroup. Linux reclaims and throttles file cache and other charges above that limit; this does not impose a per-command quarter-RAM cap. The shared sampler remains responsible for cancellation. Cache-heavy work can slow under reclaim. If the policy cannot be applied, exec continues with a warning and sampled protection.
+
+Sampling starts within one second. Quiet workloads below half the aggregate allowance are sampled every five seconds; aggregate usage near the allowance or a new descendant restores the one-second interval. On excess, OpenClaw cancels a large contributor through its existing cleanup owner and keeps its charge until cleanup completes. The result reports `memory-limit`; process output retains the shared RAM and swap diagnostic. Pending reads do not block peers, and concurrent watchers share procfs reads within each tick without scanning unrelated host processes.
+
+Sampled enforcement and soft limits can overshoot during rapid allocation. Shared resident pages across different processes may count more than once. Without writable delegation, ordinary process-tree sampling does not bound file cache. Ordinary file-cache charges and durable units occupy separate cgroups, so their combined kernel charges can exceed the sampled RAM allowance. Virtual address reservations are excluded. Ordinary child execution retains a tree owner for reparented descendants. PTY sampling follows the live command's descendants; daemonized children that reparent outside that tree need `background: true` without PTY for supervised long-running work. Unreadable usage produces a degradation warning. There is no pressure-only automatic killer or host-wide coordinator across independent installations.
+
+Sandbox backends retain their own limits. This policy does not apply to remote `host=node`, Codex-native shell commands, or non-Linux hosts. If work exceeds the shared allowance, reduce concurrency or input size and inspect completed side effects before retrying.
+
+## Host I/O isolation
+
+When a Linux Gateway service delegates CPU, I/O, and memory controllers, ordinary
+Gateway-hosted agent commands run below a shared I/O ceiling that protects the
+Gateway database. Commands with the same session key share a child ceiling of
+half that aggregate read/write bandwidth and IOPS budget. Starting more commands
+in one session does not increase its share. Commands without a session key share
+one separate child ceiling.
+
+This reserves headroom against one session monopolizing the aggregate budget; it
+is not equal-share scheduling among every active session. Command cancellation
+and memory-limit enforcement still target the owned command tree. They do not
+terminate other commands sharing its session budget. Startup reports unavailable
+delegation with Doctor guidance; hosts without it retain their existing behavior.
 
 ## Parameters
 
@@ -129,7 +150,7 @@ Notes:
 - Running, completed, and failed results preserve execution warnings in structured `warningText` as well as visible text, so Code Mode callers can follow guidance such as using a noninteractive command when sandbox PTY is unavailable. Calls without warnings omit this field.
 - Before a Gateway restart, a background command continuation keeps the original requester's still-current authority, including permitted reviewer models. Another participant's permissions do not replace it, and revoked authority prevents further execution. Adopted durable completions after restart are new system input under the owning session principal's current authority; requester continuations are not restored.
 - When an approved async command completes, its continuation uses the normal agent run timeout from `agents.defaults.timeoutSeconds`. The follow-up observer can finish waiting while the accepted agent run continues.
-- Subagent sessions do not receive automatic background-exec wakes. Collect the result with `process poll` before yielding without another completion source.
+- Hidden subagent sessions do not receive automatic background-exec wakes; visible spawned sessions do. Collect the result with `process poll` before yielding without another completion source.
 - The process owner tracks agent-started background commands. Use the returned process session ID to inspect output, poll, or stop a command; its completion can wake the agent.
 - For work that should happen later or on a schedule, use cron instead of `exec` sleep/delay patterns.
 
@@ -241,6 +262,14 @@ openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 ```
 
 Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings. A saved target can become unresolvable or stop advertising execution support. Its binding then stays selected and is marked **Unavailable**. You can clear it with **Any node** or **Use default**, even when no execution-capable nodes are available. Supported names, addresses, and ID prefixes resolve without rewriting the saved reference.
+
+### macOS Local Network access
+
+A Gateway running as a macOS LaunchAgent can fail to reach LAN devices even when
+the same command succeeds in Terminal. Check [Local Network permission for the
+Gateway runtime](/platforms/mac/permissions#local-network-access-for-the-gateway)
+when Gateway-hosted commands fail with `EHOSTUNREACH`. If a connected node already
+has access, select that node with `host=node` for the command.
 
 ### Python environments (`uv`)
 

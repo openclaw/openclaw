@@ -1,13 +1,27 @@
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, lazy, Loading, onSettled, Show } from "solid-js";
+import type { RunFailureCause } from "../../../../../src/shared/run-failure-notice.js";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
+import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
+import type { FailedMessageEditSource } from "../failed-message-edit.ts";
+import { openChatRewindConfirmation } from "./chat-message-confirmation-view.tsx";
+
+// Failure facts and continuation stay eager; only this optional action is deferred.
+const ChatFailedMessageEditButton = lazy(() => import("./chat-failed-message-edit-button.tsx"));
 
 let nextPanelId = 0;
+// A rejected key or billing problem is fixed under Models, not by another attempt.
+const FIX_TITLES = new Map([
+  ["auth", "credentialsRejected"],
+  ["auth_permanent", "credentialsRejected"],
+  ["billing", "billingProblem"],
+]);
 
 /** Details open away from the conversation's edges, so they never cover the composer. */
 function panelPlacement(line: HTMLElement, panel: HTMLElement): "bottom" | "top" {
@@ -22,14 +36,24 @@ function panelPlacement(line: HTMLElement, panel: HTMLElement): "bottom" | "top"
 /** One terminal notice, separate from assistant prose and preserved partial output. */
 export function ChatRunFailureNotice(props: {
   summary: string;
+  cause?: RunFailureCause;
   repeatCount?: number;
   onRetry?: () => void;
+  editSource?: FailedMessageEditSource;
+  onFocusComposer?: () => void;
 }) {
   const panelId = `chat-run-failure-${++nextPanelId}`;
   const [line, setLine] = createSignal<HTMLElement>();
   const [open, setOpen] = createSignal(false);
   const [placement, setPlacement] = createSignal<"bottom" | "top">("bottom");
   let panel: PopoverHandle | undefined;
+  const fixTitle = () => props.cause && FIX_TITLES.get(props.cause.failoverReason!);
+  const title = () =>
+    t(`chat.recovery.${fixTitle() ?? "failedTitle"}`, {
+      provider: providerDisplayLabel(props.cause?.provider ?? ""),
+    });
+  const app = useOptionalApplication();
+  const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
   const concise = createMemo(() => {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";
@@ -60,7 +84,7 @@ export function ChatRunFailureNotice(props: {
         <Popover
           id={panelId}
           class="chat-run-failure__panel"
-          label={t("chat.recovery.failedTitle")}
+          label={title()}
           positionAnchor={line()}
           placement={placement()}
           triggerClass="chat-run-failure__toggle"
@@ -70,7 +94,7 @@ export function ChatRunFailureNotice(props: {
               <span class="chat-run-failure__icon" aria-hidden="true">
                 <Icon name="circleX" />
               </span>
-              <span class="chat-run-failure__title">{t("chat.recovery.failedTitle")}</span>
+              <span class="chat-run-failure__title">{title()}</span>
               <Show when={(props.repeatCount ?? 1) > 1}>
                 <span class="chat-run-failure__repeat">
                   · {t("chat.recovery.failedRepeatCount", { count: String(props.repeatCount) })}
@@ -133,10 +157,34 @@ export function ChatRunFailureNotice(props: {
             </span>
           </div>
         </Popover>
+        <Show when={props.editSource}>
+          <Loading fallback={null}>
+            <ChatFailedMessageEditButton
+              source={props.editSource}
+              confirm={openChatRewindConfirmation}
+              onFocusComposer={props.onFocusComposer}
+            />
+          </Loading>
+        </Show>
+        <Show when={openModels()}>
+          {(provider) => (
+            <button
+              type="button"
+              class="btn primary btn--sm chat-run-failure__retry"
+              onClick={() =>
+                app?.navigate("model-providers", {
+                  search: `?provider=${encodeURIComponent(provider())}`,
+                })
+              }
+            >
+              {t("chat.recovery.openModels")}
+            </button>
+          )}
+        </Show>
         <Show when={props.onRetry}>
           <button
             type="button"
-            class="btn primary btn--sm chat-run-failure__retry"
+            class={`btn ${openModels() ? "" : "primary "}btn--sm chat-run-failure__retry`}
             onClick={() => props.onRetry?.()}
           >
             <Icon name="refresh" />

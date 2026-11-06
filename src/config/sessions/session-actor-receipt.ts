@@ -10,6 +10,11 @@ import type {
 } from "./session-actor-contract.js";
 import type { PendingInputMutationReceipt } from "./session-pending-input-operations.types.js";
 
+export type SessionActorEntryReference = Pick<
+  SessionActorHotState,
+  "target" | "entry" | "writeToken"
+>;
+
 export type SessionActorCommittedWireOutcome<Value> = Extract<
   SessionActorOutcome<Value>,
   { kind: "committed" }
@@ -26,7 +31,7 @@ export function projectSessionActorCommittedOutcome<
   Value extends SessionActorPhaseResults[SessionActorPhase],
 >(
   outcome: Extract<SessionActorOutcome<Value>, { kind: "committed" }>,
-  reference: SessionActorHotState | undefined,
+  reference: SessionActorEntryReference | undefined,
 ): SessionActorCommittedWireOutcome<Value> {
   const { receipt, value } = outcome;
   // Turn/initialization results can also expose the entry; preserve their graph aliases.
@@ -83,7 +88,7 @@ export function projectSessionActorCommittedOutcome<
 
 export function restoreSessionActorCommittedOutcome<Value>(
   outcome: SessionActorCommittedWireOutcome<Value>,
-  reference: SessionActorHotState | undefined,
+  reference: SessionActorEntryReference | undefined,
 ): Extract<SessionActorOutcome<Value>, { kind: "committed" }> {
   const { receipt } = outcome;
   if (receipt.entryReference !== undefined) {

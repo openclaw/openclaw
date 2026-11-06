@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { expect, it as baseIt, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { withSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -131,6 +133,108 @@ async function withBoundedContextScope(run: (scope: Scope) => Promise<void>): Pr
 
 const it = baseIt.extend<{ scope: Scope }>({
   scope: async ({ task: _task }, use) => withBoundedContextScope(use),
+});
+
+it("reports slow hydration scan shape without formatting fast reads or draining byte-limited scans", async ({
+  scope,
+}) => {
+  await persist(scope, [
+    user("old", null),
+    transcriptMessage("pending", "old", {
+      ...makeAgentAssistantMessage({
+        provider: "openclaw",
+        model: "automation-result",
+        content: [],
+      }),
+      excludeFromContext: true,
+      openclawModelPlacement: "pending",
+    }),
+    user("large", "pending", "x".repeat(4096)),
+    user("tail", "large"),
+  ]);
+  await waitProjection(scope);
+  const opened = openOpenClawAgentDatabaseReadOnly({ agentId: scope.agentId });
+  assert(opened.found);
+  const database = opened.database;
+  const counter = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["metadata", "dependency"],
+    (sql) =>
+      sql.startsWith('select "active"."event_seq", "active"."active_position"')
+        ? "metadata"
+        : sql.startsWith('with "dependency"')
+          ? "dependency"
+          : null,
+  );
+  const logger = { warn: vi.fn() };
+  const formatAgent = vi.fn(() => "main");
+  try {
+    for (const [maxEvents, maxBytes, metadataRows, exhausted] of [
+      [10, 16_384, 3, 1],
+      [1, 16_384, 2, 0],
+      [10, 1024, 2, 0],
+    ] as const) {
+      for (const slow of [false, true]) {
+        logger.warn.mockClear();
+        formatAgent.mockClear();
+        counter.counts.metadata = counter.counts.dependency = 0;
+        counter.rowCounts.metadata = counter.rowCounts.dependency = 0;
+        withSqliteReaderOwner(
+          { operation: "sessions.transcript-hydration.cron-model", ownerKind: "worker" },
+          () => {
+            runSqliteReadSnapshotSync(
+              database.db,
+              () => boundedContext(scope, { maxEvents, maxBytes, transaction: database }),
+              {
+                logger,
+                slowTransactionHoldMs: slow ? 0 : Infinity,
+              },
+            );
+            if (slow) {
+              runSqliteReadSnapshotSync(database.db, () => undefined, {
+                logger,
+                slowTransactionHoldMs: 0,
+              });
+            }
+          },
+          {
+            get agentId() {
+              return formatAgent();
+            },
+          },
+        );
+        expect(counter.counts).toEqual({ metadata: 1, dependency: 1 });
+        expect(counter.rowCounts).toEqual({ metadata: metadataRows, dependency: 1 });
+        if (!slow) {
+          expect(logger.warn).not.toHaveBeenCalled();
+          expect(formatAgent).not.toHaveBeenCalled();
+          continue;
+        }
+        expect(logger.warn).toHaveBeenCalledWith(
+          "slow SQLite transaction hold",
+          expect.objectContaining({
+            operation: "sessions.transcript-hydration.cron-model",
+            context: {
+              agentId: "main",
+              metadataRows,
+              metadataLimit: maxEvents + 1,
+              activeEvents: 4,
+              dependencyRows: 1,
+              exhausted,
+            },
+          }),
+        );
+        expect(logger.warn).toHaveBeenLastCalledWith(
+          "slow SQLite transaction hold",
+          expect.objectContaining({ context: { agentId: "main" } }),
+        );
+        expect(formatAgent).toHaveBeenCalledTimes(2);
+      }
+    }
+  } finally {
+    counter.restore();
+    database.close();
+  }
 });
 
 async function seedImportedTranscript(scope: Scope, events: unknown[]) {

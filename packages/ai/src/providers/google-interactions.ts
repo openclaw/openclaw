@@ -43,6 +43,7 @@ import {
   type GoogleInteractionsRequestBody,
 } from "./google-interactions-request.js";
 import { buildGoogleInteractionsSimpleThinking, type GoogleApiType } from "./google-shared.js";
+import { mapGoogleToolArguments } from "./google-tool-parameters.js";
 import {
   GOOGLE_VIDEO_SLOT_OMISSION,
   materializeGoogleVideoSlots,
@@ -86,6 +87,23 @@ function isGoogleInteractionsRequestBody(value: unknown): value is GoogleInterac
     typeof record.store === "boolean" &&
     typeof record.stream === "boolean"
   );
+}
+
+// Google prices Priority at 1.8x and Flex at 0.5x the Standard rate in its per-model
+// tables. Priority can be downgraded to Standard, which x-gemini-service-tier reports.
+function applyGoogleServiceTierPricing(
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number },
+  tier: string | undefined,
+): void {
+  const multiplier = tier === "priority" ? 1.8 : tier === "flex" ? 0.5 : 1;
+  if (multiplier === 1) {
+    return;
+  }
+  cost.input *= multiplier;
+  cost.output *= multiplier;
+  cost.cacheRead *= multiplier;
+  cost.cacheWrite *= multiplier;
+  cost.total = cost.input + cost.output + cost.cacheRead + cost.cacheWrite;
 }
 
 export const streamGoogleInteractions: StreamFunction<
@@ -232,6 +250,12 @@ export const streamGoogleInteractions: StreamFunction<
           if (currentBlock.partialJson?.trim()) {
             currentBlock.arguments = parseTerminalToolCallArguments(currentBlock.partialJson);
           }
+          currentBlock.arguments = mapGoogleToolArguments(
+            providerContext.tools,
+            currentBlock.name,
+            currentBlock.arguments,
+            "decode",
+          );
           delete currentBlock.partialJson;
           stream.push({
             type: "toolcall_end",
@@ -485,6 +509,12 @@ export const streamGoogleInteractions: StreamFunction<
           };
           if (model.cost) {
             calculateCost(model, output.usage);
+            applyGoogleServiceTierPricing(
+              output.usage.cost,
+              response.headers.get("x-gemini-service-tier") ??
+                readStringField(interaction, "service_tier") ??
+                body.service_tier,
+            );
           }
 
           const status = typeof interaction.status === "string" ? interaction.status : "completed";

@@ -130,7 +130,9 @@ describe("ManagedWorktreeService garbage collection", () => {
     const created = await materializeRunOwnedFixture("idle-dead", "workboard");
     await git(repo, "worktree", "lock", "--reason", "openclaw pid=999999", created.path);
     for (const record of [manual, created]) {
-      await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+      await updateRegistryWorktree(env, record.id, {
+        lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+      });
     }
 
     const result = await service.gc();
@@ -138,6 +140,23 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeTruthy();
     expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
     expect(await fs.stat(manual.path)).toBeTruthy();
+  });
+
+  it("spreads equal-age expiry across a stable extra hour without shortening retention", async () => {
+    const later = await materializeRunOwnedFixture("jitter-a", "session");
+    const earlier = await materializeRunOwnedFixture("jitter-b", "session");
+    for (const record of [later, earlier]) {
+      await updateRegistryWorktree(env, record.id, { lastActiveAt: now - IDLE_GC_MS });
+    }
+    expect((await service.gc()).removed).toEqual([]);
+    for (const record of [later, earlier]) {
+      await updateRegistryWorktree(env, record.id, { lastActiveAt: now - IDLE_GC_MS - 1_800_000 });
+    }
+    expect((await service.gc()).removed).toEqual([earlier.id]);
+    expect((await service.gc()).removed).toEqual([]);
+    await updateRegistryWorktree(env, later.id, { lastActiveAt: now - IDLE_GC_MS - 3_600_001 });
+    expect((await service.gc()).removed).toEqual([later.id]);
+    expect(getRegistryWorktree(env, later.id)?.snapshotRef).toBeTruthy();
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -332,7 +351,9 @@ describe("ManagedWorktreeService garbage collection", () => {
       await fs.writeFile(path.join(dependencies, `generated-dependency-file-${index}.txt`), "");
     }
     await fs.writeFile(path.join(created.path, "README.md"), "preserve local edit\n");
-    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    await updateRegistryWorktree(env, created.id, {
+      lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+    });
     const realRun = worktreeGit.runGitBuffered;
     const capped = vi
       .spyOn(worktreeGit, "runGitBuffered")
@@ -390,7 +411,9 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
     await fs.writeFile(path.join(generated, "cache", "rebuildable.txt"), "ignored\n");
     await fs.writeFile(path.join(created.path, "README.md"), "preserve local edit\n");
-    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    await updateRegistryWorktree(env, created.id, {
+      lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+    });
     const capped = await capUntrackedListing(created.path);
     const warnLogs = createWarnLogCapture("openclaw-worktree-gc-bounded-untracked");
     try {
@@ -430,7 +453,9 @@ describe("ManagedWorktreeService garbage collection", () => {
       await fs.rm(parentPath);
       await fs.mkdir(parentPath);
       await fs.writeFile(path.join(parentPath, "child.txt"), "discovered child\n");
-      await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+      await updateRegistryWorktree(env, created.id, {
+        lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+      });
       const warnLogs = createWarnLogCapture(`openclaw-worktree-gc-replaced-${_label}`);
       try {
         expect((await service.gc()).removed).toEqual([created.id]);
@@ -459,7 +484,9 @@ describe("ManagedWorktreeService garbage collection", () => {
     await fs.mkdir(parentPath);
     const nested = await initializeNestedRepository(created.path, "entry/nested");
     await fs.writeFile(path.join(nested, "local.txt"), "nested state\n");
-    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    await updateRegistryWorktree(env, created.id, {
+      lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+    });
     const warnLogs = createWarnLogCapture("openclaw-worktree-gc-replaced-conflicted");
     try {
       expect((await service.gc()).removed).toEqual([]);
@@ -489,7 +516,9 @@ describe("ManagedWorktreeService garbage collection", () => {
     await fs.rm(parentPath, { force: true });
     await fs.mkdir(parentPath);
     await fs.writeFile(path.join(parentPath, "child.txt"), "replacement\n");
-    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    await updateRegistryWorktree(env, created.id, {
+      lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+    });
 
     expect((await service.gc()).removed).toEqual([created.id]);
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
@@ -508,7 +537,9 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
     const nested = await initializeNestedRepository(created.path, "generated/package/nested");
     await fs.writeFile(path.join(nested, "local.txt"), "nested state\n");
-    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    await updateRegistryWorktree(env, created.id, {
+      lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+    });
     const capped = await capUntrackedListing(created.path);
     const warnLogs = createWarnLogCapture("openclaw-worktree-gc-bounded-nested");
     try {
@@ -536,7 +567,9 @@ describe("ManagedWorktreeService garbage collection", () => {
     const commit = await git(created.path, "commit-tree", tree, "-p", parent, "-m", "large tree");
     await git(created.path, "update-ref", "HEAD", commit);
     await fs.writeFile(path.join(created.path, "README.md"), "preserve local edit\n");
-    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    await updateRegistryWorktree(env, created.id, {
+      lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+    });
 
     // Gateway cleanup runs on Node's main thread, whose stack limit differs from Vitest workers.
     const collected = await runNodeScript(
@@ -579,7 +612,9 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
     expect(findLiveRegistryWorktreeByPath(env, nested)).toBeUndefined();
     expect(await git(created.path, "ls-files", "--others", "--exclude-standard")).toBe("");
-    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    await updateRegistryWorktree(env, created.id, {
+      lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+    });
     const warnLogs = createWarnLogCapture(`openclaw-worktree-gc-nested-${kind}`);
     try {
       expect((await service.gc()).removed).toEqual([]);
@@ -605,7 +640,9 @@ describe("ManagedWorktreeService garbage collection", () => {
       records.push(record);
     }
     for (const record of records) {
-      await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+      await updateRegistryWorktree(env, record.id, {
+        lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+      });
     }
     const inventories = vi.spyOn(worktreeGit, "listGitWorktrees");
     const warnLogs = createWarnLogCapture("openclaw-worktree-gc-lock-inventory");
@@ -626,7 +663,9 @@ describe("ManagedWorktreeService garbage collection", () => {
 
   it("rechecks a lock acquired after the GC prefilter before removing the checkout", async () => {
     const record = await materializeRunOwnedFixture("late-foreign-lock", "session");
-    await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    await updateRegistryWorktree(env, record.id, {
+      lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+    });
     const readInventory = worktreeGit.listGitWorktrees;
     const inventories = vi
       .spyOn(worktreeGit, "listGitWorktrees")
@@ -650,7 +689,9 @@ describe("ManagedWorktreeService garbage collection", () => {
 
   it("preserves a worktree used after the idle cleanup inspection", async () => {
     const created = await materializeRunOwnedFixture("resumed", "session", "agent:main:resumed");
-    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    await updateRegistryWorktree(env, created.id, {
+      lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+    });
     const remove = service.remove.bind(service);
     const resumed = vi.spyOn(service, "remove").mockImplementationOnce(async (params) => {
       await service.acquire(created.id);

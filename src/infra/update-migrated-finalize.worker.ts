@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
+import { withUpdateDatabaseEngine } from "../cli/update-cli/update-command-database-engine.js";
 import {
   captureUpdateCommandExecutorAuthority,
   withDelegatedUpdateCommandExecutor,
@@ -35,8 +36,10 @@ import { routeLogsToStderr } from "../logging/console.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { installDatabaseProcessRole } from "./database-engine/admission-scope.js";
@@ -44,11 +47,13 @@ import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync/pool.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
+import { withSqliteSnapshotReuse } from "./sqlite-snapshot-reuse.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  createUpdateDoctorDatabaseWriteCapture,
   recordUpdateDoctorConfigWriteRefusal,
   writeUpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
@@ -117,9 +122,16 @@ async function finalizeMigratedUpdate(): Promise<void> {
   // bypasses that bootstrap, so install the same kill-on-close owner before input.
   // POSIX callers own the detached process group and join its kernel extinction.
   await withCliProcessScope(retainCliProcessJobUntilExit);
-  await preparePostgresPoolForUpdate(
-    process.argv[2] === "--doctor" ? "openclaw doctor --fix" : "openclaw update repair",
-  );
+  if (
+    settlePluginCohort ||
+    commitPluginCohort ||
+    process.argv[2] === "--doctor" ||
+    process.argv[2] === "--post-core"
+  ) {
+    await preparePostgresPoolForUpdate(
+      process.argv[2] === "--doctor" ? "openclaw doctor --fix" : "openclaw update repair",
+    );
+  }
   const chunks: Buffer[] = [];
   let inputBytes = 0;
   for await (const chunk of process.stdin) {
@@ -147,7 +159,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
     return await runDelegatedPostCore(readUpdatePostCoreInput(JSON.parse(text)));
   }
   if (process.argv[2] === "--doctor") {
-    return await runDelegatedDoctor(readUpdateDoctorInput(JSON.parse(text)));
+    const doctorInput = readUpdateDoctorInput(JSON.parse(text));
+    return await withSqliteSnapshotReuse(() => runDelegatedDoctor(doctorInput));
   }
   // SAFETY: Only the typed parent continuation serializes this private input.
   const input = JSON.parse(text) as MigratedUpdateFinalizationInput;
@@ -161,111 +174,115 @@ async function finalizeMigratedUpdate(): Promise<void> {
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
     );
   }
-  const omittedOperatorTimeout = isOmittedUpdateTimeout(input.params.opts.timeout, input);
-  if (omittedOperatorTimeout) {
-    input.params.opts.timeout = undefined;
-  }
-  const activationTimeoutMs =
-    input.params.opts.run?.activationTimeoutMs ??
-    (omittedOperatorTimeout
-      ? undefined
-      : await resolveUpdateFinalizationTimeoutMs(input.params.updateStepTimeoutMs, {
-          env: input.params.ownedManagedUpdateEnv ?? input.params.opts.run?.env,
-          databases: input.params.schemaVersions,
-          pluginCount: Object.keys(input.params.preUpdatePluginInstallRecords).length,
-        }));
-  let publishedRecord: UpdateRunRecord | undefined;
-  const finalized = await withUpdateCommandTerminalResult(
-    async (registerRun) => {
-      if (input.executor) {
-        return await withDelegatedUpdateCommandExecutor(
-          input.executor,
-          input.params.opts.run?.runId ?? "",
-          input.params.result.root ?? input.params.root,
-          async (fence) => finalizeInput(input, fence, registerRun),
-          activationTimeoutMs === undefined ? undefined : { activationTimeoutMs },
-        );
-      }
-      // The shipped v2026.9.3 producer overrides these selectors for worker
-      // scratch, but retains its pre-override environment in the private input.
-      // Restore only this one-shot worker's selectors before resolving the normal
-      // installation lease domain; scratch-local ownership cannot exclude updates.
-      const admissionEnv = input.params.ownedManagedUpdateEnv ?? input.params.opts.run?.env;
-      if (!admissionEnv) {
-        throw new Error("Grantless finalization requires its captured update environment.");
-      }
-      // v2026.9.3 update-command-migrated.ts:149–195 sends this grantless handoff.
-      // Its captured meta.root is the lease key; activation can retarget that path.
-      // Only the same installation borrows the waiting parent's lease.
-      const meta = input.params.controlPlaneUpdateSentinelMeta;
-      const runId = input.params.opts.run?.runId ?? "";
-      const scratch = path.dirname(input.resultPath);
-      const legacyManagedParent =
-        input.params.result.before?.version === "2026.9.3" &&
-        admissionEnv.OPENCLAW_UPDATE_RUN_HANDOFF === "1" &&
-        admissionEnv.OPENCLAW_UPDATE_RUN_ID === runId &&
-        meta?.runId === runId &&
-        meta.handoffId &&
-        meta.root &&
-        meta.root === resolveUpdateInstallRoot(input.params.result.root ?? input.params.root) &&
-        path.basename(scratch).startsWith("openclaw-update-migrated-") &&
-        path.basename(input.resultPath) === "result.json" &&
-        ["TMPDIR", "TMP", "TEMP"].every(
-          (name) => resolveEnvironmentValue(process.env, name) === scratch,
-        )
-          ? { runId, handoffId: meta.handoffId, root: meta.root }
-          : undefined;
-      for (const name of ["TMPDIR", "TMP", "TEMP"] as const) {
-        const value = resolveEnvironmentValue(admissionEnv, name);
-        if (value === undefined) {
-          delete process.env[name];
-        } else {
-          process.env[name] = value;
+  // Engine selection is process-local; restore the updater owner before ledger access.
+  await withUpdateDatabaseEngine(process.env, async () => {
+    const omittedOperatorTimeout = isOmittedUpdateTimeout(input.params.opts.timeout, input);
+    if (omittedOperatorTimeout) {
+      input.params.opts.timeout = undefined;
+    }
+    const activationTimeoutMs =
+      input.params.opts.run?.activationTimeoutMs ??
+      (omittedOperatorTimeout
+        ? undefined
+        : await resolveUpdateFinalizationTimeoutMs(input.params.updateStepTimeoutMs, {
+            env: input.params.ownedManagedUpdateEnv ?? input.params.opts.run?.env,
+            databases: input.params.schemaVersions,
+            pluginCount: Object.keys(input.params.preUpdatePluginInstallRecords).length,
+          }));
+    let publishedRecord: UpdateRunRecord | undefined;
+    const finalized = await withUpdateCommandTerminalResult(
+      async (registerRun) => {
+        if (input.executor) {
+          return await withDelegatedUpdateCommandExecutor(
+            input.executor,
+            input.params.opts.run?.runId ?? "",
+            input.params.result.root ?? input.params.root,
+            async (fence) => finalizeInput(input, fence, registerRun),
+            activationTimeoutMs === undefined ? undefined : { activationTimeoutMs },
+          );
         }
-      }
-      return await withUpdateCommandExecutor(
-        runId,
-        async (executor) => {
-          const fence = await executor.enter(input.params.result.root ?? input.params.root, {
-            activationTimeoutMs,
-          });
-          return await finalizeInput(input, fence, registerRun);
-        },
-        legacyManagedParent ? { legacyManagedParent } : undefined,
-      );
-    },
-    {
-      ...input.params.opts,
-      onTerminalRecord: (record) => {
-        publishedRecord = record;
+        // The shipped v2026.9.3 producer overrides these selectors for worker
+        // scratch, but retains its pre-override environment in the private input.
+        // Restore only this one-shot worker's selectors before resolving the normal
+        // installation lease domain; scratch-local ownership cannot exclude updates.
+        const admissionEnv = input.params.ownedManagedUpdateEnv ?? input.params.opts.run?.env;
+        if (!admissionEnv) {
+          throw new Error("Grantless finalization requires its captured update environment.");
+        }
+        // v2026.9.3 update-command-migrated.ts:149–195 sends this grantless handoff.
+        // Its captured meta.root is the lease key; activation can retarget that path.
+        // Only the same installation borrows the waiting parent's lease.
+        const meta = input.params.controlPlaneUpdateSentinelMeta;
+        const runId = input.params.opts.run?.runId ?? "";
+        const scratch = path.dirname(input.resultPath);
+        const legacyManagedParent =
+          input.params.result.before?.version === "2026.9.3" &&
+          admissionEnv.OPENCLAW_UPDATE_RUN_HANDOFF === "1" &&
+          admissionEnv.OPENCLAW_UPDATE_RUN_ID === runId &&
+          meta?.runId === runId &&
+          meta.handoffId &&
+          meta.root &&
+          meta.root === resolveUpdateInstallRoot(input.params.result.root ?? input.params.root) &&
+          path.basename(scratch).startsWith("openclaw-update-migrated-") &&
+          path.basename(input.resultPath) === "result.json" &&
+          ["TMPDIR", "TMP", "TEMP"].every(
+            (name) => resolveEnvironmentValue(process.env, name) === scratch,
+          )
+            ? { runId, handoffId: meta.handoffId, root: meta.root }
+            : undefined;
+        for (const name of ["TMPDIR", "TMP", "TEMP"] as const) {
+          const value = resolveEnvironmentValue(admissionEnv, name);
+          if (value === undefined) {
+            delete process.env[name];
+          } else {
+            process.env[name] = value;
+          }
+        }
+        return await withUpdateCommandExecutor(
+          runId,
+          async (executor) => {
+            const fence = await executor.enter(input.params.result.root ?? input.params.root, {
+              activationTimeoutMs,
+            });
+            return await finalizeInput(input, fence, registerRun);
+          },
+          legacyManagedParent ? { legacyManagedParent } : undefined,
+        );
       },
-    },
-  );
-  const terminal = publishedRecord ?? getUpdateRun(finalized.run.runId, { env: finalized.run.env });
-  const gatewayRestartPending =
-    finalized.run.completionOwner === "gateway-restart" &&
-    finalized.run.gatewayRestartRequired === true &&
-    finalized.result.status === "ok" &&
-    terminal?.status === "running" &&
-    terminal.phase === "restarting";
-  if (
-    !terminal ||
-    terminal.runId !== finalized.run.runId ||
-    (terminal.status === "running" && !gatewayRestartPending)
-  ) {
-    throw new Error("Update finalization left the update run nonterminal.");
-  }
-  const response: MigratedUpdateFinalizationResult = {
-    result: finalized.result,
-    exitCode: finalized.exitCode,
-    candidateStartAttempted: finalized.candidateStartAttempted || gatewayRestartPending,
-    ...(gatewayRestartPending
-      ? { restartRunId: terminal.runId }
-      : { terminalRunId: terminal.runId }),
-    executorDelegation: "pid-start-v1",
-  };
-  // Private response publication follows executor settlement and terminal history.
-  await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
+      {
+        ...input.params.opts,
+        onTerminalRecord: (record) => {
+          publishedRecord = record;
+        },
+      },
+    );
+    const terminal =
+      publishedRecord ?? getUpdateRun(finalized.run.runId, { env: finalized.run.env });
+    const gatewayRestartPending =
+      finalized.run.completionOwner === "gateway-restart" &&
+      finalized.run.gatewayRestartRequired === true &&
+      finalized.result.status === "ok" &&
+      terminal?.status === "running" &&
+      terminal.phase === "restarting";
+    if (
+      !terminal ||
+      terminal.runId !== finalized.run.runId ||
+      (terminal.status === "running" && !gatewayRestartPending)
+    ) {
+      throw new Error("Update finalization left the update run nonterminal.");
+    }
+    const response: MigratedUpdateFinalizationResult = {
+      result: finalized.result,
+      exitCode: finalized.exitCode,
+      candidateStartAttempted: finalized.candidateStartAttempted || gatewayRestartPending,
+      ...(gatewayRestartPending
+        ? { restartRunId: terminal.runId }
+        : { terminalRunId: terminal.runId }),
+      executorDelegation: "pid-start-v1",
+    };
+    // Private response publication follows executor settlement and terminal history.
+    await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
+  });
 }
 
 async function runDelegatedPostCore(input: DecodedUpdatePostCoreInput): Promise<void> {
@@ -373,7 +390,19 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
       remaining();
+      const databaseWriteCapture = isStatePostgres()
+        ? undefined
+        : createUpdateDoctorDatabaseWriteCapture(input.databaseGenerations, {
+            env: process.env,
+            root: input.root,
+            signal: getAsyncWorkSignal() ?? new AbortController().signal,
+            pluginOwners: input.databasePluginOwners,
+            assertCurrent,
+            warn: (message) => process.stderr.write(message + "\n"),
+          });
+      await databaseWriteCapture?.admit();
       await stopSupervisedPredecessorGateway(input, {
+        databaseWriteCapture,
         root: input.root,
         assertCurrent,
         serviceInspectionBudget: remaining,
@@ -415,6 +444,7 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
                 installRoot: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
                 ref: input.originalRecoveryCapture,
               },
+              databaseWriteCapture,
               ...(input.databaseGenerations
                 ? { databaseGenerations: input.databaseGenerations }
                 : {}),

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { closeOpenClawStateDatabaseWorkersByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabaseForDoctor } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { formatErrorMessage } from "./errors.js";
@@ -56,7 +57,12 @@ export async function withLegacyMigrationStateLock(
     result = await lock.run(async () => {
       // Await first-open attribution before native migration writes borrow the cached owner.
       // An absent source remains absent when the migration itself has nothing to do.
-      if (hasUpdateDoctorMigrationCapture() && existsSync(resolveOpenClawStateSqlitePath(env))) {
+      const statePath = resolveOpenClawStateSqlitePath(env);
+      if (hasUpdateDoctorMigrationCapture() && existsSync(statePath)) {
+        // Attributed writes take native exclusion. Doctor detection can leave warm
+        // worker connections at this path; retire them without closing the native owner.
+        await closeOpenClawStateDatabaseWorkersByPathAsync(statePath);
+        lock.assertCurrent();
         await openOpenClawStateDatabaseForDoctor({ env });
         lock.assertCurrent();
       }

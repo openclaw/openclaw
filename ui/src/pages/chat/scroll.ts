@@ -287,7 +287,7 @@ function updateChatScrollPosition(
   // streaming stops pinning them back to the bottom.
   const isUserScrollUp = takeover !== false || (delta < 0 && !host.chatIsMaintenanceScroll?.());
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  if (host.chatIsProgrammaticScroll?.() && !isUserScrollUp) {
+  if ((host.chatIsProgrammaticScroll?.() || host.chatIsMaintenanceScroll?.()) && !isUserScrollUp) {
     // A measured arrival clears the affordance even when maintenance must not
     // change the reader's follow policy.
     if (distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {

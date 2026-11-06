@@ -10,6 +10,7 @@ import {
   normalizeGitPathForFilesystem,
   quoteGitConfig,
 } from "./git-exec.js";
+import { compareSemverStrings } from "./npm-registry-spec.js";
 import {
   DEV_BRANCH,
   isBetaTag,
@@ -17,7 +18,6 @@ import {
   selectNpmChannelVersion,
   type UpdateChannel,
 } from "./update-channels.js";
-import { compareSemverStrings } from "./update-check.js";
 import { isFullGitObjectId, type DevUpdateTarget } from "./update-dev-target.js";
 import {
   readGitRefFetchTarget,
@@ -521,11 +521,18 @@ export async function fetchGitUpdateTarget(params: {
   }
   if (channel === "dev") {
     // FETCH_HEAD proves freshness; an excluded source can otherwise look current.
-    const fetched =
-      devSource && devSource.remote !== "."
-        ? await runStep(step("git-resolve-target", "rev-parse", "--verify", "FETCH_HEAD^{commit}"))
-        : undefined;
-    return result(!fetched || !isFailedUpdateStep(fetched));
+    if (devSource && devSource.remote !== ".") {
+      const fetched = await runStep(
+        step("git-resolve-target", "rev-parse", "--verify", "FETCH_HEAD^{commit}"),
+      );
+      const revision = fetched.stdoutTail?.trim();
+      if (isFailedUpdateStep(fetched) || !revision) {
+        return result(false);
+      }
+      // An explicit source fetch need not have a configured remote-tracking mapping.
+      devSource.revision = revision;
+    }
+    return result(true);
   }
   if (!tagRemote) {
     steps.push({

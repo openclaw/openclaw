@@ -35,7 +35,7 @@ Source: https://github.blog/ai-and-ml/github-copilot/how-to-write-a-great-agents
 2. If `AGENTS.md` is absent, treat the nearest alias file as canonical.
 3. Keep compatibility surfaces explicit: `AGENTS.md`, `AGENT.md`, `.cursorrules`, `.cursor/rules/*`, `.agent/`, `.agents/`, `.pi/`.
 4. If aliases are used, document how they map back to canonical policy (or symlink when supported).
-5. When repos use `.agents/` as canonical rule storage, keep `.cursor` as a compatibility symlink to `.agents` for Cursor rule auto-loading.
+5. When Cursor compatibility is requested, verify its rule layout before choosing an alias. A skills-only `.agents/` directory does not establish that intent.
 6. Keep policy DRY: store one shared policy core and expose it via aliases/symlinks instead of duplicating rule text.
 
 ## Context-awareness by agent platform
@@ -51,14 +51,14 @@ Source: https://github.com/openai/codex/blob/main/AGENTS.md
 
 ## Symlink and compatibility operations
 
-1. Preferred layout for multi-agent compatibility:
+1. For requested Cursor compatibility with verified `.agents/` rule storage, one supported layout is:
    - canonical rule directory: `.agents/`
    - Cursor compatibility path: `.cursor -> .agents` symlink
    - canonical policy doc: `AGENTS.md` pointing to `.agents` paths where relevant
-2. Validate symlink state before finalizing changes:
-   - if `.agents/` exists and `.cursor` is missing, create `.cursor` symlink to `.agents`
-   - if `.cursor` is a symlink to another target, fix target or document why it must differ
-   - if `.cursor` is a real directory/file, treat as migration conflict and ask before replacement
+2. Inspect existing destinations before proposing alias changes.
+   - Do not create `.cursor` merely because `.agents/` exists.
+   - Preserve existing files, directories, and intentional symlink targets.
+   - Change aliases only within the requested compatibility or migration scope after verifying the consumer layout.
 3. Validate rule payload through the canonical directory:
    - rules: `.agents/rules/*.mdc` with valid frontmatter (`description`, `globs`, `alwaysApply` as needed)
    - commands: `.agents/commands/*.md` when command routing is used
