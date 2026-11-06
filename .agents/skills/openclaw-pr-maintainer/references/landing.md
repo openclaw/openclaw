@@ -19,32 +19,6 @@
 - Conflict repair: record last passing run/tested head, resolved delta, affected contracts in existing preparation evidence. Reuse unchanged-input proof; run affected checks, not every completed suite. Older run ≠ current-head CI or gate waiver. Admission succeeds → merge before optional polish/cleanup.
 - UI/native translation memory + locale metadata: post-merge locale workflow owners. Check hosted review bundle size; remove accidental generated output via owner, never truncate input or silently exclude authored changes.
 
-### Reconcile a publisher-created head
-
-Publish once and retain the request/receipt, intended commit, PR URL, and reported
-head. A different remote SHA is not by itself a different patch or permission to
-republish. Reconcile pending or uncertain publication through its owner first.
-
-If the publisher reports a metadata wrapper commit, fetch that PR's current head
-into a dedicated tracking ref and inspect its parents. Verify the intended commit
-is the reported wrapper's parent, both `<commit>^{tree}` IDs match, and
-`git diff <intended> <published-head>` is empty. Otherwise investigate the
-actual delta; do not label it metadata-only. A later collaborator commit is not
-necessarily the original wrapper. Record the current PR state and CI/review
-status separately; tree equality does not make old-head checks current.
-
-### Explicit direct branch pushes
-
-Use only within an authorized direct-push scope, such as the red-main repair
-below. Record the remote, branch, and full candidate SHA; fetch the destination
-and require its current head to be an ancestor of that SHA. Push the exact object
-with `git push <remote> <sha>:refs/heads/<branch>`, never force. Re-read the
-remote head after the push; if it has advanced, distinguish your accepted push
-from the later tip instead of overwriting it or claiming exact-tip equality.
-A rejected or uncertain push needs remote reconciliation before retrying.
-Direct-push authority does not waive required proof; optional validation may
-continue independently unless the user asks to stop it.
-
 ## Evidence media
 
 - Authorized upload: read [media upload reference](media.md) for feature detection, commands, formats, fallback.
