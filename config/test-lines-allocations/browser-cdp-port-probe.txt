@@ -1,0 +1,2 @@
+# Regression pins: allocator skips configured ports, live listeners and invalid ranges.
+53
