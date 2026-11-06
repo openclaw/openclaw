@@ -4,8 +4,8 @@ import Testing
 
 struct ShareDraftComposerTests {
     @Test(arguments: [
-        "sHaReD fRoM iOs.",
-        "tExT:",
+        "  sHaReD fRoM iOs.\t",
+        "\ttExT:  ",
         "sHaReD aTtAcHmEnT(s):",
         "pLeAsE hElP mE wItH tHiS.",
     ])
@@ -33,6 +33,32 @@ struct ShareDraftComposerTests {
             text: "Text: keep this\nShared from iOS.\nsecond line")
 
         #expect(ShareDraftComposer.compose(from: payload) == "Text: keep this\nsecond line")
+    }
+
+    @Test func `preserves whitespace around non scaffold content and between lines`() {
+        let text = "  Text: keep this  \n\n\tsecond line\t\n  \nthird line  "
+        let payload = SharedContentPayload(title: nil, url: nil, text: text)
+
+        #expect(ShareDraftComposer.compose(from: payload) == text)
+    }
+
+    @Test(arguments: ["\n", "\r\n", "\r"])
+    func `removing scaffold lines retains adjacent blank lines and indentation`(_ newline: String) {
+        let payload = SharedContentPayload(
+            title: nil,
+            url: nil,
+            text: [
+                "Text:",
+                "first line",
+                "",
+                "  Shared from iOS.\t",
+                "\tsecond line",
+                "",
+                "Please help me with this.",
+            ].joined(separator: newline))
+
+        #expect(ShareDraftComposer
+            .compose(from: payload) == "first line\(newline)\(newline)\tsecond line\(newline)\(newline)")
     }
 
     @Test func `composes sanitized title text and URL into the final draft`() throws {

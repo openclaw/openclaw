@@ -19,14 +19,14 @@ enum ShareDraftComposer {
 
     private static func sanitize(_ raw: String?) -> String? {
         guard let raw else { return nil }
-        let cleanedLines = raw
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { line in
-                !line.isEmpty && !self.legacyScaffoldLines.contains(line.lowercased())
+        var cleaned = ""
+        raw.enumerateSubstrings(in: raw.startIndex..<raw.endIndex, options: .byLines) { line, _, range, _ in
+            let comparison = (line ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !self.legacyScaffoldLines.contains(comparison) {
+                cleaned += raw[range]
             }
-        let cleaned = cleanedLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.isEmpty ? nil : cleaned
+        }
+        return cleaned.trimmedNonEmpty == nil ? nil : cleaned
     }
 }
 
