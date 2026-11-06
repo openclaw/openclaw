@@ -1,0 +1,3 @@
+# PR #185872: 41 net browser-regression test lines against the exact CI base.
+# Verifies full theme names with descriptions on focus and hover while cards stay unselected.
+41
