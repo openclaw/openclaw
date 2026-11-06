@@ -60,8 +60,26 @@ it("prepares known provider owners once while keeping catalog execution and auth
           "registrations.jsonl",
           `provider: ${JSON.stringify(provider)}, filename: __filename`,
         );
+      const plannerCoverage = `
+if (require("node:worker_threads").threadId !== ${threadId} &&
+    !globalThis[Symbol.for("catalog.reuse.coverage")]) {
+  const session = new (require("node:inspector").Session)();
+  session.connect();
+  const post = (method, params = {}) => new Promise((resolve, reject) =>
+    session.post(method, params, (error, result) => error ? reject(error) : resolve(result)));
+  const ready = post("Profiler.enable").then(() =>
+    post("Profiler.startPreciseCoverage", { callCount: true, detailed: true }));
+  globalThis[Symbol.for("catalog.reuse.coverage")] = { post, ready };
+}
+`;
       const execution = (provider: string) =>
-        `require("node:v8").queryObjects(WeakRef);
+        `const coverage = globalThis[Symbol.for("catalog.reuse.coverage")];
+await coverage.ready;
+const plannerCalls = await coverage.post("Profiler.takePreciseCoverage").then(sample =>
+  sample.result.flatMap(script => script.functions)
+    .filter(fn => fn.functionName === "planRuntimePluginDiscovery")
+    .reduce((count, fn) => count + fn.ranges[0].count, 0));
+require("node:v8").queryObjects(WeakRef);
 const retainedPayloads = globalThis[Symbol.for("catalog.reuse.payloads")];
 const activePayload = retainedPayloads.at(-1);
 const currentPayload = activePayload.ref.deref();
@@ -78,7 +96,7 @@ const currentPayload = activePayload.ref.deref();
         ) +
         record(
           "executions.jsonl",
-          `provider: ${JSON.stringify(provider)}, agentDir: context.agentDir`,
+          `provider: ${JSON.stringify(provider)}, agentDir: context.agentDir, plannerCalls`,
         ) +
         `
         const retained = globalThis[Symbol.for("catalog.retired.registries.proof")];
@@ -119,11 +137,11 @@ const currentPayload = activePayload.ref.deref();
             .replace(/ {6}loadModelCatalog: async \(\) => \{[\s\S]*?\n {6}\},\n/u, "")
             .replace(
               "  register(api) {",
-              `  register(api) {${registration(PROVIDER_ID)}${retention}`,
+              `  register(api) {${plannerCoverage}${registration(PROVIDER_ID)}${retention}`,
             )
             .replace(
               "run(context) {",
-              `run(context) {
+              `async run(context) {
 if (payload.rows[99_999].index !== 99_999) throw Error("native payload unavailable");
 ${execution(PROVIDER_ID)}`,
             ),
@@ -139,7 +157,7 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
   api.registerProvider({
     id: ${JSON.stringify(provider)}, label: "Scoped reuse fixture", auth: [],
     normalizeResolvedModel: ({ model }) => ({ ...model, name: "Observed " + ++normalization }),
-    catalog: { run(context) {
+    catalog: { async run(context) {
       ${execution(provider)}
       const auth = context.resolveProviderApiKey(${JSON.stringify(provider)});
       return { provider: {
@@ -182,7 +200,10 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
   const registrations = () =>
     readRecords<{ provider: string; filename: string }>(fixture.root, "registrations.jsonl");
   const executions = () =>
-    readRecords<{ provider: string; agentDir: string }>(fixture.root, "executions.jsonl");
+    readRecords<{ provider: string; agentDir: string; plannerCalls: number }>(
+      fixture.root,
+      "executions.jsonl",
+    );
   for (const provider of providerIds) {
     expect(
       fixture.snapshots[0]!.metadataSnapshot.plugins.find(({ id }) => id === provider),
@@ -238,7 +259,10 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
         `Scoped catalog did not publish: ${snapshot.agentId}/${provider}`,
       );
       expect(catalog.refreshFailed).toBeFalsy();
-      expect(executions().slice(before)).toEqual([{ provider, agentDir: snapshot.agentDir }]);
+      // The first request admits new owners; every already-covered request skips the planner.
+      expect(executions().slice(before)).toEqual([
+        { provider, agentDir: snapshot.agentDir, plannerCalls: before === 0 ? 1 : 0 },
+      ]);
       const entries = catalog.entries.filter((entry) => entry.provider === provider);
       expect(entries.map(({ id }) => id)).toEqual([`auth-${key}`]);
       // Catalog display and executable rows must share one provider observation.

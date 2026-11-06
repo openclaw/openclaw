@@ -331,17 +331,21 @@ async function runCatalogRequest(
       ],
     });
     const discoveryPluginIds = [...(discoveryScope?.keys() ?? [])];
-    const discoveryPlan = await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
-      planRuntimePluginDiscovery({
-        config: value.input.config,
-        env: value.input.env,
-        workspaceDir: value.input.workspaceDir,
-        pluginMetadataSnapshot,
-        onlyPluginIds: discoveryPluginIds,
-      }),
-    );
+    // Recorded owners include failed loads. Only new owners need admission planning;
+    // repeat reads use the generation's prepared descriptors and still run live hooks.
+    const discoveryPlan = discoveryPluginIds.every((id) => prepared.pluginIds.has(id))
+      ? undefined
+      : await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+          planRuntimePluginDiscovery({
+            config: value.input.config,
+            env: value.input.env,
+            workspaceDir: value.input.workspaceDir,
+            pluginMetadataSnapshot,
+            onlyPluginIds: discoveryPluginIds,
+          }),
+        );
     let catalogGeneration = prepared.pluginGeneration;
-    if (discoveryPlan.kind === "runtime") {
+    if (discoveryPlan?.kind === "runtime") {
       // Keep newly observed owners in this bounded metadata generation. Alternating agents
       // must not reconstruct each other's registrations or retry recorded load failures.
       const pluginIds = [
