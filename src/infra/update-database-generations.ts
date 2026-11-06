@@ -14,6 +14,7 @@ import {
 import { runWithSqliteCleanup, SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
+import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
 import type {
   PreparedSqliteReadOnlyLocation,
   PreparedSqliteSnapshotSource,
@@ -93,7 +94,7 @@ function inspectDrainedSource(
   }
   const database = openNodeSqliteDatabase(location, { readOnly: true });
   runWithSqliteCleanup({ release: () => database.close() }, "Database generation admission", () =>
-    database.prepare("SELECT count(*) FROM sqlite_schema").get(),
+    readSqliteSchemaObjects(database),
   );
 }
 

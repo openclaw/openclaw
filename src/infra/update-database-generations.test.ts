@@ -763,16 +763,20 @@ it.each(["delete", "wal-absent", "wal-empty"])(
   },
 );
 
-it("falls back to the private copy when a write races a drained read", async () => {
+it("refuses a write that lands during a drained read", () => {
   const { file, immutableRead } = generationFixture();
   immutableRead.mockRestore();
-  const hash = vi.spyOn(fileGeneration, "readStableSqliteFileGeneration");
-  hash.mockImplementationOnce(() => {
-    throw new Error("SQLite file generation changed while reading");
-  });
   const copy = vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess);
-  expect(await readUpdatePhysicalDatabaseGenerations([file])).toEqual({
-    [file]: expectedClosedGeneration(file),
-  });
+  let wrote = false;
+  expect(() =>
+    readUpdateDatabaseGeneration(file, () => {
+      if (!wrote) {
+        wrote = true;
+        using writer = new DatabaseSync(file);
+        writer.exec("INSERT INTO receipt VALUES ('raced');");
+      }
+    }),
+  ).toThrow();
+  expect(wrote).toBe(true);
   expect(copy).toHaveBeenCalledOnce();
 });
