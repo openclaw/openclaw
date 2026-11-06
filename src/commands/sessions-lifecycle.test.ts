@@ -137,6 +137,49 @@ describe("sessions lifecycle commands", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "restores only eligible archived sessions (dry run: %s)",
+    async (dryRun) => {
+      const key = "agent:work:archived";
+      const missingId = "agent:work:key-only";
+      const active = "agent:work:active";
+      respond(
+        described(key, "retained-session", { archived: true }),
+        { session: { key: missingId, archived: true } },
+        described(active, "active-session"),
+        ...(dryRun ? [] : [{ ok: true, key, entry: { sessionId: "retained-session" } }]),
+      );
+
+      await run("restore", { keys: [key, missingId, active], agent: "work", json: true, dryRun });
+
+      expectJson(
+        expect.objectContaining({
+          ok: false,
+          operation: "restore",
+          dryRun,
+          results: [
+            result(key, dryRun ? "would_restore" : "restored"),
+            failure(
+              missingId,
+              "Session has no durable identity; lifecycle mutation was not attempted.",
+            ),
+            result(active, "already_active"),
+          ],
+        }),
+      );
+      expect(mocks.callGateway).toHaveBeenCalledTimes(dryRun ? 3 : 4);
+      if (!dryRun) {
+        expectMutation(4, "sessions.patch", {
+          key,
+          agentId: "work",
+          expectedSessionId: "retained-session",
+          archived: false,
+        });
+      }
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
+
   it.each([
     ["archive", "Cannot archive an agent's main session."],
     ["delete", "Cannot delete the main session (agent:work:gateway-main)."],
