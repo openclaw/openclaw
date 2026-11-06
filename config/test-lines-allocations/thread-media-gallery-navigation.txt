@@ -1,0 +1,3 @@
+# Thirteen net lines remain after consolidating overlapping thread/inline gallery proof.
+# Preserve callback arity, duplicate inline slots, and cross-turn image/video navigation.
+13

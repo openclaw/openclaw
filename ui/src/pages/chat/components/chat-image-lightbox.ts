@@ -72,6 +72,10 @@ export function openInlineChatImage(
   event.preventDefault();
   const src = image.currentSrc || image.src;
   const title = image.alt.trim() || t("chat.imageLightbox.untitled");
-  openResolvedImage(onOpenImage ? (item) => onOpenImage(item, index) : undefined, src, title);
+  openResolvedImage(
+    index !== undefined && onOpenImage ? (item) => onOpenImage(item, index) : onOpenImage,
+    src,
+    title,
+  );
   return true;
 }
