@@ -314,18 +314,18 @@ extension OpenClawChatView {
                     }
                 #endif
                     .padding(.horizontal, self.usesExpandedLayout ? 0 : Layout.outerPaddingHorizontal)
-            if !self.usesInlineProgressCard {
-                self.progressCard
-                    // The composer draws its surface this far inside its frame; share its edges.
-                    .padding(
-                        .horizontal,
-                        self.showsComposer
-                            ? OpenClawChatComposer.surfaceInset(style: self.style, chrome: self.composerChrome)
-                            : 0)
-                    .frame(maxWidth: self.readingColumnWidth)
-                    .padding(.horizontal, self.composerHorizontalMargin)
-                    .padding(.top, Layout.stackSpacing)
-            }
+                if !self.usesInlineProgressCard {
+                    self.progressCard
+                        // The composer draws its surface this far inside its frame; share its edges.
+                        .padding(
+                            .horizontal,
+                            self.showsComposer
+                                ? OpenClawChatComposer.surfaceInset(style: self.style, chrome: self.composerChrome)
+                                : 0)
+                        .frame(maxWidth: self.readingColumnWidth)
+                        .padding(.horizontal, self.composerHorizontalMargin)
+                        .padding(.top, Layout.stackSpacing)
+                }
             if self.showsComposer {
                 self.turnRecapRow
                     .frame(maxWidth: self.readingColumnWidth)
