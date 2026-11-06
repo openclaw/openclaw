@@ -1450,6 +1450,7 @@
   "ui/src/lib/sessions/swarm-roster.ts",
   "ui/src/lib/sessions/unread.ts",
   "ui/src/lib/sessions/workspace.ts",
+  "ui/src/lib/text-diff.ts",
   "ui/src/lib/text-direction.ts",
   "ui/src/lib/text-match.ts",
   "ui/src/pages/chat/browser-annotation-admission.ts",
