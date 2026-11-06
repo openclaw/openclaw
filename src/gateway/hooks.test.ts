@@ -193,6 +193,41 @@ describe("gateway hooks helpers", () => {
     });
   });
 
+  test("hook wake modes map spelling variants and reject unknown values", () => {
+    for (const mode of ["next_heartbeat", " Next-Heartbeat "]) {
+      expect(normalizeWakePayload({ text: "hi", mode })).toEqual({
+        ok: true,
+        value: { text: "hi", mode: "next-heartbeat" },
+      });
+      expect(agentPayload({ wakeMode: mode })).toEqual({
+        ok: true,
+        value: expect.objectContaining({ wakeMode: "next-heartbeat" }),
+      });
+    }
+    for (const mode of [null, "", "  "]) {
+      expect(normalizeWakePayload({ text: "hi", mode })).toEqual({
+        ok: true,
+        value: { text: "hi", mode: "now" },
+      });
+      expect(agentPayload({ wakeMode: mode })).toEqual({
+        ok: true,
+        value: expect.objectContaining({ wakeMode: "now" }),
+      });
+    }
+    expect(normalizeWakePayload({ text: "hi", mode: "later" })).toEqual({
+      ok: false,
+      error: "mode must be now or next-heartbeat",
+    });
+    expect(normalizeWakePayload({ text: "hi", mode: 1, sessionKey: "hook:wake:x" })).toEqual({
+      ok: false,
+      error: "mode must be now or next-heartbeat",
+    });
+    expect(agentPayload({ wakeMode: "later" })).toEqual({
+      ok: false,
+      error: "wakeMode must be now or next-heartbeat",
+    });
+  });
+
   test("normalizeAgentPayload defaults + validates channel and agent", () => {
     expect(agentPayload({ timeoutSeconds: 0.5 })).toEqual({
       ok: true,
