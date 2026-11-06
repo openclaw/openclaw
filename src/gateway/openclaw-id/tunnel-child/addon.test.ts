@@ -2,10 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The module the loader receives from require, whichever path it tries.
 const loaded = vi.hoisted(() => ({ binding: undefined as unknown }));
-vi.mock("node:module", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:module")>()),
-  createRequire: () => () => loaded.binding,
-}));
+vi.mock("node:module", () => ({ createRequire: () => () => loaded.binding }));
 
 const { loadIrohBinding } = await import("./addon.js");
 
