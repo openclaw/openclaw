@@ -68,6 +68,10 @@ function sourceKey(url: URL): string {
   return key.href;
 }
 
+function mathText(token: Token): string {
+  return token.content.replace(/\s+/gu, " ").trim();
+}
+
 function inlineText(tokens: readonly Token[]): string {
   return tokens
     .map((token) => {
@@ -107,8 +111,10 @@ function sourceTitle(value: unknown, name: WebToolName): string | undefined {
     return undefined;
   }
   const text = markdownTokens(prose)
-    .filter((token) => token.type === "inline")
-    .map((token) => inlineText(token.children ?? []))
+    .filter((token) => token.type === "inline" || token.type === "math_block")
+    .map((token) =>
+      token.type === "math_block" ? mathText(token) : inlineText(token.children ?? []),
+    )
     .join(" ")
     .trim();
   return text ? truncateUtf16Safe(text, 180) : undefined;
@@ -123,14 +129,16 @@ function sourceExcerpt(value: unknown, name: WebToolName): string | undefined {
   // A page heading or navigation label is not a useful excerpt. Search snippets
   // may legitimately be short; page previews need a readable paragraph.
   for (const [index, token] of tokens.entries()) {
+    // Display math is its own block; read it like a paragraph.
+    const paragraph = token.type === "inline" && tokens[index - 1]?.type === "paragraph_open";
+    const block = paragraph ? tokens[index - 1] : token;
     if (
-      token.type !== "inline" ||
-      tokens[index - 1]?.type !== "paragraph_open" ||
-      (name === "web_fetch" && tokens[index - 1]?.level !== 0)
+      (!paragraph && token.type !== "math_block") ||
+      (name === "web_fetch" && block?.level !== 0)
     ) {
       continue;
     }
-    const text = inlineText(token.children ?? []);
+    const text = paragraph ? inlineText(token.children ?? []) : mathText(token);
     if (text.length >= (name === "web_fetch" ? 60 : 1)) {
       return text.length > MAX_EXCERPT_CHARS
         ? `${truncateUtf16Safe(text, MAX_EXCERPT_CHARS - 1).trimEnd()}…`
