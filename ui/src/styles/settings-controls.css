@@ -292,12 +292,9 @@ select.settings-select {
     --row-action-size: 32px;
   }
 
-  :root
-    :is(
-      .transcripts-filters__search,
-      .transcripts-filters__trigger,
-      .transcripts-page-menu__trigger
-    ) {
+  :root .transcripts-filters__search,
+  :root .transcripts-filters__trigger,
+  :root .transcripts-page-menu__trigger {
     --settings-control-height: var(--settings-touch-control-height);
   }
 

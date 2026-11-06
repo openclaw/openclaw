@@ -500,14 +500,13 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                   const inferred = await resolveCronCreationDelivery({
                     cfg: runtimeConfig,
                     agentId: callerAgentId,
+                    job: { agentId: job.agentId, delivery },
+                    requesterOrigin: getGatewayToolCallerIdentity()?.requesterOrigin,
                     currentDeliveryContext: opts.currentDeliveryContext,
                     agentSessionKey: opts.agentSessionKey,
                   });
                   if (inferred) {
-                    job.delivery = {
-                      ...inferred,
-                      ...delivery,
-                    } satisfies CronDelivery;
+                    job.delivery = { ...inferred, ...delivery } satisfies CronDelivery;
                   }
                 }
               }

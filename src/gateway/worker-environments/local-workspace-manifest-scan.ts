@@ -297,7 +297,7 @@ export async function executeLocalWorkspaceManifestRead(
           if (candidate !== "projection") {
             canonicalPaths ??= await selectLocalWorkspaceCanonicalPaths({
               root,
-              admittedPaths: row.source_paths_json,
+              admittedPaths: parseLocalWorkspaceSourcePaths(row.source_paths_json),
               baselinePaths,
               assertCurrent: () => undefined,
             });
@@ -537,7 +537,7 @@ export async function executeLocalWorkspaceManifestRead(
   const target = action.kind === "archive" ? "canonical" : action.target;
   const canonicalPaths = await selectLocalWorkspaceCanonicalPaths({
     root: action.canonicalRoot,
-    admittedPaths: row.source_paths_json,
+    admittedPaths: parseLocalWorkspaceSourcePaths(row.source_paths_json),
     // This read has no effects; the lease owner revalidates before using its result.
     assertCurrent: () => undefined,
   });

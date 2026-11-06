@@ -49,6 +49,7 @@ export async function snoozeSessionWithUndo(
   }
   const undoHost = sessionUndoHost(host, scope);
   showToast({
+    severity: "success",
     message: t("sessionsView.sessionSnoozed", { time: formatSessionSnoozeWakeTime(snoozedUntil) }),
     actionLabel: t("common.undo"),
     onAction: () =>
@@ -65,7 +66,7 @@ export async function promoteSession(
     sessionScope: true,
   });
   if (result === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.sessionMovedToTopLevel") });
+    showToast({ severity: "success", message: t("sessionsView.sessionMovedToTopLevel") });
   }
 }
 
@@ -273,10 +274,13 @@ export async function confirmRunningSessionsArchive(
   const running = sessions.some(hasActiveArchiveWork);
   const single = sessions.length === 1 ? sessions[0] : undefined;
   const options = {
+    title: single
+      ? t("sessionsView.archiveSessionPrompt", { session: single.label })
+      : t("sessionsView.archiveSessionsPrompt", { count: String(sessions.length) }),
     message: !running
       ? ""
       : single
-        ? t("sessionsView.archiveRunningSessionConfirm", { session: single.label })
+        ? t("sessionsView.archiveRunningSessionConfirm")
         : t("sessionsView.archiveRunningSessions"),
     confirmLabel: single
       ? t("sessionsView.archiveSession")
@@ -349,6 +353,7 @@ export async function archiveSessionWithUndo(
     return;
   }
   showToast({
+    severity: "success",
     message: t("sessionsView.sessionArchived"),
     actionLabel: t("common.undo"),
     onAction: archiveUndoAction(host, [{ session, pinned: session.pinned }], scope, undoPins),
@@ -419,6 +424,7 @@ export async function archiveConfirmedSessionsWithUndo(
   }
   const archived = archivedRows.map((session) => ({ session, pinned: session.pinned }));
   showToast({
+    severity: "success",
     message:
       archived.length === 1
         ? t("sessionsView.sessionArchived")

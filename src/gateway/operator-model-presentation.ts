@@ -6,6 +6,7 @@ import type {
   ModelChoice,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-operator-authority.types.js";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { modelKey } from "../agents/model-ref-shared.js";
@@ -15,7 +16,10 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
-import { isOperatorAccessProgramAllowed } from "../agents/operator-access-program.js";
+import {
+  isOperatorAccessProgramAllowed,
+  resolveAgentHarnessOperatorPolicyError,
+} from "../agents/operator-access-program.js";
 import {
   prepareOperatorModelPolicy,
   readOperatorModelPolicyMembership,
@@ -211,15 +215,32 @@ export function prepareOperatorModelPolicyPresentation(params: {
         }
       : entry;
   const filterModels = <T extends ModelChoice>(models: T[]): T[] => {
+    const harnesses = new Map(
+      listRegisteredAgentHarnesses().map(({ harness }) => [harness.id, harness]),
+    );
+    const projectRuntime = <
+      R extends Pick<ModelChoice, "agentRuntime" | "availableAccessPrograms">,
+    >(
+      entry: R,
+    ): R => {
+      const projected = projectAccess(entry);
+      const harness = entry.agentRuntime && harnesses.get(entry.agentRuntime.id);
+      return resolveAgentHarnessOperatorPolicyError(harness || undefined, {
+        modelPolicy: policy,
+        rolePolicy,
+      })
+        ? { ...projected, available: false, unavailableReason: "unsupported-runtime" }
+        : projected;
+    };
     const visible: T[] = [];
     for (const model of models) {
       if (policy && !policy.allows({ provider: model.provider, model: model.id })) {
         continue;
       }
-      const projected = projectAccess(model);
+      const projected = projectRuntime(model);
       visible.push(
         model.runtimeChoices
-          ? { ...projected, runtimeChoices: model.runtimeChoices.map(projectAccess) }
+          ? { ...projected, runtimeChoices: model.runtimeChoices.map(projectRuntime) }
           : projected,
       );
     }

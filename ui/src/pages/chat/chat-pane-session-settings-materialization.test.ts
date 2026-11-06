@@ -301,6 +301,7 @@ it.each(["unbound", "materialized"] as const)(
       const controls = renderChatPaneComposerControls({
         state: pane.state,
         selectedSession: selectedChatSessionRow(pane.state),
+        cachedSessionStatePending: false,
         agentDefaultModel: undefined,
         modelAccess: access.model,
         effortAccess: access.effort,

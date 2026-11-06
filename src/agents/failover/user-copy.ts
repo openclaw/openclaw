@@ -630,6 +630,8 @@ const AUTH_PROFILE_COOLDOWN_COPY = {
     `${provider} rejected the request — looks like a billing issue on the account.`,
   server_error: (provider: string) =>
     `${provider} is having issues right now. Please wait a moment before trying again.`,
+  route_unavailable: (provider: string) =>
+    `${provider} cannot serve this model right now. Choose another model.`,
   timeout: (provider: string) =>
     `${provider} hasn't been responding. Please wait a moment before trying again.`,
   tls_certificate: authProfileUnavailableCopy,

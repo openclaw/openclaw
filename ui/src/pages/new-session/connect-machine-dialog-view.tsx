@@ -51,7 +51,8 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
             ) : undefined}
             {props.error ? (
               <div class="callout danger" role="alert">
-                {t("newSession.connectMachineFailed")} {props.error}
+                <p>{t("newSession.connectMachineFailed")}</p>
+                <p>{props.error}</p>
               </div>
             ) : undefined}
             <Show when={props.setup}>

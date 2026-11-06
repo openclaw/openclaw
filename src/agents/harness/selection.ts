@@ -29,7 +29,7 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
-import { requiresOperatorModelExecutionPolicy } from "../operator-access-program.js";
+import { resolveAgentHarnessOperatorPolicyError } from "../operator-access-program.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -523,14 +523,11 @@ export async function runAgentHarnessAttempt(
 function assertHarnessModelPolicySupport(harness: AgentHarness, params: EmbeddedRunAttemptParams) {
   const authority = readRunOperatorAuthority(params);
   authority?.assertCurrent();
-  if (
-    !isBuiltInOpenClawAgentHarness(harness) &&
-    requiresOperatorModelExecutionPolicy(authority) &&
-    harness.nativeModelPolicySupport !== "exact"
-  ) {
-    throw new AgentHarnessPreflightError(
-      `Agent harness ${harness.id} cannot enforce your operator role's model policy or Access grants. Choose a compatible runtime or ask a gateway administrator to update the harness.`,
-    );
+  const error = !isBuiltInOpenClawAgentHarness(harness)
+    ? resolveAgentHarnessOperatorPolicyError(harness, authority)
+    : undefined;
+  if (error) {
+    throw new AgentHarnessPreflightError(error);
   }
   return authority;
 }

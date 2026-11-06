@@ -45,6 +45,11 @@ import {
   serializeToolSearchControlResult,
 } from "./tool-search-control-result.js";
 import { getToolSearchLexicalIndex } from "./tool-search-index.js";
+import type {
+  CatalogVisibilityOptions,
+  ToolSearchConfig,
+  UnknownToolErrorOptions,
+} from "./tool-search-protocol.js";
 import { scoreLexical, tokenizeQuery } from "./tool-search-ranking.js";
 import {
   formatCatalogInputError,
@@ -56,14 +61,11 @@ import { readToolSearchLimit } from "./tool-search-request.js";
 import { runScheduledToolSearchCall } from "./tool-search-scheduling.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
-  CatalogVisibilityOptions,
   ToolSearchCallOptions,
   ToolSearchCatalogEntry,
   ToolSearchCatalogSession,
   ToolSearchCatalogToolExecutor,
-  ToolSearchConfig,
   ToolSearchToolContext,
-  UnknownToolErrorOptions,
 } from "./tool-search-types.js";
 import { ToolSourceReplyCell } from "./tool-source-reply-completion.js";
 import { textResult, ToolInputError } from "./tools/common.js";

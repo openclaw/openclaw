@@ -9,7 +9,10 @@ import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
+beforeEach(() => {
+  vi.stubEnv("GITHUB_ACTIONS", "");
+  vi.stubEnv("OPENCLAW_RELEASE_CONTEXT_REF", "main");
+});
 const nestedGitEnvKeys = new Set(
   (
     "ALTERNATE_OBJECT_DIRECTORIES COMMON_DIR CONFIG CONFIG_COUNT CONFIG_PARAMETERS DIR " +
@@ -45,6 +48,21 @@ function makeRepo(entries: string[], files: Record<string, string> = {}) {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it("ignores release size-baseline drift without allowing blanket lint disables", () => {
+  vi.stubEnv("OPENCLAW_RELEASE_CONTEXT_REF", "");
+  const root = makeRepo(["src/stale.ts"]);
+  fs.rmSync(path.join(root, "src/stale.ts"));
+  fixtureFiles(root).write("src/new.ts", suppression);
+  git(root, ["branch", "-m", "release/2026.11.4"]);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  fixtureFiles(root).write("src/new.ts", "/* oxlint-disable */\n");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(console.error).toHaveBeenCalledWith(
+    expect.stringContaining("All-rule lint disables are forbidden"),
+  );
 });
 
 it("reports baseline growth as an advisory in GitHub Actions even when listed", () => {

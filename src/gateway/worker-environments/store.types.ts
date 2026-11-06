@@ -1,4 +1,7 @@
-import type { WorkerResourceReceipt } from "../../plugins/capability-provider.types.js";
+import type {
+  WorkerProfile,
+  WorkerResourceReceipt,
+} from "../../plugins/capability-provider.types.js";
 import type {
   WorkerRetentionOperation,
   WorkerRetentionObservation,
@@ -116,6 +119,15 @@ export type WorkerEnvironmentMutationMethods = {
     maxTotal: number;
     assertCurrent: () => void;
   }): WorkerEnvironmentRecord | undefined;
+  refreshPreparedProject(input: {
+    environmentId: string;
+    ownerEpoch: number;
+    preparationKey: string;
+    sessionId: string;
+    expectedGeneration: number;
+    profileSnapshot: WorkerProfile;
+    assertCurrent?: () => void;
+  }): WorkerEnvironmentRecord;
   requestPreparedDestroy(input: {
     environmentId: string;
     ownerEpoch: number;

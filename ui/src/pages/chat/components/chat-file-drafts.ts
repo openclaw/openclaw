@@ -111,6 +111,7 @@ function syncReloadGuard() {
       () => retainedFileDrafts.size === 0,
       () =>
         showToast({
+          severity: "error",
           actionPrimary: true,
           message: t("chat.detailPanel.reloadBlocked"),
           actionLabel: t("chat.detailPanel.draftRecovery.review"),

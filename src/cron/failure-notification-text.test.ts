@@ -20,6 +20,10 @@ describe("cronFailureDetailLines", () => {
 
   it.each([
     [
+      "route_unavailable",
+      "The provider cannot serve this model right now. Choose another model for this automation or ask the provider operator to restore the route, then run it again.",
+    ],
+    [
       "billing",
       "Ask the provider account owner to resolve the billing error, or choose another provider for this automation, then run it again.",
     ],

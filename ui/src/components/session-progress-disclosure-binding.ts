@@ -194,7 +194,12 @@ function createDisclosure(
     touching = observation.touching;
     if (observation.type === "offset") {
       scrolling = observation.scrolling;
-      if (observation.programmatic && gesture?.distancePx === 0) {
+      // A resize can settle before a held touch starts moving.
+      if (
+        observation.programmatic &&
+        gesture?.distancePx === 0 &&
+        !(gesture.kind === "touch" && touching)
+      ) {
         gesture = undefined;
       }
       if (!observation.programmatic && observation.delta !== 0) {

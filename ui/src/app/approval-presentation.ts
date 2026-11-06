@@ -34,6 +34,19 @@ export function summarizeApprovalScopeLabel(scope: ApprovalScope): string {
   return scope satisfies never;
 }
 
+export function approvalHostLabel(host: string | null | undefined): string | undefined {
+  switch (host) {
+    case "gateway":
+      return t("execApproval.labels.thisComputer");
+    case "node":
+      return t("execApproval.labels.node");
+    case "sandbox":
+      return t("execApproval.labels.sandbox");
+    default:
+      return host ?? undefined;
+  }
+}
+
 export function compactApprovalCommand(command: string): string {
   const singleLine = command.replace(/\s+/g, " ").trim();
   return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;

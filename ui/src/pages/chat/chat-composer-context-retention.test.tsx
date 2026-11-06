@@ -1,15 +1,23 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { sanitizeSessionRow } from "../../lib/sessions/session-row-reconcile.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
+  createComposerControlsFixture,
   createComposerProps,
   resetComposerFixture,
   renderComposerInto,
 } from "./chat-composer.test-support.ts";
 import { projectChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
+
+const metrics = vi.hoisted(() => ({ started: false, ...Promise.withResolvers<void>() }));
+vi.mock("./components/chat-composer-quota-metrics.tsx", async (importOriginal) => {
+  metrics.started = true;
+  await metrics.promise;
+  return importOriginal();
+});
 
 afterEach(() => resetComposerFixture());
 
@@ -56,7 +64,14 @@ function usageProps(refreshed = false) {
   const [provider, displayName, plan, usedPercent, revision] = refreshed
     ? (["anthropic", "Claude", "Max", 61, 2] as const)
     : (["openai", "OpenAI", "Plus", 21, 1] as const);
+  const controls = createComposerControlsFixture();
+  controls.model.accountSelection = {
+    kind: "shared",
+    label: "Selected account",
+    authProfileId: `${provider}:oauth`,
+  };
   return createComposerProps({
+    composerControls: controls,
     selectedSession: {
       key: "main",
       kind: "direct",
@@ -78,6 +93,7 @@ function usageProps(refreshed = false) {
             profiles: [{ profileId: `${provider}:oauth`, type: "oauth", status: "ok" }],
             usage: {
               providerId: provider,
+              authProfileId: `${provider}:oauth`,
               plan,
               windows: [{ label: "Week", usedPercent }],
             },
@@ -95,11 +111,15 @@ it("keeps the context counter exempt and usage-link focus during refreshes", asy
   const query = container.querySelector.bind(container);
   const details = query<HTMLDetailsElement>(".context-usage details")!;
   expect(details.querySelector(".context-usage__popover")).toBeNull();
+  expect(metrics.started).toBe(false);
   details.querySelector("summary")!.click();
   await waitForSolid(() =>
     expect(details.querySelector("[popover]")?.matches(":popover-open")).toBe(true),
   );
   const usageLink = query<HTMLAnchorElement>("[data-chat-provider-usage]")!;
+  await waitForSolid(() => expect(metrics.started).toBe(true));
+  expect(details.querySelectorAll(".context-usage__limit")).toHaveLength(1);
+  expect(details.querySelector('[role="progressbar"]')).toBeNull();
   usageLink.focus();
   expect(document.activeElement).toBe(usageLink);
   expect(query<HTMLElement>(".context-usage__context-value")!.translate).toBe(false);
@@ -108,6 +128,7 @@ it("keeps the context counter exempt and usage-link focus during refreshes", asy
   const current = usageProps(true);
   renderComposerInto(container, {
     ...props,
+    composerControls: current.composerControls,
     selectedSession: current.selectedSession,
     providerUsage: current.providerUsage,
   });
@@ -120,6 +141,12 @@ it("keeps the context counter exempt and usage-link focus during refreshes", asy
   expect(usageLink.textContent).toContain("Max");
   expect(query(".context-usage__context-value")?.textContent).toContain("190k / 200k");
   expect(query(".context-ring")?.classList).toContain("context-ring--warning");
+  metrics.resolve();
+  await waitForSolid(() =>
+    expect(query('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("61"),
+  );
+  expect(details.querySelectorAll(".context-usage__limit")).toHaveLength(1);
+  expect(document.activeElement).toBe(usageLink);
   expect(query(".context-usage__limit")?.getAttribute("aria-valuenow")).toBe("61");
   expect(
     query(".context-usage__identity .provider-brand-icon")?.getAttribute("data-provider-icon"),
