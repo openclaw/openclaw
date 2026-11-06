@@ -115,3 +115,13 @@ jobs:
       - name: Build Apple XCFramework and typecheck Swift
         if: matrix.platform == 'apple'
         run: scripts/build-apple.sh
+
+      # Short-lived workflow artifact for app integration testing; not a release.
+      - name: Upload Apple XCFramework
+        if: matrix.platform == 'apple'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openclaw-iroh-ffi-apple-${{ github.event.pull_request.head.sha || github.sha }}
+          path: crates/openclaw-iroh-ffi/dist/apple/OpenClawIrohFFI.xcframework
+          retention-days: 3
+          if-no-files-found: error
