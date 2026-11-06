@@ -36,7 +36,7 @@ function captureSnapshotRouteEvidence(sessionPathParam: string): void {
   const record = (event: string, read: () => object | undefined) => {
     try {
       const facts = read();
-      if (facts)
+      if (facts) {
         console.debug(
           "[snapshot-route] " +
             JSON.stringify({
@@ -46,6 +46,7 @@ function captureSnapshotRouteEvidence(sessionPathParam: string): void {
               ...facts,
             }),
         );
+      }
     } catch {
       /* Passive evidence must preserve original results and exceptions. */
     }
@@ -101,7 +102,9 @@ function captureSnapshotRouteEvidence(sessionPathParam: string): void {
       const result: unknown = Reflect.apply(target, receiver, args);
       record("mock.reply.dispatched", () => {
         const event = args[0];
-        if (!(event instanceof MessageEvent) || typeof event.data !== "string") return undefined;
+        if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
+          return undefined;
+        }
         const frame = JSON.parse(event.data) as ResponseFrame;
         const request = mock.requests.find((candidate) => candidate.id === frame.id);
         return frame.type === "res" && request && methods.has(request.method)
@@ -118,7 +121,9 @@ function captureSnapshotRouteEvidence(sessionPathParam: string): void {
     },
   });
   const attach = (context: ApplicationContext) => {
-    if (seen.has(context)) return;
+    if (seen.has(context)) {
+      return;
+    }
     seen.add(context);
     // bootstrap's native context supplies the full router; no product API or readiness load.
     const router = context.router as ApplicationRuntime["router"];
@@ -131,7 +136,9 @@ function captureSnapshotRouteEvidence(sessionPathParam: string): void {
     const clientChanged = () =>
       record("rpc.observer", () => {
         const client = context.gateway.snapshot.client;
-        if (!client || seen.has(client)) return undefined;
+        if (!client || seen.has(client)) {
+          return undefined;
+        }
         seen.add(client);
         // Existing timing seam also covers requests issued before context publication.
         // gateway.ts retains opts and reads this callback at each protocol settlement.
@@ -161,9 +168,10 @@ function captureSnapshotRouteEvidence(sessionPathParam: string): void {
     clientChanged();
     context.gateway.subscribe(clientChanged);
     const route = router.getRoute("chat");
-    if (route?.loader)
-      route.loader = new Proxy(route.loader, {
-        apply(target, receiver, args: Parameters<typeof target>) {
+    if (route?.loader) {
+      const loader = route.loader;
+      route.loader = new Proxy(loader, {
+        apply(target, receiver, args: Parameters<typeof loader>) {
           const [, options] = args;
           const facts = {
             load: ++loads,
@@ -205,13 +213,18 @@ function captureSnapshotRouteEvidence(sessionPathParam: string): void {
                   options.signal.aborted || result.kind !== "session" ? "rejected" : "accepted",
                 reason: options.signal.aborted
                   ? "aborted"
-                  : (("cache" in result ? result.cache : result.kind) ?? "redirect-or-not-found"),
+                  : (("cache" in result ? result.cache : undefined) ??
+                    result.kind ??
+                    "redirect-or-not-found"),
               };
             });
           try {
             const result: unknown = Reflect.apply(target, receiver, args);
-            if (result instanceof Promise) void result.then(accepted, rejected);
-            else accepted(result);
+            if (result instanceof Promise) {
+              void result.then(accepted, rejected);
+            } else {
+              accepted(result);
+            }
             return result;
           } catch (error) {
             rejected(error);
@@ -219,6 +232,7 @@ function captureSnapshotRouteEvidence(sessionPathParam: string): void {
           }
         },
       });
+    }
     let previous = "";
     router.subscribe((state) =>
       record("route.published", () => {
@@ -231,7 +245,9 @@ function captureSnapshotRouteEvidence(sessionPathParam: string): void {
           data: data(match.data),
         }));
         const serialized = JSON.stringify(matches);
-        if (serialized === previous) return undefined;
+        if (serialized === previous) {
+          return undefined;
+        }
         previous = serialized;
         return { matches };
       }),
@@ -242,8 +258,9 @@ function captureSnapshotRouteEvidence(sessionPathParam: string): void {
     "context-provider",
     (event) => {
       const incoming = event as ApplicationContextRequest;
-      if (incoming.context !== "openclaw.application" || !(event.target instanceof HTMLElement))
+      if (incoming.context !== "openclaw.application" || !(event.target instanceof HTMLElement)) {
         return;
+      }
       event.target.dispatchEvent(
         Object.assign(new Event("context-request", { bubbles: true }), {
           context: incoming.context,
@@ -312,6 +329,8 @@ suite.define(() => {
         await gateway.setMethodResponse("sessions.resolve", { ok: false });
         await gateway.resolveDeferred("sessions.resolve", { ok: false });
         await page.locator(".session-route-not-found").waitFor();
+        const [resolution] = await gateway.getRequests("sessions.resolve");
+        const params = resolution!.params as { reference: { key?: string } };
         // Exercise the native history seam without changing the route or issuing another RPC.
         await page.evaluate(() => history.replaceState(history.state, "", location.href));
         const texts = events.flatMap(({ source, details }) =>
@@ -333,25 +352,42 @@ suite.define(() => {
           });
         expect(facts).toEqual(
           expect.arrayContaining([
-            evidence("route.requested", { requestedKey: sessionKey }),
+            evidence("route.requested", {
+              cause: "navigation",
+              reference: `/chat/main/${id.replaceAll("-", "")}`,
+              requestedKey: null,
+            }),
             evidence("route.admission", { decision: "accepted" }),
             evidence("route.admission", { decision: "rejected", reason: expect.any(String) }),
-            ...["sessions.resolve", "sessions.describe", "chat.startup"].map((method) =>
+            ...["sessions.describe", "chat.startup"].map((method) =>
               evidence("rpc.settled", {
                 method,
                 key: sessionKey,
                 id: expect.any(String),
-                ok: true,
+                ok: expect.any(Boolean),
               }),
             ),
+            evidence("rpc.settled", {
+              method: "sessions.resolve",
+              key: params.reference.key ?? null,
+              id: resolution!.id,
+              ok: expect.any(Boolean),
+            }),
             evidence("mock.reply.dispatched", {
               method: "sessions.resolve",
+              id: resolution!.id,
+              ok: true,
               reply: { key: null, agentId: null },
             }),
             evidence("mock.release", { method: "sessions.resolve" }),
             evidence("history.replaceState", { source: expect.any(String) }),
           ]),
         );
+        for (const fact of facts.filter(
+          (fact) => fact.event === "rpc.settled" && fact.ok === false,
+        )) {
+          expect(fact.reason).toEqual(expect.any(String));
+        }
         expect(JSON.stringify(facts)).not.toContain(transcript);
       },
     );
