@@ -46,6 +46,8 @@ const handshakeRecoverySnapshotSchema = z.strictObject({
   controlUiAdmin: z.boolean(),
   localOperator: z.boolean(),
   sourceIngress: z.enum(["control-ui", "internal"]),
+  // Optional: snapshots persisted before this field decode unchanged and keep their admission.
+  commandSenderProfileIdOnly: z.boolean().optional(),
 });
 const principalRecoverySnapshotSchema = handshakeRecoverySnapshotSchema.extend({
   sourceIngress: z.literal("principal"),

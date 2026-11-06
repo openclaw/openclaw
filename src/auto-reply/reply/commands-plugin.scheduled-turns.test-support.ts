@@ -80,6 +80,10 @@ export type Fixture = {
   revokeOwner: () => void;
   demoteOwner: () => void;
   removeOwner: () => void;
+  /** The requester's channel sender id (use with `setCommandsAllowFrom`). */
+  requesterSenderId: string;
+  /** Replace the requester channel's `commands.allowFrom` list. */
+  setCommandsAllowFrom: (senderIds: string[]) => void;
   installAgentTurnFacade: () => void;
   readJobs: () => Promise<import("../../cron/types.js").CronStoredJob[]>;
   /** The scheduler of the current Gateway process; replaced by `restart`. */
@@ -351,6 +355,13 @@ export async function withCommandPlugin(
         demoteOwner: () => {
           setUserProfileRole(admins[0]!.profile.id, "member");
           invalidateOperatorRolePolicy(admins[0]!.profile.id);
+        },
+        requesterSenderId: admins[0]!.identity.senderId,
+        setCommandsAllowFrom: (senderIds: string[]) => {
+          cfg.commands = {
+            ...cfg.commands,
+            allowFrom: { [admins[0]!.identity.channelId]: senderIds },
+          };
         },
         installAgentTurnFacade: () => {
           const methodRegistry = createRequestGatewayMethodRegistry();
