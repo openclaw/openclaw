@@ -1,4 +1,6 @@
 import "../../styles/secret-reveal.css";
+// The name step uses SettingsRow, whose styles load with the Settings pages.
+import "../../styles/settings.css";
 import { createSignal, For, Match, Show, Switch } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
