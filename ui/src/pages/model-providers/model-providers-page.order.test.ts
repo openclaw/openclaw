@@ -475,9 +475,9 @@ describe("ModelProvidersPage installed agents", () => {
       expect(agentRow(page, "opencode")?.textContent).not.toMatch(/sign.in/i);
     });
     expect(
-      agentRow(page, "opencode")?.querySelector<HTMLInputElement>(
-        '.settings-toggle__input[role="switch"]',
-      )?.disabled,
+      agentRow(page, "opencode")
+        ?.querySelector<HTMLInputElement>('.settings-toggle__input[role="switch"]')
+        ?.matches(':disabled, [aria-disabled="true"]'),
     ).toBe(false);
     page
       .querySelector<HTMLButtonElement>(
@@ -636,9 +636,9 @@ describe("ModelProvidersPage installed agents", () => {
     agentRow(page, "opencode")!.querySelector<HTMLElement>(".settings-row__title")!.click();
 
     expect(
-      agentRow(page, "opencode")!.querySelector<HTMLInputElement>(
-        '.settings-toggle__input[role="switch"]',
-      )?.disabled,
+      agentRow(page, "opencode")!
+        .querySelector<HTMLInputElement>('.settings-toggle__input[role="switch"]')
+        ?.matches(':disabled, [aria-disabled="true"]'),
     ).toBe(true);
     expect(page.querySelector(".model-providers__installed-agents")?.textContent).toContain(
       "Model changes require operator.admin access.",

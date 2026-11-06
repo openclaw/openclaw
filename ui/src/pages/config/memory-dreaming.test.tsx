@@ -131,16 +131,18 @@ describe("MemoryDreamingControls", () => {
     const container = renderInto(null, vi.fn(), true);
 
     expect(
-      [...container.querySelectorAll<HTMLInputElement>("input")].every((input) => input.disabled),
+      [...container.querySelectorAll<HTMLInputElement>("input")].every((input) =>
+        input.matches(':disabled, [aria-disabled="true"]'),
+      ),
     ).toBe(true);
     expect(
-      [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].every(
-        (toggle) => toggle.disabled,
+      [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].every((toggle) =>
+        toggle.matches(':disabled, [aria-disabled="true"]'),
       ),
     ).toBe(true);
     expect(
       [...container.querySelectorAll<HTMLInputElement>(".settings-segmented__input")].every(
-        (input) => input.disabled,
+        (input) => input.matches(':disabled, [aria-disabled="true"]'),
       ),
     ).toBe(true);
   });

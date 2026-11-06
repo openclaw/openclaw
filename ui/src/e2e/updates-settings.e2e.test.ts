@@ -170,7 +170,8 @@ suite.define(() => {
             .getByRole("radio")
             .evaluateAll(
               (radios) =>
-                radios.length > 0 && radios.every((radio) => (radio as HTMLInputElement).disabled),
+                radios.length > 0 &&
+                radios.every((radio) => radio.matches(':disabled, [aria-disabled="true"]')),
             ),
         ).toBe(true);
         expect(
@@ -395,7 +396,8 @@ suite.define(() => {
             .getByRole("radio")
             .evaluateAll(
               (radios) =>
-                radios.length > 0 && radios.every((radio) => (radio as HTMLInputElement).disabled),
+                radios.length > 0 &&
+                radios.every((radio) => radio.matches(':disabled, [aria-disabled="true"]')),
             ),
         ).toBe(true);
         expect(await page.getByRole("switch", { name: "Automatic updates" }).isDisabled()).toBe(

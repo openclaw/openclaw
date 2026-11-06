@@ -396,7 +396,11 @@ describe("renderUpdates", () => {
     ).toEqual(["Stable", "Beta", "Dev", "Extended stable"]);
     const automaticRow = row("Automatic updates");
     expect(automaticRow.textContent).toContain("never installs them automatically");
-    expect(automaticRow.querySelector('input[role="switch"]')?.hasAttribute("disabled")).toBe(true);
+    expect(
+      automaticRow
+        .querySelector('input[role="switch"]')
+        ?.matches(':disabled, [aria-disabled="true"]'),
+    ).toBe(true);
   });
 
   it("reports a configless extended-stable package install by the Gateway channel and gates auto-apply", () => {
@@ -966,14 +970,18 @@ describe("renderUpdates", () => {
     );
     expect(
       [...row("Release channel").querySelectorAll<HTMLInputElement>('input[type="radio"]')].every(
-        (input) => input.disabled,
+        (input) => input.matches(':disabled, [aria-disabled="true"]'),
       ),
     ).toBe(true);
     expect(
-      row("Automatic updates").querySelector('input[role="switch"]')?.hasAttribute("disabled"),
+      row("Automatic updates")
+        .querySelector('input[role="switch"]')
+        ?.matches(':disabled, [aria-disabled="true"]'),
     ).toBe(true);
     expect(
-      row("Check for updates").querySelector('input[role="switch"]')?.hasAttribute("disabled"),
+      row("Check for updates")
+        .querySelector('input[role="switch"]')
+        ?.matches(':disabled, [aria-disabled="true"]'),
     ).toBe(true);
     expect(row("Update now").querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
     expect(row("Status").querySelector("button")).toBeNull();

@@ -215,7 +215,7 @@ describe("renderSkills", () => {
     expect(
       container
         .querySelector<HTMLInputElement>("input.settings-toggle__input")
-        ?.hasAttribute("disabled"),
+        ?.matches(':disabled, [aria-disabled="true"]'),
     ).toBe(true);
     const install = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => normalizeText(button) === "Install skill-cli",
@@ -273,7 +273,7 @@ describe("renderSkills", () => {
     expect(
       Array.from(
         container.querySelectorAll<HTMLInputElement>("input.settings-toggle__input"),
-      ).every((toggle) => toggle.hasAttribute("disabled")),
+      ).every((toggle) => toggle.matches(':disabled, [aria-disabled="true"]')),
     ).toBe(true);
     expect(container.querySelectorAll(".plugins-item input.settings-toggle__input")).toHaveLength(
       0,

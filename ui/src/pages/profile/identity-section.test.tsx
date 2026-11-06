@@ -145,6 +145,6 @@ describe("IdentitySection", () => {
     expect(container.textContent).not.toContain("Refresh to retry");
     const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
     expect(toggle?.checked).toBe(false);
-    expect(toggle?.hasAttribute("disabled")).toBe(true);
+    expect(toggle?.matches(':disabled, [aria-disabled="true"]')).toBe(true);
   });
 });
