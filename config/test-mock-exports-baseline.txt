@@ -4342,7 +4342,6 @@
 ["src/flows/doctor-startup-channel-maintenance.test.ts","../commands/doctor/shared/channel-doctor.js","c6baad9e8cad4c351280c7cbf2eeb434708e5a97e6d4a9b8af119c385fe02438",1]
 ["src/flows/doctor-startup-channel-maintenance.test.ts","../commands/doctor/shared/preview-warnings.js","f3d2ba8583ce5e39698740896354ece29ccd9a6b26acfe43a706bf9af347316b",1]
 ["src/flows/doctor-tool-schema-frames.test.ts","../agents/embedded-agent-runner/model.js","f64758a0497668af5d9e33ce8457004fab477e4a31552c098f458f58621f6193",1]
-["src/flows/doctor-update-snapshots.test.ts","../infra/openclaw-root.js","952255f48cce4531a30c75ec9fe7304917ec0dbfeb7486c095691ed529a55516",1]
 ["src/flows/doctor-whatsapp-responsiveness.flow.test.ts","../../packages/terminal-core/src/note.js","f5864cdeb859b12765491a2066778d233cade85ee0bc133481fa4580397b105b",1]
 ["src/flows/doctor-whatsapp-responsiveness.flow.test.ts","../commands/doctor-gateway-health.js","72af33bc599c2395d70ba6c53e6cdf5a2a259fb22baf4d3cbb633e7a36e349ac",1]
 ["src/flows/doctor-whatsapp-responsiveness.flow.test.ts","./doctor-gateway-exec-credential.js","8d8c54cd589716bf77fb999a10f7561f85de92912e7a48abc944539d37aa699e",1]
