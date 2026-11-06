@@ -19,9 +19,7 @@ export function ErrorDetails(props: { error: unknown; action?: JSX.Element; labe
             <code class="lazy-view-error__detail" tabindex={0} aria-label={props.label}>
               {message}
             </code>
-            <Show when={props.action}>
-              {(action) => <span class="lazy-view-error__action">{action()}</span>}
-            </Show>
+            {props.action ? <span class="lazy-view-error__action">{props.action}</span> : undefined}
           </div>
         </details>
       )}

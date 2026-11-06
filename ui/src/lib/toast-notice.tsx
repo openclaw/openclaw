@@ -1,5 +1,4 @@
 import type { JSX } from "@solidjs/web";
-import "../styles/toast.css";
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { ErrorDetails } from "../components/config-error.tsx";
 import { Icon, type IconName } from "../components/solid/icon.tsx";
@@ -14,6 +13,7 @@ import {
   type ToastLane,
   type ToastSeverity,
 } from "./toast.ts";
+import toastStyles from "../styles/toast.css?inline";
 
 const SEVERITY_ICONS = {
   success: "circleCheck",
@@ -89,150 +89,159 @@ export function ToastNotice(props: {
     return value instanceof DocumentFragment ? Array.from(value.childNodes) : value;
   });
   return (
-    <div
-      class={[
-        "app-toast",
-        props.class,
-        {
-          "app-toast--anchored": Boolean(anchor()),
-          "app-toast--success": toast().severity === "success",
-          "app-toast--info": toast().severity === "info",
-          "app-toast--warning": toast().severity === "warning",
-          "app-toast--error": toast().severity === "error",
-          "app-toast--progress": toast().severity === "progress",
-          "app-toast--avatar": Boolean(toast().avatar),
-          "app-toast--action": Boolean(props.action) || hasAction(),
-          "app-toast--single-row": !copy().description && toast().detail == null && singleRow(),
-        },
-      ]}
-      data-active={props.active === false ? "false" : "true"}
-      data-depth={props.depth}
-      inert={props.open === false && (props.depth ?? 0) >= TOAST_VISIBLE_LIMIT}
-      tabindex="-1"
-      style={
-        anchor()
-          ? {
-              "--app-toast-anchor-center": `${anchor()!.left + anchor()!.width / 2}px`,
-              "--app-toast-anchor-top": `${anchor()!.top}px`,
-              "--app-toast-anchor-width": `${anchor()!.width}px`,
-            }
-          : {}
-      }
-      role={toast().severity === "error" ? "alert" : "status"}
-      aria-live={toast().severity === "error" ? "assertive" : "polite"}
-      aria-atomic="true"
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && props.onDismiss) {
-          event.stopPropagation();
-          dismiss("dismiss");
+    <>
+      <style>{toastStyles}</style>
+      <div
+        class={[
+          "app-toast",
+          props.class,
+          {
+            "app-toast--anchored": Boolean(anchor()),
+            "app-toast--success": toast().severity === "success",
+            "app-toast--info": toast().severity === "info",
+            "app-toast--warning": toast().severity === "warning",
+            "app-toast--error": toast().severity === "error",
+            "app-toast--progress": toast().severity === "progress",
+            "app-toast--avatar": Boolean(toast().avatar),
+            "app-toast--action": Boolean(props.action) || hasAction(),
+            "app-toast--single-row": !copy().description && toast().detail == null && singleRow(),
+          },
+        ]}
+        data-active={props.active === false ? "false" : "true"}
+        data-depth={props.depth}
+        inert={props.open === false && (props.depth ?? 0) >= TOAST_VISIBLE_LIMIT}
+        tabindex="-1"
+        style={
+          anchor()
+            ? {
+                "--app-toast-anchor-center": `${anchor()!.left + anchor()!.width / 2}px`,
+                "--app-toast-anchor-top": `${anchor()!.top}px`,
+                "--app-toast-anchor-width": `${anchor()!.width}px`,
+              }
+            : {}
         }
-      }}
-      onPointerEnter={() => {
-        if (lane() === "anchored") {
-          props.onHover?.(true);
-        }
-      }}
-      onPointerLeave={() => {
-        if (lane() === "anchored") {
-          props.onHover?.(false);
-        }
-      }}
-      onFocusIn={() => {
-        if (lane() === "anchored") {
-          props.onFocus?.(true);
-        }
-      }}
-      onFocusOut={(event) => {
-        if (lane() === "anchored") {
-          props.onFocus?.(
-            event.relatedTarget instanceof Node &&
-              event.currentTarget.contains(event.relatedTarget),
-          );
-        }
-      }}
-      onTransitionEnd={(event) => {
-        if (
-          lane() === "anchored" &&
-          event.target === event.currentTarget &&
-          event.propertyName === "opacity"
-        ) {
-          props.onExit?.();
-        }
-      }}
-    >
-      {toast().avatar ? (
-        <span class="app-toast__avatar" aria-hidden="true">
-          <AgentIdentityAvatar agent={toast().avatar!} />
-        </span>
-      ) : toast().severity ? (
-        <span class="app-toast__icon" aria-hidden="true">
-          <Icon name={SEVERITY_ICONS[toast().severity!]} />
-        </span>
-      ) : undefined}
-      <div class="app-toast__content" ref={(element) => (contentElement = element)}>
-        <div class="app-toast__body" ref={(element) => (bodyElement = element)}>
-          <span class="app-toast__message" ref={(element) => (messageElement = element)}>
-            {message()}
+        role={toast().severity === "error" ? "alert" : "status"}
+        aria-live={toast().severity === "error" ? "assertive" : "polite"}
+        aria-atomic="true"
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && props.onDismiss) {
+            event.stopPropagation();
+            dismiss("dismiss");
+          }
+        }}
+        onPointerEnter={() => {
+          if (lane() === "anchored") {
+            props.onHover?.(true);
+          }
+        }}
+        onPointerLeave={() => {
+          if (lane() === "anchored") {
+            props.onHover?.(false);
+          }
+        }}
+        onFocusIn={() => {
+          if (lane() === "anchored") {
+            props.onFocus?.(true);
+          }
+        }}
+        onFocusOut={(event) => {
+          if (lane() === "anchored") {
+            props.onFocus?.(
+              event.relatedTarget instanceof Node &&
+                event.currentTarget.contains(event.relatedTarget),
+            );
+          }
+        }}
+        onTransitionEnd={(event) => {
+          if (
+            lane() === "anchored" &&
+            event.target === event.currentTarget &&
+            event.propertyName === "opacity"
+          ) {
+            props.onExit?.();
+          }
+        }}
+      >
+        {toast().avatar ? (
+          <span class="app-toast__avatar" aria-hidden="true">
+            <AgentIdentityAvatar agent={toast().avatar!} />
           </span>
-          {copy().description ? " " : undefined}
-          {copy().description ? (
-            <span class="app-toast__description">{formatUiExternalText(copy().description)}</span>
-          ) : undefined}
-          <Show when={toast()} keyed>
-            {(options) => (
-              <ErrorDetails
-                error={options.detail}
-                action={props.detailAction}
-                label={props.detailLabel}
-              />
-            )}
-          </Show>
-        </div>
-        {props.action}
-        {!props.action && hasAction() ? (
-          toast().actionHref ? (
-            <a
-              ref={(element) => (actionElement = element)}
-              class={["app-toast__action", { "app-toast__action--primary": toast().actionPrimary }]}
-              href={toast().actionHref}
-              onClick={(event) => {
-                const action = toast().onAction;
-                if (shouldHandleNavigationClick(event)) {
-                  dismiss("action");
-                }
-                action?.(event);
-              }}
-              onAuxClick={(event) => toast().onAction?.(event)}
-              onContextMenu={(event) => toast().onAction?.(event)}
-            >
-              {toast().actionLabel}
-            </a>
-          ) : (
-            <button
-              ref={(element) => (actionElement = element)}
-              type="button"
-              class={["app-toast__action", { "app-toast__action--primary": toast().actionPrimary }]}
-              onClick={() => {
-                const action = toast().onAction;
-                dismiss("action");
-                action?.();
-              }}
-            >
-              {toast().actionLabel}
-            </button>
-          )
+        ) : toast().severity ? (
+          <span class="app-toast__icon" aria-hidden="true">
+            <Icon name={SEVERITY_ICONS[toast().severity!]} />
+          </span>
         ) : undefined}
+        <div class="app-toast__content" ref={(element) => (contentElement = element)}>
+          <div class="app-toast__body" ref={(element) => (bodyElement = element)}>
+            <span class="app-toast__message" ref={(element) => (messageElement = element)}>
+              {message()}
+            </span>
+            {copy().description ? " " : undefined}
+            {copy().description ? (
+              <span class="app-toast__description">{formatUiExternalText(copy().description)}</span>
+            ) : undefined}
+            <Show when={toast()} keyed>
+              {(options) => (
+                <ErrorDetails
+                  error={options.detail}
+                  action={props.detailAction}
+                  label={props.detailLabel}
+                />
+              )}
+            </Show>
+          </div>
+          {props.action}
+          {!props.action && hasAction() ? (
+            toast().actionHref ? (
+              <a
+                ref={(element) => (actionElement = element)}
+                class={[
+                  "app-toast__action",
+                  { "app-toast__action--primary": toast().actionPrimary },
+                ]}
+                href={toast().actionHref}
+                onClick={(event) => {
+                  const action = toast().onAction;
+                  if (shouldHandleNavigationClick(event)) {
+                    dismiss("action");
+                  }
+                  action?.(event);
+                }}
+                onAuxClick={(event) => toast().onAction?.(event)}
+                onContextMenu={(event) => toast().onAction?.(event)}
+              >
+                {toast().actionLabel}
+              </a>
+            ) : (
+              <button
+                ref={(element) => (actionElement = element)}
+                type="button"
+                class={[
+                  "app-toast__action",
+                  { "app-toast__action--primary": toast().actionPrimary },
+                ]}
+                onClick={() => {
+                  const action = toast().onAction;
+                  dismiss("action");
+                  action?.();
+                }}
+              >
+                {toast().actionLabel}
+              </button>
+            )
+          ) : undefined}
+        </div>
+        <Show when={props.onDismiss}>
+          <button
+            type="button"
+            class="app-toast__dismiss"
+            aria-label={props.dismissLabel ?? t("common.dismiss")}
+            onClick={() => dismiss("dismiss")}
+          >
+            <Icon name="x" />
+          </button>
+        </Show>
       </div>
-      <Show when={props.onDismiss}>
-        <button
-          type="button"
-          class="app-toast__dismiss"
-          aria-label={props.dismissLabel ?? t("common.dismiss")}
-          onClick={() => dismiss("dismiss")}
-        >
-          <Icon name="x" />
-        </button>
-      </Show>
-    </div>
+    </>
   );
 }

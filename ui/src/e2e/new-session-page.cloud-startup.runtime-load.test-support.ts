@@ -228,6 +228,7 @@ async function recoverStartup(
     const probesBeforeManualReload = documentProbes;
     await reload.click();
     // Two-sentence copy renders as a title plus description; read both.
+    const warning = "Recovery needs a reload. Unsaved starts will be lost.";
     const toast = page.locator(".app-toast__body");
     await expect.poll(() => toast.textContent()).toContain(warning);
 
