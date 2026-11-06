@@ -83,7 +83,7 @@ it(
             commands.push(args);
             let result = { code: 0, stdout: "", stderr: "" };
             if (args[0] === "--version") {
-              result.stdout = "crabbox 0.81.0";
+              result.stdout = "crabbox 0.81.1";
             } else if (args[0] === "providers") {
               result.stdout = "[]";
             } else if (args[0] === "config") {
