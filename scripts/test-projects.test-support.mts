@@ -2861,7 +2861,9 @@ export function resolveDependencyTestConsumers(
     runtimeOnly = false,
     importerBindings,
     direct = false,
+    changedPaths,
   }: Pick<ImportGraphOptions, "runtimeOnly" | "direct"> & {
+    changedPaths?: string[];
     importerBindings?: Array<{ root: string; dependencies: string[] }>;
   } = {},
 ) {
@@ -2871,6 +2873,12 @@ export function resolveDependencyTestConsumers(
   const options = { tooling: true, resolveAliases: true, runtimeOnly };
   getImportGraph(cwd, options);
   const files = listImportGraphFilesForCwd(cwd, options);
+  const affected = changedPaths
+    ? new Set([...changedPaths, ...resolveImportGraphDependents(changedPaths, cwd, options)])
+    : undefined;
+  const fileSet = affected ? new Set([...files, ...(changedPaths ?? [])]) : undefined;
+  const aliases = affected ? getImportGraphAliases(cwd) : [];
+  const aliasResolutions = new Map<string, string[]>();
   const unresolved = new Map<string, { root: string; dependency: string }>();
   for (const { root, dependencies } of importers) {
     for (const dependency of dependencies) {
@@ -2916,9 +2924,26 @@ export function resolveDependencyTestConsumers(
           // Erased imports prove type ownership; absent usage may be a CLI or
           // generated child script and must remain unresolved for the planner.
           unresolved.delete(`${root}\0${dependency}`);
-          runtimeConsumer ||= specifiers.some(
-            (specifier) => !runtimeOnly || !edges.typeOnlySpecifiers.has(specifier),
-          );
+          runtimeConsumer ||= specifiers.some((specifier) => {
+            if (runtimeOnly && edges.typeOnlySpecifiers.has(specifier)) {
+              return false;
+            }
+            if (!affected || !fileSet) {
+              return true;
+            }
+            const modules = resolveImportSpecifiers(
+              file,
+              specifier,
+              fileSet,
+              TOOLING_IMPORTABLE_FILE_EXTENSIONS,
+              aliases,
+              aliasResolutions,
+              runtimeOnly,
+            );
+            // Unknown package bindings retain coverage; resolved subpaths only
+            // retain consumers of the changed source, including barrel exports.
+            return modules.length === 0 || modules.some((module) => affected.has(module));
+          });
         }
       }
     }
@@ -4873,8 +4898,23 @@ function resolveBoundedChangedTestTargetPlan(
       if (typeof name !== "string") {
         continue;
       }
+      const packagePaths = changedPaths.filter((file) =>
+        file.startsWith(`${path.posix.dirname(manifest)}/`),
+      );
       const consumers = resolveDependencyTestConsumers([{ root: ".", dependencies: [name] }], cwd, {
         runtimeOnly: true,
+        changedPaths:
+          packagePaths.length > 0 &&
+          packagePaths.every(
+            (file) =>
+              file.startsWith(`${path.posix.dirname(manifest)}/src/`) &&
+              TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => file.endsWith(ext)) &&
+              !isTestOnlyPath(file) &&
+              !/(?:^|\/)(?:__fixtures__|fixtures|scripts|test-fixtures|test-utils|test-helpers|test-support|testing)\//u.test(file) &&
+              !/\.(?:config|setup|d)\.[cm]?[jt]sx?$/u.test(file),
+          )
+            ? packagePaths
+            : undefined,
         // Resolved aliases share the module graph's hub cutoff. Traversing again
         // from package readers would bypass it for mixed import styles.
         direct: true,
