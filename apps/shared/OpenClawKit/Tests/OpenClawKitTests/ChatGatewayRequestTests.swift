@@ -839,6 +839,21 @@ struct ChatGatewayRequestTests {
         #expect(inherited.params["expectedToolOverrides"] == nil)
     }
 
+    @Test func `send request omits the inherited thinking level sentinel`() {
+        // The chat view model resolves "nobody chose a level" to this value; it
+        // must never reach the wire as an explicit override.
+        let request = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: "main",
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: "inherit",
+            thinking: OpenClawChatViewModel.inheritedThinkingLevelForSend,
+            idempotencyKey: "send-inherited-sentinel",
+            attachments: [])
+        #expect(OpenClawChatViewModel.inheritedThinkingLevelForSend.isEmpty)
+        #expect(request.params["thinking"] == nil)
+    }
+
     @Test(arguments: [nil, .steer, .followup] as [OpenClawChatQueueMode?])
     func `send request preserves a per message queue mode`(mode: OpenClawChatQueueMode?) throws {
         let request = OpenClawChatGatewayRequests.sendMessage(

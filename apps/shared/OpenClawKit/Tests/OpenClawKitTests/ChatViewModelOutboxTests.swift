@@ -1401,6 +1401,67 @@ struct ChatViewModelOutboxTests {
         #expect(await store.loadCommands().map(\.thinking) == ["off"])
     }
 
+    @Test func `offline queue keeps an unchosen thinking level inherited`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        // The advertised levels omit `off`, so a seeded override would be
+        // rejected by the Gateway on every replay.
+        let sessions = [outboxSessionEntry(key: "main", thinkingLevels: ["low", "medium", "high"])]
+        let transport = OutboxTestTransport(healthy: false, sessions: sessions)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+
+        await MainActor.run { vm.load() }
+        await MainActor.run {
+            vm.sessions = sessions
+            vm.syncThinkingLevelOptions()
+        }
+        #expect(await MainActor.run { !vm.prefersExplicitThinkingLevel })
+
+        try await sendWhileOffline(vm, text: "queue before choosing a level")
+        #expect(await store.loadCommands().map(\.thinking) == [
+            OpenClawChatViewModel.inheritedThinkingLevelForSend,
+        ])
+    }
+
+    @Test func `flush replays an inherited thinking level without an override`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let now = Date().timeIntervalSince1970
+        #expect(await store.enqueueCommand(
+            OpenClawChatOutboxCommand(
+                id: "c-inherited",
+                sessionKey: "main",
+                routingContract: "per-sender|main|main",
+                text: "queued while cold",
+                thinking: OpenClawChatViewModel.inheritedThinkingLevelForSend,
+                expectedSessionSettings: OpenClawChatSessionSettingsExpectation(
+                    permissionMode: nil,
+                    toolOverrides: nil),
+                createdAt: now,
+                status: .queued,
+                retryCount: 0,
+                lastError: nil)))
+        let sessionEntries = [outboxSessionEntry(key: "main", thinkingLevels: ["low", "medium", "high"])]
+        let transport = OutboxTestTransport(healthy: false, sessions: sessionEntries)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+
+        await MainActor.run { vm.load() }
+        await MainActor.run {
+            vm.sessions = sessionEntries
+            vm.syncThinkingLevelOptions()
+        }
+        let sendGate = OutboxTestGate()
+        await transport.state.update { $0.sendGate = sendGate }
+        await transport.goOnline()
+        try await finishOutboxFlush(vm, at: sendGate)
+        #expect(await store.loadCommands().isEmpty)
+        #expect(await transport.state.sentThinkingLevels == [
+            OpenClawChatViewModel.inheritedThinkingLevelForSend,
+        ])
+        #expect(await transport.state.sentSessionKeys == ["main"])
+        _ = vm
+    }
+
     @Test func `inert outbox does not capability gate healthy live chat`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }

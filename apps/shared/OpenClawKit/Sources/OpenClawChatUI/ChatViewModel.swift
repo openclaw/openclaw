@@ -558,13 +558,16 @@ public final class OpenClawChatViewModel {
         self.activeAgentId = ChatPayloadDecoding.trimmedNonEmptyString(activeAgentId)?.lowercased()
         self.sessionRoutingContract = ChatPayloadDecoding.trimmedNonEmptyString(sessionRoutingContract)
         let normalizedThinkingLevel = Self.normalizedThinkingLevel(initialThinkingLevel)
-        let initialResolvedThinkingLevel = normalizedThinkingLevel ?? "off"
-        self.thinkingLevel = initialResolvedThinkingLevel
-        self.preferredThinkingLevel = initialResolvedThinkingLevel
+        // A missing initial level is not a user choice. Keep the send-side value
+        // inherited so a cold-launch send cannot inject an explicit override the
+        // session model may not advertise; the picker keeps its neutral label.
+        let initialPreferredThinkingLevel = normalizedThinkingLevel ?? Self.inheritedThinkingLevelForSend
+        self.thinkingLevel = normalizedThinkingLevel ?? "off"
+        self.preferredThinkingLevel = initialPreferredThinkingLevel
         self.thinkingLevelOptions = []
         self.prefersExplicitThinkingLevel = normalizedThinkingLevel != nil
         let initialThinkingPreference = PreferenceState(
-            level: initialResolvedThinkingLevel,
+            level: initialPreferredThinkingLevel,
             isExplicit: normalizedThinkingLevel != nil)
         self.confirmedThinkingPreference = initialThinkingPreference
         self.emittedThinkingPreference = initialThinkingPreference

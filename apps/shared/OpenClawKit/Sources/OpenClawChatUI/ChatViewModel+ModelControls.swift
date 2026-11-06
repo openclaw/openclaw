@@ -3,6 +3,10 @@ import Foundation
 extension OpenClawChatViewModel {
     public nonisolated static let defaultModelSelectionID = "__default__"
     public nonisolated static let inheritedThinkingSelectionID = "__inherited__"
+    /// Send-side value meaning "nobody chose a thinking level". `chat.send`
+    /// trims empty params, so this omits `thinking` and leaves inheritance to
+    /// the Gateway instead of asserting an override the model may reject.
+    public nonisolated static let inheritedThinkingLevelForSend = ""
 
     func projectedModelSelectionID(_ requested: String) -> String {
         guard !self.modelCatalogInvalidated else { return Self.defaultModelSelectionID }

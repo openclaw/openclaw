@@ -12087,6 +12087,49 @@ struct ChatViewModelTests {
         #expect(await transport.sentThinkingLevels() == ["xhigh"])
     }
 
+    @Test func `send before gateway thinking metadata omits the override`() async {
+        // Cold launch: the transcript cache lets the user send before live
+        // history, sessions and models arrive. An unchosen level must not become
+        // an explicit override the session model may not advertise.
+        let history = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [],
+            thinkingLevel: nil)
+        let (transport, vm) = await makeViewModel(historyResponses: [history])
+        #expect(await MainActor.run {
+            vm.preferredThinkingLevel == OpenClawChatViewModel.inheritedThinkingLevelForSend
+        })
+
+        await MainActor.run { vm.load() }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { !vm.prefersExplicitThinkingLevel })
+
+        await sendUserMessage(vm, text: "hello before metadata")?.value
+
+        #expect(await transport.lastSentSessionKey() == "main")
+        #expect(await transport.sentThinkingLevels() == [OpenClawChatViewModel.inheritedThinkingLevelForSend])
+    }
+
+    @Test func `explicit thinking choice is still sent before gateway metadata`() async {
+        let history = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [],
+            thinkingLevel: nil)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            initialThinkingLevel: "high")
+
+        await MainActor.run { vm.load() }
+        await vm.bootstrapTask?.value
+        #expect(await MainActor.run { vm.prefersExplicitThinkingLevel })
+
+        await sendUserMessage(vm, text: "hello with a choice")?.value
+
+        #expect(await transport.sentThinkingLevels() == ["high"])
+    }
+
     @Test func `decodes gateway thinking metadata from session list`() throws {
         let json = """
         {

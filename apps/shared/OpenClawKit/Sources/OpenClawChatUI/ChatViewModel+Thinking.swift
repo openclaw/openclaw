@@ -213,7 +213,7 @@ extension OpenClawChatViewModel {
                     storedLevel,
                     target: target,
                     session: nil)
-                return fallback == "ultra" ? "high" : (fallback ?? storedLevel)
+                return fallback == "ultra" ? "high" : (fallback ?? Self.inheritedThinkingLevelForSend)
             }
             modelChoice = self.sessionModelChoice(for: session)
         } else {
@@ -229,16 +229,30 @@ extension OpenClawChatViewModel {
         {
             return "off"
         }
+        let chosen = Self.normalizedThinkingLevel(storedLevel)
         guard profile != nil else {
+            // No advertised profile and no chosen level: there is nothing safe to
+            // assert, so omit the override and let the Gateway inherit.
+            guard let chosen else { return Self.inheritedThinkingLevelForSend }
             return self.thinkingLevelWithoutGatewayMetadata(
-                storedLevel,
+                chosen,
                 target: target,
-                session: session) ?? storedLevel
+                session: session) ?? chosen
+        }
+        guard let chosen else {
+            // Inherited preference: only send a level the Gateway metadata owns.
+            let inherited = Self.normalizedThinkingLevel(session?.thinkingLevel)
+                ?? Self.normalizedThinkingLevel(profile?.defaultLevel)
+            guard let inherited else { return Self.inheritedThinkingLevelForSend }
+            return Self.normalizedThinkingLevel(
+                inherited,
+                options: options,
+                fallback: session?.thinkingLevel) ?? inherited
         }
         return Self.normalizedThinkingLevel(
-            storedLevel,
+            chosen,
             options: options,
-            fallback: session?.thinkingLevel) ?? storedLevel
+            fallback: session?.thinkingLevel) ?? chosen
     }
 
     func syncThinkingLevelOptions() {
