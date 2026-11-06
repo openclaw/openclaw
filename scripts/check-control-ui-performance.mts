@@ -50,10 +50,10 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // CPU-backed theme readback cuts Appearance latency 7–20% across both engines.
-  // After the medium-transcript merge: 1,295,862 B + 192 B generated-name headroom.
-  chatBootJsGzipBytes: 1_296_054,
-  // The same theme readback win also affects New Session's shared bundle.
-  // After the merge: 802,351 B + 192 B generated-name headroom.
+  // Preserve its approved growth and this branch's 75 B tighter Chat ceiling.
+  // Inline Template references retain Patrick's approved +239 B allowance (2026-11-05).
+  chatBootJsGzipBytes: 1_295_979,
+  // Theme readback also affects New Session's shared bundle; retain main's ceiling.
   newBootJsGzipBytes: 802_543,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
@@ -70,9 +70,11 @@ const controlUiPerformanceBudgets = {
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
   // Separately indexed class lists avoid universal selector buckets.
-  // Measured total CSS is 323,552 B gzip / 1,672,385 B raw; retain 64 B headroom.
-  totalCssGzipBytes: 323_616,
-  totalCssRawBytes: 1_672_449,
+  // Main's 323,552 B gzip / 1,672,385 B raw measurement retains 64 B headroom.
+  // Patrick approved compact Template preview growth (2026-11-05):
+  // +1,386 B gzip / +4,379 B raw; preserve existing headroom.
+  totalCssGzipBytes: 325_002,
+  totalCssRawBytes: 1_676_828,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
