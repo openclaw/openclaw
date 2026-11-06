@@ -702,7 +702,7 @@ it("records the update's own Gateway stop so repair can restore it after the upd
     const run = createUpdateRun({ trigger: "cli" }, { env });
     mockMaintenanceService(home, {
       stop: vi.fn<GatewayService["stop"]>(async ({ onMutation }) => {
-        onMutation?.();
+        onMutation?.({ mode: "kickstart" });
       }),
     });
     const updateRun = { runId: run.runId, env };
