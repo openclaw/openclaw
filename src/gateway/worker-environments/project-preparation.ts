@@ -437,6 +437,7 @@ export function createWorkerProjectPreparation(params: {
     preparedWorkspace = readPreparedWorkspace(prepared, sourceInput.baseCommit);
     return {
       ...result,
+      baseCommit: sourceInput.baseCommit,
       preparedWorkspace,
       recipePreparation,
       ...(typeof prepared.captureSkipped === "string"

@@ -82,6 +82,7 @@ describe("prepared repository snapshot bases", () => {
       });
       expect(prepared.baseCommit).toBe(f.project.baseCommit);
       expect(prepared.cacheHit).toBe(true);
+      expect(prepared.captureRequired).toBeUndefined();
       expect(f.upload).not.toHaveBeenCalled();
       expect(f.runScript).toHaveBeenCalledOnce();
       expect(revalidate).toHaveBeenCalledOnce();
