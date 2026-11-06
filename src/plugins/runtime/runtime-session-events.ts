@@ -6,7 +6,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 
 declare const capturedTarget: unique symbol;
-type SessionEventTarget = { readonly [capturedTarget]: true };
+export type SessionEventTarget = { readonly [capturedTarget]: true };
 
 // Source and built runtime copies redeem the same opaque handles.
 const targets = resolveGlobalSingleton(
