@@ -468,6 +468,19 @@ describe("browser config", () => {
       },
     },
     {
+      name: "preserves HTTP top-level credentials, path, and query for the default profile",
+      config: {
+        cdpUrl: "http://cdp-user:cdp-pass@127.0.0.1:9222/browser-prefix?token=test-key",
+      },
+      profileName: "openclaw",
+      expected: {
+        cdpUrl: "http://cdp-user:cdp-pass@127.0.0.1:9222/browser-prefix?token=test-key",
+        cdpHost: "127.0.0.1",
+        cdpPort: 9222,
+        cdpIsLoopback: true,
+      },
+    },
+    {
       name: "preserves loopback direct WebSocket cdpUrl for explicit profiles",
       config: withProfile("localws", {
         cdpUrl: "ws://127.0.0.1:9222/devtools/browser/ABC?token=test-key",
