@@ -1274,6 +1274,11 @@ SQLite's completion result; they do not turn a completed checkpoint into a failu
 
 Non-quiet checkpoint logs use the same warning threshold, including explicit and
 final-close checkpoints; a blocked checkpoint still returns an incomplete result.
+Each checkpoint owner logs the first warning after a completed checkpoint, then
+repeats it at most hourly while the WAL size does not grow, such as behind a
+replication tool's reader that checkpoints the WAL itself. WAL growth and the
+oversized-WAL condition log on every non-quiet pass. Health, status, and Doctor
+still record every blocked pass.
 Best-effort incremental vacuum quietly skips writer contention before its
 transaction starts and retries on the next maintenance pass. Failures after
 transaction entry retain their diagnostics.
