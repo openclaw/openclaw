@@ -16,6 +16,45 @@ function makeError(overrides: Partial<p.ValidationError>): p.ValidationError {
 }
 
 describe("precompiled protocol validators", () => {
+  it("keeps bounded history continuity in the session-key startup branch", () => {
+    const request = {
+      sessionKey: "agent:main:main",
+      continuity: { cursor: "c".repeat(4096), activeLeafEntryId: "l".repeat(1024) },
+    };
+    for (const validate of [p.validateChatHistoryParams, p.validateChatStartupParams]) {
+      expect(validate(request)).toBe(true);
+      for (const continuity of [
+        { ...request.continuity, cursor: "" },
+        { ...request.continuity, cursor: "c".repeat(4097) },
+        { ...request.continuity, activeLeafEntryId: "" },
+        { ...request.continuity, activeLeafEntryId: "l".repeat(1025) },
+        { ...request.continuity, extra: true },
+      ]) {
+        expect(validate({ ...request, continuity })).toBe(false);
+      }
+    }
+    expect(
+      p.validateChatStartupParams({
+        shortId: "short-link",
+        agentId: "main",
+        continuity: request.continuity,
+      }),
+    ).toBe(false);
+  });
+
+  it("validates exact steer-now custody through the public export", () => {
+    const steer = validation(p.validateChatSteerNowParams);
+    const request = { sessionKey: "agent:main:main", sessionId: "session", runId: "r".repeat(256) };
+    steer.accepts(request, { ...request, agentId: "main" });
+    steer.rejects(
+      { sessionKey: request.sessionKey, runId: request.runId },
+      { sessionKey: request.sessionKey, sessionId: request.sessionId },
+      { ...request, runId: "" },
+      { ...request, runId: "r".repeat(257) },
+      { ...request, extra: true },
+    );
+  });
+
   it("validates every self-service channel identity action through the public export", () => {
     const target = { channelId: "discord", accountId: "default" };
     const start = {

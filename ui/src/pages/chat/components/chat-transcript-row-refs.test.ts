@@ -65,14 +65,17 @@ it("retains row measurements across hidden and detached observer receipts", asyn
   }
   expect(virtualizer.itemSizeCache.get("retained")).toBe(160);
 
-  // The virtualizer applies ResizeObserver receipts in a later animation frame;
-  // a hidden measurement can arrive after the pane is visible again.
+  // Observer receipts invalidate current geometry; a hidden native box keeps
+  // its last measurement until the retained row becomes visible again.
   Object.defineProperty(viewport, "clientHeight", { value: 300 });
   row.style.height = "0px";
+  const bounds = vi.spyOn(row, "getBoundingClientRect");
+  bounds.mockReturnValue(new DOMRect(0, 0, 0, 0));
   for (const observer of resizeObservers) {
     observer.emitTarget(row, 0, 0);
   }
   expect(virtualizer.itemSizeCache.get("retained")).toBe(160);
+  bounds.mockReturnValue(new DOMRect(0, 0, 800, 0));
   for (const observer of resizeObservers) {
     observer.emitTarget(row, 800, 0);
   }
@@ -177,6 +180,9 @@ it.each([
 
   await Promise.resolve();
   readOffset.mockReturnValue(10);
+  for (const row of mounted) {
+    row.style.height = "90px";
+  }
   for (const observer of resizeObservers) {
     observer.emit(800, 90);
   }

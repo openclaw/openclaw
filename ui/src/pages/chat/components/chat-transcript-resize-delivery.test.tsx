@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { Virtualizer } from "@tanstack/virtual-core";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
@@ -11,6 +11,8 @@ import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
+import type { TranscriptNativeScroll } from "./chat-transcript-scroll-events.ts";
+import { createTranscriptPresentation } from "./chat-transcript-session.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -71,7 +73,8 @@ it.each([false, true])(
 
 it("defers replacement rows when resize delivery reads a pending native jump", async () => {
   const frame = stubAnimationFrames();
-  const rows = contentRows(80);
+  // The native fixture is 100px; unmeasured rows must describe the same geometry.
+  const rows = contentRows(80).map((row) => Object.assign({}, row, { estimatedSize: 100 }));
   const { container, renderRows } = await mountTestTranscript("resize-native-jump", rows);
   frame();
   await flushDeferredRowPrune();
@@ -98,6 +101,82 @@ it("defers replacement rows when resize delivery reads a pending native jump", a
   expect(container.scrollTop).toBe(4000);
   expect(container.querySelector('.chat-virtual-row[data-index="40"]')).not.toBeNull();
 });
+
+it("flushes a measured native jump before forwarding its captured scroll policy", async () => {
+  const frame = stubAnimationFrames();
+  const rows = contentRows(80).map((row) => Object.assign({}, row, { estimatedSize: 100 }));
+  const onNativeScroll = vi.fn<(scroll: TranscriptNativeScroll) => void>();
+  const transcript = createChatTranscript(() => "resize-native-policy", { onNativeScroll });
+  const { container, renderRows } = await mountTestTranscript(
+    "resize-native-policy",
+    rows,
+    transcript,
+  );
+  frame();
+  await flushDeferredRowPrune();
+  renderRows(rows);
+  container.scrollTop = 800;
+  container.dispatchEvent(new Event("scroll"));
+  frame();
+  await flushDeferredRowPrune();
+  const before = transcriptRows(container);
+  const outgoing = before[0]!;
+  container.scrollTop = 4000;
+  emitTranscriptResize(outgoing, 800, 120);
+  await flushDeferredRowPrune();
+  expect(transcriptRows(container)).toEqual(before);
+
+  const commit = vi.fn();
+  onTestFinished(transcript.subscribe(commit));
+  onNativeScroll.mockClear();
+  const forwarded: Array<{ offset: number; commits: number }> = [];
+  onNativeScroll.mockImplementation((scroll) => {
+    forwarded.push({
+      offset: scroll.viewport.scrollTop,
+      commits: commit.mock.calls.length,
+    });
+  });
+  container.dispatchEvent(new Event("scroll"));
+  expect(onNativeScroll).toHaveBeenCalledOnce();
+  // This branch notifies the pane before policy; its subscriber owns the batched DOM commit.
+  expect(forwarded).toEqual([{ offset: 4000, commits: 1 }]);
+  frame();
+  await flushDeferredRowPrune();
+  expect(container.scrollTop).toBe(4000);
+  expect(container.querySelector('.chat-virtual-row[data-index="40"]')).not.toBeNull();
+});
+
+it.each(["flushChange", "cancelChange", "disconnect"] as const)(
+  "retires the coalesced row commit on %s before its queued frame",
+  (action) => {
+    const frame = stubAnimationFrames();
+    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+      count: 0,
+      getScrollElement: () => null,
+      estimateSize: () => 100,
+      scrollToFn: vi.fn(),
+      observeElementRect: vi.fn(),
+      observeElementOffset: vi.fn(),
+    });
+    const presentation = createTranscriptPresentation(
+      () => null,
+      virtualizer,
+      () => [],
+      vi.fn(),
+    );
+    const superseded = vi.fn();
+    const latest = vi.fn();
+    presentation.commitChange(superseded, true);
+    presentation.commitChange(latest, true);
+    presentation[action]();
+    expect(superseded).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledTimes(action === "flushChange" ? 1 : 0);
+    frame();
+    expect(superseded).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledTimes(action === "flushChange" ? 1 : 0);
+    presentation.disconnect();
+  },
+);
 
 it.each([
   { kind: "accounted", lateChange: 0, deliveredChange: 0 },
