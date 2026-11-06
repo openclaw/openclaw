@@ -187,9 +187,8 @@ export class TranscriptInitialRange {
     }
     // Start lookahead with reader motion, before the first large step can expose
     // unpainted rows. Keep both sides while arriving row estimates settle.
-    const moving = this.isReaderMoving();
     return this.normalRange(
-      moving ? { ...range, overscan: Math.max(6, range.overscan) } : range,
+      { ...range, overscan: Math.max(this.isReaderMoving() ? 6 : 0, range.overscan) },
       this.rowIndexes,
     );
   }
@@ -276,13 +275,13 @@ export class TranscriptInitialRange {
     return true;
   }
 
-  finish(viewportOnly = false): void {
+  finish(viewportOnly = false, readerStarted = false): void {
     const changed = this.viewportOnly !== viewportOnly;
     this.pending = false;
     // Boot placement can precede the native extent; only reader navigation
     // releases its anchor to subsequent native-offset measurements.
     this.viewportOnly = viewportOnly;
-    if (!this.tailRows && !changed) {
+    if (!this.tailRows && !changed && !readerStarted) {
       return;
     }
     // The measured viewport stays adaptive; offscreen rows wait for reader navigation.
@@ -341,12 +340,8 @@ export class TranscriptInitialRange {
       velocity: previous.time ? Math.abs(delta) / Math.max(16, now - previous.time) : 0,
       direction: Math.sign(delta),
     };
-    this.finish();
-    if (starting) {
-      // Motion changes overscan even when the visible row indexes stay put.
-      this.refresh();
-      this.invalidate();
-    }
+    // Motion changes overscan even when the visible row indexes stay put.
+    this.finish(false, starting);
   }
 
   readonly measureElement = (
