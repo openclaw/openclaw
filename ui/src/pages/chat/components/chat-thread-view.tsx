@@ -96,7 +96,9 @@ type ChatThreadInput = {
 };
 
 export function ChatThread(input: ChatThreadInput) {
-  const [ready, setReady] = createSignal(false);
+  // Restored snapshots join the header and composer in their first visible frame.
+  const initialReady = Boolean(input.props.restoring);
+  const [ready, setReady] = createSignal(initialReady);
   const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
   return (
     <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
@@ -114,7 +116,13 @@ export function ChatThread(input: ChatThreadInput) {
               {ready() ? (
                 <ChatThreadContent {...input} presented={isPresented()} />
               ) : (
-                <div class="chat-thread" ref={[elementRef(input.bindViewport)]}>
+                <div
+                  class={[
+                    "chat-thread",
+                    { "chat-thread--annotations": input.props.commentAttachments !== undefined },
+                  ]}
+                  ref={[elementRef(input.bindViewport)]}
+                >
                   <ChatConversationLoading route />
                 </div>
               )}

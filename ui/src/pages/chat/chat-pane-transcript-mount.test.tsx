@@ -48,6 +48,7 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
     const chat = createChatProps({
       paneId,
       sessionKey: `agent:main:${paneId}`,
+      commentAttachments: [],
       messages: [{ role: "assistant", content: "Initial history", timestamp: 1 }],
     });
     chat.transcript.start();
@@ -108,6 +109,7 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   const viewport = pane.container.querySelector(".chat-thread-viewport");
   expect(viewport).not.toBeNull();
   expect(pane.container.querySelector(".chat-conversation-loading")).not.toBeNull();
+  expect(pane.container.querySelector(".chat-thread--annotations")).not.toBeNull();
   await paint();
   pane.update({ presented: false });
   await settlePaints();
