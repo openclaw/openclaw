@@ -36,6 +36,10 @@ Never edit generated Swift, Kotlin, C headers, or module maps by hand. See
 Swift module: `OpenClawIroh` (C module `OpenClawIrohFFI`). Kotlin package:
 `ai.openclaw.iroh`. Native library: `openclaw_iroh_ffi`.
 
+On Android, call `OpenClawIrohAndroid.install(applicationContext)` once from
+Application initialization before `bind`; without it, `bind` fails closed. See
+[PACKAGING.md](PACKAGING.md).
+
 ```rust,ignore
 bind(secret_key: Vec<u8>, relay_url: Option<String>, alpns: Vec<Vec<u8>>,
      ip_transports: bool, keep_alive_ms: u32) -> Result<Arc<Endpoint>, IrohError>
