@@ -121,6 +121,40 @@ it.each(["image", "edit", "video"] as const)(
 );
 
 it.each([
+  ["grok-imagine-image-2.0", "medium", false, "medium"],
+  ["grok-imagine-image-2.0", "low", true, "low"],
+  ["grok-imagine-image-2.0", "auto", false, "auto"],
+  ["grok-imagine-image-2.0", undefined, false, undefined],
+  ["grok-imagine-image", "medium", false, undefined],
+] as const)("sends quality %s/%s (edit: %s)", async (model, quality, edit, expected) => {
+  await withXaiServer(async (baseUrl, requests) => {
+    const provider = buildXaiImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "xai",
+      model,
+      prompt: "quality proof",
+      quality,
+      cfg: createModelProviderConfig({
+        xai: {
+          baseUrl,
+          apiKey: "test-xai-key",
+          models: [],
+          request: { allowPrivateNetwork: true },
+        },
+      }),
+      ...(edit ? { inputImages: [{ buffer: media, mimeType: "image/png" }] } : {}),
+    });
+    expect(result.images[0]?.buffer).toEqual(media);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toBe(`/v1/images/${edit ? "edits" : "generations"}`);
+    expect(JSON.parse(requests[0]?.body ?? "{}").quality).toBe(expected);
+    if (expected) {
+      expect(provider.capabilities.output?.qualitiesByModel?.[model]).toContain(quality);
+    }
+  });
+});
+
+it.each([
   ["image", undefined],
   ["image", false],
   ["video", undefined],
