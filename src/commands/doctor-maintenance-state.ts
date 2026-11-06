@@ -4,6 +4,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
+import { retireSqliteSnapshotReuse } from "../infra/sqlite-snapshot-reuse.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { runWithDoctorMigrationBackup } from "../infra/update-doctor-migration-attribution.js";
 import {
@@ -423,6 +424,7 @@ export async function createDoctorMaintenanceState(options: {
       let brokerRetired: boolean;
       try {
         await closeResources();
+        await retireSqliteSnapshotReuse();
         readersRetired = await retireIdleOpenClawStateReadWorkers(nativeSource);
         brokerRetired = await nativeSource.retireIdleBroker();
       } catch (cause) {
