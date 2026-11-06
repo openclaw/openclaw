@@ -1,5 +1,6 @@
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { runSessionNavigationAction } from "../lib/sessions/session-menu-navigation.ts";
+import { playSidebarArchiveExit } from "./app-sidebar-archive-exit.ts";
 import {
   storeSidebarSessionStatusFilter,
   storeSidebarSessionsGrouping,
@@ -112,7 +113,7 @@ export async function runSessionAction(
     case "toggle-archived":
       return session.archived
         ? organizer.patchSession(session, { archived: false }, { sessionScope: true })
-        : organizer.archiveSessionWithUndo(session);
+        : playSidebarArchiveExit(session.key, organizer.archiveSessionWithUndo(session));
     default:
       return organizer.runOperation(
         (operations, scope) => {
