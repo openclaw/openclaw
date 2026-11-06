@@ -1363,6 +1363,10 @@ textarea.settings-input {
   background: var(--warn);
 }
 
+.settings-status--danger {
+  color: var(--danger);
+}
+
 .settings-status--danger .settings-status__dot {
   background: var(--danger);
 }
