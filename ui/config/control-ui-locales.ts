@@ -138,22 +138,57 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
   return {
     name: "control-ui-locale-modules",
     enforce: "pre",
-    transformIndexHtml() {
-      // Direction cannot wait for the translated catalog: the critical frame paints first.
-      const policy = JSON.stringify({
-        supported: SUPPORTED_LOCALES,
-        rules: LOCALE_MATCH_RULES,
-        rtl: RTL_LOCALES,
-        fallback: DEFAULT_LOCALE,
-      }).replaceAll("<", "\\u003c");
-      return [
-        {
-          tag: "script",
-          attrs: { "data-cfasync": "false" },
-          injectTo: "head-prepend",
-          children: `(()=>{const p=${policy};let saved;try{saved=localStorage.getItem("openclaw.i18n.locale")}catch{}const language=(navigator.language||"").toLowerCase();const locale=p.supported.includes(saved)?saved:(p.rules.find(([pattern])=>new RegExp(pattern).test(language))?.[1]||p.fallback);document.documentElement.dir=p.rtl.includes(locale)?"rtl":"ltr"})();`,
-        },
-      ];
+    transformIndexHtml: {
+      order: "post",
+      handler(_html, context) {
+        // Direction cannot wait for the translated catalog: the critical frame paints first.
+        const policy = JSON.stringify({
+          supported: SUPPORTED_LOCALES,
+          rules: LOCALE_MATCH_RULES,
+          rtl: RTL_LOCALES,
+          fallback: DEFAULT_LOCALE,
+        }).replaceAll("<", "\\u003c");
+        // These six late Chat namespaces leave at most one unhinted batch on a
+        // six-connection origin. Keep per-locale hashes, not repeated asset URLs,
+        // in the document paid for by English users too.
+        const namespaces = [
+          "chat",
+          "attention",
+          "profilePage",
+          "mcpServers",
+          "mcpPage",
+          "sessionsView",
+        ];
+        const files = Object.values(context.bundle ?? {}).map((output) => output.fileName);
+        const hashes: Record<string, string> = {};
+        for (const locale of locales) {
+          const prefixes = [
+            locale,
+            ...namespaces.map((name) => `locale-namespace-${locale}-${name}`),
+          ];
+          const row = prefixes.map((prefix) =>
+            files
+              .find((file) => file.startsWith(`assets/${prefix}-`) && file.endsWith(".js"))
+              ?.slice(`assets/${prefix}-`.length, -3),
+          );
+          if (row.every(Boolean)) {
+            hashes[locale] = row.join(" ");
+          }
+        }
+        const helper = files.find((file) => /^assets\/lazy-catalog-[\w-]+\.js$/.test(file));
+        const hints =
+          helper && Object.keys(hashes).length
+            ? `const base=document.documentElement.getAttribute("data-openclaw-control-ui-base-path")||"";if(locale!==p.fallback&&(location.pathname===base+"/chat"||location.pathname.startsWith(base+"/chat/"))){const hashes=(${JSON.stringify(hashes)})[locale];if(hashes){const names=${JSON.stringify(namespaces)};const files=hashes.split(" ").map((hash,i)=>"assets/"+(i?"locale-namespace-"+locale+"-"+names[i-1]:locale)+"-"+hash+".js");files.splice(1,0,${JSON.stringify(helper)});for(const file of files){const link=document.createElement("link");link.rel="modulepreload";link.crossOrigin="";link.href=base+"/"+file;document.head.append(link)}}}`
+            : "";
+        return [
+          {
+            tag: "script",
+            attrs: { "data-cfasync": "false" },
+            injectTo: "head-prepend",
+            children: `(()=>{const p=${policy};let saved;try{saved=localStorage.getItem("openclaw.i18n.locale")}catch{}const language=(navigator.language||"").toLowerCase();const locale=p.supported.includes(saved)?saved:(p.rules.find(([pattern])=>new RegExp(pattern).test(language))?.[1]||p.fallback);document.documentElement.dir=p.rtl.includes(locale)?"rtl":"ltr";${hints}})();`,
+          },
+        ];
+      },
     },
     configResolved(config) {
       sourceAliases = config.resolve.alias;

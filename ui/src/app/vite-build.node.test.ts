@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { JSDOM } from "jsdom";
 import { build, createLogger, type InlineConfig, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
@@ -259,6 +260,74 @@ it("fetches a locale's co-registered error catalogs in one lazy request", async 
   expect(entry.dynamicImports.filter((file) => file === errorsChunk.fileName)).toHaveLength(1);
   expect(entry.imports).not.toContain(errorsChunk.fileName);
   expect(html).not.toContain(errorsChunk.fileName);
+});
+
+it("preloads only the selected locale's late Chat catalogs before body parsing", async () => {
+  const config = createConfig();
+  const namespaces = ["chat", "attention", "profilePage", "mcpServers", "mcpPage", "sessionsView"];
+  await writeRoot("lazy-catalog.js", "export const createCatalog = (value) => value;");
+  for (const locale of ["de", "ar"]) {
+    for (const namespace of namespaces) {
+      await writeRoot(
+        `locale-namespace-${locale}-${namespace}.js`,
+        `export default "${locale}/${namespace}";`,
+      );
+    }
+    await writeRoot(
+      `${locale}.js`,
+      `import { createCatalog } from "./lazy-catalog.js";
+export default createCatalog({${namespaces.map((namespace) => `${namespace}: () => import("./locale-namespace-${locale}-${namespace}.js")`).join(",")}});`,
+    );
+  }
+  await writeRoot(
+    "main.js",
+    'globalThis.locales = [() => import("./de.js"), () => import("./ar.js")];',
+  );
+  await writeRoot(
+    "index.html",
+    `<html><head><script>globalThis.beforeBody = { body: document.body, hints: [...document.querySelectorAll('link[rel="modulepreload"]')].map(link => link.getAttribute("href")) };</script></head><body><script type="module" src="./main.js"></script></body></html>`,
+  );
+  const { html, output } = await buildOutput(config);
+  const emitted = new Set(output.map((asset) => asset.fileName));
+  for (const [base, route, saved, language, expected] of [
+    ["", "/chat/main/session", "de", "en-US", "de"],
+    ["/control", "/chat/main/session", "ar", "en-US", "ar"],
+    ["/control", "/chat", null, "de-DE", "de"],
+    ["", "/chat", "en", "de-DE", null],
+    ["", "/new", "de", "de-DE", null],
+    ["", "/settings/appearance", "de", "de-DE", null],
+    ["", "/chatty", "de", "de-DE", null],
+  ] as const) {
+    const page = new JSDOM(
+      html.replace("<html>", `<html data-openclaw-control-ui-base-path="${base}">`),
+      {
+        url: `https://gateway.example${base}${route}`,
+        runScripts: "dangerously",
+        beforeParse(window) {
+          Object.defineProperty(window.navigator, "language", { value: language });
+          if (saved) window.localStorage.setItem("openclaw.i18n.locale", saved);
+        },
+      },
+    );
+    try {
+      const beforeBody = Reflect.get(page.window, "beforeBody");
+      expect(beforeBody.body).toBeNull();
+      const hints = beforeBody.hints.filter((href: string) => !href.includes("/index-"));
+      expect(hints).toHaveLength(expected ? 8 : 0);
+      for (const href of hints) {
+        expect(href.startsWith(`${base}/assets/`)).toBe(true);
+        const file = href.slice(base.length + 1);
+        expect(emitted.has(file)).toBe(true);
+        expect(
+          file.startsWith(`assets/${expected}-`) ||
+            file.startsWith(`assets/locale-namespace-${expected}-`) ||
+            file.startsWith("assets/lazy-catalog-"),
+        ).toBe(true);
+      }
+    } finally {
+      page.window.close();
+    }
+  }
 });
 
 it("keeps page styles separate from measured JavaScript boot groups", async () => {
