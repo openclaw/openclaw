@@ -1,3 +1,4 @@
+import { resolveProviderContext, type ProviderContext } from "@openclaw/ai/provider-types";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { convertMessages } from "../../../packages/ai/src/openai-completions-messages.js";
@@ -8,6 +9,7 @@ import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-
 import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json-normalize.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
+import { resolveUserTurnMergeOptions } from "../embedded-agent-helpers/turns.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -22,6 +24,8 @@ import {
   validateReplayTurns,
 } from "./replay-history.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./run/attempt-tool-call-replay-sanitization.js";
+import { materializeProviderContext } from "./run/images.js";
+import { wrapStreamFnWithMessageTransform } from "./run/message-transform-stream-wrapper.js";
 
 // Preface of carriers persisted before the stable system prompt explained the markers.
 const LEGACY_HEADER =
@@ -322,20 +326,35 @@ describe("normalizeAssistantReplayContent", () => {
         if (!messages.every((message) => message.role === "user")) {
           throw new Error("Expected repaired history and the current prompt to contain only users");
         }
-        const baseFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+        const policy = {
+          validateAnthropicTurns: true,
+          validateGeminiTurns: false,
+          preserveSignatures: true,
+          dropThinkingBlocks: false,
+          appendOnlyRuntimeContext: true,
+        };
+        let request: ProviderContext | undefined;
+        const baseFn = vi.fn<StreamFn>(async (_model, context, options) => {
+          request = await resolveProviderContext(context, options);
+          return createAssistantMessageEventStream();
+        });
         const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
-          baseFn,
+          wrapStreamFnWithMessageTransform(
+            baseFn,
+            (rows) => rows,
+            ({ context, signal }) =>
+              materializeProviderContext({
+                context,
+                signal,
+                workspaceDir: process.cwd(),
+                mergeUserTurns: resolveUserTurnMergeOptions(policy, api),
+              }),
+          ),
           undefined,
-          {
-            validateAnthropicTurns: true,
-            validateGeminiTurns: false,
-            preserveSignatures: true,
-            dropThinkingBlocks: false,
-            appendOnlyRuntimeContext: true,
-          },
+          policy,
           api === "bedrock-converse-stream" ? "amazon-bedrock" : "anthropic",
         );
-        void wrapped(
+        await wrapped(
           makeProviderModelFixture({
             id: "claude-sonnet-4-6",
             provider: api === "bedrock-converse-stream" ? "amazon-bedrock" : "anthropic",
@@ -344,7 +363,7 @@ describe("normalizeAssistantReplayContent", () => {
           }),
           { messages },
         );
-        expect(baseFn.mock.calls[0]?.[1].messages).toEqual(
+        expect(request?.messages).toEqual(
           api === "anthropic-messages"
             ? messages
             : [
