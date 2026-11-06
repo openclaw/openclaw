@@ -70,7 +70,9 @@ it("counts cached bound formatter calls only during the action and restores desc
   const descriptor = Object.getOwnPropertyDescriptor(Intl.DateTimeFormat.prototype, "format");
   audit = createControlUiMutationAudit();
   const date = new Intl.DateTimeFormat("en-US");
+  // oxlint-disable-next-line typescript/unbound-method -- Intl.format is a getter returning a bound function.
   const format = date.format;
+  // oxlint-disable-next-line typescript/unbound-method -- Repeated getter access must preserve that bound function identity.
   expect(date.format).toBe(format);
   const expected = format(0);
   audit.start();
