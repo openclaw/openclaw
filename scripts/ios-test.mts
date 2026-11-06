@@ -31,7 +31,7 @@ function resolveSelectors(args: string[]): { scheme: string; selectors: string[]
   const selectors = args.map((arg) =>
     arg.includes("/") || unitTargets.has(arg) || arg === uiTarget ? arg : `OpenClawTests/${arg}`,
   );
-  const targets = new Set(selectors.map((selector) => selector.split("/")[0]));
+  const targets = new Set(selectors.map((selector) => selector.split("/")[0] ?? selector));
   for (const target of targets) {
     if (!unitTargets.has(target) && target !== uiTarget) {
       fail(
