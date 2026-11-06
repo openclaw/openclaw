@@ -12,7 +12,7 @@ import type {
   SkillsLibraryReceipt,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.ts";
 import type { OpenClawConfig } from "../../../src/config/types.ts";
-import type { GatewayClient } from "../../../src/gateway/client.ts";
+import { isGatewayProtocolResponseError, type GatewayClient } from "../../../src/gateway/client.ts";
 import { resolveConfigRestartRequirement } from "../../../src/gateway/config-reload-plan.ts";
 import { startGatewayServer } from "../../../src/gateway/server.ts";
 import { loadOrCreateDeviceIdentity } from "../../../src/infra/device-identity.ts";
@@ -41,6 +41,7 @@ import {
   createSkillImportProofConfig,
   createProofPolicy,
   createProofSource,
+  classifySkillProofFailure,
   digest,
   proofBinary,
   proofExecutable,
@@ -77,9 +78,14 @@ type Fixture = {
 async function withGateway(
   origins: string[],
   source: Source,
-  lifetime: { close?: () => Promise<void>; signal?: AbortSignal },
+  lifetime: { close?: () => Promise<void>; signal?: AbortSignal; phase?: string },
   run: (fixture: Fixture) => Promise<void>,
 ) {
+  const phase = (value: string) => {
+    lifetime.phase = value;
+    console.info("Skill fixture phase: " + value);
+  };
+  phase("state-root");
   await withOpenClawTestState(
     {
       label: "skills-real-authority",
@@ -101,6 +107,7 @@ async function withGateway(
         await setCanonicalUserProfileRole(profile.id, actor === "reader" ? "reader" : "writer");
         return profile.id;
       };
+      phase("profile-seed");
       const [writerId, readerId, redirectId, publicationId] = await Promise.all([
         seed("writer"),
         seed("reader"),
@@ -113,6 +120,7 @@ async function withGateway(
         redirect: redirectId,
         publication: publicationId,
       };
+      phase("config-write");
       await state.writeConfig(
         createSkillImportProofConfig({
           workspaceDir: state.workspaceDir,
@@ -124,7 +132,9 @@ async function withGateway(
         }),
       );
       lifetime.signal?.throwIfAborted();
+      phase("gateway-port");
       const port = await getFreePort();
+      phase("gateway-start");
       const server = await startGatewayServer(port, {
         bind: "loopback",
         controlUiEnabled: false,
@@ -151,6 +161,7 @@ async function withGateway(
       try {
         await runQaGatewayFixture(async () => {
           for (const actor of ["writer", "reader", "redirect", "publication"] as const) {
+            phase("proxy-" + actor);
             const proxy = await createGatewayProxy(state.root, {
               "/": gatewayProxyRoute(port, emails[actor]),
             });
@@ -161,6 +172,7 @@ async function withGateway(
               throw new Error("Owned auth proxy unavailable");
             }
             const url = "ws://127.0.0.1:" + address.port;
+            phase("hello-" + actor);
             const client = await connect(
               url,
               state,
@@ -196,8 +208,11 @@ async function withGateway(
               () => false,
             ),
           ).toBe(false);
+          phase("scenario");
           await run({ state, clients, profiles, gatewayUrls, policy, writerConnection });
+          phase("gateway-cleanup");
         }, close);
+        phase("state-cleanup");
       } finally {
         lifetime.close = undefined;
       }
@@ -257,13 +272,27 @@ async function artifacts(state: OpenClawTestState) {
   return count;
 }
 async function denied(client: GatewayClient, state: OpenClawTestState, slug: string, url: string) {
+  console.info("Skill denial phase: snapshot-before");
   const before = await artifacts(state);
+  console.info("Skill denial phase: import-rpc");
+  let rejection: unknown;
   const accepted = await importUrl(client, slug, url).then(
     () => true,
-    () => false,
+    (error: unknown) => {
+      rejection = error;
+      return false;
+    },
   );
+  console.info("Skill denial phase: expected-rejection");
   expect(accepted).toBe(false);
+  if (!isGatewayProtocolResponseError(rejection)) {
+    throw new Error("Expected a Gateway server rejection, not a transport failure", {
+      cause: rejection,
+    });
+  }
+  console.info("Skill denial phase: list-after");
   expect((await list(client)).entries.some((entry) => entry.slug === slug)).toBe(false);
+  console.info("Skill denial phase: snapshot-after");
   expect(await artifacts(state)).toBe(before);
 }
 async function revoke(fixture: Fixture, actor: "redirect" | "publication") {
@@ -316,23 +345,26 @@ suite.define(() => {
     };
     authorityReport = report;
     await writePublicProof(publicDir, report);
-    const lifetime: { close?: () => Promise<void>; signal?: AbortSignal } = {};
+    const lifetime: { close?: () => Promise<void>; signal?: AbortSignal; phase?: string } = {};
     await suite.runScenario(context, {
       close: async () => {
         await lifetime.close?.();
       },
       run: async (signal) => {
         lifetime.signal = signal;
-        let stage = "strict-default";
+        let stage = "source-state";
         const progress = (next: string) => {
           signal.throwIfAborted();
           stage = next;
+          lifetime.phase = undefined;
           console.info("Skill proof stage: " + next);
         };
         try {
+          progress("source-state");
           await withOpenClawTestState(
             { label: "skills-owned-https", applyEnv: false },
             async (raw) => {
+              progress("source-tls");
               const tls = createLoopbackTlsFixture(
                 raw.root,
                 "DNS:localhost,IP:127.0.0.1,IP:127.0.0.2",
@@ -342,11 +374,13 @@ suite.define(() => {
               const sources: Source[] = [];
               await runQaGatewayFixture(
                 async () => {
+                  progress("source-listen");
                   const archive = await createProofArchive();
                   const source = await createProofSource(tls, archive);
                   sources.push(source);
                   const other = await createProofSource(tls, archive);
                   sources.push(other);
+                  progress("source-health");
                   const healthy = await fetch(source.alternateOrigin + "/fixture-health");
                   expect(healthy.ok).toBe(true);
                   await healthy.arrayBuffer();
@@ -354,6 +388,7 @@ suite.define(() => {
                     id: "owned-source-tls-and-alternate-host-reachable",
                     passed: true,
                   });
+                  progress("strict-default");
                   await withGateway([], source, lifetime, async (fixture) => {
                     await denied(
                       fixture.clients.writer,
@@ -361,6 +396,7 @@ suite.define(() => {
                       "strict-default",
                       source.origin + "/strict.zip",
                     );
+                    progress("strict-default-outbound-counter");
                     expect(source.count("/strict.zip")).toBe(0);
                     report.assertions.push({
                       id: "strict-private-default",
@@ -757,7 +793,15 @@ suite.define(() => {
                 () => setDefaultCACertificates(trusted),
               );
             },
-          );
+          ).catch((error: unknown) => {
+            report.failureDiagnostics = classifySkillProofFailure(error);
+            const failedStage = lifetime.phase ? stage + "." + lifetime.phase : stage;
+            console.error(
+              "Skill proof safe failure facts: " +
+                JSON.stringify({ stage: failedStage, ...report.failureDiagnostics }),
+            );
+            throw error;
+          });
           report.cleanup = {
             scope: "candidate-authority",
             gatewaysAndClientsStopped: true,
@@ -768,9 +812,12 @@ suite.define(() => {
           report.authorityStatus = "passed";
         } catch {
           report.authorityStatus = "failed";
-          report.failedStage = stage;
+          report.failedStage = lifetime.phase ? stage + "." + lifetime.phase : stage;
           throw new Error(
-            "Real skill proof failed at " + stage + "; only sanitized evidence is public",
+            "Real skill proof failed at " +
+              report.failedStage +
+              "; safe facts: " +
+              JSON.stringify(report.failureDiagnostics ?? { kinds: ["unobserved"] }),
           );
         } finally {
           await writePublicProof(publicDir, report);

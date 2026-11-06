@@ -3,6 +3,15 @@ import fs from "node:fs/promises";
 import type { RequestListener } from "node:http";
 import { createServer, type Server } from "node:https";
 import path from "node:path";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorCauses,
+  readErrorName,
+} from "@openclaw/normalization-core/error-coercion";
+import { GatewayClientRequestTimeoutError } from "../../../packages/gateway-client/src/client.ts";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/gateway-error-codes.ts";
 import type { OpenClawConfig } from "../../../src/config/types.ts";
 import { validateConfigObjectRaw } from "../../../src/config/validation-core.ts";
 import type { createLoopbackTlsFixture } from "../../../test/helpers/loopback-tls.test-support.ts";
@@ -190,6 +199,7 @@ export type ImportProofReport = {
   upgradeStatus: "not-run" | "running" | "passed" | "failed";
   upgradeFailedStage?: string;
   failedStage?: string;
+  failureDiagnostics?: ReturnType<typeof classifySkillProofFailure>;
   source: { expectedHead: string; observedHead: string; tree: string; buildCommit: string };
   assertions: Array<{
     id: string;
@@ -234,6 +244,135 @@ export type ImportProofReport = {
     newImportSucceeded: boolean;
   };
 };
+
+export function classifySkillProofFailure(error: unknown) {
+  const errors = collectErrorGraphCandidates(error, readErrorCauses).slice(0, 8);
+  const messages = errors.map((item) =>
+    formatErrorMessage(item).slice(0, 4096).replace(/\s+/gu, " "),
+  );
+  const names = new Set(errors.map(readErrorName));
+  const allowedCodes = [
+    ...Object.values(ErrorCodes),
+    "INVALID_CONFIG",
+    "ERR_ASSERTION",
+    "CLIENT_TIMEOUT",
+    "ERR_MODULE_NOT_FOUND",
+    "ERR_PACKAGE_PATH_NOT_EXPORTED",
+    "ERR_WORKER_INIT_FAILED",
+    "ERR_WORKER_NOT_RUNNING",
+    "ERR_WORKER_OUT_OF_MEMORY",
+    "ERR_DLOPEN_FAILED",
+    "ENOENT",
+    "EACCES",
+    "SQLITE_BUSY",
+    "SQLITE_LOCKED",
+    "SQLITE_CANTOPEN",
+    "ERR_SQLITE_ERROR",
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "ENOTFOUND",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "UND_ERR_HEADERS_TIMEOUT",
+    "ABORT_ERR",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "CERT_HAS_EXPIRED",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  ];
+  const codes = allowedCodes.filter(
+    (code) =>
+      errors.some((item) => extractErrorCode(item) === code) ||
+      messages.some((message) => message.includes(code)),
+  );
+  const kinds: string[] = [];
+  if (names.has("AssertionError")) {
+    kinds.push("assertion");
+  }
+  if (
+    messages.some((message) => message.includes("Owned profile authentication did not complete"))
+  ) {
+    kinds.push("gateway-hello-timeout");
+  }
+  if (messages.some((message) => /gateway.*closed|closed.*before hello/iu.test(message))) {
+    kinds.push("gateway-close");
+  }
+  if (
+    messages.some((message) =>
+      /worker.*(?:timed out|timeout)|(?:timed out|timeout).*worker/iu.test(message),
+    )
+  ) {
+    kinds.push("worker-timeout");
+  }
+  if (messages.some((message) => /timed out|timeout|deadline/iu.test(message))) {
+    kinds.push("timeout");
+  }
+  if (
+    names.has("ZodError") ||
+    codes.includes("INVALID_CONFIG") ||
+    messages.some((message) => message.includes("Invalid owned proof config"))
+  ) {
+    kinds.push("config-validation");
+  }
+  if (codes.some((code) => /CERT|TLS|SELF_SIGNED/iu.test(code))) {
+    kinds.push("tls");
+  }
+  if (codes.some((code) => ["NOT_LINKED", "NOT_PAIRED"].includes(code))) {
+    kinds.push("authentication");
+  }
+  if (
+    messages.some((message) =>
+      /missing scope|unauthorized|authentication required|pairing required/iu.test(message),
+    )
+  ) {
+    kinds.push("authentication");
+  }
+  if (codes.some((code) => Object.values(ErrorCodes).some((publicCode) => publicCode === code))) {
+    kinds.push("gateway-rpc");
+  }
+  if (kinds.length === 0) {
+    kinds.push("unclassified");
+  }
+  const reportedExitCodes = [
+    ...new Set(
+      messages
+        .flatMap((message) =>
+          [...message.matchAll(/(?:exited with|exit) code ([0-9]{1,3})/giu)].map((match) =>
+            Number(match[1]),
+          ),
+        )
+        .filter((code) => code <= 255),
+    ),
+  ].slice(0, 4);
+  const clientTimeouts = errors.flatMap((item) =>
+    item instanceof GatewayClientRequestTimeoutError &&
+    ["skills.library.list", "skills.library.import", "config.get", "config.patch"].includes(
+      item.method,
+    )
+      ? [{ method: item.method, timeoutMs: item.timeoutMs, requestSent: item.requestSent }]
+      : [],
+  );
+  // Only fixed categories/codes and scalar counts leave the private error graph.
+  return {
+    kinds: [...new Set(kinds)],
+    codes,
+    names: [
+      "Error",
+      "TypeError",
+      "ReferenceError",
+      "RangeError",
+      "AggregateError",
+      "AssertionError",
+      "TimeoutError",
+      "AbortError",
+      "ZodError",
+    ].filter((name) => names.has(name)),
+    reportedExitCodes,
+    clientTimeouts,
+    errorNodes: errors.length,
+  };
+}
 
 export async function writePublicProof(directory: string, report: ImportProofReport) {
   // Completion is derived here; candidate success alone must never publish a whole-proof pass.

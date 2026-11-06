@@ -1,9 +1,13 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { GatewayClientRequestTimeoutError } from "../../packages/gateway-client/src/client.ts";
+import { isGatewayProtocolResponseError } from "../../src/gateway/client.ts";
 import {
   writePublicProof,
+  classifySkillProofFailure,
   type ImportProofReport,
 } from "../../ui/src/e2e/skills-library-import-proof.test-support.ts";
 import {
@@ -132,3 +136,50 @@ it.each([
     );
   },
 );
+
+it("reports nested worker error facts without exposing private diagnostics", () => {
+  const secret = randomUUID();
+  const privateText =
+    "https://" + secret + "@private.invalid/" + secret + " 10.23.42.9 /private/" + secret;
+  const cause = Object.assign(new Error(privateText), { code: "ERR_MODULE_NOT_FOUND" });
+  const error = new AggregateError([
+    new Error("database worker request timed out " + privateText, { cause }),
+    new Error("worker exited with code 9 " + privateText),
+  ]);
+  const facts = classifySkillProofFailure(error);
+  expect(facts.kinds).toContain("worker-timeout");
+  expect(facts.codes).toContain("ERR_MODULE_NOT_FOUND");
+  expect(facts.reportedExitCodes).toEqual([9]);
+  const publicText = JSON.stringify(facts);
+  for (const value of [secret, "private.invalid", "10.23.42.9", "/private/"]) {
+    expect(publicText).not.toContain(value);
+  }
+});
+it("keeps a server-close assertion a failure, never a successful denial", () => {
+  let failure: unknown;
+  try {
+    assert.fail("gateway closed before hello");
+  } catch (error) {
+    failure = error;
+  }
+  const facts = classifySkillProofFailure(failure);
+  expect(facts.kinds).toContain("assertion");
+  expect(facts.kinds).toContain("gateway-close");
+  expect(facts.codes).toContain("ERR_ASSERTION");
+  expect(facts.kinds).not.toContain("denied");
+});
+
+it("retains a typed client deadline but never treats it as a server denial", () => {
+  const error = new GatewayClientRequestTimeoutError({
+    method: "skills.library.import",
+    timeoutMs: 60000,
+    requestSent: true,
+  });
+  expect(isGatewayProtocolResponseError(error)).toBe(false);
+  const facts = classifySkillProofFailure(error);
+  expect(facts.codes).toContain("CLIENT_TIMEOUT");
+  expect(facts.kinds).toContain("timeout");
+  expect(facts.clientTimeouts).toEqual([
+    { method: "skills.library.import", timeoutMs: 60000, requestSent: true },
+  ]);
+});
