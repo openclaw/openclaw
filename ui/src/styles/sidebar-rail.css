@@ -166,13 +166,16 @@
       color: var(--text-strong);
     }
 
-    &:hover,
-    &[aria-current="page"],
-    &[aria-pressed="true"],
-    &.nav-item--active {
-      --sidebar-rail-control-surface: var(--sidebar-rail-hover-surface);
-      background: var(--sidebar-rail-control-surface);
-      color: var(--text-strong);
+    /* Preserve the build's existing hover guard while splitting the subject keys. */
+    @media (hover: hover) {
+      &:hover,
+      &[aria-current="page"],
+      &[aria-pressed="true"],
+      &.nav-item--active {
+        --sidebar-rail-control-surface: var(--sidebar-rail-hover-surface);
+        background: var(--sidebar-rail-control-surface);
+        color: var(--text-strong);
+      }
     }
 
     &[aria-current="page"],
