@@ -427,7 +427,7 @@ describe("plugins cli list", () => {
         signal,
       );
       const acquire = lifecycleLease.withPluginLifecycleLease;
-      using admission = vi
+      using _admission = vi
         .spyOn(lifecycleLease, "withPluginLifecycleLease")
         .mockImplementation((options, run) => {
           const pending = acquire(options, run);
