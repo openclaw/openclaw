@@ -8774,6 +8774,18 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(normalized.output).toBe("json=\n");
   });
 
+  it.each([
+    { candidateArtifactJson: "\n" },
+    { prepublishPluginRegistryJson: "\t" },
+    { candidateArtifactJson: "{} {}" },
+  ])("rejects a nonempty input without exactly one JSON document", (input) => {
+    const normalized = runPackageAcceptanceRegistryInputValidation(input);
+    expect(normalized.result.status).toBe(1);
+    expect(normalized.result.stderr).toContain(
+      "Prerelease plugin registry JSON must contain one complete immutable tuple.",
+    );
+  });
+
   it("rejects partial, malformed, or ambiguous prerelease registry tuples before child workflows", () => {
     const tuple = packageAcceptanceRegistryTuple();
     const partial = runPackageAcceptanceRegistryInputValidation({

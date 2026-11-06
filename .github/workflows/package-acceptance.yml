@@ -582,7 +582,7 @@ jobs:
             local json="$1"
             local source="$2"
             [[ -n "${json// }" ]] || return 0
-            jq -cr \
+            jq -crs \
               --arg source "$source" \
               '
                 def digits: test("^[1-9][0-9]*$");
@@ -598,7 +598,8 @@ jobs:
                   | .prepublishPluginRegistryArtifactId |= tostring
                   | .prepublishPluginRegistryArtifactRunId |= tostring
                   | .prepublishPluginRegistryArtifactRunAttempt |= tostring;
-                if type != "object" then error("not an object") else . end
+                if length != 1 then error("expected one JSON document") else .[0] end
+                | if type != "object" then error("not an object") else . end
                 | . as $input
                 | [fields[] as $field | select($input | has($field))] as $present
                 | if ($present | length) == 0 and $source == "candidate" then empty

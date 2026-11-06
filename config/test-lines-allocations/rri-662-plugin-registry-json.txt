@@ -1,0 +1,2 @@
+# Fail-closed regressions for whitespace-only and multi-document optional registry input.
+6
