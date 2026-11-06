@@ -1,8 +1,10 @@
 import type { Message } from "@openclaw/llm-core";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
-import { estimateTokens } from "./compaction.js";
+import { prepareBranchEntries } from "./branch-summarization.js";
+import { compactWithoutSummary, estimateTokens, prepareCompaction } from "./compaction.js";
+import { createMessageEntry } from "./compaction.test-support.js";
 import {
   assistant,
   custom,
@@ -14,7 +16,7 @@ import {
 import {
   computeFileLists,
   createFileOps,
-  extractFileOpsFromMessage,
+  extractFileOpsFromMessages,
   formatFileOperations,
   mergeSummaryFileOperations,
   serializeConversation,
@@ -26,11 +28,86 @@ function serializeToolResult(text: string): string {
 
 function fileLists(messages: AgentMessage[]) {
   const fileOps = createFileOps();
-  for (const message of messages) {
-    extractFileOpsFromMessage(message, fileOps);
-  }
+  extractFileOpsFromMessages(messages, fileOps);
   return computeFileLists(fileOps);
 }
+
+it("pairs explicit no-op outcomes without dropping other mutation occurrences", () => {
+  const call = (name = "edit", id = "same") => toolCall(name, { file_path: "target.ts" }, id);
+  const result = (
+    changed?: boolean,
+    overrides: Partial<Extract<AgentMessage, { role: "toolResult" }>> = {},
+  ) =>
+    toolResult("opaque outcome", {
+      toolName: "edit",
+      toolCallId: "same",
+      details: { changed },
+      ...overrides,
+    });
+  const frame = assistant([call()]);
+  const cases: [string, AgentMessage[], boolean][] = [
+    ["no-op", [frame, result(false)], false],
+    [
+      "write no-op",
+      [assistant([call("files__write")]), result(false, { toolName: "write" })],
+      false,
+    ],
+    ["namespaced edit", [assistant([call("mcp__files__EDIT")]), result(false)], false],
+    ["successful edit", [frame, result(true)], true],
+    ["unknown outcome", [frame, result()], true],
+    ["error alone", [frame, result(undefined, { isError: true })], true],
+    ["post-write error", [frame, result(true, { isError: true })], true],
+    ["success then no-op", [frame, result(true), assistant([call()]), result(false)], true],
+    [
+      "success then failure",
+      [frame, result(true), assistant([call()]), result(undefined, { isError: true })],
+      true,
+    ],
+    ["repeated ids", [assistant([call(), call()]), result(true), result(false)], true],
+    [
+      "unrelated occurrence",
+      [assistant([call("read"), call()]), result(false, { toolName: "read" }), result(false)],
+      false,
+    ],
+    ["unpaired call", [frame], true],
+    ["unpaired result", [result(false)], false],
+    ["wrong id", [frame, result(false, { toolCallId: "other" })], true],
+    ["wrong tool", [frame, result(false, { toolName: "write" })], true],
+    ["assistant boundary", [frame, assistant("next turn"), result(false)], true],
+    ["user boundary", [frame, user("next turn"), result(false)], true],
+  ];
+  for (const [label, messages, modified] of cases) {
+    expect(fileLists(messages).modifiedFiles, label).toEqual(modified ? ["target.ts"] : []);
+  }
+});
+
+it("carries paired outcomes through compaction and reverse branch collection", () => {
+  for (const successFirst of [false, true]) {
+    const edit = (id: string, changed: boolean): AgentMessage[] => [
+      assistant([toolCall("edit", { path: "target.ts" }, id)]),
+      toolResult("opaque outcome", { toolName: "edit", toolCallId: id, details: { changed } }),
+    ];
+    const entries = [
+      user("edit the file"),
+      ...(successFirst ? edit("changed", true) : []),
+      ...edit("unchanged", false),
+      assistant("done"),
+      user("keep this latest turn"),
+    ].map(createMessageEntry);
+    const preparation = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 0,
+      keepRecentTokens: 1,
+    });
+    assert(preparation.ok && preparation.value, "Expected compactable history");
+    const result = compactWithoutSummary(preparation.value);
+    assert(result.ok);
+    const expected = successFirst ? ["target.ts"] : [];
+    expect(result.value.details?.modifiedFiles).toEqual(expected);
+    expect(computeFileLists(prepareBranchEntries(entries).fileOps).modifiedFiles).toEqual(expected);
+    expect(result.value.summary.includes("<modified-files>")).toBe(successFirst);
+  }
+});
 it("extracts namespaced tool names", () => {
   const call = (name: string, path: string) => toolCall(name, { path });
   const calls = [call("mcp__files__READ", "r.ts"), call("files__edit", "e.ts")];
