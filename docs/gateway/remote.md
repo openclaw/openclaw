@@ -21,6 +21,18 @@ Gateway token. Each node generates and keeps its own tunnel key. The owner
 registers a signed, single-use node invitation; the link defaults to 10 minutes
 and cannot last longer than one hour.
 
+From an approved owner browser, open **Access → Nodes → Add node**, enter a
+label, and choose **Create node command**. Copy the command into a POSIX shell on
+the computer you want to add. The default command uses the Gateway's OpenClaw
+version through `npx` and installs the node as a service after approval. Expand
+**Already have OpenClaw installed?** for the installed CLI command.
+
+The browser builds the secret-bearing link and both commands locally. Neither the
+link nor the secret is sent to the Gateway, stored by the UI, or logged. Closing
+the dialog discards the command; pending requests remain available under **Nodes**.
+If Discovery is unconfigured, no command is created: configure
+`gateway.openclawId.discoveryUrl` on the Gateway first. The relay must be running.
+
 Run the join command supplied by the owner, including the deployment's Discovery
 origin:
 
@@ -32,7 +44,16 @@ Treat the join link as a secret. The node terminal and the owner's approval dial
 show the same six-digit verification code. Compare all six digits, review the
 self-reported name, platform, commands, and capabilities, then explicitly approve.
 An open dialog never approves a node automatically. The Discovery service can
-relay a pending request but cannot admit the node.
+relay a pending request but cannot admit the node. Select **Codes match — approve
+node** only after comparing the terminal code and reviewing the complete declared
+surface. Sensitive commands and capabilities are highlighted. **Deny node** grants
+no access; ask the node operator to stop the waiting command.
+
+The **Nodes** list shows each node's name, platform, last seen, and approving owner
+device. **Remove node** explains and confirms disconnection and deletion of the
+node pairing. Removing only a pairing in **Devices** leaves its OpenClaw ID key
+admitted but makes subsequent pairing manual. Members and viewers cannot manage
+nodes.
 
 An admitted node key grants only `role: "node"` with client mode `node`. It grants
 no owner or member identity, operator scopes, plugin cookies, or operator HTTP
