@@ -1291,14 +1291,6 @@ select.settings-select:not([multiple]) {
   column-gap: 10px;
 }
 
-.config-form .field.checkbox input[type="checkbox"],
-.exec-approval-skip input[type="checkbox"],
-.data-table-checkbox-col input[type="checkbox"] {
-  margin: 0;
-  width: 16px;
-  height: 16px;
-}
-
 .field input[aria-invalid="true"],
 .field textarea[aria-invalid="true"],
 .field select[aria-invalid="true"] {
@@ -2312,10 +2304,6 @@ td.data-table-key-col {
   background: var(--data-table-row-bg);
 }
 
-.data-table-checkbox-col input[type="checkbox"] {
-  vertical-align: middle;
-}
-
 .data-table .data-table-key-col {
   position: sticky;
   left: var(--data-table-checkbox-col-width);
@@ -2752,7 +2740,10 @@ select.data-table-pagination__size {
   overflow: hidden;
 }
 
+/* The palette uses the compact, always-visible overlay scrollbar. */
 .cmd-palette__input {
+  --scrollbar-size: var(--scrollbar-size-compact);
+
   display: block;
   width: 100%;
   min-width: 0;
@@ -2763,7 +2754,6 @@ select.data-table-pagination__size {
   padding: 0 calc(var(--cmd-palette-actions-width) + 20px) 0 0;
   resize: none;
   overflow-y: hidden;
-  scrollbar-width: thin;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
   font-family: inherit;
@@ -2779,27 +2769,6 @@ select.data-table-pagination__size {
 
 .cmd-palette__input::placeholder {
   color: var(--muted);
-}
-
-/* Keep the overflow indicator visible instead of using an auto-hidden overlay. */
-@supports selector(::-webkit-scrollbar) {
-  .cmd-palette__input {
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .cmd-palette__input::-webkit-scrollbar {
-    width: 8px;
-  }
-
-  .cmd-palette__input::-webkit-scrollbar-thumb {
-    border-radius: var(--radius-sm);
-    background: var(--scrollbar-thumb);
-  }
-
-  .cmd-palette__input::-webkit-scrollbar-thumb:hover {
-    background: var(--scrollbar-thumb-hover);
-  }
 }
 
 /* Fades cover only text, never the native far-right scrollbar or actions. */

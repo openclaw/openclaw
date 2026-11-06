@@ -885,34 +885,23 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
      both values share --sidebar-pad-x so they cannot drift. */
   margin-right: calc(-1 * var(--sidebar-pad-x));
   padding-right: var(--sidebar-pad-x);
-  scrollbar-color: color-mix(in srgb, var(--muted) 10%, transparent) transparent;
 }
 
-.sidebar-shell:hover .sidebar-shell__body {
-  scrollbar-color: color-mix(in srgb, var(--muted) 16%, transparent) transparent;
-}
-
+/* The whole sidebar counts as the scroller's hover zone, header and footer included. */
 @supports selector(::-webkit-scrollbar) {
-  .sidebar-shell__body {
-    /* Native scrollbar colors override the separate thumb-hover treatment. */
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .sidebar-shell:hover .sidebar-shell__body {
-    scrollbar-color: auto;
-  }
-
-  .sidebar-shell__body::-webkit-scrollbar-thumb {
-    background-color: color-mix(in srgb, var(--muted) 10%, transparent);
-  }
-
   .sidebar-shell:hover .sidebar-shell__body::-webkit-scrollbar-thumb {
-    background-color: color-mix(in srgb, var(--muted) 16%, transparent);
+    background-color: var(--scrollbar-thumb-near);
   }
 
-  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:hover {
+  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:hover,
+  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:active {
     background-color: var(--scrollbar-thumb-hover);
+  }
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .sidebar-shell:hover .sidebar-shell__body {
+    scrollbar-color: var(--scrollbar-thumb-near) transparent;
   }
 }
 

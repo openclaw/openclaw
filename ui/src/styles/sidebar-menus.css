@@ -1105,8 +1105,6 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-color: color-mix(in srgb, var(--border) 72%, transparent) transparent;
-  scrollbar-width: thin;
 }
 
 .oc-menu.sidebar-identity-menu {
