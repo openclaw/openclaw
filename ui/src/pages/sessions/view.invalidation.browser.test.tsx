@@ -104,7 +104,6 @@ it.each([1280, 390])(
     expect(view.container.querySelector("table")?.getAttribute("aria-rowcount")).toBe("26");
     setCurrent((previous) => ({ ...previous, pageSize: 100 }));
     flush();
-
     await expect.poll(() => rows().length).toBeLessThan(25);
     expect(view.container.querySelector("table")?.getAttribute("aria-rowcount")).toBe("101");
     // The phone list has no header row; select-all lives in the bulk bar.
@@ -119,16 +118,14 @@ it.each([1280, 390])(
           await new Promise<void>((resolve) => {
             requestAnimationFrame(() => resolve());
           });
-          geometry.push(
-            JSON.stringify([
-              scroller.scrollHeight,
-              scroller.scrollTop,
-              rows().map((row) => [
-                row.getAttribute("aria-rowindex"),
-                row.getBoundingClientRect().height,
-              ]),
+          geometry[frame] = JSON.stringify([
+            scroller.scrollHeight,
+            scroller.scrollTop,
+            rows().map((row) => [
+              row.getAttribute("aria-rowindex"),
+              row.getBoundingClientRect().height,
             ]),
-          );
+          ]);
         }
         return new Set(geometry).size;
       })
@@ -150,7 +147,6 @@ it.each([1280, 390])(
       selectedKeys: new Set(result.sessions.map((row) => row.key)),
     }));
     flush();
-
     // Entering from the far end of the list must expose the preceding native Tab target.
     rows().at(-1)!.focus();
     await userEvent.keyboard("{Shift>}{Tab}{/Shift}");

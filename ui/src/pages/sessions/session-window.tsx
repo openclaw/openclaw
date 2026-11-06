@@ -325,6 +325,8 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
       <tbody
         ref={(node) => (element = node)}
         onFocusIn={() => {
+          // Native focus supersedes any still-converging index scroll.
+          virtualizer.cancelScroll();
           if (focusedKey === item.entry.key) {
             return;
           }
