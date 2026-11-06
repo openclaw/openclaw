@@ -115,7 +115,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     return tool;
   }
 
-  it.each(["memory flush", "disabled tools", "raw", "model"])(
+  it.each(["memory flush", "disabled tools", "raw", "model", "global denial"])(
     "does not widen %s with auxiliary tools",
     async (mode) => {
       const input = createInput([], [createStubTool("read"), createStubTool("write")]);
@@ -124,6 +124,13 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       input.attempt.disableTools = mode === "disabled tools";
       input.isRawModelRun = mode === "raw";
       input.preparedToolBase.toolsEnabled = mode !== "model";
+      if (mode === "global denial") {
+        input.attempt.config.tools = { deny: ["*"] };
+        input.preparedToolBase.runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+          config: input.attempt.config,
+        });
+        input.preparedToolBase.toolsRaw = [];
+      }
       if (mode === "memory flush") {
         input.attempt.trigger = "memory";
         input.attempt.memoryFlushWritePath = "memory/2026-10-08.md";
@@ -137,11 +144,11 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
       const result = await prepare(input);
 
-      const expected = mode === "model" ? [] : ["read", "write"];
-      expect(toolNames(result.uncompactedEffectiveTools)).toEqual(expected);
-      expect(result.clientTools).toBeUndefined();
       expect(mocks.acquireSessionMcpRuntime).not.toHaveBeenCalled();
       expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
+      const expected = ["model", "global denial"].includes(mode) ? [] : ["read", "write"];
+      expect(toolNames(result.uncompactedEffectiveTools)).toEqual(expected);
+      expect(result.clientTools).toBeUndefined();
       await withRuntimeToolSchemaQuarantine((record) => result.refreshTools(record));
       expect(toolNames(result.uncompactedEffectiveTools)).toEqual(expected);
     },
