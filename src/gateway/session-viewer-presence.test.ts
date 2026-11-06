@@ -33,13 +33,13 @@ function createDeclarations() {
     usesSharedGatewayAuth: false,
     socket: { readyState: 1 } as GatewayWsClient["socket"],
     connect: connect(),
-    authenticatedUserId: "viewer@timing.test",
+    authenticatedUserId: "viewer-timing",
     personPresence: { onlineSince: Date.now() - 1_000 },
   };
   const clients = new GatewayClientRegistry([client]);
   const publishPresence = vi.fn();
   const declarations = createSessionViewerPresenceDeclarations({ clients, publishPresence });
-  const row = () => listSystemPresence().find((entry) => entry.user?.id === "viewer@timing.test");
+  const row = () => listSystemPresence().find((entry) => entry.user?.id === "viewer-timing");
   return { declarations, client, clients, publishPresence, row };
 }
 
@@ -71,21 +71,34 @@ describe("session viewer presence declarations", () => {
   });
 
   it("publishes an empty declaration and forgets state on disconnect", () => {
-    const { declarations, publishPresence, row } = createDeclarations();
+    const { declarations, client, publishPresence, row } = createDeclarations();
+    client.connect.device = {
+      id: "viewer-device",
+      publicKey: "test-public-key",
+      signature: "test-signature",
+      signedAt: Date.now(),
+      nonce: "test-nonce",
+    };
 
     declarations.replace("conn-a", ["alpha"]);
+    expect(declarations.isViewedOnDevice("viewer-device", "alpha")).toBe(true);
     const activity = row()?.lastActivityAt;
     vi.setSystemTime(Date.now() + 1_000);
     declarations.replace("conn-a", []);
     expect([row()?.watchedSessions, row()?.lastActivityAt]).toEqual([undefined, activity]);
+    expect(declarations.isViewedOnDevice("viewer-device", "alpha")).toBe(false);
     declarations.replace("conn-a", ["beta"]);
     const nextActivity = row()?.lastActivityAt;
     vi.setSystemTime(Date.now() + 1_000);
     declarations.unsubscribe("conn-a");
     expect(row()?.lastActivityAt).toBe(nextActivity);
+    expect(declarations.isViewedOnDevice("viewer-device", "beta")).toBe(false);
     declarations.replace("conn-a", ["beta"]);
     expect(row()?.lastActivityAt).toBe(Date.now());
     expect(publishPresence).toHaveBeenCalledTimes(4);
+    expect(declarations.isViewedOnDevice("viewer-device", "beta")).toBe(true);
+    declarations.stop();
+    expect(declarations.isViewedOnDevice("viewer-device", "beta")).toBe(false);
   });
 
   it("rejects declarations from inactive connections and after stop", () => {
@@ -99,6 +112,47 @@ describe("session viewer presence declarations", () => {
     declarations.stop();
     expect(declarations.replace("conn-a", ["alpha"])).toEqual([]);
     expect(publishPresence).not.toHaveBeenCalled();
+  });
+
+  it("restores an unidentified connection when its viewer declaration changes after expiry", () => {
+    const { declarations, client } = createDeclarations();
+    delete client.authenticatedUserId;
+    delete client.personPresence;
+    client.connect.client.timeZone = "Europe/Paris";
+    declarations.replace("conn-a", ["alpha"]);
+    vi.setSystemTime(Date.now() + 300_001);
+    expect(listSystemPresence().some((entry) => entry.watchedSessions?.includes("alpha"))).toBe(
+      false,
+    );
+    declarations.replace("conn-a", ["beta"]);
+    expect(listSystemPresence().find((entry) => entry.connectionId === "conn-a")).toMatchObject({
+      host: "openclaw-control-ui",
+      timeZone: "Europe/Paris",
+      watchedSessions: ["beta"],
+      user: undefined,
+      lastActivityAt: undefined,
+    });
+  });
+
+  it("does not inherit viewer declarations when a connection id is reused", () => {
+    const { declarations, client, clients, publishPresence } = createDeclarations();
+    declarations.replace("conn-a", ["alpha"]);
+    clients.delete(client);
+    const replacement: GatewayWsClient = {
+      connId: "conn-a",
+      presenceKey: "replacement-viewer",
+      usesSharedGatewayAuth: false,
+      socket: { readyState: 1 } as GatewayWsClient["socket"],
+      connect: connect(),
+      authenticatedUserId: "replacement-viewer-timing",
+      personPresence: { onlineSince: Date.now() },
+    };
+    clients.add(replacement);
+    declarations.replace("conn-a", ["alpha"]);
+    expect(
+      listSystemPresence().find((entry) => entry.user?.id === "replacement-viewer-timing"),
+    ).toMatchObject({ watchedSessions: ["alpha"] });
+    expect(publishPresence).toHaveBeenCalledTimes(2);
   });
 });
 

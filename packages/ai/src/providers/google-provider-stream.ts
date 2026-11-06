@@ -27,6 +27,7 @@ export function createGoogleGenerateContentStreams<
     void runGoogleGenerateContentLifecycle({
       stream: events,
       model,
+      tools: context.tools,
       output: createAssistantOutput(model, api),
       options,
       createClient: () => createClient(model, options),

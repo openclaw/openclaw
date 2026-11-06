@@ -189,7 +189,7 @@ async function select(menu: HeaderMenuElement, value: string) {
 it("focuses the current first row when reopening removes the parked first row", async () => {
   const menu = await mountMenu({}, false);
   await openMenu(menu);
-  const previousFirst = item(menu, "Command palette");
+  const previousFirst = item(menu, "search");
   const trigger = menu.readTrigger()!;
   const hidden = whenHidden(menu);
   press(panel(menu), "Escape");
@@ -275,7 +275,7 @@ it.each(["MacIntel", "Win32"])(
     vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
     const menu = await mountMenu({ archiveShortcut: true });
     expect(shortcut(item(menu, "Archive session"), true)).toBe(
-      platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl+Shift+A",
+      platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl⇧A",
     );
     menu.archiveShortcut = false;
     await menu.updateComplete;

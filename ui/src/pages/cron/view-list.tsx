@@ -12,6 +12,8 @@ import {
   createSignal,
   Errored,
   For,
+  action,
+  createOptimistic,
   isPending,
   latest,
   Loading,
@@ -24,8 +26,10 @@ import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
@@ -37,8 +41,8 @@ import {
   NoticeBanner,
 } from "./view-controls.tsx";
 import {
-  describeJobSchedule,
   describeJobNextRun,
+  JobSchedule,
   JobStateIndicator,
   TriggerIndicator,
   DisabledNote,
@@ -88,11 +92,11 @@ export function ListView(props: CronProps) {
         <Errored
           fallback={(error, reset) => (
             <div class="cron-error-banner" role="alert">
-              {String(error())}
+              {formatUiError(error())}
               <button
                 class="btn btn--sm"
                 onClick={() => {
-                  props.onRefresh();
+                  void props.onRefresh();
                   reset();
                 }}
               >
@@ -215,8 +219,35 @@ function Toolbar(
     hasAdvancedJobsFilters: boolean;
   },
 ) {
+  // The jobs read holds its results in a transition; only an optimistic value shows during it.
+  const [manualRefresh, setManualRefresh] = createOptimistic(false);
+  const refreshing = () => manualRefresh() || props.loading;
+  const refresh = action(function* () {
+    const retired = props.getActionRetired();
+    setManualRefresh(true);
+    yield Promise.race([props.onRefresh(), retired]);
+  });
+  const newTask = () =>
+    (props.canCreate ?? props.canManage) ? (
+      <button
+        ref={props.focus?.ref("create")}
+        type="button"
+        class="btn primary btn--sm cron-new-task"
+        data-test-id="cron-new-task"
+        onClick={() => props.onOpenCreate()}
+      >
+        <Icon name="plus" /> {t("cron.list.newTask")}
+      </button>
+    ) : undefined;
+
   return (
     <div class="cron-toolbar">
+      {props.phoneLayout ? (
+        <div class="cron-toolbar__scope">
+          {props.toolbarScope}
+          {newTask()}
+        </div>
+      ) : undefined}
       {props.listTab === "tasks" ? (
         <div class="cron-toolbar__filters">
           <div class="cron-search-box">
@@ -243,30 +274,14 @@ function Toolbar(
       <div class="cron-toolbar__primary">
         <ListTabs {...props} />
         <div class="cron-toolbar__actions">
-          <button
-            type="button"
-            class={[
-              "btn btn--sm btn--ghost cron-refresh",
-              { "cron-refresh--loading": props.loading },
-            ]}
-            disabled={props.loading}
-            title={props.loading ? t("cron.list.refreshing") : t("cron.list.refresh")}
-            aria-label={t("cron.list.refresh")}
-            onClick={() => props.onRefresh()}
-          >
-            <Icon name="refresh" />
-          </button>
-          {(props.canCreate ?? props.canManage) ? (
-            <button
-              ref={props.focus?.ref("create")}
-              type="button"
-              class="btn primary btn--sm cron-new-task"
-              data-test-id="cron-new-task"
-              onClick={() => props.onOpenCreate()}
-            >
-              <Icon name="plus" /> {t("cron.list.newTask")}
-            </button>
-          ) : undefined}
+          <RefreshButton
+            class="cron-refresh"
+            label={t("cron.list.refresh")}
+            tooltip={refreshing() ? t("cron.list.refreshing") : t("cron.list.refresh")}
+            busy={refreshing()}
+            onClick={() => void refresh()}
+          />
+          {props.phoneLayout ? undefined : newTask()}
         </div>
       </div>
     </div>
@@ -593,25 +608,32 @@ function JobRow(
           ) : undefined}
         </span>
       </button>
-      <JobCell
-        class="cron-table__schedule"
-        label={t("cron.jobs.schedule")}
-        value={describeJobSchedule(props.job)}
-      />
-      <JobCell
-        class="cron-table__next"
-        label={t("cron.jobs.nextRun")}
-        value={
-          <span class={{ "cron-table__running": isCronJobRunning(props.job) }}>
-            {describeJobNextRun(props.job)}
-          </span>
-        }
-      />
-      <JobCell
-        class="cron-table__last"
-        label={t("cron.jobs.lastRun")}
-        value={<LastRunCell job={props.job} />}
-      />
+      <span class="cron-table__meta">
+        <JobCell
+          class="cron-table__schedule"
+          label={t("cron.jobs.schedule")}
+          value={<JobSchedule job={props.job} />}
+        />
+        <JobCell
+          class="cron-table__next"
+          label={t("cron.jobs.nextRun")}
+          value={
+            <span
+              class={{
+                "cron-table__running": isCronJobRunning(props.job),
+                "cron-table__waiting": Boolean(props.job.state?.admissionDeferred),
+              }}
+            >
+              {describeJobNextRun(props.job)}
+            </span>
+          }
+        />
+        <JobCell
+          class="cron-table__last"
+          label={t("cron.jobs.lastRun")}
+          value={<LastRunCell job={props.job} />}
+        />
+      </span>
       {props.canManage ? (
         <span class="cron-table__actions" onClick={(e: Event) => e.stopPropagation()}>
           <button

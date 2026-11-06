@@ -165,6 +165,13 @@ The location does not depend on how the plugin was installed. Back up the
 registry, each store's `state.sqlite`, and its `vault/` directory together. A
 Markdown-only or Git-only copy is not a complete backup.
 
+Knowledge flushes file contents and synchronizes publication directories where
+the platform supports it. On Windows, directory flushing is not portable;
+Knowledge accepts only the filesystem helper's checked unsupported outcome,
+not other I/O errors. Journal recovery and exact retries handle interrupted
+processes, but a completed save is not a guarantee against loss of directory
+entries after a Windows power failure. Keep a complete backup of the store.
+
 ## Writes and authority
 
 - Agents publish through journaled operations with revision/hash preconditions

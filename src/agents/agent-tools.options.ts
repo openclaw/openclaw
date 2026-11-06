@@ -15,7 +15,7 @@ import type {
   AgentRunClientContext,
   AgentRunMessageContext,
   AgentRunChannelContext,
-} from "./command/shared-types.js";
+} from "./command/execution-context.types.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import type { DelegationCapability } from "./delegation-capability.js";
 import type { ModelAuthMode } from "./model-auth.js";

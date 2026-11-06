@@ -1,7 +1,10 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import {
+  assertUpdateRecoveryAdmission,
+  inspectPluginCohortRecoveryAdmission,
+} from "../../infra/update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -47,10 +50,19 @@ export async function withUpdateCommandRecoveryUnwind(
           }),
           runId: run.runId,
         });
-  const pendingFailure = (cause: unknown, original: unknown) =>
-    new UpdateCommandPendingRecoveryFailure(primaryResult(original), formatErrorMessage(cause), {
-      cause,
-    });
+  const pendingFailure = (cause: unknown, original: unknown, nextStep?: string) =>
+    new UpdateCommandPendingRecoveryFailure(
+      primaryResult(original),
+      [
+        formatErrorMessage(cause),
+        // The refusal describes retained state; only this line names what went wrong.
+        ...(original === cause
+          ? []
+          : [`First failure: ${createUpdateErrorFact("update", original, run.env).message}`]),
+        ...(nextStep ? [nextStep] : []),
+      ].join("\n"),
+      { cause },
+    );
   const settlePending = async (error: UpdateCommandFailure) => {
     if (opts.recovery) {
       return error;
@@ -166,7 +178,17 @@ export async function withUpdateCommandRecoveryUnwind(
     try {
       await admitRecovery();
     } catch (error) {
-      const pending = pendingFailure(error, failure?.error ?? error);
+      // Repair settles a matching cohort pair; other retained recovery keeps its original owner.
+      const repairable =
+        error instanceof UpdateRecoveryRequiredError &&
+        (await inspectPluginCohortRecoveryAdmission({ env: run.env }, error.record.runId).catch(
+          () => undefined,
+        ));
+      const pending = pendingFailure(
+        error,
+        failure?.error ?? error,
+        repairable ? "Run `openclaw update repair` to finish this recovery." : undefined,
+      );
       if (
         failure &&
         !(failure.error instanceof UpdateCommandFailure) &&

@@ -263,7 +263,7 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
       deliveryStatuses: undefined,
     }),
   );
-  getButtonByText(page, "Show all runs").click();
+  getButtonByText(page, "Show all activity").click();
   await waitFor(() => expect(page.querySelectorAll(".cron-run-entry")).toHaveLength(50));
   expect(page.querySelector(".cron-run-entry--highlighted")).toBeNull();
   updateCronRunsFilter(page.cron, previousFilters);
@@ -384,7 +384,9 @@ it.each(["operator.write", "operator.read"])(
     gateway.emitSnapshot({ hello: harness.operatorHello([scope]) });
     staleRunButton.click();
     await page.settle();
-    expect(page.textContent).toContain("Browsing only");
+    expect(page.textContent).toContain(
+      "Only the owner with automation access or an admin can change this automation.",
+    );
     expect(page.querySelector(dom.testId("cron-row-run-access-job"))).toBeNull();
     expect(
       request.mock.calls.some(([method]) =>

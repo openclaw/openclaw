@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OpenClawProtocol
 import Synchronization
@@ -132,6 +133,7 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let challengeCapabilities: [String]
     private let connectError: [String: Any]?
+    private let onConnectSent: (@Sendable () -> Void)?
     private var _state: URLSessionTask.State = .suspended
     private var resumeCount = 0
     private var connectRequestId: String?
@@ -156,7 +158,8 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         challengeCapabilities: [String] = [],
-        connectError: [String: Any]? = nil)
+        connectError: [String: Any]? = nil,
+        onConnectSent: (@Sendable () -> Void)? = nil)
     {
         self.helloAuth = helloAuth
         self.helloMethods = helloMethods
@@ -167,6 +170,7 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         self.challenge = challenge
         self.challengeCapabilities = challengeCapabilities
         self.connectError = connectError
+        self.onConnectSent = onConnectSent
     }
 
     var state: URLSessionTask.State {
@@ -224,6 +228,7 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
                 self.connectDevice = device
                 self.waiters.resumeSatisfied()
             }
+            self.onConnectSent?()
         }
     }
 
@@ -566,6 +571,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let challengeCapabilities: [String]
     private let connectError: [String: Any]?
+    private let onConnectSent: (@Sendable () -> Void)?
     let effectiveTLSFingerprintSHA256: String?
     private var tasks: [FakeGatewayWebSocketTask] = []
     private var requests: [URLRequest] = []
@@ -582,7 +588,8 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         challengeCapabilities: [String] = [],
         connectError: [String: Any]? = nil,
-        effectiveTLSFingerprintSHA256: String? = nil)
+        effectiveTLSFingerprintSHA256: String? = nil,
+        onConnectSent: (@Sendable () -> Void)? = nil)
     {
         self.helloAuth = helloAuth
         self.helloMethods = helloMethods
@@ -594,6 +601,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
         self.challengeCapabilities = challengeCapabilities
         self.connectError = connectError
         self.effectiveTLSFingerprintSHA256 = effectiveTLSFingerprintSHA256
+        self.onConnectSent = onConnectSent
     }
 
     func waitForTasks(count: Int) async {
@@ -638,7 +646,8 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
                 helloDelayNanoseconds: self.helloDelayNanoseconds,
                 challenge: self.challenge,
                 challengeCapabilities: self.challengeCapabilities,
-                connectError: self.connectError)
+                connectError: self.connectError,
+                onConnectSent: self.onConnectSent)
             self.tasks.append(task)
             self.waiters.resumeSatisfied()
             return WebSocketTaskBox(task: task)
@@ -3380,6 +3389,140 @@ struct GatewayNodeSessionTests {
     }
 
     @Test(.stateDirectoryIsolated)
+    func `Dashboard challenge signs the accepted operator grant with the native client identity`() async throws {
+        let gatewayID = "dashboard-auth-\(UUID().uuidString)"
+        let identity = DeviceIdentityStore.loadOrCreate()
+        defer { DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID) }
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "accepted-dashboard-grant",
+            scopes: ["operator.read", "operator.admin"],
+            gatewayID: gatewayID)
+
+        let scopes = ["operator.admin", "operator.read"]
+        let socket = FakeGatewayWebSocketSession(helloAuth: [
+            "deviceToken": "accepted-dashboard-grant",
+            "role": "operator",
+            "scopes": scopes,
+        ])
+        let gateway = GatewayNodeSession()
+        try await gateway.connectForTest(
+            testURL("wss://dashboard-auth.example.invalid"),
+            options: operatorConnectOptions(
+                scopes: scopes,
+                clientId: "openclaw-ios",
+                includeDeviceIdentity: true,
+                deviceAuthGatewayID: gatewayID),
+            session: socket)
+
+        let route = try #require(await gateway.currentRoute(ifGatewayID: gatewayID))
+        let data = try await gateway.controlUIDashboardAuthorization(
+            ifCurrentRoute: route,
+            nonce: "dashboard-nonce",
+            signedAtMs: 1_800_000_000_000)
+        let response = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let client = try #require(response["client"] as? [String: Any])
+        let auth = try #require(response["auth"] as? [String: String])
+        let device = try #require(response["device"] as? [String: Any])
+
+        #expect(client["id"] as? String == "openclaw-ios")
+        #expect(client["mode"] as? String == "ui")
+        #expect(auth == ["deviceToken": "accepted-dashboard-grant"])
+        #expect(response["scopes"] as? [String] == scopes)
+        #expect(device["id"] as? String == identity.deviceId)
+        #expect(device["nonce"] as? String == "dashboard-nonce")
+        #expect(device["signedAt"] as? Int64 == 1_800_000_000_000)
+        #expect(device["signature"] as? String != nil)
+        #expect(response["privateKey"] == nil)
+        #expect(await gateway.controlUIDashboardLegacyCredentials(ifCurrentRoute: route) == nil)
+        await gateway.disconnect()
+    }
+
+    @Test(.stateDirectoryIsolated)
+    func `Dashboard challenge denies a route without native device authority and rejects a retired route`() async throws {
+        let socket = FakeGatewayWebSocketSession(helloAuth: [
+            "role": "operator",
+            "scopes": ["operator.admin"],
+        ])
+        let gateway = GatewayNodeSession()
+        try await gateway.connectForTest(
+            testURL("wss://dashboard-denial.example.invalid"),
+            credentials: .init(password: "accepted-password"),
+            options: operatorConnectOptions(includeDeviceIdentity: false),
+            session: socket)
+        let route = try #require(await gateway.currentRoute())
+        do {
+            _ = try await gateway.controlUIDashboardAuthorization(
+                ifCurrentRoute: route,
+                nonce: "dashboard-nonce",
+                signedAtMs: 1_800_000_000_000)
+            Issue.record("A route without device identity must not sign Dashboard challenges")
+        } catch is CancellationError {
+            // Expected: the operator connection has no accepted native identity.
+        }
+        #expect(await gateway.controlUIDashboardLegacyCredentials(ifCurrentRoute: route) == nil)
+
+        await gateway.disconnect()
+        do {
+            _ = try await gateway.controlUIDashboardAuthorization(
+                ifCurrentRoute: route,
+                nonce: "dashboard-nonce",
+                signedAtMs: 1_800_000_000_000)
+            Issue.record("A retired route must not sign Dashboard challenges")
+        } catch is CancellationError {
+            // Expected: the physical operator route has been retired.
+        }
+    }
+
+    @Test(.stateDirectoryIsolated)
+    func `Dashboard legacy bootstrap uses only the accepted shared credential`() async throws {
+        let sharedGateway = GatewayNodeSession()
+        let sharedSocket = FakeGatewayWebSocketSession(helloAuth: [
+            "role": "operator",
+            "scopes": ["operator.admin"],
+        ])
+        try await sharedGateway.connectForTest(
+            testURL("wss://dashboard-shared.example.invalid"),
+            credentials: .init(token: "accepted-shared-token"),
+            options: operatorConnectOptions(includeDeviceIdentity: true),
+            session: sharedSocket)
+        let sharedRoute = try #require(await sharedGateway.currentRoute())
+        #expect(await sharedGateway.controlUIDashboardLegacyCredentials(ifCurrentRoute: sharedRoute) == [
+            "token": "accepted-shared-token",
+        ])
+        await sharedGateway.disconnect()
+
+        let identity = DeviceIdentityStore.loadOrCreate()
+        let gatewayID = "dashboard-bootstrap-\(UUID().uuidString)"
+        defer { DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID) }
+        let bootstrapGateway = GatewayNodeSession()
+        let bootstrapSocket = FakeGatewayWebSocketSession(helloAuth: [
+            "deviceToken": "gateway-issued-dashboard-grant",
+            "role": "operator",
+            "scopes": ["operator.admin", "operator.read"],
+        ])
+        try await bootstrapGateway.connectForTest(
+            testURL("wss://dashboard-bootstrap.example.invalid"),
+            credentials: .init(bootstrapToken: "pairing-bootstrap-secret"),
+            options: operatorConnectOptions(
+                includeDeviceIdentity: true,
+                deviceAuthGatewayID: gatewayID),
+            session: bootstrapSocket)
+        let bootstrapRoute = try #require(await bootstrapGateway.currentRoute(ifGatewayID: gatewayID))
+        #expect(await bootstrapGateway.controlUIDashboardLegacyCredentials(ifCurrentRoute: bootstrapRoute) == nil)
+        let authData = try await bootstrapGateway.controlUIDashboardAuthorization(
+            ifCurrentRoute: bootstrapRoute,
+            nonce: "post-pairing-dashboard-nonce",
+            signedAtMs: 1_800_000_000_000)
+        let authResult = try #require(JSONSerialization.jsonObject(with: authData) as? [String: Any])
+        #expect((authResult["auth"] as? [String: String]) == [
+            "deviceToken": "gateway-issued-dashboard-grant",
+        ])
+        await bootstrapGateway.disconnect()
+    }
+
+    @Test(.stateDirectoryIsolated)
     func `scanned setup code prefers bootstrap auth over stored device token`() async throws {
         let identity = DeviceIdentityStore.loadOrCreate()
         _ = DeviceAuthStore.storeToken(
@@ -3402,6 +3545,59 @@ struct GatewayNodeSessionTests {
         #expect(auth["token"] == nil)
         #expect(auth["deviceToken"] == nil)
 
+        await gateway.disconnect()
+    }
+
+    @Test(.stateDirectoryIsolated, arguments: [false, true])
+    func `credential-free issuance replaces only the retained token observed before connect`(
+        newerWrite: Bool) async throws
+    {
+        let identity = DeviceIdentityStore.loadOrCreate()
+        let gatewayID = "native-ingress-repair"
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId, role: "node", token: "retained-node-token", gatewayID: gatewayID)
+        let session = FakeGatewayWebSocketSession(
+            helloAuth: ["deviceToken": "fresh-node-token", "role": "node", "scopes": []],
+            onConnectSent: {
+                if newerWrite {
+                    // This separate writer lands after auth selection and before the issued hello.
+                    _ = DeviceAuthStore.storeToken(
+                        deviceId: identity.deviceId, role: "node", token: "newer-node-token", gatewayID: gatewayID)
+                }
+            })
+        let gateway = GatewayNodeSession()
+        do {
+            try await gateway.connectForTest(
+                testURL("wss://ingress.example.invalid"),
+                options: nodeConnectOptions(
+                    includeDeviceIdentity: true, allowStoredDeviceAuth: false, deviceAuthGatewayID: gatewayID),
+                session: session)
+
+            let task = try #require(session.latestTask())
+            #expect(try #require(task.latestConnectAuth()).isEmpty)
+            let device = try #require(task.latestConnectDevice())
+            #expect(device["id"] as? String == identity.deviceId)
+            #expect(device["nonce"] as? String == "nonce-1")
+            #expect((device["signedAt"] as? NSNumber)?.int64Value == 1_800_000_000_000)
+            let signatureText = try #require(device["signature"] as? String)
+                .replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+            let signature = try #require(Data(base64Encoded: signatureText +
+                    String(repeating: "=", count: (4 - signatureText.count % 4) % 4)))
+            let key = try Curve25519.Signing
+                .PublicKey(rawRepresentation: #require(Data(base64Encoded: identity.publicKey)))
+            let expectedPayload = "v2|\(identity.deviceId)|openclaw-ios-test|node|node||1800000000000||nonce-1"
+            #expect(key.isValidSignature(signature, for: Data(expectedPayload.utf8)))
+
+            let stored = try #require(DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId, role: "node", gatewayID: gatewayID))
+            #expect(stored.token == (newerWrite ? "newer-node-token" : "fresh-node-token"))
+            let roles = await gateway.currentDeviceAuthRoles()
+            #expect(roles.received == ["node"])
+            #expect(roles.persisted == (newerWrite ? [] : ["node"]))
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
         await gateway.disconnect()
     }
 

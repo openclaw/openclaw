@@ -345,13 +345,19 @@ it("reuses palette reads through session publications while retaining retries an
     await vi.waitFor(() => expect(environmentPath()).not.toBeNull());
     await expectDot("rgb(20, 100, 180)");
     await changePresentation(() => mascot("none"));
-    expectMark("rgb(180, 20, 40)", "rgb(250, 250, 250)");
+    expectMark(
+      "rgb(180, 20, 40)",
+      getComputedStyle(root).getPropertyValue("--primary-foreground").trim(),
+    );
     expect(environmentPath()).toBeNull();
     expect(dotColor()).toBe("rgb(20, 100, 180)");
     await changePresentation(() => {
       root.dataset.theme = "favicon-neutral";
     });
-    expectMark("rgb(190, 30, 50)", "rgb(240, 240, 240)");
+    expectMark(
+      "rgb(190, 30, 50)",
+      getComputedStyle(root).getPropertyValue("--primary-foreground").trim(),
+    );
     await changePresentation(() => {
       root.style.setProperty("--primary", "rgb(160, 40, 60)");
     });

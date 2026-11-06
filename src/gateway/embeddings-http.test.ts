@@ -10,11 +10,9 @@ import {
   resetConfigRuntimeState,
 } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import type { EmbeddingInput } from "../plugins/embedding-providers.js";
-import type {
-  MemoryEmbeddingProvider,
-  MemoryEmbeddingProviderAdapter,
-} from "../plugins/memory-embedding-providers.js";
+import type { EmbeddingInput } from "../plugins/embedding-provider-runtime-types.js";
+import type { MemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/registry-contribution-types.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";

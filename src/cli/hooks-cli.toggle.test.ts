@@ -383,14 +383,18 @@ describe("hooks CLI metadata config keys", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
-  it("propagates blank leaf agent failures to the root CLI renderer", async () => {
-    const message = "--agent must not be blank";
-    const execution = runHooks("list", "--agent", "", "--json");
+  it.for([
+    ["list", "--agent", ""],
+    ["--agent", "", "list"],
+    ["--agent", "research", "install", "./hook-pack"],
+  ])("propagates invalid hook agent usage to the root renderer: %j", async (args) => {
+    const message = args.includes("install")
+      ? "openclaw hooks install does not support --agent; the option only selects an owner for read-only hook reports."
+      : "--agent must not be blank";
+    const execution = runHooks("--json", ...args);
     await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
     await expect(execution).rejects.toMatchObject({
-      message,
       humanOutput: `Error: ${message}`,
-      machineOutput: message,
     });
     expect(capture.defaultRuntime.error).not.toHaveBeenCalled();
     expect(capture.defaultRuntime.exit).not.toHaveBeenCalled();
@@ -400,6 +404,7 @@ describe("hooks CLI metadata config keys", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.buildWorkspaceHookStatus).not.toHaveBeenCalled();
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(capture.runtimeLogs).toHaveLength(0);
   });
 
   it("uses hooks.status for the check read command", async () => {
@@ -488,12 +493,6 @@ describe("hooks CLI metadata config keys", () => {
     expect(capture.runtimeErrors.at(-1)).toContain('Unknown agent id "retired"');
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(explicitFleet).toEqual(initialConfig);
-  });
-
-  it("rejects a blank parent hook agent before dispatching a subcommand", async () => {
-    await expect(runHooks("--agent", "", "list")).rejects.toThrow("--agent must not be blank");
-
-    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("uses the selected local fallback for an older Gateway", async () => {

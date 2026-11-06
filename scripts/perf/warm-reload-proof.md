@@ -62,6 +62,25 @@ has its own Element Timing marker, `bottomParagraphPaintMs`. Join the geometry
 samples to the inspected first transcript PNG; DOM sampling alone does not prove
 the first painted scroll position. Runtime code is unchanged by this diagnostic.
 
+Add `--dashboard-pane-chrome` to give the
+dashboard its own archived conversation with 160 trailing tool exchanges,
+so the loaded transcript window contains activity groups and an earlier-history
+boundary rather than assistant prose. `paneChrome.frames` records identity-action
+children, versions-button geometry, boundary text/geometry, and message/activity
+counts from navigation through settle. The dashboard retains its generated peer
+owner, outside the operator's Involving me roster. Its unpinned activity is seven
+days old, below the bounded agent-roster window, so its session menu arrives after
+cached header admission. The chat target remains archived.
+With plugin activation, the dashboard also contains a native Workboard summary
+and one synthetic backlog card, created through the existing Gateway RPCs.
+
+For active-session composer proof, add `--active-targets` with `--transcript-late-paint`.
+Targets stay unarchived with a fresh, versioned 1,800-token context total and 96,000-token
+limit. `contextRingFrames` retains changed composer/ring display samples, and
+`firstComposerDomHasFinalRing` requires the final ring label and dial at opacity one
+in the first visible composer DOM sample. Inspect the correlated compositor frame
+and its predecessor before claiming first-paint presence.
+
 For plugin-publication attribution, add `--plugin-activation`. This enables bundled
 Workboard and two isolated native modules: a neutral CSS theme with a header
 accessory, and a board-like module that awaits two lazy chunks before registering

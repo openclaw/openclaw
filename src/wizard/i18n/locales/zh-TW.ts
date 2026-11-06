@@ -331,6 +331,7 @@ export const zh_TW = {
       laneQuickHint: "尋找 AI 存取方式，由你選擇要驗證的連線，然後開啟網頁儀表板。",
       laneCustomLabel: "自訂設定",
       laneCustomHint: "逐項選擇所有設定選項。",
+      quickstartKeepRunningQuestion: "讓 OpenClaw 在背景持續執行？",
       quickstartDashboard: "儀表板：{url}",
       quickstartForeground: "閘道正在前景執行。按 Ctrl+C 停止。",
       quickstartBackground: "如需日後讓閘道在背景持續執行，請執行：openclaw gateway install",

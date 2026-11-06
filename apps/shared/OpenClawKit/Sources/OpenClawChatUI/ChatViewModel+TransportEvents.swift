@@ -472,13 +472,13 @@ extension OpenClawChatViewModel {
         }
         guard var message = payload.message else { return }
         message.transcriptMessageID = message.transcriptMessageID ?? payload.messageId
-        let sanitized = Self.stripInboundMetadata(from: message)
+        let ingested = message.ingestedMessages.map { Self.stripInboundMetadata(from: $0) }
         // Confirmation is gateway-scoped, not presentation-scoped. A flush
         // can drain session A while session B is visible, and A's event must
         // still retire its durable row before this handler returns early.
-        confirmOutboxCommands(in: [sanitized])
+        confirmOutboxCommands(in: ingested)
         guard isCurrentSession else { return }
-        self.observeOutboxTranscriptTip(sanitized, session: self.currentSessionSnapshot())
+        self.observeOutboxTranscriptTip(message, session: self.currentSessionSnapshot())
 
         self.invalidateHistorySnapshots()
         // The active client also receives the gateway's echo of the user turn it
@@ -488,17 +488,18 @@ extension OpenClawChatViewModel {
         // Adopt the server record onto the exactly correlated row even when the
         // run's final event already cleared pending state. Same-content turns
         // without this key remain distinct.
-        if adoptCorrelatedUserMessage(incoming: sanitized) {
+        let last = ingested[ingested.count - 1]
+        if adoptCorrelatedUserMessage(incoming: last, precedingMessages: Array(ingested.dropLast())) {
             self.clearActiveSessionRunIndicatorIfLatestUserAnswered()
             self.applyDeferredExternalStateIfReady()
             return
         }
-        if adoptProvisionalFinalMessage(incoming: sanitized) {
+        if adoptProvisionalFinalMessage(incoming: last) {
             self.clearActiveSessionRunIndicatorIfLatestUserAnswered()
             return
         }
 
-        let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [sanitized])
+        let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + ingested)
         replaceMessages(Self.dedupeMessages(reconciled))
         pruneProvisionalFinalMessages()
         pruneRunMessageScopes()

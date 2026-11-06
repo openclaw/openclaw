@@ -35,6 +35,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Opt-in traffic allowlist for requests and CONNECT tunnels. When present, destinations must appear in this list, a per-secret host binding, or bypassHosts. An empty list permits only bound or bypassed hosts. Restart the Gateway after changing it.",
   "secrets.egressProxy.bypassHosts":
     "Exact hostnames that use authenticated blind CONNECT tunnels for certificate-pinned clients. Sentinels remain ciphertext and will fail vendor authentication instead of exposing plaintext.",
+  "security.audit.suppressions":
+    "Accepted security audit findings to omit from the active summary and findings list. Matching findings remain available under suppressedFindings in JSON output.",
+  "security.installPolicy.enabled":
+    "Enable a trusted local policy command for skill and plugin installs and updates. When enabled without a configured command, supported install targets are blocked.",
+  "security.installPolicy.targets":
+    'Apply the install policy to "skill", "plugin", or both. Omit this list to cover every supported target.',
+  "security.installPolicy.exec":
+    'Trusted local command that returns an "allow", "warn", or "block" install decision. Set an absolute executable path; OpenClaw runs it without a shell.',
   wizard:
     "User-owned setup preferences. Machine-owned wizard history and acknowledgement state live in the shared state database.",
   "wizard.accessMode":
@@ -361,6 +369,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
   "agents.entries.*.reasoningDefault":
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+  "agents.entries.*.newSessionPermissionMode":
+    "Permission mode saved on new attended, profiled operator sessions when no explicit mode is supplied. Does not change existing, forked, delegated, or autonomous sessions. Full still requires operator.admin.",
   "agents.entries.*.fastModeDefault":
     'Optional per-agent default for fast mode ("auto", "ultrafast", true, or false). Applies when no per-message or session fast-mode override is set.',
   "agents.defaults.fastModeDefault":

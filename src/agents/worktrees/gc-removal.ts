@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -51,6 +51,7 @@ export type WorktreeCleanupMutation = <T>(
 
 export type WorktreeCleanupOwnerPolicy = {
   retryDeferred?: boolean;
+  beforeRemoval?: (record: ManagedWorktreeRecord) => Promise<void>;
   prepareOwners?: (
     records: readonly ManagedWorktreeRecord[],
   ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "readOwnerState">>;
@@ -473,7 +474,11 @@ export function createWorktreeGcRemoval(context: {
           retiredOwner =
             record.ownerId !== undefined &&
             context.classifyOwner?.(record.ownerKind, record.ownerId) === "retired";
-          if (retiredOwner || record.lastActiveAt < context.expiresBefore) {
+          // Stable per-checkout jitter spreads a busy day's seven-day expiry
+          // across an extra hour without ever shortening retention.
+          const idleJitterMs =
+            createHash("sha256").update(record.id).digest().readUInt32BE(0) % 3_600_000;
+          if (retiredOwner || record.lastActiveAt + idleJitterMs < context.expiresBefore) {
             // Capacity eviction and idle cleanup share one decision per record per pass.
             if (!progress.start(record.id)) {
               continue;
@@ -489,6 +494,9 @@ export function createWorktreeGcRemoval(context: {
               continue;
             }
             progress.result.eligibleCount += 1;
+            // Wait outside owner/checkout custody; removal still acquires and
+            // validates live authority after admission.
+            await policy.beforeRemoval?.(record);
             await withOwnerCleanup(record, async (withOwnerMutation) => {
               const assertOwnerCurrent = await prepareOwnerCurrent(record, retiredOwner);
               return context.remove({

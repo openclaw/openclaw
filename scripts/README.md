@@ -331,6 +331,26 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
 
+Giant completed runs are opt-in: `--steps completed-direct-run-2000-open,completed-direct-run-2000-scroll,completed-single-run-2000-expand,completed-single-run-2000-scroll`.
+Replace `2000` with `400` for the scaling control. These reuse the cold-load
+long-session fixture and desktop 61-frame scroll trajectory in both engines. Open checks
+the complete cached message count and ready tail; dashboard expansion checks the
+first output; scrolling checks both endpoint entries, zero blank frames and a
+two-pixel endpoint tolerance. Evidence includes fragment/DOM counts and geometry.
+Use `--compare-bundle-dir` and `--control-bundle-dir` for candidate and A/A triplets;
+keep `--trace` attribution separate from untraced timing. These synthetic sweeps
+do not measure native reader scroll latency.
+
+Native clipboard measurements use `--steps chat-actions-native-paste-text,chat-actions-native-paste-image`.
+They paste a 256 KiB draft or a synthetic 2048×2048 PNG through the browser's
+clipboard and keyboard shortcut, and require trusted paste events. Evidence
+separates keydown-to-paste dispatch, paste-to-ready-frame, and their combined
+latency; a ready animation frame is not a paint timestamp. Clipboard preparation
+and image encoding happen before measurement. Use Chromium at `--cpu-throttle 1`
+and `4`; WebKit supports only native CPU speed.
+Generic CPU counters cover the whole scenario, including work before the paste
+keypress. Use a separate trace to attribute CPU within the native input interval.
+
 `--pages` selects the route-catalog census: first visit after boot, each page's
 primary interaction, and route leave. The manifest records redirects,
 unavailable states and pages excluded for an active campaign; none silently
@@ -717,6 +737,13 @@ bundle comparison, so real server-cache lifecycle remains externally controlled.
 `--warm-reload` cannot be combined with `--first-load`; the existing persisted
 warm-snapshot comparison path remains separate.
 
+For a compact completed-and-active rich transcript, use
+`bench-control-ui-rich-boot.ts --bundle-dir <base> --compare-bundle-dir <head> --pairs 10`.
+Its default measures a cold document. Add `--warm-reload` to load the same document
+to composer and transcript readiness first, then measure its reload in the same
+browser context. Warm-up requests and CPU are excluded. This mode cannot be
+combined with `--service-worker`.
+
 For the 100 ms RTT / 10 Mbps profile, replace `--latency-ms 0` with
 `--latency-ms 100 --network-latency-ms 100 --download-kbps 10000` and add
 `--cold-http-cache`. HTTP/CDP throttling does not affect the synthetic WebSocket,
@@ -857,7 +884,7 @@ caller according to its contract.
 - `test-*.mts` / retained `test-*.mjs` / `test-*.sh` / `test-*.ts`: test planners, Docker lanes, live
   checks, and focused validation helpers.
 - `docs-*` and `check-docs-*`: docs listing, link auditing, MDX checks,
-  spellcheck, sync, and i18n glossary checks.
+  spellcheck, sync, and translation.
 - `release-*`, `openclaw-npm-*`, and `plugin-*-release-*`: release preparation,
   package verification, and publishing helpers.
 - `docker-*`, `test-docker-*`, and `test-live-*-docker.sh`: Docker E2E planning,

@@ -33,7 +33,7 @@ beforeEach(() => {
 
 it("brands only host-created instances as the built-in runtime", () => {
   expect(isBuiltInOpenClawAgentHarness(harness)).toBe(true);
-  expect(isBuiltInOpenClawAgentHarness({ ...harness, label: "forged" })).toBe(false);
+  expect(isBuiltInOpenClawAgentHarness({ ...harness })).toBe(false);
 });
 
 it.each([true, false])(

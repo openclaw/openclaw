@@ -5,6 +5,7 @@ import type {
   WorkerRetentionOperation,
 } from "../../plugins/worker-retention.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 import { workerReadyPatch } from "./store.test-support.js";
@@ -15,7 +16,7 @@ const receipt: WorkerResourceReceipt = {
   leaseId: "lease-retained",
   identity: { disk: "original" },
 };
-async function seed() {
+async function seed(prepared = false) {
   const store = support.testState.store;
   const environmentId = "retained-original";
   const provisionOperationId = "provision-original";
@@ -24,7 +25,32 @@ async function seed() {
     provisionOperationId,
     providerId: "fake",
     profileId: "development",
-    profileSnapshot: { settings: {}, executionMode: "worker-turn" },
+    profileSnapshot: {
+      settings: {},
+      executionMode: "worker-turn",
+      ...(prepared
+        ? {
+            runtimePreparation: {
+              ...createWorkerPreparationIdentity({
+                namespace: "retained-restart-test",
+                providerId: "fake",
+                profileId: "development",
+                profileSnapshot: { settings: {}, executionMode: "worker-turn" },
+                target: { machineClass: "small", platform: "linux", arch: "x64" },
+                artifacts: {
+                  nodeBootstrapSha256: "b".repeat(64),
+                  enabledPluginIds: [],
+                  workerBundleHash: support.BOOTSTRAP_RECEIPT.bundleHash,
+                  workerArchiveSha256: "c".repeat(64),
+                  openclawVersion: support.BOOTSTRAP_RECEIPT.openclawVersion,
+                  protocolFeatures: support.BOOTSTRAP_RECEIPT.protocolFeatures,
+                },
+              }),
+              source: "empty",
+            },
+          }
+        : {}),
+    },
     retention: policy,
   });
   await store.transition({ environmentId, from: "requested", to: "provisioning" });
@@ -54,6 +80,7 @@ function fixture(environmentId = "retained-original") {
   const inspect = vi.fn<import("../../plugins/types.js").WorkerProvider["inspect"]>(
     async (): Promise<WorkerLeaseStatus> => ({
       status: observation.state === "running" ? "active" : "dormant",
+      ...(observation.state === "running" ? { sharedHost: false } : {}),
       resourceReceipt: receipt,
       retention: observation,
     }),
@@ -290,6 +317,98 @@ describe("retained lifecycle through the environment service", () => {
       runtimeReady: false,
       observation: { state: "running", operation: { ...resume, phase: "observed" } },
     });
+  });
+
+  it("repairs the enrolled node before reconnecting under the retained operation lock", async () => {
+    const request = await seed(true);
+    const f = fixture();
+    const events: string[] = [];
+    const provision = vi.fn(f.provider.provision);
+    f.provider.provision = provision;
+    const resumeNode = vi.fn<NonNullable<typeof f.provider.resumeNode>>(async (lease) => {
+      lease.assertCurrent();
+      expect(lease).toMatchObject({
+        leaseId: receipt.leaseId,
+        resourceReceipt: receipt,
+        retention: policy,
+      });
+      expect(lease.deviceId).toBe("node-original");
+      expect(support.testState.store.getCredential(request.environmentId)).toEqual(
+        credentialBeforeWake,
+      );
+      expect(support.testState.store.get(request.environmentId)?.retention?.runtimeReady).toBe(
+        false,
+      );
+      expect(f.waitForRetainedNode).not.toHaveBeenCalled();
+      events.push("node-repaired");
+    });
+    f.provider.resumeNode = resumeNode;
+    const connected = createDeferredCore();
+    const waiting = createDeferredCore();
+    f.waitForRetainedNode.mockImplementationOnce(async (node, args) => {
+      expect(node).toBe("node-original");
+      expect(resumeNode).toHaveBeenCalledTimes(1);
+      args.assertCurrent();
+      events.push("node-wait");
+      waiting.resolve();
+      await connected.promise;
+      args.assertCurrent();
+    });
+    const service = f.service();
+    await service.suspendRetained(request);
+    const credentialBeforeWake = support.testState.store.getCredential(request.environmentId);
+    const completed = vi.fn();
+    // The real service lock is deliberately held by ensureRetainedRunning: using
+    // the public locking resumer here deadlocks before the node wait is entered.
+    const wake = service.ensureRetainedRunning(request).then(completed);
+    try {
+      await Promise.race([waiting.promise, wake]);
+      expect(events).toEqual(["node-repaired", "node-wait"]);
+      expect(completed).not.toHaveBeenCalled();
+      expect(f.ensureNodeWorkerBundle).not.toHaveBeenCalled();
+    } finally {
+      connected.resolve();
+    }
+    await wake;
+    expect(service.get(request.environmentId)).toMatchObject({
+      leaseId: receipt.leaseId,
+      nodeDeviceId: "node-original",
+      ownerEpoch: request.expectedOwnerEpoch,
+      resourceReceipt: receipt,
+      retention: { runtimeReady: true },
+    });
+    expect(f.ensureNodeWorkerBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: "node-original" }),
+    );
+    expect(provision).not.toHaveBeenCalled();
+    expect(f.destroy).not.toHaveBeenCalled();
+  });
+
+  it("rejects changed resource identity before launching the retained node", async () => {
+    const request = await seed(true);
+    const f = fixture();
+    const resumeNode = vi.fn<NonNullable<typeof f.provider.resumeNode>>(async () => {});
+    f.provider.resumeNode = resumeNode;
+    const inspect = f.inspect.getMockImplementation()!;
+    f.inspect.mockImplementation(async (lease) => {
+      expect(lease).toMatchObject({ resourceReceipt: receipt, retention: policy });
+      const status = await inspect(lease);
+      // Retained reconciliation sees the committed disk; the separate inspection
+      // immediately before node launch detects a replacement at that boundary.
+      return f.inspect.mock.calls.length === 2
+        ? { ...status, resourceReceipt: { ...receipt, identity: { disk: "replacement" } } }
+        : status;
+    });
+    const service = f.service();
+    await expect(service.ensureRetainedRunning(request)).rejects.toThrow(
+      "resource receipt does not match committed identity",
+    );
+    expect(f.inspect).toHaveBeenCalledTimes(2);
+    expect(resumeNode).not.toHaveBeenCalled();
+    expect(f.waitForRetainedNode).not.toHaveBeenCalled();
+    expect(f.ensureNodeWorkerBundle).not.toHaveBeenCalled();
+    expect(service.get(request.environmentId)?.retention?.runtimeReady).toBe(false);
+    expect(f.destroy).not.toHaveBeenCalled();
   });
 
   it("recovers lost pause and resume replies without replacing the disk, and waits for the same node before readiness", async () => {

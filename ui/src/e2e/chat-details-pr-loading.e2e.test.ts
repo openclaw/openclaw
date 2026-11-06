@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -63,20 +63,125 @@ const pullRequest = (number: number) => ({
   url: `https://github.com/synthetic/layout-demo/pull/${number}`,
 });
 
-async function capture(page: Page, details: Locator, content: Locator, stage: string) {
+async function capture(
+  page: Page,
+  details: Locator,
+  content: Locator,
+  stage: string,
+  directory?: string,
+) {
   if (!process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
     return;
   }
-  const directory = createControlUiE2eArtifactDir(`details-${stage}`);
+  const output = directory ?? createControlUiE2eArtifactDir(`details-${stage}`);
+  const prefix = directory ? `${stage}-` : "";
   const frame = await takeControlUiScreenshotFrame(page, details, [content], {
     animations: "disabled",
     elements: [details],
   });
-  await writeFile(path.join(directory, "page.png"), frame.png);
-  await writeFile(path.join(directory, "details.png"), frame.elements[0]!.png);
+  await writeFile(path.join(output, `${prefix}page.png`), frame.png);
+  await writeFile(path.join(output, `${prefix}details.png`), frame.elements[0]!.png);
 }
 
 suite.define(() => {
+  it.each([
+    { cpuRate: 1, reducedMotion: "no-preference" },
+    { cpuRate: 4, reducedMotion: "no-preference" },
+    { cpuRate: 1, reducedMotion: "reduce" },
+  ] as const)(
+    "keeps the first Details load quiet and continuous ($cpuRate× CPU; $reducedMotion)",
+    async ({ cpuRate, reducedMotion }) => {
+      await suite.withPage({ ...options, reducedMotion }, async ({ page }) => {
+        const cdp = await page.context().newCDPSession(page);
+        await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuRate });
+        const artifacts = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
+          ? createControlUiE2eArtifactDir(`details-first-load-${cpuRate}x-${reducedMotion}`)
+          : undefined;
+        const module = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-details-session.tsx"),
+        );
+        onTestFinished(module.release);
+        await installMockGateway(page, scenario);
+        await page.goto(suite.server.baseUrl + "chat");
+        const details = await openChatDetails(page);
+        await module.request;
+        const loading = details.locator("openclaw-panel-loading-skeleton");
+        await loading.waitFor();
+        await nextPaint(page);
+        const shimmer = await loading
+          .locator(".skeleton")
+          .first()
+          .evaluate((element) => {
+            const style = getComputedStyle(element, "::after");
+            return {
+              opacity: Number(style.opacity),
+              seconds: Number.parseFloat(style.animationDuration),
+              name: style.animationName,
+            };
+          });
+        if (artifacts) {
+          await capture(page, details, loading, "loading", artifacts);
+        }
+        expect(shimmer.opacity).toBeLessThanOrEqual(0.3);
+        if (reducedMotion === "reduce") {
+          expect(shimmer.name).toBe("none");
+        } else {
+          expect(shimmer.seconds).toBeGreaterThanOrEqual(3);
+        }
+        // Sample content handoff after the surface's independent entrance motion.
+        await expect.poll(() => details.evaluate((panel) => panel.getAnimations().length)).toBe(0);
+        const before = (await details.boundingBox())!;
+        const firstContentFrame = await details.evaluateHandle((panel) => ({
+          frame: new Promise<number>((resolve) => {
+            const pending = panel.querySelector("openclaw-panel-loading-skeleton")!;
+            const observer = new MutationObserver(() => {
+              if (!pending.isConnected) {
+                observer.disconnect();
+                requestAnimationFrame(() => resolve(panel.getBoundingClientRect().height));
+              }
+            });
+            observer.observe(panel, { childList: true, subtree: true });
+          }),
+        }));
+        module.release();
+        const firstHeight = await firstContentFrame.evaluate((probe) => probe.frame);
+        await firstContentFrame.dispose();
+        await details.locator(".chat-environment__branch").waitFor();
+        await expect
+          .poll(() => details.evaluate((panel) => panel.getAnimations({ subtree: true }).length))
+          .toBe(0);
+        const after = (await details.boundingBox())!;
+        expect(before.height).toBeGreaterThan(after.height);
+        if (reducedMotion === "reduce") {
+          expect(firstHeight).toBe(after.height);
+        } else {
+          expect(Math.abs(firstHeight - before.height)).toBeLessThan(
+            (before.height - after.height) / 2,
+          );
+        }
+        if (artifacts) {
+          await capture(
+            page,
+            details,
+            details.locator(".chat-environment__branch"),
+            "loaded",
+            artifacts,
+          );
+          await writeFile(
+            path.join(artifacts, "measurements.json"),
+            JSON.stringify({ cpuRate, reducedMotion, before, firstHeight, after }, null, 2),
+          );
+        }
+        expect(after.x).toBe(before.x);
+        expect(after.y).toBe(before.y);
+        expect(
+          await details.locator(".chat-details-desktop-body").evaluate((body) => body.style.height),
+        ).toBe("");
+      });
+    },
+  );
+
   it.each([false, true])(
     "keeps PR loading geometry and sibling controls stable (recovered receipt=%s)",
     async (receipt) => {
@@ -205,9 +310,7 @@ suite.define(() => {
         await gateway.waitForRequest("connect");
         await transcript.waitFor();
         await module.request;
-        await page
-          .locator(".chat-details[data-desktop] > openclaw-panel-loading-skeleton")
-          .waitFor();
+        await page.locator(".chat-details[data-desktop] openclaw-panel-loading-skeleton").waitFor();
         await nextPaint(page);
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
         await gateway.resolveDeferred("connect");

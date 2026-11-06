@@ -41,7 +41,10 @@ const { values } = parseArgs({
     "capture-ms": { type: "string", default: "8000" },
     "transcript-late-paint": { type: "boolean", default: false },
     "dashboard-end-anchor": { type: "boolean", default: false },
+    "dashboard-pane-chrome": { type: "boolean", default: false },
     "plugin-activation": { type: "boolean", default: false },
+    "details-session-facts": { type: "boolean", default: false },
+    "active-targets": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
@@ -56,7 +59,7 @@ if (values.help) {
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
-  --transcript-late-paint --reload-after-navigation --cpu-profile
+  --transcript-late-paint --plugin-activation --active-targets --reload-after-navigation --cpu-profile
   --init-script <browser-script.js> (repeatable)
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
@@ -481,6 +484,8 @@ async function captureReload(
       "firstMainDomMs",
       "firstTranscriptDomMs",
       "firstDashboardContentDomMs",
+      "allBoardWidgetsVisibleMs",
+      "cachedBoardLayoutMs",
       "firstPaintedRowsMs",
       "bottomParagraphPaintMs",
       "transcriptTextPaintMs",
@@ -506,6 +511,7 @@ async function captureReload(
       ...probe.pluginStates,
       ...probe.pluginMarks,
       ...probe.textPaints,
+      ...probe.contextRingFrames,
     ]) {
       entry.atMs += documentOffsetMs;
     }
@@ -597,6 +603,8 @@ async function captureReload(
         `Signed-in admission must yield one top-level document; saw ${documents.length}. Inspect ${outputDir}`,
       );
     }
+    const firstRing = probe.contextRingFrames[0]?.ring;
+    const finalRing = probe.contextRingFrames.at(-1)?.ring;
     const report = {
       warm,
       ...(shortVisit ? { shortVisit } : {}),
@@ -614,6 +622,16 @@ async function captureReload(
       firstAppCandidateFrameMs: candidateFrameAfter(probe.firstAppDomMs),
       firstMainCandidateFrameMs: candidateFrameAfter(probe.firstMainDomMs),
       firstDashboardCandidateFrameMs: candidateFrameAfter(probe.firstDashboardContentDomMs),
+      firstComposerCandidateFrameMs: candidateFrameAfter(probe.contextRingFrames[0]?.atMs ?? null),
+      firstComposerDomHasFinalRing: Boolean(
+        firstRing &&
+        finalRing &&
+        firstRing.width > 0 &&
+        firstRing.height > 0 &&
+        firstRing.opacity === "1" &&
+        firstRing.label === finalRing.label &&
+        firstRing.dashOffset === finalRing.dashOffset,
+      ),
       paintMilestoneMethod: "DOM-correlated candidates; first visible paint requires a pixel audit",
       regions,
       visual,
@@ -747,7 +765,10 @@ try {
     sessions,
     transcriptLatePaint: values["transcript-late-paint"],
     dashboardEndAnchor: values["dashboard-end-anchor"],
+    dashboardPaneChrome: values["dashboard-pane-chrome"],
     pluginActivation: values["plugin-activation"],
+    detailsSessionFacts: values["details-session-facts"],
+    activeTargets: values["active-targets"],
     ...(admission
       ? {
           admission: {
@@ -830,7 +851,7 @@ try {
   browser = launched.browser;
   browserConfiguration = launched.configuration;
   if (admission) {
-    // Pause peer JavaScript without hiding the pages, which would clear their viewer declarations.
+    // Keep peers visible and running so their viewer declarations and socket heartbeats stay live.
     for (const peer of admission.peerSessions) {
       for (const [routePath, target] of [
         [fixture.chatPath, fixture.fixtureSummary.targets[0]!],
@@ -841,7 +862,7 @@ try {
         const page = await context.newPage();
         await page.goto(baseUrl);
         await waitForControlUiGatewayReady(page, 60000);
-        // A rendered header can precede the viewer declaration; pause only after its ack.
+        // A rendered header can precede the viewer declaration; wait for its ack.
         const declared = page.waitForEvent("websocket").then(async (socket) => {
           const { payload: declaration } = await socket.waitForEvent("framesent", {
             predicate: ({ payload }) => {
@@ -868,9 +889,6 @@ try {
         await waitForControlUiGatewayReady(page, 60000);
         await declared;
         await page.locator(".chat-pane__header").first().waitFor({ state: "visible" });
-        const cdp = await context.newCDPSession(page);
-        await cdp.send("Debugger.enable");
-        await cdp.send("Debugger.pause");
       }
     }
   }
@@ -916,7 +934,7 @@ try {
             await page.addInitScript({ content: extraInitScripts.join("\n") });
           }
           await page.addInitScript({
-            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]});`,
+            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"]});`,
           });
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");

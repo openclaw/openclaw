@@ -1,4 +1,5 @@
 import type { ApplicationContext } from "../../ui/src/app/context.ts";
+import type { installPaneChromeProbe } from "../lib/control-ui-pane-chrome-probe.ts";
 import type { ReloadAnimationSample } from "./warm-reload-frames.ts";
 
 export const proofRegions = {
@@ -10,8 +11,54 @@ export const proofRegions = {
   dashboard: "openclaw-board-view",
 };
 
+/** Summarize the existing pane-chrome sampler after its first populated Details frame. */
+export function summarizeDetailsGeometry(
+  frames: ReturnType<ReturnType<typeof installPaneChromeProbe>["read"]>["detailsFrames"],
+) {
+  const firstIndex = frames.findIndex((frame) =>
+    frame.sections.some((row) => row.section === "session" && row.height > 0),
+  );
+  const populated = firstIndex < 0 ? [] : frames.slice(firstIndex);
+  let topMovementPx = 0;
+  let heightMovementPx = 0;
+  let sectionInsertions = 0;
+  let sectionRemovals = 0;
+  for (let index = 1; index < populated.length; index++) {
+    const before = new Map(populated[index - 1]!.sections.map((row) => [row.section, row]));
+    const after = new Map(populated[index]!.sections.map((row) => [row.section, row]));
+    for (const id of new Set([...before.keys(), ...after.keys()])) {
+      const from = before.get(id);
+      const to = after.get(id);
+      if (from && to) {
+        topMovementPx += Math.abs(to.top - from.top);
+      } else if (to) {
+        sectionInsertions++;
+      } else {
+        sectionRemovals++;
+      }
+      heightMovementPx += Math.abs((to?.height ?? 0) - (from?.height ?? 0));
+    }
+  }
+  const first = populated[0];
+  return {
+    firstPopulatedMs: first?.at ?? null,
+    firstHasAutomations: first?.sections.some((row) => row.section === "automations") ?? false,
+    firstProcessHeightPx: first?.sections.find((row) => row.section === "processes")?.height ?? 0,
+    topMovementPx,
+    heightMovementPx,
+    totalVerticalMovementPx: topMovementPx + heightMovementPx,
+    sectionInsertions,
+    sectionRemovals,
+    frames: populated,
+  };
+}
+
 /** Serialized into the top document before its application modules execute. */
-export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint = false) {
+export function installWarmReloadBrowserProbe(
+  route: string,
+  transcriptLatePaint = false,
+  composerContext = false,
+) {
   if (window !== window.top) {
     return undefined;
   }
@@ -20,6 +67,9 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     firstMainDomMs: null as number | null,
     firstTranscriptDomMs: null as number | null,
     firstDashboardContentDomMs: null as number | null,
+    boardWidgetSkeletonMs: null as number | null,
+    allBoardWidgetsVisibleMs: null as number | null,
+    cachedBoardLayoutMs: null as number | null,
     firstPaintedRowsMs: null as number | null,
     bottomParagraphPaintMs: null as number | null,
     transcriptTextPaintMs: null as number | null,
@@ -81,6 +131,19 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
       width: number;
     }>,
     animationSamples: [] as ReloadAnimationSample[],
+    contextRingFrames: [] as Array<{
+      atMs: number;
+      composer: { x: number; y: number; width: number; height: number };
+      ring: {
+        label: string | null;
+        opacity: string;
+        dashOffset: string | null;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      } | null;
+    }>,
     animationProbeMs: 0,
     animationPolicy:
       "Recognized skeleton shimmer or opacity/visibility-only fades with at most 64 elements; fades containing images, canvas, video or iframes are excluded. Signatures retain content, attributes, appearance and geometry, except intermediate opacity. No whole-page animation mask.",
@@ -470,6 +533,7 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
   };
   let previous = "";
   let previousRows = "";
+  let previousContextRing = "";
   const sample = () => {
     if (data.stopped) {
       stopGateway?.();
@@ -479,6 +543,44 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     }
     Reflect.get(window, "__paneChrome").sample(performance.now());
     sampleAnimations();
+    if (composerContext) {
+      const composer = document.querySelector(".agent-chat__input");
+      const box = composer?.getBoundingClientRect();
+      if (
+        composer &&
+        box &&
+        box.width > 0 &&
+        box.height > 0 &&
+        box.bottom > 0 &&
+        box.top < innerHeight &&
+        composer.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+      ) {
+        const ring = composer.querySelector(".context-ring");
+        const ringBox = ring?.getBoundingClientRect();
+        const state = {
+          composer: { x: box.x, y: box.y, width: box.width, height: box.height },
+          ring:
+            ring && ringBox
+              ? {
+                  label: ring.getAttribute("aria-label"),
+                  opacity: getComputedStyle(ring).opacity,
+                  dashOffset:
+                    ring.querySelector(".context-ring__fill")?.getAttribute("stroke-dashoffset") ??
+                    null,
+                  x: ringBox.x,
+                  y: ringBox.y,
+                  width: ringBox.width,
+                  height: ringBox.height,
+                }
+              : null,
+        };
+        const signature = JSON.stringify(state);
+        if (signature !== previousContextRing) {
+          data.contextRingFrames.push({ atMs: performance.now(), ...state });
+          previousContextRing = signature;
+        }
+      }
+    }
     const answer = transcriptLatePaint
       ? [...document.querySelectorAll(".chat-group.assistant .chat-text")].at(-1)
       : undefined;

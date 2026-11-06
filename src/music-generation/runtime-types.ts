@@ -1,8 +1,8 @@
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
+import type { MusicGenerationRequest } from "./provider-types.js";
 import type {
   MusicGenerationIgnoredOverride,
   MusicGenerationNormalization,
-  MusicGenerationRequest,
   MusicGenerationResult,
 } from "./types.js";
 

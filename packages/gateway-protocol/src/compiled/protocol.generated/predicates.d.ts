@@ -752,6 +752,11 @@ export function isChatPendingInputsDismissParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ChatPendingInputsDismissParamsSchema
 >;
+export function isChatSteerNowParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ChatSteerNowParamsSchema
+>;
 export function isChatPredictParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2087,6 +2092,11 @@ export function isSessionsGroupsDefaultsResult(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsGroupsDefaultsResultSchema
+>;
+export function isSessionsGroupsCreateParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsGroupsCreateParamsSchema
 >;
 export function isSessionsGroupsPutParams(
   value: unknown,

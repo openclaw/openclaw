@@ -9,6 +9,7 @@ import { withSessionPlacementComputer } from "../../agents/session-placement-com
 import { withSessionSkillResources } from "../../agents/session-placement-skill-resources.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import {
   attachErrorDiagnostic,
@@ -192,7 +193,9 @@ export async function reconcileWorkspaceAfterTurn(params: {
     resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
   };
   await params.placements.prepareWorkspaceResultClaim(params.turnClaim);
-  const completed = await SessionManager.openAsync(transcriptTarget);
+  const completed = await withSessionTranscriptHydrationCaller("workspace-result", () =>
+    SessionManager.openAsync(transcriptTarget),
+  );
   const currentPlacement = requireCurrentPlacement();
   assertResultCurrent();
   const priorWorkspaceConflict =
@@ -288,7 +291,9 @@ export async function reconcileWorkspaceAfterTurn(params: {
           stagedResultRef: recordedStagedResultRef,
           workspace: params.workspace,
           report: async (report) => {
-            const manager = await SessionManager.openAsync(transcriptTarget);
+            const manager = await withSessionTranscriptHydrationCaller("workspace-result", () =>
+              SessionManager.openAsync(transcriptTarget),
+            );
             assertResultCurrent();
             await withSessionTranscriptWriteAssertion(transcriptTarget, assertResultCurrent, () =>
               withSessionManagerWrite(manager, async () => {

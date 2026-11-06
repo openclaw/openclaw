@@ -3146,6 +3146,31 @@ execute commands, or require a database restore. The maintainer-authorized
 restart-continuity repair accepts this narrowly scoped durability change; owner
 and separate-Gateway-process tests cover lifecycle cleanup and restart handoff.
 
+## Plugin session notice delivery owner
+
+A channel notice that a loaded plugin posts with `runtime.system.postSessionNotice`
+stores one more `deliveryCompletion` variant in the existing
+`delivery_queue_entries.entry_json`: `{ kind: "plugin-notice", pluginId }`. It names
+the posting plugin and nothing else. Core callers that are not loaded plugins
+store no completion, as before.
+
+Before any channel I/O, restart recovery's existing owner step checks that this
+plugin is loaded, enabled, and not revoked in the active plugin registry. If it is,
+the intent replays as usual. Otherwise the owner logs the reason, and recovery
+settles the intent without sending through its existing owner-rejection path,
+which records a failed delivery audit with no result. The notice uses the existing completion retention under the
+`plugin-notice:` intent prefix (24 hours, 2,000 receipts). A retry with the same
+key therefore finds the kept receipt and does not send again.
+
+There is no table, column, index, or schema-version change, and existing rows are
+not rewritten. The installed updater runs first and is unaffected. Older readers
+(checked against `v2026.10.9`) route an unknown completion kind to the
+conversation owner. That owner has no agent or operation ID for this row, so the
+transition throws, recovery records "delivery owner state unavailable", and the
+row fails without sending until its retry budget moves it to failed. A downgrade
+therefore never sends a pending plugin notice; an upgrade does not resume one
+that an older reader already failed.
+
 ## Memory index batch revisions
 
 Agent schema 31 removes the six row revision triggers on `memory_index_sources`

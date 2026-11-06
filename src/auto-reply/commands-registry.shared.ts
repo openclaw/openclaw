@@ -261,6 +261,23 @@ export function buildBuiltinChatCommands(
       },
     ),
     defineBuiltinCommand(
+      "fork",
+      "Fork this conversation into a separate thread.",
+      "session",
+      "standard",
+      {
+        // Slack slash commands cannot identify a message-thread source; use addressed text.
+        nativeProviders: ["discord", "telegram"],
+        modelIndependent: "always",
+        activeRunSafe: true,
+        args: [
+          defineCommandArgument("title", "Optional title for the new conversation", {
+            captureRemaining: true,
+          }),
+        ],
+      },
+    ),
+    defineBuiltinCommand(
       "export-session",
       "Export current session to an owner-only HTML file in the workspace.",
       "status",

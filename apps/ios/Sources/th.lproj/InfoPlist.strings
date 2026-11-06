@@ -1,11 +1,13 @@
+/* OpenClaw source: "OpenClaw uses Bluetooth to securely set up a nearby ESP device when you choose device setup." */
+"NSBluetoothAlwaysUsageDescription" = "OpenClaw ใช้ Bluetooth เพื่อตั้งค่าอุปกรณ์ ESP ที่อยู่ใกล้เคียงอย่างปลอดภัยเมื่อคุณเลือกตั้งค่าอุปกรณ์";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsFullAccessUsageDescription" = "OpenClaw ใช้ปฏิทินของคุณเพื่อแสดงกิจกรรมและข้อมูลประกอบการจัดตารางเวลา เมื่อคุณเปิดใช้งานการเข้าถึงปฏิทิน";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsUsageDescription" = "OpenClaw ใช้ปฏิทินของคุณเพื่อแสดงกิจกรรมและข้อมูลประกอบการจัดตารางเวลา เมื่อคุณเปิดใช้งานการเข้าถึงปฏิทิน";
 /* OpenClaw source: "OpenClaw uses your calendars to add events when you enable calendar access." */
 "NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw ใช้ปฏิทินของคุณเพื่อเพิ่มกิจกรรมเมื่อคุณเปิดให้เข้าถึงปฏิทิน";
-/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
-"NSCameraUsageDescription" = "OpenClaw ใช้กล้องเมื่อคุณสแกนรหัส QR สำหรับตั้งค่า Gateway หรือขอให้ Gateway ที่จับคู่ไว้หรือผู้ช่วยของคุณถ่ายภาพหรือวิดีโอสั้นจาก iPhone เครื่องนี้ เช่น เพื่อเชื่อมต่อกับ Gateway ของคุณ หรือให้ผู้ช่วยของคุณดูเอกสาร หน้าจออุปกรณ์ หรือพื้นที่ทำงาน";
+/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway or device setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
+"NSCameraUsageDescription" = "OpenClaw ใช้กล้องเมื่อคุณสแกนรหัส QR สำหรับตั้งค่า Gateway หรืออุปกรณ์ หรือเมื่อคุณขอให้ Gateway ที่จับคู่ไว้หรือผู้ช่วยถ่ายภาพหรือวิดีโอสั้นๆ จาก iPhone เครื่องนี้ เช่น เพื่อเชื่อมต่อกับ Gateway ของคุณ หรือให้ผู้ช่วยดูเอกสาร หน้าจออุปกรณ์ หรือพื้นที่ทำงาน";
 /* OpenClaw source: "OpenClaw uses your contacts so you can search and reference people while using the assistant." */
 "NSContactsUsageDescription" = "OpenClaw ใช้รายชื่อผู้ติดต่อของคุณเพื่อให้คุณค้นหาและอ้างถึงบุคคลต่าง ๆ ได้ขณะใช้งานผู้ช่วย";
 /* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */

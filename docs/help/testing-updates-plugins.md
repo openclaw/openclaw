@@ -367,9 +367,15 @@ The `legacy-operator-state` scenario uses the published baseline's own CLI to
 create a second agent, allowlist exec approvals, and two command cron jobs: one
 without an explicit agent and one owned by `ops`. It leaves `systemAgent`
 unset, installs one version-matched npm plugin through the local registry, and
-preserves a workspace skill. It also configures DuckDuckGo without an install
-record: bundled baselines use their own CLI web-search settings; newer baselines
-receive the retained configuration of an already-broken upgrade. The local
+preserves a workspace skill. It explicitly disables autonomous Skill Workshop
+learning through the baseline CLI, selecting `enabled: false` or `mode: "off"` from
+that release's config schema and recording the native field in its baseline receipt.
+After update it requires canonical `mode: "off"`, either in core settings or in the
+marked plugin configuration after Doctor migrates them. Missing, reactivated,
+duplicate settings or a retained `enabled` field fail acceptance. The restrictive
+plugin allowlist remains intact. It also configures DuckDuckGo
+without an install record: bundled baselines use their own CLI web-search settings;
+newer baselines receive the retained configuration of an already-broken upgrade. The local
 registry supplies the candidate's official external DuckDuckGo package. Before
 standalone Doctor or consent repair, assertions require the npm install record,
 candidate package version and integrity, `plugins list` entry, and clean

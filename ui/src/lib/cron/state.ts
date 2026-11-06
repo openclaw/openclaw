@@ -209,8 +209,15 @@ export async function loadCronStatus(
       return;
     }
     if (isMissingOperatorReadScopeError(err)) {
+      const message = await formatMissingOperatorReadScopeMessage(
+        "cron status",
+        formatUiError(err),
+      );
+      if (!isCurrent() || !request.reportErrors || (opts?.coalesce && request.queued)) {
+        return;
+      }
       state.cronStatus = null;
-      state.cronError = formatMissingOperatorReadScopeMessage("cron status");
+      state.cronError = message;
     } else {
       state.cronError = formatUiError(err);
     }

@@ -1,6 +1,6 @@
 import { listMusicGenerationProviders } from "../../media-generation/registry.js";
 import { listSupportedMusicGenerationModes } from "../../music-generation/capabilities.js";
-import type { MusicGenerationProvider } from "../../music-generation/types.js";
+import type { MusicGenerationProvider } from "../../music-generation/provider-types.js";
 import {
   buildMusicGenerationTaskStatusDetails,
   buildMusicGenerationTaskStatusText,

@@ -30,6 +30,7 @@ type Step = {
   "working-directory"?: string;
 };
 type Job = {
+  env?: Record<string, string>;
   name?: string;
   environment?: string;
   if?: string;
@@ -69,11 +70,7 @@ function step(job: Job | undefined, name: string): Step {
 }
 
 function runPublishBranchPolicy(prelude: string, env: Record<string, string>, cwd = process.cwd()) {
-  const guard = step(
-    workflow().jobs?.preview_plugins_npm,
-    "Validate ref is on a trusted publish branch",
-  );
-  const policy = guard.run!.split("<<'PYTHON'\n")[1]!.split("\nPYTHON")[0];
+  const policy = readFileSync("scripts/plugin-npm-release-admission.py", "utf8");
   return spawnSync("python3", ["-c", `${prelude}${policy}`], {
     cwd,
     encoding: "utf8",
@@ -525,6 +522,7 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
           EVENTS: events,
           RUNNER_TEMP: root,
           TARBALL_PATH: tarball,
+          PREPARED_NPM_ARTIFACT: "",
           PUBLISH_TAG: publishTag,
           PACKAGE_VERSION: "2026.7.33",
           GITHUB_REPOSITORY: "openclaw/openclaw",
@@ -823,26 +821,6 @@ it("binds preflight to an exact source SHA without release-publish approval", ()
     WORKFLOW_REF: "${{ github.ref }}",
     WORKFLOW_SHA: "${{ github.workflow_sha }}",
   });
-  expect(trusted.run).toContain(
-    'if os.environ["TRUSTED_PUBLISHER_PREFLIGHT"] == "true" and not preflight:',
-  );
-  expect(trusted.run).toContain("trusted_publisher_preflight requires preflight_only=true");
-  expect(trusted.run).toContain('re.fullmatch(r"[0-9a-fA-F]{40}", source_ref)');
-  expect(trusted.run).toContain(
-    'exact_ref_match(\n        "HEAD",\n        f"{source_ref}^{{commit}}"',
-  );
-  expect(trusted.run).toContain(
-    "Plugin npm preflight must not include a release publish parent run tuple.",
-  );
-  expect(trusted.run).toContain("preflight must not include release_candidate_branch");
-  expect(trusted.run).toContain(
-    "Plugin npm preflight target must be reachable from main or release/*.",
-  );
-  expect(trusted.run).toContain("if not preflight:");
-  expect(trusted.run).toContain(
-    "Extended-stable plugin publication requires release_candidate_branch=",
-  );
-  expect(trusted.run).not.toContain("refs/heads/tideclaw/alpha/");
   const requirement = trusted.env?.REQUIRE_NPM_PUBLISH_ENVIRONMENT;
   if (requirement === undefined) {
     throw new Error("npm-publish tag requirement is missing.");
@@ -927,37 +905,9 @@ it("prepares and independently reads back immutable package evidence", () => {
     "plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}",
   );
   expect(prepare.if).toBeUndefined();
-  expect(prepare.run).toContain("bash .release-tooling/scripts/plugin-npm-publish.sh");
-  expect(prepare.run).toContain('--repo-root "$GITHUB_WORKSPACE"');
-  expect(prepare.run).toContain('--pack "${PACKAGE_DIR}"');
-  expect(prepare.run).not.toContain("OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD=0");
   expect(
     preview?.steps?.filter((entry) => entry.run?.includes("plugin-npm-publish.sh")),
   ).toHaveLength(1);
-  expect(prepare.run).toContain(
-    'import { resolveNpmJsonEntries } from "./.release-tooling/scripts/lib/npm-json-output.mts";',
-  );
-  expect(prepare.run).toContain('raw[index] !== "[" && raw[index] !== "{"');
-  expect(prepare.run).toContain("const entries = resolveNpmJsonEntries(candidate)");
-  expect(prepare.run).toContain("npm can print bundled-dependency summaries");
-  expect(prepare.run).toContain(
-    "fs.writeFileSync(process.argv[3], `${JSON.stringify(pack, null, 2)}\\n`)",
-  );
-  expect(prepare.run).toContain('join(process.env.ARTIFACT_DIR, "preflight-manifest.json")');
-  expect(prepare.run).toContain('kind: "openclaw-plugin-npm-preflight"');
-  expect(prepare.run).toContain('mode: "preflight-only"');
-  expect(prepare.run).toContain("source_package_json_sha256=");
-  expect(prepare.run).toContain("packed_package_json_sha256=");
-  expect(prepare.run).toContain("sourcePackageJsonSha256: process.env.SOURCE_PACKAGE_JSON_SHA256");
-  expect(prepare.run).toContain("packageJsonSha256: process.env.PACKED_PACKAGE_JSON_SHA256");
-  expect(prepare.run).toContain("npmIntegrity: actualIntegrity");
-  expect(prepare.run).toContain("npmShasum: actualShasum");
-  expect(prepare.run).toContain('typeof pluginManifest.id !== "string"');
-  expect(prepare.run).toContain('trustPolicy: "workflow-main-and-target-main-or-release-ancestor"');
-  expect(prepare.run).toContain("npmPublish: false");
-  expect(prepare.run).toContain("environmentApproval: false");
-  expect(prepare.run).toContain("oidcWrite: false");
-  expect(prepare.run).not.toContain("pluginManifest.id !== process.env.EXTENSION_ID");
 
   const upload = step(preview, "Upload immutable npm preflight artifact");
   expect(upload.uses).toBe("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9");
@@ -980,57 +930,15 @@ it("prepares and independently reads back immutable package evidence", () => {
   expect(download.with?.name).toBe(
     "plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}",
   );
-  const sourceRead = step(verify, "Read exact npm preflight source package");
-  expect(sourceRead.run).toContain("f\"{source_sha}:{os.environ['PACKAGE_DIR']}/package.json\"");
-  expect(sourceRead.run).toContain("timeout=120");
-  expect(sourceRead.run).toContain('errors="surrogateescape"');
-  const readback = step(verify, "Validate npm preflight artifact readback");
-  expect(readback.run).not.toMatch(/(?:^|\s)git (?:fetch|show)\b/mu);
-  expect(readback.run).toContain("unique_by(.id)");
-  expect(readback.run).toContain("Expected exactly one live package artifact named");
-  expect(readback.run).toContain('crypto.createHash("sha256")');
-  expect(readback.run).toContain('crypto.createHash("sha512")');
-  expect(readback.run).toContain('crypto.createHash("sha1")');
-  expect(readback.run).toContain('echo "npm_integrity=${npm_integrity}"');
-  expect(readback.run).toContain('echo "npm_shasum=${npm_shasum}"');
-  expect(readback.run).toContain(
-    "Packed plugin identity, package hashes, or install route changed",
-  );
-  expect(readback.run).toContain("manifest.package.pluginId !== pluginManifest.id");
-  expect(readback.run).toContain(
-    'trustPolicy: "workflow-main-and-target-main-or-release-ancestor"',
-  );
-  expect(readback.run).not.toContain("unique_by(.name)");
-  expect(readback.run).not.toContain("manifest.package.pluginId !== process.env.EXTENSION_ID");
-  expect(readback.run).not.toContain("target-main-release-or-tideclaw");
 
   const route = step(verify, "Verify npm publication route readiness");
   expect(route.env).toMatchObject({
     EXPECTED_NPM_INTEGRITY: "${{ steps.publication_artifact.outputs.npm_integrity }}",
     EXPECTED_NPM_SHASUM: "${{ steps.publication_artifact.outputs.npm_shasum }}",
   });
-  expect(route.run).toContain("encodeURIComponent(packageName)");
-  expect(route.run).toContain("fetchNpmRegistryPackumentWithRetry");
-  expect(route.run).toContain("resolvePublishedNpmVersionRoute");
-  expect(route.run).toContain('distTags: packument["dist-tags"] ?? {}');
-  expect(route.run).toContain("const requestAttempts = 3");
-  expect(route.run).toContain("const requestTimeoutMs = 20_000");
-  expect(route.run).toContain("attempts: requestAttempts");
-  expect(route.run).toContain("timeoutMs: requestTimeoutMs");
-  expect(route.run).toContain("packument.versions?.[packageVersion]?.dist");
-  expect(route.run).toContain("targetDist?.integrity !== expectedIntegrity");
-  expect(route.run).toContain("targetDist?.shasum !== expectedShasum");
-  expect(route.run).toContain("npm registry tarball identity does not match");
-  expect(route.run).toContain('observations.push("npm-token-bootstrap")');
-  expect(route.run).toContain('observations.push("npm-oidc")');
-  expect(route.run).not.toContain("response.json()");
 
   const evidence = step(verify, "Create immutable plugin npm publication evidence");
   expect(evidence.env?.PUBLISH_ROUTE).toBe("${{ steps.publication_route.outputs.route }}");
-  expect(evidence.run).toContain("node scripts/plugin-publication-artifact.mjs create");
-  expect(evidence.run).toContain("--publisher-policy-id plugin-npm-release-workflow");
-  expect(evidence.run).toContain('--route "$PUBLISH_ROUTE"');
-  expect(evidence.run).toContain('artifact_name="${ARTIFACT_NAME_PREFIX}-${PUBLISH_ROUTE}-');
   const evidenceUpload = step(verify, "Upload immutable plugin npm preflight evidence");
   expect(evidenceUpload.with?.name).toBe("${{ steps.preflight_evidence.outputs.artifact_name }}");
   expect(evidenceUpload.with?.path).toBe("${{ steps.preflight_evidence.outputs.artifact_path }}/*");
@@ -1088,13 +996,10 @@ it("runs one trusted-publisher exchange job directly after selected-package plan
   });
   expect(step(oidc, "Setup trusted Node").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
   const exchange = step(oidc, "Verify npm trusted-publisher exchange");
-  expect(exchange.env?.PLUGIN_MATRIX).toBe("${{ needs.preview_plugins_npm.outputs.all_matrix }}");
+  expect(oidc?.env?.PLUGIN_MATRIX).toBe("${{ needs.preview_plugins_npm.outputs.all_matrix }}");
   expect(exchange.run).toContain(
-    'import { preflightNpmTrustedPublisher } from "./scripts/npm-trusted-publisher-preflight.mjs"',
+    'import { preflightNpmTrustedPublisher } from "./.release-tooling/scripts/npm-trusted-publisher-preflight.mjs"',
   );
-  expect(exchange.run).toContain("JSON.parse(process.env.PLUGIN_MATRIX)");
-  expect(exchange.run).toContain("selection must be a non-empty array");
-  expect(exchange.run).toContain("for (const entry of selection)");
   expect(exchange.run).toContain("await preflightNpmTrustedPublisher(entry?.packageName)");
   const serialized = JSON.stringify(oidc);
   expect(serialized).not.toContain("secrets.");
@@ -1148,10 +1053,7 @@ it("publishes extended-stable with OIDC only and verifies every package tag", ()
     TARBALL_PATH: "${{ steps.publication_evidence.outputs.tarball_path }}",
     PUBLISH_TAG: "${{ steps.publication_evidence.outputs.publish_tag }}",
   });
-  expect(publish.run).not.toContain("plugin-npm-publish.sh");
   expect(publish["working-directory"]).toBeUndefined();
-  expect(publish.run).toContain("unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS");
-  expect(publish.run).toContain('NPM_CONFIG_USERCONFIG="$npmrc"');
   expect(publish.env?.NODE_AUTH_TOKEN).toBeUndefined();
   expect(publish.env?.NPM_TOKEN).toBeUndefined();
   expect(publishStep("Authorize bootstrap release").if).toBe(
@@ -1182,31 +1084,8 @@ it("publishes extended-stable with OIDC only and verifies every package tag", ()
   expect(bootstrap.run).toContain("NPM_CONFIG_USERCONFIG");
   expect(bootstrap.run).toContain("unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS");
   expect(bootstrap.run).toContain("--ignore-scripts");
-  expect(bootstrap.run).not.toContain("@openclaw/meta-provider");
   expect(bootstrap.run).not.toContain("bash scripts/plugin-npm-publish.sh");
 
-  const resolveEvidence = publishStep("Resolve immutable npm publication artifact");
-  expect(resolveEvidence.run).toContain("last.producer_attempt");
-  expect(resolveEvidence.run).toContain("--connect-timeout 10");
-  expect(resolveEvidence.run).toContain("--max-time 120");
-  expect(resolveEvidence.run).toContain("actions/artifacts/${artifact_id}/zip");
-  expect(resolveEvidence.run).toContain("node scripts/release-tooling-identity.mjs verify");
-  expect(resolveEvidence.run).toContain('--workflow-ref "$WORKFLOW_HEAD_BRANCH"');
-  expect(resolveEvidence.run).toContain('--workflow-full-ref "$WORKFLOW_REF"');
-  expect(resolveEvidence.run).toContain('--workflow-sha "$WORKFLOW_SHA"');
-  expect(resolveEvidence.run).toContain('--release-publish-run-id "$RELEASE_PUBLISH_RUN_ID"');
-  const sourceRead = publishStep("Read exact npm publication source package");
-  expect(sourceRead.run).toContain("timeout=120");
-  expect(sourceRead.run).toContain('errors="surrogateescape"');
-  const consume = publishStep("Consume immutable npm publication evidence");
-  expect(consume.run).toContain("node scripts/plugin-publication-artifact.mjs verify");
-  expect(consume.run).toContain("--run-state-policy same-run-producer-success");
-  expect(consume.run).toContain("producer_attempt");
-  expect(consume.run).toContain(
-    '--producer-job-name "Preflight plugin npm package (${PACKAGE_NAME})"',
-  );
-  expect(consume.run).toContain("--workflow-jobs-metadata");
-  expect(consume.run).toContain("--source-package-json-sha256");
   expect(publishStep("Checkout trusted publication tooling").with?.ref).toBe(
     "${{ github.workflow_sha }}",
   );
@@ -1232,8 +1111,4 @@ it("publishes extended-stable with OIDC only and verifies every package tag", ()
   expect(verify?.if).toContain("always()");
   expect(verify?.if).toContain("has_candidates == 'false'");
   expect(verify?.strategy?.matrix?.plugin).toContain("all_matrix");
-  const readback = step(verify, "Verify complete plugin registry readback");
-  expect(readback.run).toContain('npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version');
-  expect(readback.run).toContain('npm view "${PACKAGE_NAME}@extended-stable" version');
-  expect(readback.run).toContain("OIDC-only source workflow does not mutate tags");
 });

@@ -79,9 +79,12 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   bindSourceReplyDeliveryRuntime(turn.followupRun.run, sourceReplyDeliveryRuntime);
   const sourceReplyDeliveryModeOrigin = sourceReplyDeliveryRuntime.origin;
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
-  const runLane =
-    turn.followupRun.run.scheduledAutomation || turn.followupRun.run.internalEventExecution
-      ? CommandLane.CronNested
+  const runLane = turn.followupRun.run.scheduledAutomation
+    ? CommandLane.CronNested
+    : turn.followupRun.run.internalEventExecution
+      ? turn.followupRun.run.inputProvenance?.sourceTool === "restart"
+        ? CommandLane.RestartRecovery
+        : CommandLane.CronNested
       : CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
   const messageToolDeliveryState: MessageToolDeliveryState = {
@@ -311,7 +314,13 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
           markAutoFallbackPrimaryProbe({ probe: activeProbe, sessionKey: turn.sessionKey });
         }
-        turn.opts?.onModelSelected?.({ provider, model, thinkLevel: candidateThinkLevel });
+        turn.opts?.onModelSelected?.({
+          provider,
+          model,
+          thinkLevel: candidateThinkLevel,
+          agentRuntime: candidateAgentRuntime,
+          cliExecution: runtime.useCliExecution,
+        });
         const runStart = params.createAgentRunStartCallbacks();
         const signalExecutionPhaseForCandidate: AgentFallbackCandidateCommonParams["signalExecutionPhaseForTyping"] =
           (info) => {

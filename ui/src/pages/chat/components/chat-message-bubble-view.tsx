@@ -335,6 +335,8 @@ function MessageReasoning(props: Pick<ContentProps, "state" | "options">) {
 }
 
 function BubbleContents(props: ContentProps) {
+  const images = () =>
+    props.state().renderInOrder ? props.state().supplementalImages : props.state().images;
   const previewCount = createMemo(() => props.state().videoPreviews.length);
   const previews = createMemo(() =>
     Array.from({ length: previewCount() }, (_, index) => (
@@ -351,13 +353,13 @@ function BubbleContents(props: ContentProps) {
         </For>
       </Show>
       <PairingQrNotices count={props.state().expiredPairingQrCount} />
-      <MessageImages
-        images={
-          props.state().renderInOrder ? props.state().supplementalImages : props.state().images
-        }
-        options={props.state().imageRenderOptions}
-        previews={previews()}
-      />
+      <Show when={images().length > 0 || previewCount() > 0}>
+        <MessageImages
+          images={images()}
+          options={props.state().imageRenderOptions}
+          previews={previews()}
+        />
+      </Show>
       <OmittedMedia items={props.state().omittedMedia} />
       <AssistantAttachments
         attachments={

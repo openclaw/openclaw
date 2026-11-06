@@ -4,6 +4,7 @@ import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-s
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { retainOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -119,6 +120,10 @@ type ToolSurface = {
 };
 
 function describeTool(tool: AnyAgentTool): ToolDefinition {
+  // Published schemas are detached, frozen JSON; checkpointing must not copy them per session.
+  if (getPublishedRuntimeToolInputSchema(tool.parameters)) {
+    retainOwnedTranscriptPayload(tool.parameters);
+  }
   return { name: tool.name, description: tool.description, parameters: tool.parameters };
 }
 

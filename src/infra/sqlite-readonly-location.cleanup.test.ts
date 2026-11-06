@@ -9,11 +9,14 @@ import {
 } from "../cli/signal-exit-barrier.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import {
   captureSqliteDatabaseAdmissions,
   hasSqliteDatabaseSchemaAdmissionForPath,
 } from "./sqlite-database-admission.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
   adoptPreparedLocation,
   registerRetainedSnapshotTempDirectory,
@@ -21,12 +24,15 @@ import {
   cleanupSnapshotOperations,
   removeTempDirectory,
   removeTempDirectoryAsync,
-  SqliteSnapshotCleanupError,
+  withPreparedSqliteSnapshot,
 } from "./sqlite-readonly-location-cleanup.js";
+import * as readOnlyWorker from "./sqlite-readonly-worker.js";
 import { createReadBarrier, observeSettlement } from "./sqlite-readonly.test-support.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { prepareSingleFlightSqliteSnapshot } from "./sqlite-snapshot-single-flight.js";
 import {
+  openSqliteReadOnlyDatabase,
+  prepareArtifactPreservingSqliteRead,
   prepareSqliteReadOnlyLocation,
   startSqliteReadOnlyLocationAsync,
 } from "./sqlite-snapshot-source.js";
@@ -125,6 +131,58 @@ function expectSnapshot(location: string, present: boolean) {
     captureSqliteDatabaseAdmissions().some((entry) => entry.location === location),
   ]).toEqual([present, present, present]);
 }
+
+it("shares one awaited image across original-path inspection readers and drains it asynchronously", async () => {
+  const root = tempDirs.make("snapshot-awaited-read-");
+  const source = path.join(root, "source.sqlite");
+  createDatabase(source, "CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('original');");
+  const original = fs.readFileSync(source);
+  vi.stubEnv("XDG_CACHE_HOME", root);
+  const worker = vi.spyOn(readOnlyWorker, "runSqliteReadOnlyWorker");
+  await withArtifactPreservingStateReads(
+    async () => {
+      await Promise.all([
+        prepareArtifactPreservingSqliteRead(source),
+        prepareArtifactPreservingSqliteRead(source),
+      ]);
+      using first = openSqliteReadOnlyDatabase(source);
+      using second = openSqliteReadOnlyDatabase(source);
+      expect(first.location()).toBe(second.location());
+      expect(first.location()).not.toBe(source);
+      expect(second.prepare("SELECT value FROM probe").get()).toEqual({ value: "original" });
+      expect(worker.mock.calls.filter(([pathname]) => pathname === source)).toHaveLength(1);
+    },
+    { agentDatabases: true },
+  );
+  expect(fs.readFileSync(source)).toEqual(original);
+  expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
+});
+
+it("keeps mutable inspection copies exclusive while preparation overlaps a shared read", async () => {
+  const root = tempDirs.make("snapshot-private-flight-");
+  const source = path.join(root, "source.sqlite");
+  createDatabase(source, "CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('original');");
+  vi.stubEnv("XDG_CACHE_HOME", root);
+  const pending = [
+    prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true }),
+    prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true, shared: false }),
+    prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true, shared: false }),
+  ];
+  const snapshots = await Promise.all(pending);
+  try {
+    expect(new Set(snapshots.map((snapshot) => snapshot.location)).size).toBe(3);
+    {
+      using mutable = openNodeSqliteDatabase(snapshots[1]!.location);
+      mutable.exec("UPDATE probe SET value = 'private mutation'");
+    }
+    for (const snapshot of [snapshots[0]!, snapshots[2]!]) {
+      using database = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
+      expect(database.prepare("SELECT value FROM probe").get()).toEqual({ value: "original" });
+    }
+  } finally {
+    await Promise.all(snapshots.map((snapshot) => snapshot.cleanupAsync()));
+  }
+});
 
 it("keeps synchronous and asynchronous token cleanup in separate snapshot flights", async () => {
   const root = tempDirs.make("snapshot-cleanup-owner-");
@@ -256,6 +314,30 @@ it.each([false, true])(
     expect(fs.readFileSync(sibling, "utf8")).toBe("not owned by snapshot");
   },
 );
+it.each([false, true])(
+  "keeps the read result only for best-effort callers when removal fails (best-effort: %s)",
+  async (bestEffortCleanup) => {
+    const report = vi.fn();
+    const { ownedRoot, prepared } = fixture(false, report);
+    {
+      using _ = vi.spyOn(fs.promises, "rm").mockRejectedValue(busyError());
+      const read = withPreparedSqliteSnapshot(
+        prepared,
+        (location) => fs.readFileSync(location, "utf8"),
+        { bestEffortCleanup },
+      );
+      await (bestEffortCleanup
+        ? expect(read).resolves.toBe("private synthetic snapshot")
+        : expect(read).rejects.toThrow(`SQLite snapshot cleanup failed: ${ownedRoot}`));
+      // Either way the failure is reported once and the copy waits for a later sweep.
+      expect(report).toHaveBeenCalledOnce();
+      expect(fs.existsSync(prepared.location)).toBe(true);
+    }
+    await cleanupSnapshotOperations();
+    expect(fs.existsSync(ownedRoot)).toBe(false);
+  },
+);
+
 it("keeps a best-effort lease read successful when shared removal stays busy", async () => {
   const report = vi.fn();
   const { ownedRoot, prepared } = fixture(false, report);

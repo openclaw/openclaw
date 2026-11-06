@@ -194,15 +194,18 @@ function QuotaGroup(props: { group: ProviderQuotaGroup; usageHref: string }) {
       </div>
       <div class="context-usage__limits">
         <For each={props.group.windows} keyed={false}>
-          {(limit, index) => (
-            <QuotaRow
-              label={formatUsageWindowLabel(limit().label)}
-              usedPercent={limit().usedPercent}
-              value={`${limit().usedPercent}%`}
-              reset={quotaReset(limit().resetAt)}
-              index={index}
-            />
-          )}
+          {(limit, index) => {
+            const usedPercent = () => Math.max(0, Math.min(100, Math.round(limit().usedPercent)));
+            return (
+              <QuotaRow
+                label={formatUsageWindowLabel((limit().label || "").trim())}
+                usedPercent={usedPercent()}
+                value={`${usedPercent()}%`}
+                reset={quotaReset(limit().resetAt)}
+                index={index}
+              />
+            );
+          }}
         </For>
         <For each={props.group.budgets} keyed={false}>
           {(budget, index) => (
@@ -229,16 +232,15 @@ export function ChatComposerContextPanel(
   props: ContextNoticeProps & {
     model: ReturnType<typeof getContextNoticeViewModel>;
     currentGroup: ProviderQuotaGroup | undefined;
+    hasSubscription: boolean;
+    quotaUnknown: boolean;
     open: boolean;
   },
 ) {
   // Plan-billed sessions hide dollar estimates: subscription usage is bounded
   // by the plan windows below, and per-token math would misread as real spend.
-  // Billing mode is provider-level: session rows do not record which auth
-  // profile served the run, so a provider with both an API key and a
-  // subscription resolves to subscription display (per-run credential
-  // attribution is #102807).
-  const showCosts = () => !props.currentGroup;
+  // Billing classification is independent of account-specific quota availability.
+  const showCosts = () => !props.currentGroup && !props.hasSubscription;
   const usageHref = () => `${normalizeBasePath(props.providerUsage?.basePath ?? "")}/usage`;
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
@@ -333,6 +335,11 @@ export function ChatComposerContextPanel(
       </Show>
       <Show when={props.currentGroup}>
         {(group) => <QuotaGroup group={group()} usageHref={usageHref()} />}
+      </Show>
+      <Show when={props.quotaUnknown}>
+        <p class="context-usage__stats" role="status">
+          {t("chat.composer.contextUsage.quotaAccountUnknown")}
+        </p>
       </Show>
     </section>
   );

@@ -17,7 +17,7 @@ suite.define(() => {
           name: pluginId === "github" ? "GitHub" : "Workboard",
           origin: "bundled",
         };
-        const entry = { enabled: true, hooks: { allowPromptInjection: false } };
+        const entry = { enabled: true, hooks: { allowPromptModification: false } };
         const config = { plugins: { entries: { [pluginId]: entry } } };
         const entrySchema =
           configMocks["config.schema"].schema.properties.plugins.properties.entries.properties
@@ -53,7 +53,7 @@ suite.define(() => {
         });
         const url = `${suite.server.baseUrl}settings/plugins/${pluginId}?view=settings`;
         await page.goto(url);
-        const toggle = page.getByRole("checkbox", { name: "Add context to prompts", exact: true });
+        const toggle = page.getByRole("checkbox", { name: "Modify prompts", exact: true });
         await toggle.waitFor();
         const editor = await page.locator("openclaw-plugin-settings-editor").elementHandle();
         const connects = (await gateway.getRequests("connect")).length;
