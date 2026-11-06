@@ -195,7 +195,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/templates/creator-publication.ts":
     case "src/agents/core-tool-facts.ts":
     case "src/agents/tools/automations-tool-name.ts":
-      // These shared helpers load together in Chat without retaining its renderers.
+    case "ui/src/components/terminal/terminal-controller-lifecycle.ts":
+    case "ui/src/components/terminal/terminal-pending-actions.ts":
+    case "ui/src/components/terminal/terminal-session-storage.ts":
+    case "ui/src/components/terminal/terminal-tab-readiness.ts":
+      // Shared owners load together without retaining Chat's renderers on other routes.
       return "deferred-ui-support";
     case "ui/src/styles/panel-loading-skeleton.css":
       // Keep the inline string with its renderer so recursive Chat grouping cannot capture it.
@@ -491,7 +495,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown-tokens.ts":
       return "markdown-streaming-runtime";
     case "ui/src/styles/session-panel-rail.css":
-      // Keep normal rail CSS in Chat; other panels import its neutral inline text.
+      // Inline consumers keep their text; the raw sheet shares the cross-route style group.
       return /[?&]inline(?:[=&]|$)/u.test(id) ? "session-panel-rail-inline" : undefined;
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
@@ -648,11 +652,14 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // Document styles also serve Agents without loading Chat's visible renderers.
                 styles.add("ui/src/styles/sidebar-markdown.css");
                 styles.add("ui/src/styles/mcp-app-extensions.css");
+                // Terminal renders this rail immediately without needing Chat's stylesheet.
+                styles.add("ui/src/styles/session-panel-rail.css");
               }
               if (route === "chat") {
                 styles.delete("ui/src/components/solid/text-overflow.css");
                 styles.delete("ui/src/styles/sidebar-markdown.css");
                 styles.delete("ui/src/styles/mcp-app-extensions.css");
+                styles.delete("ui/src/styles/session-panel-rail.css");
                 // These optional views share the route's preloaded stylesheet.
                 styles.add("ui/src/pages/chat/components/chat-pane-mobile-header.css");
                 styles.add("ui/src/pages/chat/components/chat-pane-mobile-composition.css");
