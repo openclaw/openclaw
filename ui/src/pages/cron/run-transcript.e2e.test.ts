@@ -63,6 +63,10 @@ async function openRunHistory(page: Page) {
 suite.define(() => {
   it("opens and focuses the transcript region while its feed loads", async () => {
     await suite.withPage({ viewport: { width: 1100, height: 900 } }, async ({ page }) => {
+      const heldHistory = await holdModuleResponse(
+        page,
+        controlUiE2eBuiltModuleRequest("ui/src/lib/chat/message-visibility.ts"),
+      );
       const held = await holdModuleResponse(
         page,
         controlUiE2eBuiltModuleRequest(
@@ -72,8 +76,12 @@ suite.define(() => {
       try {
         await installCron(page, { "cron.history": history("Delayed transcript output") });
         await page.getByRole("tab", { name: "Activity history", exact: true }).waitFor();
+        expect(heldHistory.requests()).toBe(0);
         expect(held.requests()).toBe(0);
         const { button, region } = await openRunHistory(page);
+        await heldHistory.request;
+        await region.getByRole("status").waitFor();
+        heldHistory.release();
         await held.request;
         await region.getByRole("status").waitFor();
         await expect
@@ -93,18 +101,20 @@ suite.define(() => {
         expect(await region.count()).toBe(0);
         expect(await button.evaluate((element) => element === document.activeElement)).toBe(true);
       } finally {
+        heldHistory.release();
         held.release();
       }
     });
   });
 
-  it("recovers a failed feed import through the guarded document reload", async () => {
+  it.each([
+    ["feed", "ui/src/pages/chat/components/chat-transcript-feed-view.tsx"],
+    ["history processing", "ui/src/lib/chat/message-visibility.ts"],
+  ])("recovers a failed %s import through the guarded document reload", async (_name, module) => {
     await suite.withPage({ viewport: { width: 1100, height: 900 } }, async ({ page }) => {
-      const feedModule = controlUiE2eBuiltModuleRequest(
-        "ui/src/pages/chat/components/chat-transcript-feed-view.tsx",
-      );
+      const transcriptModule = controlUiE2eBuiltModuleRequest(module);
       let requests = 0;
-      await page.route(feedModule, (route) =>
+      await page.route(transcriptModule, (route) =>
         ++requests === 1 ? route.abort("internetdisconnected") : route.fallback(),
       );
       const gateway = await installCron(page, {
