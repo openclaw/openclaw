@@ -66,6 +66,7 @@ import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
 import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.tsx";
+import { SubmittedAppContext } from "./submitted-app-context.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -390,6 +391,7 @@ function BubbleContents(props: ContentProps) {
       </Show>
       <Show when={props.state().normalizedRole === "user"} fallback={<MessageText {...props} />}>
         <Show when={hasText() || props.options.avatar}>
+          <SubmittedAppContext message={props.state().message} />
           <div class="chat-message-avatar-anchor">
             <MessageText {...props} />
             <MessageAvatar render={props.options.avatar} />
