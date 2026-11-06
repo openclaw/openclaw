@@ -8,10 +8,32 @@ openclaw-markdown-math[data-display="true"] {
   display: block;
   max-width: 100%;
   overflow: auto hidden;
+  /* KaTeX lays math out left to right; keep the scroll origin and edge fades aligned. */
+  direction: ltr;
 }
 openclaw-markdown-math[data-display="true"] > .katex-display {
   width: max-content;
   min-width: 100%;
+}
+/* Like Markdown tables, fade the clipped edges of an overflowing equation. Equations
+   that fit have no scroll range, so the timeline stays inactive and nothing is masked;
+   engines without scroll timelines keep their native scrollbar. */
+@supports (animation-timeline: scroll()) {
+  openclaw-markdown-math[data-display="true"] {
+    animation: openclaw-math-overflow linear both;
+    animation-timeline: scroll(self inline);
+  }
+  /* The mask would also clip the outside focus ring, so keyboard focus drops the fade. */
+  openclaw-markdown-math[data-display="true"]:focus-visible {
+    animation: none;
+  }
+}
+@keyframes openclaw-math-overflow {
+  0%, 1% { mask-image: linear-gradient(to right, black calc(100% - 28px), transparent); }
+  2%, 98% {
+    mask-image: linear-gradient(to right, transparent, black 28px, black calc(100% - 28px), transparent);
+  }
+  99%, 100% { mask-image: linear-gradient(to right, transparent, black 28px); }
 }
 `;
 

@@ -115,4 +115,30 @@ describe("Control UI lazy LaTeX rendering", () => {
       readingSurface.getBoundingClientRect().right + 1,
     );
   });
+  it("fades only the clipped edges of overflowing display math", async () => {
+    const wide = mount("$$" + Array.from({ length: 35 }, (_, i) => `x_{${i}}`).join("+") + "$$");
+    const short = mount("$$x^2$$");
+    wide.style.width = short.style.width = "180px";
+    await Promise.all([typeset(wide), typeset(short)]);
+    const leaf = wide.querySelector<HTMLElement>(leafTag)!;
+    const fade = () => getComputedStyle(leaf).maskImage;
+    const frame = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    expect(getComputedStyle(short.querySelector(leafTag)!).maskImage).toBe("none");
+    if (!CSS.supports("animation-timeline: scroll()")) {
+      return;
+    }
+    await frame();
+    const start = fade();
+    expect(start).toContain("gradient");
+    leaf.scrollLeft = leaf.scrollWidth;
+    await frame();
+    expect(fade()).toContain("gradient");
+    expect(fade()).not.toBe(start);
+    await userEvent.tab();
+    expect(document.activeElement).toBe(leaf);
+    expect(fade()).toBe("none");
+  });
 });
