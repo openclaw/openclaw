@@ -105,6 +105,7 @@ export function writeMemoryChunks(
           })),
         ),
     );
+    syncMemoryCjkBigramRows(database, [...written.values()]);
   }
   executeSqliteQuerySync(
     database,
@@ -171,7 +172,6 @@ export function writeMemoryChunks(
           ),
       ),
   );
-  syncMemoryCjkBigramRows(database, rows);
 }
 
 /**
@@ -184,20 +184,17 @@ export function writeMemoryChunks(
  */
 function syncMemoryCjkBigramRows(
   database: EngineConnection,
-  rows: readonly MemoryChunkWrite[],
+  rows: readonly (MemoryChunkWrite & { embedding: number[] })[],
 ): void {
-  if (isPostgresSqlConnection(database)) {
+  if (isPostgresSqlConnection(database) || rows.length === 0) {
     return;
   }
   const cjkFtsEnabled = tableExists(database, MEMORY_INDEX_CJK_FTS_TABLE);
   if (!cjkFtsEnabled) {
     return;
   }
-  // The companion row mirrors the canonical row, so the canonical values are
-  // the ones to read back rather than the caller's copy of them.
-  const chunkStatement = database.prepare(
-    `SELECT chunk_rowid, text, path, source, model, start_line, end_line
-       FROM ${MEMORY_INDEX_CHUNKS_TABLE} WHERE id = ?`,
+  const rowidStatement = database.prepare(
+    `SELECT chunk_rowid FROM ${MEMORY_INDEX_CHUNKS_TABLE} WHERE id = ?`,
   );
   const deleteStatement = database.prepare(
     `DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE "rowid" = ?`,
@@ -207,31 +204,22 @@ function syncMemoryCjkBigramRows(
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const row of rows) {
+    const rowidRow = rowidStatement.get(row.id);
     // SAFETY: SQLite returns row records conforming to the SELECT projection.
-    const chunk = chunkStatement.get(row.id) as
-      | {
-          chunk_rowid?: number;
-          text?: string;
-          path?: string;
-          source?: string;
-          model?: string;
-          start_line?: number;
-          end_line?: number;
-        }
-      | undefined;
+    const chunk = rowidRow as { chunk_rowid?: number } | undefined;
     if (typeof chunk?.chunk_rowid !== "number") {
       continue;
     }
     deleteStatement.run(chunk.chunk_rowid);
     insertStatement.run(
       chunk.chunk_rowid,
-      encodeHanBigrams(chunk.text ?? ""),
+      encodeHanBigrams(row.chunk.text ?? ""),
       row.id,
-      chunk.path ?? "",
-      chunk.source ?? "",
-      chunk.model ?? "",
-      chunk.start_line ?? 0,
-      chunk.end_line ?? 0,
+      row.context.path,
+      row.context.source,
+      row.context.model,
+      row.chunk.startLine,
+      row.chunk.endLine,
     );
   }
 }

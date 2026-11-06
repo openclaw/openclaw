@@ -14,6 +14,7 @@ export type ForgetDatabase = {
     session_kind: "interactive" | "cron" | "heartbeat" | "subagent" | "unknown";
   };
   memory_index_chunks_fts: { rowid: number; id: string; path: string; source: string };
+  memory_index_chunks_cjk_fts: { rowid: number; id: string; path: string; source: string };
   memory_index_chunks_vec: { id: string };
   memory_embedding_cache: { hash: string };
   memory_index_state: { id: number; revision: number };

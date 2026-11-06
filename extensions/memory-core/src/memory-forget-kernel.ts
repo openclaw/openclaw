@@ -67,6 +67,12 @@ export function purgeForgottenMemory(
         kysely.deleteFrom("memory_index_chunks_vec").where("id", "in", input.chunkIds),
       );
     }
+    if (!isPostgresSqlConnection(db) && tableExists(db, "memory_index_chunks_cjk_fts")) {
+      executeSqliteQuerySync(
+        db,
+        kysely.deleteFrom("memory_index_chunks_cjk_fts").where("id", "in", input.chunkIds),
+      );
+    }
     executeSqliteQuerySync(
       db,
       kysely

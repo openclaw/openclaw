@@ -51,13 +51,11 @@ export {
 } from "./memory-schema-recall.js";
 
 export {
-  deleteMemoryCjkBigramRows,
   dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
   ensureMemoryChunkFtsTriggers,
   ensureMemoryCjkBigramFtsSchema,
   ensureMemoryPathFtsTriggers,
-  upsertMemoryCjkBigramRow,
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_CJK_FTS_TABLE,
   MEMORY_INDEX_FTS_TABLE,

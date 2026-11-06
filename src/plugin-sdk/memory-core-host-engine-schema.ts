@@ -18,9 +18,7 @@ export {
   markInvalidImportedMemoryEmbeddings,
   rebuildMemoryChunkFts,
   rebuildMemoryCjkBigramFts,
-  deleteMemoryCjkBigramRows,
   ensureMemoryCjkBigramFtsSchema,
-  upsertMemoryCjkBigramRow,
   ensureMemoryIndexSchema,
   readRepairedMemoryIndexSchema,
   publishRepairedMemoryIndexSchema,
@@ -40,7 +38,6 @@ export {
 export {
   buildHanBigramMatchQuery,
   buildHanBigramPhrase,
-  containsHan,
   encodeHanBigrams,
   isHanTerm,
 } from "../../packages/memory-host-sdk/src/host/cjk-bigram.js";

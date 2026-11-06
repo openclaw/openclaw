@@ -19,16 +19,10 @@
 // Han ideographs: CJK Unified Ideographs and Extension A.
 const HAN_RUN_RE = /[\u3400-\u4dbf\u4e00-\u9fff]+/g;
 const HAN_ONLY_RE = /^[\u3400-\u4dbf\u4e00-\u9fff]+$/u;
-const HAN_CHAR_RE = /[\u3400-\u4dbf\u4e00-\u9fff]/u;
 
 /** True when the term is made only of Han ideographs. */
 export function isHanTerm(term: string): boolean {
   return HAN_ONLY_RE.test(term);
-}
-
-/** True when the text contains at least one Han ideograph. */
-export function containsHan(text: string): boolean {
-  return HAN_CHAR_RE.test(text);
 }
 
 /**
@@ -71,8 +65,11 @@ export function buildHanBigramPhrase(term: string): string | null {
   return `"${tokens.join(" ")}"`;
 }
 
-/** Combine per-term phrases into one AND-ed FTS5 match expression. */
-export function buildHanBigramMatchQuery(terms: readonly string[]): string | null {
+/** Combine per-term phrases into one FTS5 match expression. */
+export function buildHanBigramMatchQuery(
+  terms: readonly string[],
+  matchAny = false,
+): string | null {
   const phrases: string[] = [];
   const seen = new Set<string>();
   for (const term of terms) {
@@ -83,5 +80,5 @@ export function buildHanBigramMatchQuery(terms: readonly string[]): string | nul
     seen.add(phrase);
     phrases.push(phrase);
   }
-  return phrases.length > 0 ? phrases.join(" AND ") : null;
+  return phrases.length > 0 ? phrases.join(matchAny ? " OR " : " AND ") : null;
 }

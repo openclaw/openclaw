@@ -362,7 +362,7 @@ export async function searchKeyword(params: {
     if (terms.length > 0) {
       registerSubstringSqlFunction(params.db, terms);
     }
-    const sourceFilter = buildSqliteMemorySourceFilter(params.sourceFilter, params.ftsTable);
+    const sourceFilter = buildSqliteMemorySourceFilter(params.sourceFilter, "c");
     try {
       const rows = params.db
         .prepare(

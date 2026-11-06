@@ -335,45 +335,6 @@ export function rebuildMemoryCjkBigramFts(db: DatabaseSync): number {
   return rows.length;
 }
 
-/** Keep one companion row aligned with its canonical chunk row. */
-export function upsertMemoryCjkBigramRow(params: {
-  db: DatabaseSync;
-  chunkRowid: number;
-  id: string;
-  path: string;
-  source: string;
-  model: string;
-  startLine: number;
-  endLine: number;
-  text: string;
-}): void {
-  params.db
-    .prepare(`DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE "rowid" = ?`)
-    .run(params.chunkRowid);
-  params.db
-    .prepare(
-      `INSERT INTO ${MEMORY_INDEX_CJK_FTS_TABLE} ("rowid", text, id, path, source, model, start_line, end_line)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      params.chunkRowid,
-      encodeHanBigrams(params.text),
-      params.id,
-      params.path,
-      params.source,
-      params.model,
-      params.startLine,
-      params.endLine,
-    );
-}
-
-/** Remove the companion rows that belong to a canonical chunk row. */
-export function deleteMemoryCjkBigramRows(params: { db: DatabaseSync; chunkRowid: number }): void {
-  params.db
-    .prepare(`DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE "rowid" = ?`)
-    .run(params.chunkRowid);
-}
-
 /**
  * Create, refresh, or drop the companion index.
  *

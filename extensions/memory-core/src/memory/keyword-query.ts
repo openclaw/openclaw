@@ -187,7 +187,7 @@ export function planKeywordSearch(params: {
   // The main index cannot rank this query. Two-character Han terms move to
   // the companion bigram index, which stores them as indexable tokens.
   const cjkTerms = substringTerms.filter((term) => isHanTerm(term) && Array.from(term).length >= 2);
-  const cjkBigramQuery = buildHanBigramMatchQuery(cjkTerms);
+  const cjkBigramQuery = buildHanBigramMatchQuery(cjkTerms, params.matchAny);
   if (!cjkBigramQuery) {
     return { matchQuery, substringTerms, tokens, cjkBigramQuery: null };
   }
