@@ -48,7 +48,7 @@ export const terminal = (job: ResearchJob) =>
 // are validated JSON data; the state store deliberately rejects explicit undefined fields.
 export function retainedJson<T>(value: T): T {
   // oxlint-disable-next-line unicorn/prefer-structured-clone -- JSON encoding must omit undefined; structuredClone preserves fields rejected by the state store.
-  return JSON.parse(JSON.stringify(value)) as T;
+  return JSON.parse(JSON.stringify(value)) as T; // SAFETY: Callers supply typed JSON data; encoding only omits optional undefined fields.
 }
 /** Feature-owned persistence bounds and namespaces; never a source of execution authority. */
 export class ResearchState {

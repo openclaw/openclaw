@@ -1305,7 +1305,7 @@ describe("chat loading skeleton", () => {
     expect(contextUsage?.closest(".agent-chat__composer-context")).not.toBeNull();
   });
 
-  it("keeps subscription usage and its navigation scoped to the configured base path", () => {
+  it("keeps subscription usage and its navigation scoped to the configured base path", async () => {
     const controls = createComposerControlsFixture();
     controls.model.accountSelection = {
       kind: "shared",
@@ -1350,15 +1350,15 @@ describe("chat loading skeleton", () => {
     container.querySelector<HTMLElement>(".context-usage summary")!.click();
     flush();
     expect(container.querySelector("[data-chat-usage-account='true']")?.textContent).toBe("OpenAI");
-    const limitRow = container.querySelector(".context-usage__limit");
-    expect(limitRow?.getAttribute("role")).toBe("progressbar");
-    expect(limitRow?.getAttribute("aria-label")).toBe("Weekly");
-    expect(limitRow?.getAttribute("aria-valuenow")).toBe("72");
+    expect(container.querySelectorAll(".context-usage__limit")).toHaveLength(1);
     const usageLink = container.querySelector<HTMLAnchorElement>(
       ".context-usage__popover [data-chat-provider-usage='true']",
     );
     expect(usageLink?.getAttribute("href")).toBe("/rosita/usage");
     expect(usageLink?.getAttribute("aria-label")).toBe("Open usage dashboard");
+    const limitRow = await waitForElement(container, '.context-usage__limit[role="progressbar"]');
+    expect(limitRow.getAttribute("aria-label")).toBe("Weekly");
+    expect(limitRow.getAttribute("aria-valuenow")).toBe("72");
   });
 
   it.each([

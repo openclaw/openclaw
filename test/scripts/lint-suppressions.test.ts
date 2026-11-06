@@ -141,6 +141,8 @@ describe("production lint suppressions", () => {
         "extensions/browser/src/browser/pw-tools-core.activity.ts|unicorn/prefer-dom-node-text-content|1",
         "extensions/codex/session-history-worker-runtime.ts|no-warning-comments|1",
         "extensions/codex/src/app-server/run-attempt-turn-request.ts|preserve-caught-error|1",
+        // Persisted research receipts omit undefined fields exactly as JSON encoding does.
+        "extensions/deep-research/src/job-state.ts|unicorn/prefer-structured-clone|1",
         "extensions/diffs/src/viewer-client.ts|eslint/no-underscore-dangle|1",
         // Markdown rendering sorts fresh private arrays without copying them again.
         "extensions/discord/src/markdown.ts|unicorn/no-array-sort|2",
@@ -430,6 +432,8 @@ describe("production lint suppressions", () => {
         "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",
         // Session commands relay the owner's original error so the display boundary can format it.
         "ui/src/pages/sessions/view.tsx|typescript/only-throw-error|1",
+        // Pinned WebKit Inspector is the only API that includes detached CSS animations.
+        "ui/src/test-helpers/control-ui-webkit-animations.ts|no-underscore-dangle|1",
       ].filter((entry) => fs.existsSync(path.join(repoRoot, entry.split("|", 1)[0]!))),
     );
   });

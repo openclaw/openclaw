@@ -1,11 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   isUserModelAuthProfileId,
   resolveApiKeyForProvider,
   withAuthProfileStoreAtEffect,
   withPersonalAuthProfileStore,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
-import type { GoogleResearchContext } from "./research.js";
+
+export type GoogleResearchAuthContext = {
+  api: OpenClawPluginApi;
+  agentId: string;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+};
 
 type Auth = Awaited<ReturnType<typeof resolveApiKeyForProvider>>;
 type Store = NonNullable<Parameters<typeof resolveApiKeyForProvider>[0]["store"]>;
@@ -13,7 +20,7 @@ type Store = NonNullable<Parameters<typeof resolveApiKeyForProvider>[0]["store"]
 /** Retain the selected credential owner through DNS preparation and the paid effect. */
 export async function withGoogleResearchAuth<T>(
   profileId: string,
-  context: GoogleResearchContext,
+  context: GoogleResearchAuthContext,
   consume: (auth: Auth, assertCredentialCurrent: () => void) => Promise<T>,
 ): Promise<T> {
   const agentDir = context.api.runtime.agent.resolveAgentDir(context.api.config, context.agentId);

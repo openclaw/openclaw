@@ -30,9 +30,7 @@ export type DeviceTokenBindingOwner = {
 };
 
 /** Why a device token was refused on this connection. */
-export type DeviceTokenPeerRefusal =
-  | "device-token-peer-mismatch"
-  | "device-token-bindings-unreadable";
+type DeviceTokenPeerRefusal = "device-token-peer-mismatch" | "device-token-bindings-unreadable";
 
 // "unreadable": the saved bindings could not be read, so no device token can be
 // told apart from a tunnel-issued one and every device token is refused.
