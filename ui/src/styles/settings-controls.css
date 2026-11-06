@@ -336,9 +336,13 @@ select.settings-select {
     min-block-size: var(--settings-control-height);
   }
 
-  :root .btn.refresh-button,
+  :root .oc-icon-button.refresh-button,
+  :root .settings-section__actions .sessions-toolbar__icon.oc-icon-button {
+    --oc-icon-button-size: var(--settings-control-height);
+  }
+
   :root .settings-section .settings-section__actions .btn.btn--xs.btn--icon.channels-refresh,
-  :root .settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs {
+  :root .settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs {
     width: var(--settings-control-height);
     min-width: var(--settings-control-height);
     height: var(--settings-control-height);
