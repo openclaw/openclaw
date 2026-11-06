@@ -1,16 +1,16 @@
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
-import { resolveGatewayStartupPluginPlanFromRegistry } from "../../../src/plugins/gateway-startup-plugin-plan.js";
-import { createInstalledPluginIndexFixture } from "../../../src/plugins/gateway-startup.test-helpers.js";
-import type { PluginManifestRegistry } from "../../../src/plugins/manifest-registry.js";
-import { loadPluginManifest } from "../../../src/plugins/manifest.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { resolveGatewayStartupPluginPlanFromRegistry } from "../../src/plugins/gateway-startup-plugin-plan.js";
+import { createInstalledPluginIndexFixture } from "../../src/plugins/gateway-startup.test-helpers.js";
+import type { PluginManifestRegistry } from "../../src/plugins/manifest-registry.js";
+import { loadPluginManifest } from "../../src/plugins/manifest.js";
 
 function plan(config: OpenClawConfig) {
   const registry: PluginManifestRegistry = {
     diagnostics: [],
     plugins: ["deep-research", "google"].map((id) => {
-      const rootDir = fileURLToPath(new URL(`../../${id}/`, import.meta.url));
+      const rootDir = fileURLToPath(new URL(`../../extensions/${id}/`, import.meta.url));
       const loaded = loadPluginManifest(rootDir);
       if (!loaded.ok) {
         throw new Error(loaded.error);
