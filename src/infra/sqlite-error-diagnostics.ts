@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isProxy } from "node:util/types";
 import {
   coerceErrorMessage,
   collectNestedErrorCandidates,
@@ -133,53 +134,41 @@ export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFai
   );
 }
 
+function errorCode(value: object): unknown {
+  return readOwnErrorDataProperty(value, "errorCode") ?? readOwnErrorDataProperty(value, "code");
+}
+
 function hasStorageWorkerMemoryFailure(error: unknown): boolean {
-  const pending: Array<{ value: unknown; storageWorker: boolean }> = [
-    { value: error, storageWorker: false },
-  ];
-  const seen = new Map<object, number>();
-  while (pending.length > 0) {
-    const entry = pending.pop();
-    if (!entry) {
-      continue;
-    }
-    const { value, storageWorker } = entry;
-    if (!isRecord(value)) {
-      continue;
-    }
-    const seenMask = seen.get(value) ?? 0;
-    const mask = storageWorker ? 2 : 1;
-    if ((seenMask & mask) !== 0) {
-      continue;
-    }
-    seen.set(value, seenMask | mask);
-    const code =
-      readOwnErrorDataProperty(value, "errorCode") ?? readOwnErrorDataProperty(value, "code");
+  const seen = new Set<object>();
+  for (
+    let current = error;
+    isRecord(current) && !isProxy(current) && !seen.has(current);
+    current = readOwnErrorDataProperty(current, "cause")
+  ) {
+    seen.add(current);
+    const code = errorCode(current);
     if (code === "storage-worker-memory") {
       return true;
     }
-    const ownsStorageWorker =
-      !(value instanceof AggregateError) &&
-      (isSqliteWorkerError(value, "closed") ||
-        isSqliteWorkerError(value, "overloaded") ||
-        isSqliteWorkerError(value, "unavailable") ||
-        isSqliteWorkerError(value, "outcome-unknown") ||
-        (readOwnErrorDataProperty(value, "errorType") === "SqliteWorkerError" &&
-          typeof code === "string"));
-    const nestedStorageWorker = storageWorker || ownsStorageWorker;
-    if (nestedStorageWorker && code === "ERR_WORKER_OUT_OF_MEMORY") {
-      return true;
+    const storageWorker =
+      isSqliteWorkerError(current, "closed") ||
+      isSqliteWorkerError(current, "overloaded") ||
+      isSqliteWorkerError(current, "unavailable") ||
+      isSqliteWorkerError(current, "outcome-unknown") ||
+      (readOwnErrorDataProperty(current, "errorType") === "SqliteWorkerError" &&
+        typeof code === "string");
+    if (!storageWorker) {
+      continue;
     }
-    pending.push({
-      value: readOwnErrorDataProperty(value, "cause"),
-      storageWorker: nestedStorageWorker,
-    });
-    const errors = readOwnErrorDataProperty(value, "errors");
-    if (Array.isArray(errors)) {
-      for (const key of Object.keys(errors)) {
-        if (/^(0|[1-9][0-9]*)$/u.test(key)) {
-          pending.push({ value: readOwnErrorDataProperty(errors, key), storageWorker });
-        }
+    const nestedSeen = new Set<object>();
+    for (
+      let nested = readOwnErrorDataProperty(current, "cause");
+      isRecord(nested) && !isProxy(nested) && !nestedSeen.has(nested);
+      nested = readOwnErrorDataProperty(nested, "cause")
+    ) {
+      nestedSeen.add(nested);
+      if (errorCode(nested) === "ERR_WORKER_OUT_OF_MEMORY") {
+        return true;
       }
     }
   }
