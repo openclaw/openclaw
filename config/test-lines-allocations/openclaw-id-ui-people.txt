@@ -2,4 +2,5 @@
 # dialogs, owner approval, Access page and Labs-off parity. No existing tests replaced.
 # Includes one-preparation, owner-key custody, IndexedDB commit and Labs-off dialog regressions.
 # Includes the Your devices removal-preview regression (names the removed device).
-3683
+# Includes the initial name-check regression; the field-copy kit-export test was removed as low value.
+3667

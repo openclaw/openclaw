@@ -13,8 +13,8 @@ export type RecoveryKitDetails = {
   createdAt: Date;
 };
 
-/** The kit as plain text lines (also what the printed page shows). */
-export function recoveryKitLines(details: RecoveryKitDetails): string[] {
+// The kit as plain text lines (also what the printed page shows).
+function recoveryKitLines(details: RecoveryKitDetails): string[] {
   return [
     "OpenClaw Recovery Kit",
     "",

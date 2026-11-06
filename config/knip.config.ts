@@ -1213,7 +1213,6 @@ const config = {
     "src/gateway/openclaw-id/tunnel-supervisor.ts": ["exports", "types"],
     "extensions/openclaw-id-access/browser/owner-signing.ts": ["exports"],
     "extensions/openclaw-id-access/browser/people-format.ts": ["exports"],
-    "ui/src/lib/openclaw-id/kit-export.ts": ["exports"],
   },
   workspaces: {
     ".": {
