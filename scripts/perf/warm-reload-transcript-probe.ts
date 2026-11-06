@@ -47,7 +47,7 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
           y: rect.y,
           height: rect.height,
           characters: row.textContent?.length ?? 0,
-          size: Number.parseFloat(row.style.containIntrinsicBlockSize),
+          size: Number.parseFloat(row.dataset.rowSize ?? ""),
         };
       });
       // Establish the reader after the gesture's admitted rows are measured, before live history.
