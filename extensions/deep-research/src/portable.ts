@@ -6,14 +6,15 @@ import type {
   ResearchResult,
   ResearchSource,
 } from "./contract.js";
-import { evidenceProblem, researchPlainText, renderResearchReport } from "./evidence.js";
+import { evidenceProblem, researchPlainText, renderResearchDocument } from "./evidence.js";
 import { parseValue } from "./validation.js";
+import type { ResearchObservation } from "./view-contract.js";
 
 export type ResearchIO = {
   complete: (
     prompt: string,
     signal: AbortSignal,
-  ) => Promise<{ text: string; tokens?: number; model?: string }>;
+  ) => Promise<{ text: string; tokens?: number; model?: string; route?: ResearchResult["route"] }>;
   search: (query: string, signal: AbortSignal) => Promise<Array<{ url: string; title: string }>>;
   fetch: (
     url: string,
@@ -21,7 +22,7 @@ export type ResearchIO = {
   ) => Promise<{ url: string; title: string; text: string; retrievedAt?: string }>;
   documentRetrievedAt?: string;
   assertCurrent: () => void;
-  progress: (message: string) => void;
+  progress: (message: string, observation?: ResearchObservation) => void | Promise<void>;
 };
 const planSchema = Type.Object(
   {
@@ -165,7 +166,31 @@ export async function runPortableResearch(
   let pendingRoundGaps: string[] = [];
   const seenUrls = new Set<string>();
   const seenQueries = new Set<string>();
-  let selectedModel = request.model ?? "host-default";
+  let route: ResearchResult["route"] = {
+    model: request.model ?? "host-default",
+    runtime: "unobserved",
+  };
+  const progress = async (phase: ResearchObservation["phase"], message: string) => {
+    current();
+    await io.progress(message, {
+      phase,
+      counts: {
+        searches: usage.searches,
+        fetches: usage.fetches,
+        modelCalls: usage.modelCalls,
+        sources: sources.length,
+      },
+      sources: sources.map(({ id, title, url, text, retrievedAt, extraction }) => ({
+        id,
+        title,
+        ...(url ? { url } : {}),
+        text,
+        ...(retrievedAt ? { retrievedAt } : {}),
+        extraction,
+      })),
+    });
+    current();
+  };
   let status: ResearchResult["status"] = "completed";
   const current = () => {
     signal.throwIfAborted();
@@ -189,8 +214,20 @@ export async function runPortableResearch(
       throw new ModelUnavailable("The model did not produce a complete response.");
     }
     current();
-    if (result.model) {
-      selectedModel = result.model;
+    if (result.route) {
+      if (
+        route.runtime !== "unobserved" &&
+        (route.runtime !== result.route.runtime ||
+          route.owner?.id !== result.route.owner?.id ||
+          route.model !== result.route.model)
+      ) {
+        gaps.push(
+          "Model execution changed between research steps; route shows the last observed execution.",
+        );
+      }
+      route = result.route;
+    } else if (result.model) {
+      route = { model: result.model, runtime: "unobserved" };
     }
     if (result.tokens === undefined) {
       usage.tokensComplete = false;
@@ -330,7 +367,7 @@ export async function runPortableResearch(
         retrievedAt: io.documentRetrievedAt ?? new Date().toISOString(),
       });
     }
-    io.progress("Planning research");
+    await progress("planning", "Planning research");
     const plan = parseValue(
       planSchema,
       await model(
@@ -344,6 +381,7 @@ export async function runPortableResearch(
       const page = await fetchUrl(url);
       if (page) {
         addSource(page);
+        await progress("gathering", "Retaining retrieved evidence");
       }
     }
     let queries = plan.questions;
@@ -355,12 +393,14 @@ export async function runPortableResearch(
             : "Remaining modelCalls budget cannot fund extraction and audit.",
         );
       }
-      io.progress(`Gathering evidence (round ${round + 1})`);
+      await progress("gathering", `Gathering evidence (round ${round + 1})`);
+
       await explore(queries.slice(0, budget.searches - usage.searches));
       if (!sources.length) {
         gaps.push("No readable sources were retrieved.");
         break;
       }
+      await progress("assessing", "Assessing retained evidence");
       const extracted = parseValue(
         extractionSchema,
         await model(
@@ -391,6 +431,7 @@ export async function runPortableResearch(
       }
       const candidates = [...candidatesByStatement.values()];
       if (candidates.length) {
+        await progress("auditing", "Auditing quote support (fallible model)");
         const verification = parseValue(
           verificationSchema,
           await model(
@@ -461,12 +502,13 @@ export async function runPortableResearch(
   if (status === "completed" && gaps.length) {
     status = "partial";
   }
-  const report = renderResearchReport(request.question, findings, sources, gaps);
+  const { report, citations } = renderResearchDocument(request.question, findings, sources, gaps);
   return {
     version: 1,
     engine: "portable",
     status,
     report,
+    reportCitations: citations,
     findings,
     sources,
     gaps,
@@ -476,6 +518,6 @@ export async function runPortableResearch(
       "Source policy filters selected evidence; it is not a network firewall.",
     ],
     usage,
-    route: { model: selectedModel, runtime: "direct-provider" },
+    route,
   };
 }

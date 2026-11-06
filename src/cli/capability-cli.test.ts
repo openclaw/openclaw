@@ -958,7 +958,7 @@ describe("capability cli", () => {
     },
   );
 
-  it.each(["local", "gateway", "audio"])("cancels pending %s execution", async (kind) => {
+  it.each(["local", "gateway", "audio", "tts"])("cancels pending %s execution", async (kind) => {
     await interruptCapability((waitForAbort) => {
       if (kind === "gateway") {
         mocks.callGateway.mockImplementationOnce(({ signal }) => waitForAbort(signal));
@@ -966,11 +966,14 @@ describe("capability cli", () => {
         mocks.completeWithPreparedSimpleCompletionModel.mockImplementationOnce(({ options }) =>
           waitForAbort(options?.signal),
         );
-      } else {
+      } else if (kind === "audio") {
         mocks.transcribeAudioFile.mockImplementationOnce((_params, execution) =>
           waitForAbort(execution?.signal),
         );
         return runCap("infer", "audio", "transcribe", "--file", "memo.m4a", "--json");
+      } else {
+        mocks.callGateway.mockImplementationOnce(({ signal }) => waitForAbort(signal));
+        return runCapability("tts", "convert", "--text", "hello", "--gateway", "--json");
       }
       return runModelProbe(...(kind === "gateway" ? ["--gateway"] : []));
     });
@@ -1025,13 +1028,7 @@ describe("capability cli", () => {
       await runCapability(
         "image",
         action,
-        ...cliOptions({
-          file: files,
-          model,
-          prompt,
-          "timeout-ms": timeoutMs,
-          json: true,
-        }),
+        ...cliOptions({ file: files, model, prompt, "timeout-ms": timeoutMs, json: true }),
       );
       if (model) {
         expect(firstImagePrepareCall()).toMatchObject({ filePath: files[0], mediaUrl: files[0] });

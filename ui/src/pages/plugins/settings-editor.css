@@ -104,10 +104,7 @@ openclaw-plugin-settings-groups {
   margin-left: auto;
 }
 .plugin-editor__control input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   margin: 8px 0 0 auto;
-  accent-color: var(--accent);
 }
 .plugin-editor__menu {
   position: absolute;

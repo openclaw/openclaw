@@ -62,9 +62,15 @@ describe("live discovery vendor token-limit fields", () => {
     expect(model?.maxTokens).toBe(32_000);
   });
 
-  it("keeps the previous defaults when a row advertises no limits", () => {
+  it("uses the shared output default when a row advertises no limits", () => {
     const model = firstModel({ id: "bare-model" });
     expect(model?.contextWindow).toBe(128_000);
-    expect(model?.maxTokens).toBe(8192);
+    expect(model?.maxTokens).toBe(32_768);
+  });
+
+  it("keeps half of a small advertised window for input", () => {
+    const model = firstModel({ id: "small-model", context_length: 32_768 });
+    expect(model?.contextWindow).toBe(32_768);
+    expect(model?.maxTokens).toBe(16_384);
   });
 });

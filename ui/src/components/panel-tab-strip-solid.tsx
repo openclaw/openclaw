@@ -65,7 +65,7 @@ function NewControl<T extends SolidPanelTabStripTab>(props: {
           <button
             id={id()}
             slot={props.slotted ? "nav" : undefined}
-            class="rail-header__action tabstrip-new"
+            class="oc-icon-button oc-icon-button--28 rail-header__action tabstrip-new"
             type="button"
             data-new-tab-action={props.strip.newTabAction ? "" : undefined}
             disabled={props.strip.newDisabled}

@@ -381,7 +381,6 @@ describe("Control UI build chunking", () => {
     const modelRefs = modulePath(
       "../../../packages/model-catalog-core/src/configured-model-refs.ts",
     );
-    const transcriptPages = modulePath("../pages/chat/chat-transcript-pages.ts");
     const cronStyle = modulePath("../styles/cron.css");
     const cronPagination = modulePath("../components/cron-jobs-pagination.tsx");
     const agents = modulePath("../pages/agents/agents-page.tsx");
@@ -539,7 +538,7 @@ describe("Control UI build chunking", () => {
       ],
       [
         cronView,
-        `import ${JSON.stringify(cronStyle)}; import { runLink } from ${JSON.stringify(cronRunLink)}; import { state } from ${JSON.stringify(cronDomain)}; import { models } from ${JSON.stringify(cronModels)}; import { pages } from ${JSON.stringify(transcriptPages)}; import { pagination } from ${JSON.stringify(cronPagination)}; export function view() { return "overview" + runLink + state + models + pages + pagination; } export const detail = () => import(${JSON.stringify(cronDetail)});`,
+        `import ${JSON.stringify(cronStyle)}; import { runLink } from ${JSON.stringify(cronRunLink)}; import { state } from ${JSON.stringify(cronDomain)}; import { models } from ${JSON.stringify(cronModels)}; import { pagination } from ${JSON.stringify(cronPagination)}; export function view() { return "overview" + runLink + state + models + pagination; } export const detail = () => import(${JSON.stringify(cronDetail)});`,
       ],
       [
         cronDomain,
@@ -555,7 +554,6 @@ describe("Control UI build chunking", () => {
         `import { refs } from ${JSON.stringify(modelRefs)}; export const models = refs;`,
       ],
       [modelRefs, 'export const refs = "refs";'],
-      [transcriptPages, 'export const pages = "pages";'],
       [cronStyle, ".cron-fixture { color: maroon; }"],
       [cronPagination, 'export const pagination = "pagination";'],
       [validator, 'export const validate = "validate";'],
@@ -740,9 +738,7 @@ describe("Control UI build chunking", () => {
     const cronDetailChunk = chunks.find((chunk) => cronDetail in chunk.modules)!;
     expect(cronView in cronChunk.modules).toBe(true);
     expect(cronRunLink in cronChunk.modules).toBe(true);
-    expect([cronModels, modelRefs, transcriptPages].every((id) => id in cronChunk.modules)).toBe(
-      true,
-    );
+    expect([cronModels, modelRefs].every((id) => id in cronChunk.modules)).toBe(true);
     const domainChunk = chunks.find((chunk) => cronDomain in chunk.modules)!;
     expect(domainChunk.fileName).toContain("cron-domain");
     expect([cronForm, cronSchedule].every((id) => id in domainChunk.modules)).toBe(true);

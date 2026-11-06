@@ -149,6 +149,9 @@ export function readScheduledMemoryParent(
 function senderBitOf(
   facts: Pick<ScheduledExecutionFacts, "authority" | "placement" | "principal">,
 ): Readonly<{ senderIsOwner?: false }> | undefined {
+  if (facts.authority.basis === "operator-source" && !facts.authority.owner) {
+    return { senderIsOwner: false };
+  }
   if (facts.placement === "in-session" || facts.principal.kind === "ingress") {
     return undefined;
   }

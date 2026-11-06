@@ -2,6 +2,7 @@ import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-
 import type { JSX } from "@solidjs/web";
 import { createMemo, createUniqueId, For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
 import { RefreshButton } from "../../../components/solid/refresh-button.tsx";
@@ -18,8 +19,8 @@ import {
 } from "../../../components/solid/settings-ui.tsx";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/dreams.css";
+import { t } from "../../../lib/reactive/i18n.ts";
 import type { DreamingEntry, DreamingReviewPanel, DreamingViewState } from "./dreaming.ts";
 import { DreamingScene } from "./view-scene.tsx";
 import { DiaryEmpty, DreamingRead, formatCompactDateTime } from "./view-shared.tsx";
@@ -505,10 +506,7 @@ function DreamingReview(props: DreamingProps) {
       notice={
         <Show when={props.dreamDiaryActionMessage}>
           {(message) => (
-            <div
-              class={["callout", message().kind === "success" ? "success" : "danger"]}
-              role="status"
-            >
+            <InlineAlert tone={message().kind === "success" ? "success" : "danger"} role="status">
               <div class="row wrap items-center gap-2">
                 <span>{message().text}</span>
                 {props.dreamDiaryActionArchivePath ? (
@@ -521,7 +519,7 @@ function DreamingReview(props: DreamingProps) {
                   </button>
                 ) : undefined}
               </div>
-            </div>
+            </InlineAlert>
           )}
         </Show>
       }

@@ -226,49 +226,75 @@ function anonymizeOperatorSource(
     return { source: { version: 1 }, executionRevision: "execution-1" } as never;
   }
   const { snapshot } = source;
+  const principal = snapshot.openclawIdPrincipal;
   const fixtureBase = {
     profileId: "profile-1",
+    // The builder reads the device kind and member role; identities are replaced.
+    ...(principal
+      ? {
+          openclawIdPrincipal: {
+            ...(principal.kind === "member"
+              ? { kind: principal.kind, accountId: "account-1", role: principal.role }
+              : { kind: principal.kind }),
+            peerKey: `iroh:${"00".repeat(32)}`,
+            authority: {
+              clawId: "claw-1",
+              rootPub: "root-1",
+              listedSeq: 1,
+              ...(principal.authority.ownerDevice ? { ownerDevice: "owner-device-1" } : {}),
+            },
+          },
+        }
+      : {}),
     scopes: [...snapshot.scopes],
     assignedRole: snapshot.assignedRole === null ? null : "role",
     githubLogin: null,
     grant: null,
     aliasBindingIds: [],
   };
+  const fixtureSnapshot =
+    snapshot.sourceIngress === "principal"
+      ? {
+          ...fixtureBase,
+          sourceIngress: "principal" as const,
+          ingress: {
+            pluginId: "plugin-1",
+            audienceId: "audience-1",
+            recoveryId: "issuance-1",
+          },
+          controlUiAdmin: false as const,
+          localOperator: false as const,
+        }
+      : {
+          ...fixtureBase,
+          authPolicy: {
+            generation: "" as const,
+            grantGeneration: "generation",
+            role: "operator" as const,
+            authMethod: snapshot.authPolicy.authMethod,
+          },
+          controlUiAdmin: snapshot.controlUiAdmin,
+          localOperator: snapshot.localOperator,
+          sourceIngress: snapshot.sourceIngress,
+        };
+  const shared = {
+    version: 1 as const,
+    agentId: source.agentId === agentId ? "main" : "other",
+    sourceRunId: "source-run",
+    snapshot: fixtureSnapshot,
+  };
   return {
     executionRevision: "execution-1",
-    source: {
-      version: 1,
-      agentId: source.agentId === agentId ? "main" : "other",
-      sessionKey: key(source.sessionKey),
-      sessionId: "parent-session",
-      ...(source.lifecycleRevision ? { lifecycleRevision: "rev-1" } : {}),
-      sourceRunId: "source-run",
-      snapshot:
-        snapshot.sourceIngress === "principal"
-          ? {
-              ...fixtureBase,
-              sourceIngress: "principal",
-              ingress: {
-                pluginId: "plugin-1",
-                audienceId: "audience-1",
-                recoveryId: "issuance-1",
-              },
-              controlUiAdmin: false,
-              localOperator: false,
-            }
-          : {
-              ...fixtureBase,
-              authPolicy: {
-                generation: "",
-                grantGeneration: "generation",
-                role: "operator",
-                authMethod: snapshot.authPolicy.authMethod,
-              },
-              controlUiAdmin: snapshot.controlUiAdmin,
-              localOperator: snapshot.localOperator,
-              sourceIngress: snapshot.sourceIngress,
-            },
-    },
+    // A device-bound source has no parent conversation to relate.
+    source:
+      source.kind === "gateway"
+        ? { ...shared, kind: "gateway" }
+        : {
+            ...shared,
+            sessionKey: key(source.sessionKey),
+            sessionId: "parent-session",
+            ...(source.lifecycleRevision ? { lifecycleRevision: "rev-1" } : {}),
+          },
   };
 }
 

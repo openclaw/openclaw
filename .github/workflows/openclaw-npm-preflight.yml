@@ -66,9 +66,9 @@ jobs:
     runs-on: &linux_runner_xlarge >-
       ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' ||
-      inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) ||
+      inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) ||
       ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04'
-      || 'blacksmith-32vcpu-ubuntu-2404') }}
+      || 'blacksmith-8vcpu-ubuntu-2404') }}
     outputs:
       source_check_json: ${{ steps.source_evidence.outputs.bundle_json }}
     steps:

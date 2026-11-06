@@ -635,16 +635,18 @@ export async function runCli(
           try {
             const invokeCommand = () =>
               withGatewayServiceInstallation(serviceInstallation, () =>
-                runCliWithPreparedOutputMode(originalArgv, {
-                  ...options,
-                  runtimeRecoveryEnv,
-                  builtInMachineOutput,
-                  harnessCleanup,
-                  serviceInstallation,
-                  onGatewayResourcesSettled: (outcome) => {
-                    gatewayCleanup = outcome;
-                  },
-                }),
+                withDoctorSnapshotReuse(originalInvocation.primary, () =>
+                  runCliWithPreparedOutputMode(originalArgv, {
+                    ...options,
+                    runtimeRecoveryEnv,
+                    builtInMachineOutput,
+                    harnessCleanup,
+                    serviceInstallation,
+                    onGatewayResourcesSettled: (outcome) => {
+                      gatewayCleanup = outcome;
+                    },
+                  }),
+                ),
               );
             const resources = harnessCleanup?.pluginResources;
             return await (resources ? resources.run(invokeCommand) : invokeCommand());
@@ -691,6 +693,17 @@ export async function runCli(
     ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
     ? await withDeferredDebugProxyCapture(invoke)
     : await invoke();
+}
+
+async function withDoctorSnapshotReuse<T>(
+  primary: string | null | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (primary !== "doctor") {
+    return run();
+  }
+  const { withSqliteSnapshotReuse } = await import("../infra/sqlite-snapshot-reuse.js");
+  return withSqliteSnapshotReuse(run);
 }
 
 async function runCliWithPreparedOutputMode(

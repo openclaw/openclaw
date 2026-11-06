@@ -592,15 +592,6 @@ span.new-session-page__select {
   width: anchor-size(width);
 }
 
-.new-session-page__menu-title {
-  padding: 4px 8px 2px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
 .oc-popover.new-session-page__picker-popover
   .new-session-page__picker-root
   > .new-session-page__menu-title:not(:first-child) {
@@ -992,39 +983,10 @@ span.new-session-page__select {
 }
 
 .new-session-page__alert {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
   width: fit-content;
   max-width: min(48rem, calc(100% - 36px));
   margin: 4px auto 2px;
-  padding: 10px 12px;
   text-align: left;
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--danger) 8%, transparent);
-}
-
-.new-session-page__alert-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--danger) 14%, transparent);
-  color: var(--danger);
-}
-
-.new-session-page__alert-icon svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.8;
-}
-
-.new-session-page__alert-message {
-  min-width: 0;
-  padding-top: 3px;
-  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
@@ -1388,13 +1350,8 @@ span.new-session-page__select {
   height: 13px;
 }
 
-.new-session-page__environment-heading {
-  margin: 12px 8px 4px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.oc-menu-heading.new-session-page__environment-heading:not(:first-child) {
+  margin-top: var(--space-2);
 }
 
 .new-session-page__cloud-configuration {
@@ -1436,21 +1393,10 @@ span.new-session-page__select {
   --openclaw-tooltip-max-width: min(510px, calc(100vw - 24px));
 }
 
-.new-session-page__cloud-configuration .new-session-page__environment-heading:first-child {
-  margin-top: 0;
-}
-
 .new-session-page__submenu-chevron {
   display: flex;
   flex: 0 0 14px;
   color: var(--muted);
-}
-
-.new-session-page__devices-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
 }
 
 .new-session-page__connect-device {
@@ -1467,10 +1413,6 @@ span.new-session-page__select {
   color: inherit;
   background: transparent;
   opacity: 0.6;
-}
-
-.new-session-page__cloud-choice-list + .new-session-page__environment-heading {
-  margin-top: 20px;
 }
 
 .new-session-page__environment-detail-trigger {

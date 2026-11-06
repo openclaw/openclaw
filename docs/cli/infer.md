@@ -231,6 +231,9 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 An accepted interrupt cancels the pending transcription request and suppresses
 late transcript output.
 
+The same cancellation behavior applies to `infer video describe`: interruption
+stops the pending provider request and suppresses late description output.
+
 For audio transcription and video description on POSIX systems, `--file` follows
 directory symlinks before resolving `..`, matching filesystem path resolution.
 Final-file symlinks remain subject to the existing media-directory checks.
@@ -259,6 +262,7 @@ Notes:
 - `tts status` only supports `--gateway` (it reflects gateway-managed TTS state).
 - Local and loopback-Gateway `tts convert --output` copies stage beside the destination and replace it only after success; a failed copy leaves an existing file unchanged.
 - If interruption is accepted before the output copy begins, `tts convert` leaves the requested destination unchanged. Completed synthesis audio remains in the media store for its normal lifetime.
+- Interrupting `tts convert --gateway` cancels the caller's pending RPC and exits with status 130 without printing a late result. Gateway-owned speech synthesis keeps its existing lifetime.
 - Remote-Gateway `tts convert --output` is rejected before requesting speech synthesis.
 - Use `tts convert --provider <id>` when selecting a provider without overriding its model.
 - `--channel <id>` is an output-format hint, not a delivery request. Local conversion
