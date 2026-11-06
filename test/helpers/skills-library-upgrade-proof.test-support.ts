@@ -46,10 +46,20 @@ const npmSchema = z.object({
 });
 const keysSchema = z.object({ keys: z.array(z.object({ keyid: z.string(), key: z.string() })) });
 
-async function command(bin: string, args: string[], root: string, timeoutMs: number) {
-  const log = await fs.open(path.join(root, "commands.private.log"), "a", 0o600);
+export async function runStablePackageCommand(
+  phase: "resolver" | "install",
+  version: string,
+  bin: string,
+  args: string[],
+  root: string,
+  timeoutMs: number,
+) {
+  const log = await fs.open(path.join(root, "commands.private.log"), "a+", 0o600);
+  const offset = (await log.stat()).size;
+  const exit: { code: number | null; signal: NodeJS.Signals | null } = { code: null, signal: null };
+  let managedError = "";
   try {
-    const code = await runManagedCommand({
+    const status = await runManagedCommand({
       bin,
       args,
       cwd: root,
@@ -57,10 +67,63 @@ async function command(bin: string, args: string[], root: string, timeoutMs: num
       stdio: ["ignore", log.fd, log.fd],
       timeoutMs,
       requireProcessTreeExit: true,
+      onReady: (child) => {
+        child.once("exit", (code, signal) => {
+          exit.code = code;
+          exit.signal = signal;
+        });
+      },
+    }).catch((error: unknown) => {
+      managedError = error instanceof Error ? error.message : "";
+      return null;
     });
-    if (code !== 0) {
-      throw new Error("Owned stable-package command failed; private output is not published");
+    if (status === 0) {
+      return;
     }
+    const size = (await log.stat()).size;
+    const tail = Buffer.alloc(Math.min(16384, size - offset));
+    const { bytesRead } = await log.read(tail, 0, tail.length, size - tail.length);
+    const privateOutput = tail.subarray(0, bytesRead).toString("utf8") + managedError;
+    const code =
+      [
+        "ERR_MODULE_NOT_FOUND",
+        "ERR_PACKAGE_PATH_NOT_EXPORTED",
+        "E401",
+        "E403",
+        "E404",
+        "ETARGET",
+        "ENOTFOUND",
+        "ECONNRESET",
+        "ETIMEDOUT",
+        "EINTEGRITY",
+        "EINVALIDSIGNATURE",
+        "EUSAGE",
+        "EACCES",
+        "ENOENT",
+        "ENOSPC",
+      ].find((value) => privateOutput.includes(value)) ?? null;
+    // Only enum/scalar facts leave the private log; never emit command arguments or child output.
+    const classification = privateOutput.includes("package tarball integrity failed")
+      ? privateOutput.includes(" imports missing ")
+        ? "tarball-missing-relative-import"
+        : "tarball-integrity"
+      : code
+        ? "known-npm-or-runtime-code"
+        : "unclassified-private-output";
+    throw new Error(
+      "Owned stable-package command failed: " +
+        JSON.stringify({
+          phase,
+          version: /^[0-9]{4}[.][0-9]+[.][0-9]+(?:-[0-9]+)?$/.test(version)
+            ? version
+            : "redacted-invalid-version",
+          status,
+          exit: exit.code,
+          signal: exit.signal,
+          code,
+          classification,
+        }),
+    );
   } finally {
     await log.close();
   }
@@ -97,7 +160,9 @@ async function prepareStablePackage() {
   });
   const repository = process.cwd();
   const output = path.join(root, "package-output");
-  await command(
+  await runStablePackageCommand(
+    "resolver",
+    metadata.version,
     process.execPath,
     [
       "--import",
@@ -137,7 +202,9 @@ async function prepareStablePackage() {
     throw new Error("Stable resolver hash mismatch");
   }
   const prefix = path.join(root, "installed");
-  await command(
+  await runStablePackageCommand(
+    "install",
+    metadata.version,
     "npm",
     ["install", "--prefix", prefix, "--no-audit", "--no-fund", facts.tarball],
     root,

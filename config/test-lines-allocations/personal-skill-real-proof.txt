@@ -1,2 +1,2 @@
-# Real authenticated URL transport, exact-origin/policy/role-revocation effects, and signed latest-stable copied-state/revision survival. Includes all new test-support code and the shared TLS constructor cutover; no global scalar change.
-1686
+# Real authenticated URL transport, exact-origin/policy/role-revocation effects, and signed latest-stable copied-state/revision survival with private-log-safe command diagnostics. Includes all new test-support code and the shared TLS constructor cutover; no global scalar change.
+1815
