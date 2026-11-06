@@ -213,13 +213,20 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Batch110, pinned main `57953680cdf7`: source inspection confirms that the
-MCP gate waiter has no retained runtime consumer after the grant-revalidation
-suite was retired. The proposed removal covers two obsolete declarations/three
-expanded gate cases and their orphan helper. The two HTTP/process cleanup cases
-remain. This ledger-only draft qualifies the native dependency route; the test
-and support files are unchanged, and baseline/candidate proof is pending.
-Source dispositions were already recorded; this batch adds no census marks.
+Batch110, pinned main `57953680cdf7`: remove two obsolete gate declarations/three
+expanded cases and the orphan MCP fixture gate waiter after its last runtime
+consumer was retired. The two HTTP/process cleanup tests remain byte-identical:
+failed readiness kills its captured process, and stopping the captured root joins
+its task-owned descendant. The unchanged five-case baseline passes; the complete
+candidate passes both retained cases through the same tooling runner. Test time
+is 115ms before and 54ms after; routed wall time is 3.47s and 1.61s respectively.
+The change removes 73 test lines and 63 support lines; production is unchanged.
+Source dispositions were already recorded; this adds no census marks. Types,
+typed lint, format, MDX, whitespace, the line ratchet and unused-file scans pass.
+Dependency/full-tree export scans report only the unchanged Talk helper export
+`setSourceConfig`; source comparison attributes it to the pinned baseline, with
+no passing aggregate claim or unrelated repair. The PR records fresh review and
+exact-head hosted admission separately.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
