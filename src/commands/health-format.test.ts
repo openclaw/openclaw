@@ -312,3 +312,13 @@ it.each<[string, HealthSummary["deliveryQueues"], string | null]>([
     formatDeliveryQueueHealthLine(createHealthSummary({ deliveryQueues: queues }), 7_290_000),
   ).toBe(expected);
 });
+
+it("warns about unavailable outbound health even when its failed count is empty", () => {
+  expect(
+    formatDeliveryQueueHealthLine(
+      createHealthSummary({
+        deliveryQueues: { failed: [], unavailable: ["outbound"] },
+      }),
+    ),
+  ).toBe("Delivery queue: warning (health unavailable — outbound)");
+});

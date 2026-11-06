@@ -116,6 +116,7 @@ vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
     heading: (value: string) => value,
     muted: (value: string) => value,
     success: (value: string) => value,
+    warn: (value: string) => value,
   },
 }));
 
@@ -289,6 +290,47 @@ describe("gateway register option collisions", () => {
     });
   });
 
+  it.each([
+    ["outbound", ["outbound"]],
+    ["ingressFailed, ingressPressure", ["ingressFailed", "ingressPressure"]],
+  ])(
+    "renders unavailable queue health through the actual gateway health route: %s",
+    async (label, unavailable) => {
+      callGatewayCli.mockResolvedValueOnce({
+        ok: true,
+        durationMs: 7,
+        channels: {},
+        deliveryQueues: { failed: [], unavailable },
+      });
+      await parse("health");
+      expect(callGatewayCli).toHaveBeenCalledWith("health", expect.any(Object), undefined, {
+        defaultTimeoutMs: 10_000,
+        sharedStateMode: "read-only",
+      });
+      expect(defaultRuntime.log).toHaveBeenCalledWith("WARN (7ms)");
+      expect(defaultRuntime.log).toHaveBeenCalledWith(
+        `Delivery queue: warning (health unavailable — ${label})`,
+      );
+      expect(defaultRuntime.log).not.toHaveBeenCalledWith("OK (7ms)");
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves the normal healthy gateway health presentation", async () => {
+    callGatewayCli.mockResolvedValueOnce({ ok: true, durationMs: 7, channels: {} });
+    await parse("health");
+    expect(defaultRuntime.log).toHaveBeenCalledWith("OK (7ms)");
+    expect(defaultRuntime.log).not.toHaveBeenCalledWith("WARN (7ms)");
+  });
+
+  it("preserves queue unavailability in JSON without rendering a text status", async () => {
+    const result = { ok: true, deliveryQueues: { failed: [], unavailable: ["outbound"] } };
+    callGatewayCli.mockResolvedValueOnce(result);
+    await parse("health", "--json");
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(result);
+    expect(defaultRuntime.log).not.toHaveBeenCalled();
+  });
+
   it("loads health presentation only for text output", async () => {
     const loadGatewayHealthModule = vi.fn(async () => ({
       emitReachableGatewayAuthDiagnostic: mocks.emitReachableGatewayAuthDiagnostic,
@@ -298,9 +340,16 @@ describe("gateway register option collisions", () => {
     const loadHealthStyleModule = vi.fn(async () => ({
       styleHealthChannelLine: (line: string) => line,
     }));
+    const loadQueueHealthModule = vi.fn(
+      async () =>
+        await vi.importActual<typeof import("../../commands/health-format.js")>(
+          "../../commands/health-format.js",
+        ),
+    );
     vi.resetModules();
     vi.doMock("../../commands/health.js", loadGatewayHealthModule);
     vi.doMock("../../../packages/terminal-core/src/health-style.js", loadHealthStyleModule);
+    vi.doMock("../../commands/health-format.js", loadQueueHealthModule);
     const { registerGatewayCli: registerFreshGatewayCli } = await import("./register.js");
     const program = createProgram(registerFreshGatewayCli);
 
@@ -312,13 +361,13 @@ describe("gateway register option collisions", () => {
       undefined,
       { defaultTimeoutMs: 10_000, sharedStateMode: "read-only" },
     );
-    expectCallCount(0, loadGatewayHealthModule, loadHealthStyleModule);
+    expectCallCount(0, loadGatewayHealthModule, loadHealthStyleModule, loadQueueHealthModule);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ ok: true });
 
     const textProgram = createProgram(registerFreshGatewayCli);
     await textProgram.parseAsync(["node", "openclaw", "gateway", "health"]);
 
-    expectCallCount(1, loadGatewayHealthModule, loadHealthStyleModule);
+    expectCallCount(1, loadGatewayHealthModule, loadHealthStyleModule, loadQueueHealthModule);
     expect(defaultRuntime.log).toHaveBeenCalledWith("Gateway Health");
   });
 });

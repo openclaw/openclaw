@@ -122,6 +122,16 @@ const HealthSnapshotSchema = closedObject({
   ),
   deliveryQueues: Type.Optional(
     closedObject({
+      unavailable: Type.Optional(
+        Type.Array(
+          Type.Union([
+            Type.Literal("outbound"),
+            Type.Literal("ingressFailed"),
+            Type.Literal("ingressPressure"),
+          ]),
+          { minItems: 1, maxItems: 3, uniqueItems: true },
+        ),
+      ),
       failed: Type.Array(
         closedObject({
           queueName: Type.String(),
