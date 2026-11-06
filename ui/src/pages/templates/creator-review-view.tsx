@@ -10,6 +10,7 @@ import {
   type Accessor,
 } from "solid-js";
 import "../../components/modal-dialog.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
@@ -49,8 +50,7 @@ function OptionalSection(props: {
           {(item) => (
             <div class="template-creator__row">
               <label class="template-creator__row-choice">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={included(item())}
                   disabled={props.publishing}
                   onChange={(event) => {
