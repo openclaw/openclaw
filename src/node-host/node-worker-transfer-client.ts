@@ -3,7 +3,6 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
-import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { boundedWorkerError } from "../gateway/worker-environments/worker-error.js";
 import {
@@ -61,7 +60,10 @@ import {
   withNodeWorkerTransferHttpRequest,
   type NodeWorkerTransferHttpRequest,
 } from "./node-worker-transfer-http.js";
-import { createNodeWorkerTempWorkspace } from "./node-worker-workspace-admission.js";
+import {
+  createNodeWorkerTempWorkspace,
+  withNodeWorkerTempWorkspace,
+} from "./node-worker-workspace-admission.js";
 import {
   captureManifest,
   readWorkspaceManifest,
@@ -517,7 +519,7 @@ async function uploadWorkspace(params: WorkspaceTransferOperation<"upload">): Pr
   const manifestBytes = Buffer.from(currentRaw);
   const baseBytes = Buffer.from(baseRaw);
   params.setStage("snapshot");
-  return await withTempWorkspace(
+  return await withNodeWorkerTempWorkspace(
     {
       rootDir: resolvePreferredOpenClawTmpDir(),
       prefix: "worker-workspace-upload-",
