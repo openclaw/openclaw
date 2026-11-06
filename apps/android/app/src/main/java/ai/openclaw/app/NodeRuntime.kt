@@ -956,7 +956,7 @@ class NodeRuntime internal constructor(
     // Permission-only WebSocket refreshes bypass preparation and keep the existing endpoint.
     retireOpenClawIdTunnel()
     openClawIdShutdown?.join()
-    val bind = checkNotNull(openClawIdEndpointFactory) { "OpenClaw ID native transport is not available in this build" }
+    val bind = checkNotNull(openClawIdEndpointFactory) { "OpenClaw ID native transport not packaged in this build" }
     val target = openClawIdController.refresh(endpoint.stableId)
     if (!isCurrent()) throw CancellationException("Node connection retired")
     val seed = openClawIdStore.seed(endpoint.stableId)
@@ -3510,7 +3510,7 @@ class NodeRuntime internal constructor(
         } catch (error: CancellationException) {
           throw error
         } catch (_: Exception) {
-          if (intent()) setStandaloneGatewayStatus(if (openClawIdEndpointFactory == null) "OpenClaw ID native transport is not available in this build" else "OpenClaw ID node could not connect. Check the connection or re-join with the owner.")
+          if (intent()) setStandaloneGatewayStatus(if (openClawIdEndpointFactory == null) "OpenClaw ID native transport not packaged in this build" else "OpenClaw ID node could not connect. Check the connection or re-join with the owner.")
           return false
         }
         if (!intent()) {

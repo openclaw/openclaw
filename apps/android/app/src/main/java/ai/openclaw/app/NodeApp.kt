@@ -73,11 +73,16 @@ class NodeApp : Application() {
           this,
           prefs,
           initialForeground = initialForeground,
-          openClawIdEndpointFactory = { seed, relay ->
-            openClawIdNativeReady
-            ai.openclaw.app.gateway.OpenClawIdNativeTransport
-              .bindNode(seed, relay)
-          },
+          openClawIdEndpointFactory =
+            if (BuildConfig.OPENCLAW_IROH_NATIVE) {
+              { seed, relay ->
+                openClawIdNativeReady
+                ai.openclaw.app.gateway.OpenClawIdNativeTransport
+                  .bindNode(seed, relay)
+              }
+            } else {
+              null
+            },
         ).also {
           runtimeInstance = it
           disconnectIfStopped(it)

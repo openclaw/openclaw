@@ -5,7 +5,6 @@ on:
     branches: [main]
     paths: &iroh_ffi_paths
       - ".github/workflows/iroh-ffi.yml"
-      - ".github/actions/setup-android-toolchain/**"
       - "crates/openclaw-iroh-ffi/**"
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -38,6 +37,7 @@ jobs:
             targets: x86_64-unknown-linux-gnu
           - platform: android
             runner: ubuntu-24.04
+            targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
           - platform: apple
             runner: xcode-27
             targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
@@ -54,12 +54,7 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Setup Android toolchain
-        if: matrix.platform == 'android'
-        uses: ./.github/actions/setup-android-toolchain
-
       - name: Install Rust
-        if: matrix.platform != 'android'
         env:
           TARGETS: ${{ matrix.targets }}
         run: |
@@ -104,9 +99,18 @@ jobs:
           wc -c target/release/libopenclaw_iroh_ffi.so
           sha256sum target/release/libopenclaw_iroh_ffi.so
 
+      - name: Setup Android toolchain
+        if: matrix.platform == 'android'
+        uses: ./.github/actions/setup-android-toolchain
+
       - name: Build Android ABIs and check 16 KiB alignment
         if: matrix.platform == 'android'
-        run: scripts/build-android.sh
+        run: |
+          set -euo pipefail
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --install 'ndk;28.2.13676358'
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/28.2.13676358"
+          cargo install cargo-ndk --version 3.5.4 --locked
+          scripts/build-android.sh
 
       - name: Build Apple XCFramework and typecheck Swift
         if: matrix.platform == 'apple'

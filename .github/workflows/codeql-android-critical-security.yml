@@ -29,11 +29,11 @@ jobs:
         with:
           submodules: false
 
-      - name: Setup Android toolchain
-        id: android-toolchain
-        uses: ./.github/actions/setup-android-toolchain
+      - name: Setup Java
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
-          cache-mode: restore
+          distribution: temurin
+          java-version: "21"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -50,8 +50,6 @@ jobs:
 
       - name: Build Android for CodeQL
         working-directory: apps/android
-        env:
-          JAVA_HOME: ${{ steps.android-toolchain.outputs.gradle-java-home }}
         run: ./gradlew --no-daemon :app:assemblePlayDebug
 
       - name: Analyze

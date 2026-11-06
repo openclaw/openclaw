@@ -1442,7 +1442,7 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt","kind":"conditional-branch","surface":"android","id":"native.android.0a354500882ec0d6","source":"Could not disable skill."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt","kind":"conditional-branch","surface":"android","id":"native.android.f79aec3ad54a77c4","source":"Could not enable skill."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt","kind":"conditional-branch","surface":"android","id":"native.android.47b5ebe1d41204ce","source":"Installed $slug."},
-    {"path":"apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt","kind":"conditional-branch","surface":"android","id":"native.android.06be656297ad35d9","source":"OpenClaw ID native transport is not available in this build"},
+    {"path":"apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt","kind":"conditional-branch","surface":"android","id":"native.android.5c973e74dadb9315","source":"OpenClaw ID native transport not packaged in this build"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt","kind":"conditional-branch","surface":"android","id":"native.android.e6ae86cf51c11412","source":"OpenClaw ID node could not connect. Check the connection or re-join with the owner."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt","kind":"ui-call","surface":"android","id":"native.android.a256e9cf1be3cb9e","source":"Another cron action is still finishing."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt","kind":"ui-call","surface":"android","id":"native.android.8e12087d27d96e54","source":"Automation deleted."},
