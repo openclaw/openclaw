@@ -105,3 +105,16 @@ describe("llama-server model mapping", () => {
     expect(provider.models[1]?.id).toBe("other");
   });
 });
+
+it.each([
+  [65536, 32768],
+  [32768, 16384],
+  [8192, 8192],
+])("sizes missing output budget to n_ctx %i", (nCtx, maxTokens) => {
+  expect(
+    mapLlamaServerModel(
+      { id: "model", object: "model" },
+      { default_generation_settings: { n_ctx: nCtx } },
+    )?.config.maxTokens,
+  ).toBe(maxTokens);
+});

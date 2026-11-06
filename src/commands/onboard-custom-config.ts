@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER, resolveDefaultModelMaxTokens } from "../agents/defaults.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { buildModelAliasIndex, modelKey, type ModelRef } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -22,7 +22,6 @@ import { applyAgentModelDefaults, type OnboardingAgentTarget } from "./onboard-a
  * room above the default compaction reserve floor in `agent-settings.ts`.
  */
 const CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
-const DEFAULT_MAX_TOKENS = 4096;
 // Azure OpenAI uses the Responses API, which supports larger generated defaults.
 const AZURE_DEFAULT_CONTEXT_WINDOW = 400_000;
 const AZURE_DEFAULT_MAX_TOKENS = 16_384;
@@ -483,7 +482,9 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams) {
     contextWindow: isAzure
       ? AZURE_DEFAULT_CONTEXT_WINDOW
       : CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
-    maxTokens: isAzure ? AZURE_DEFAULT_MAX_TOKENS : DEFAULT_MAX_TOKENS,
+    maxTokens: isAzure
+      ? AZURE_DEFAULT_MAX_TOKENS
+      : resolveDefaultModelMaxTokens(CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS),
     input: generatedInput,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     reasoning: isLikelyReasoningModel,

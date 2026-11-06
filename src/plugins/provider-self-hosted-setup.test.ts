@@ -118,7 +118,7 @@ function expectedModel(
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128000,
-    maxTokens: 8192,
+    maxTokens: 32768,
     ...overrides,
   };
 }
@@ -577,7 +577,11 @@ describe("discoverOpenAICompatibleLocalModels", () => {
 
     expect(models).toEqual([
       expectedModel("qwen/router-a", { contextWindow: 262_144, contextTokens: 65_536 }),
-      expectedModel("qwen/router-b", { contextWindow: 131_072, contextTokens: 32_768 }),
+      expectedModel("qwen/router-b", {
+        contextWindow: 131_072,
+        contextTokens: 32_768,
+        maxTokens: 16_384,
+      }),
     ]);
     expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
       2,

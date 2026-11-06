@@ -37,6 +37,7 @@ import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential
 import { gatewayServicesExtraCheck } from "./doctor-gateway-services-check.js";
 import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
 import { legacyOwnedRepair } from "./doctor-health-contribution.js";
+import { legacyOutputCapCheck } from "./doctor-legacy-output-cap-check.js";
 import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import {
@@ -833,6 +834,7 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     bootstrapSizeCheck,
     createModelReferenceCheck(),
     createAcpAgentModelCheck(),
+    legacyOutputCapCheck,
     {
       id: "core/doctor/provider-catalog-projection",
       description: "Provider catalog hooks project into unified text model catalog rows.",

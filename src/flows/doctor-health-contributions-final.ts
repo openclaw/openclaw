@@ -186,6 +186,11 @@ export function resolveFinalDoctorHealthContributions(params: {
       healthCheckIds: ["core/doctor/hooks-model"],
       run: runHooksModelHealth,
     }),
+    createDoctorHealthContribution("doctor:legacy-output-cap", "Saved model output caps", {
+      updateWork: { kind: "inspection", scope: "run" },
+      healthCheckIds: ["core/doctor/legacy-output-cap"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/legacy-output-cap"),
+    }),
     ...(
       [
         ["model-references", "Model references", "agent"],

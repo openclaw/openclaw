@@ -405,9 +405,9 @@ describe("openrouter-model-capabilities", () => {
       const module = await importOpenRouterModelCapabilities("tool-support");
       await module.loadOpenRouterModelCapabilities("perplexity/sonar-deep-research");
 
-      expect(
-        module.getOpenRouterModelCapabilities("perplexity/sonar-deep-research")?.supportsTools,
-      ).toBe(false);
+      expect(module.getOpenRouterModelCapabilities("perplexity/sonar-deep-research")).toMatchObject(
+        { supportsTools: false, contextWindow: 128_000, maxTokens: 32_768 },
+      );
       expect(module.getOpenRouterModelCapabilities("google/gemini-2.5-pro")?.supportsTools).toBe(
         true,
       );

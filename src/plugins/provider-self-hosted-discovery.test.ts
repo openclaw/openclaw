@@ -462,6 +462,33 @@ describe("discoverOpenAICompatibleLocalModels context metadata", () => {
     ).resolves.toEqual({ base: 2_048, configured: 2_048 });
   });
 
+  it("sizes the output default to the serving window", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      guarded(
+        Response.json({
+          data: [
+            { id: "large" },
+            { id: "served-32k", max_model_len: 32_768, meta: { n_ctx_train: 262_144 } },
+            { id: "served-8k", max_model_len: 8_192 },
+          ],
+        }),
+      ),
+    );
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "self-hosted",
+      discoverRuntimeContext: false,
+      env: {},
+    });
+    expect(
+      models.map(({ id, contextWindow, maxTokens }) => [id, contextWindow, maxTokens]),
+    ).toEqual([
+      ["large", 128_000, 32_768],
+      ["served-32k", 262_144, 16_384],
+      ["served-8k", 8_192, 8_192],
+    ]);
+  });
+
   it("inherits only one exact direct parent top-level context", async () => {
     await expect(
       discoverModelContexts([

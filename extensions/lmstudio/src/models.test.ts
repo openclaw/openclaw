@@ -1,8 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import {
-  SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-  SELF_HOSTED_DEFAULT_MAX_TOKENS,
-} from "openclaw/plugin-sdk/provider-setup";
+import { SELF_HOSTED_DEFAULT_CONTEXT_WINDOW } from "openclaw/plugin-sdk/provider-setup";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
@@ -212,7 +209,7 @@ describe("lmstudio-models", () => {
       id: "bad-context",
       contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
-      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+      maxTokens: 32_000,
       loaded: false,
     });
   });
@@ -248,7 +245,7 @@ describe("lmstudio-models", () => {
       id: "large-loaded-context",
       contextWindow: 262_144,
       contextTokens: 98_304,
-      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+      maxTokens: 32_768,
       loaded: true,
     });
   });
@@ -355,7 +352,7 @@ describe("lmstudio-models", () => {
       },
       contextWindow: 262144,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
-      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+      maxTokens: 32_000,
     });
     expect(models[1]).toEqual({
       id: "deepseek-r1",
@@ -366,7 +363,8 @@ describe("lmstudio-models", () => {
       compat: { supportsUsageInStreaming: true },
       contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
-      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+      // Half of the 64,000-token JIT load window stays available for the prompt.
+      maxTokens: 32_000,
     });
     expect(models[2]).toMatchObject({ id: "graded-reasoning", reasoning: true });
     expect(models[2]?.compat).toEqual({

@@ -1,5 +1,6 @@
 import { normalizeUpstreamModelPricing } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveDefaultModelMaxTokens } from "../agents/defaults.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
 
 export type UpstreamProviderCatalogModel = Record<string, unknown> & {
@@ -311,7 +312,7 @@ function buildOpenAICompatibleLiveModel(
     ) ??
     fallback.maxTokens ??
     template?.maxTokens ??
-    Math.min(contextWindow, 8192);
+    resolveDefaultModelMaxTokens(contextWindow);
   const explicitReasoning = readLiveModelCatalogBooleanField(record, [
     "reasoning",
     "supports_reasoning",

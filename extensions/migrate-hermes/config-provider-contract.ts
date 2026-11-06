@@ -1,5 +1,6 @@
 // Hermes provider config contract parsing and normalization.
 import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
+import { resolveDefaultModelMaxTokens } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asNonArrayRecord,
   isRecord,
@@ -326,7 +327,7 @@ function modelDefinition(
     input: model.supportsVision ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: model.contextWindow ?? 128_000,
-    maxTokens: model.maxTokens ?? 8192,
+    maxTokens: model.maxTokens ?? resolveDefaultModelMaxTokens(model.contextWindow ?? 128_000),
     baseUrl,
     metadataSource: "models-add",
   };

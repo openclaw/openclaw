@@ -149,7 +149,7 @@ function applyOllamaProviderConfig(
           baseUrl,
           api: "ollama",
           apiKey: OLLAMA_DEFAULT_API_KEY,
-          models: buildOllamaModelsConfig(modelNames, discoveredModelsByName),
+          models: buildOllamaModelsConfig(modelNames, discoveredModelsByName, baseUrl),
         }),
       },
     },

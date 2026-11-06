@@ -352,6 +352,20 @@ describe("applyCustomApiConfig", () => {
     expect(() => applyCustomApiConfig(params)).toThrow(expectedMessage);
   });
 
+  it("seeds new non-Azure models with the shared output default", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      providerId: "custom",
+    });
+    expect(result.config.models?.providers?.custom?.models?.[0]).toMatchObject({
+      contextWindow: EXPECTED_CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
+      maxTokens: 32_768,
+    });
+  });
+
   it("produces azure-specific config for Azure OpenAI URLs with reasoning model", () => {
     const result = applyCustomApiConfig({
       config: {},

@@ -18,6 +18,26 @@ import {
 } from "./provider-models.js";
 
 describe("ollama provider models", () => {
+  it.each([
+    ["local", undefined, 16384],
+    ["minimax-m3", "https://ollama.com", 131072],
+    ["remote-alias", "https://ollama.com", 262144],
+  ] as const)("discovers the output budget for %s", async (name, remote_host, expected) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) =>
+        requestUrl(input).endsWith("/api/tags")
+          ? jsonResponse({ models: [{ name, ...(remote_host ? { remote_host } : {}) }] })
+          : jsonResponse({
+              model_info: { "fixture.context_length": 262144 },
+              capabilities: ["completion"],
+            }),
+      ),
+    );
+    const provider = await buildOllamaProvider("http://127.0.0.1:11434");
+    expect(provider.models?.[0]).toMatchObject({ id: name, maxTokens: expected });
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });

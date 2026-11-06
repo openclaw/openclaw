@@ -152,7 +152,10 @@ function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefi
 }
 
 function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, unknown> {
-  const options = pickOllamaParams(model.params, OLLAMA_OPTION_PARAM_KEYS);
+  const options: Record<string, unknown> = {
+    num_predict: model.maxTokens,
+    ...pickOllamaParams(model.params, OLLAMA_OPTION_PARAM_KEYS),
+  };
   const numCtx = resolveOllamaNativeNumCtx(model);
   if (numCtx !== undefined) {
     options.num_ctx = numCtx;

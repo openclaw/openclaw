@@ -273,7 +273,7 @@ describe("applyModelDefaults", () => {
     expect(model?.input).toEqual(["text"]);
     expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
     expect(model?.contextWindow).toBeUndefined();
-    expect(model?.maxTokens).toBe(8192);
+    expect(model?.maxTokens).toBe(32768);
   });
 
   it.each([

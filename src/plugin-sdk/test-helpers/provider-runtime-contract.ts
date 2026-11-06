@@ -891,7 +891,7 @@ export function describeOpenRouterProviderRuntimeContract(
         provider: "openrouter",
         api: "openai-completions",
         baseUrl: "https://openrouter.ai/api/v1",
-        maxTokens: 8192,
+        maxTokens: 32_768,
       });
     });
   });

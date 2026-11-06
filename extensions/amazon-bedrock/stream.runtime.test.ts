@@ -631,6 +631,7 @@ describe("Bedrock thinking request composition", () => {
 
   it.each([
     ["explicit request cap", 128_000, 32_000, 32_000, "high"],
+    ["authored 32768 cap", 32_768, undefined, 32_768, "high"],
     ["native model cap with thinking disabled", 128_000, undefined, 128_000, "off"],
   ] as const)(
     "uses the %s for adaptive-capable models",

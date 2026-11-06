@@ -6,6 +6,27 @@ export const DEFAULT_PROVIDER = "openai";
 export const DEFAULT_MODEL = "gpt-6-astra";
 // Conservative fallback used when model metadata is unavailable.
 export const DEFAULT_CONTEXT_TOKENS = 200_000;
+/** Output-token cap used when no authored, provider, or catalog limit exists. */
+export const DEFAULT_MODEL_MAX_TOKENS = 32_768;
+// The former fixed fallback. Small windows never resolve below it unless the window is smaller.
+const DEFAULT_MODEL_MAX_TOKENS_FLOOR = 8_192;
+
+/**
+ * Resolves the invented output cap for a model whose real limit is unknown.
+ * A known window keeps half its tokens for input, between the former 8192
+ * fallback and the 32768 default, and never exceeds the window itself.
+ * Explicit limits never pass through here.
+ */
+export function resolveDefaultModelMaxTokens(contextWindow?: number): number {
+  if (contextWindow === undefined || !Number.isFinite(contextWindow) || contextWindow <= 0) {
+    return DEFAULT_MODEL_MAX_TOKENS;
+  }
+  const window = Math.max(1, Math.floor(contextWindow));
+  return Math.min(
+    DEFAULT_MODEL_MAX_TOKENS,
+    Math.max(Math.min(DEFAULT_MODEL_MAX_TOKENS_FLOOR, window), Math.floor(window / 2)),
+  );
+}
 
 /** Builds structural model metadata for a harness that resolves its real model natively. */
 export function createNativeModelOwnedRuntimeModel(params: {

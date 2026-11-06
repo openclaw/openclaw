@@ -2,7 +2,10 @@ import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-r
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { fetchLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  resolveDefaultModelMaxTokens,
+  type ModelDefinitionConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -24,7 +27,6 @@ const DEEPINFRA_MODELS_URL = `${DEEPINFRA_BASE_URL}/models?sort_by=openclaw&filt
 const DEEPINFRA_PRICING_URL = "https://api.deepinfra.com/models/list";
 
 const DEEPINFRA_DEFAULT_CONTEXT_WINDOW = 128000;
-const DEEPINFRA_DEFAULT_MAX_TOKENS = 8192;
 
 const DISCOVERY_TIMEOUT_MS = 5000;
 const DISCOVERY_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -190,7 +192,9 @@ function chatSurfaceModelToModelDefinition(
     input,
     ...(manifestModel?.compat ? { compat: manifestModel.compat } : {}),
     contextWindow: model.contextWindow ?? DEEPINFRA_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: model.maxTokens ?? DEEPINFRA_DEFAULT_MAX_TOKENS,
+    maxTokens:
+      model.maxTokens ??
+      resolveDefaultModelMaxTokens(model.contextWindow ?? DEEPINFRA_DEFAULT_CONTEXT_WINDOW),
   };
 }
 

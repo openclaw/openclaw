@@ -243,3 +243,8 @@ sidebarTitle: "Troubleshooting"
 <Note>
 More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
 </Note>
+
+Native Ollama requests send the resolved model output cap as `num_predict`.
+Discovered local models default to 16,384 output tokens (less for smaller windows).
+Authored `maxTokens`, `params.num_predict`, and explicit request limits remain
+supported. See [Output budgets](/gateway/local-models#output-budgets).

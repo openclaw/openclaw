@@ -14,6 +14,10 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-types";
 import {
   OLLAMA_CLOUD_PROVIDER_ID,
+  OLLAMA_CLOUD_BASE_URL,
+  isHostedOllamaCloud,
+  resolveOllamaCloudDefaultModel,
+  resolveOllamaOutputBudget,
   isOllamaCloudOrigin,
   OLLAMA_DEFAULT_BASE_URL,
 } from "./src/defaults.js";
@@ -94,18 +98,36 @@ export function normalizeConfig({
   }
 
   const normalizedProviderId = (provider ?? "").trim().toLowerCase();
-  if (normalizedProviderId !== "ollama") {
+  if (normalizedProviderId !== "ollama" && normalizedProviderId !== OLLAMA_CLOUD_PROVIDER_ID) {
     return providerConfig;
   }
-
-  return {
-    ...providerConfig,
-    baseUrl:
-      typeof providerConfig.baseUrl === "string" && providerConfig.baseUrl.trim()
-        ? providerConfig.baseUrl
-        : OLLAMA_DEFAULT_BASE_URL,
-    models: Array.isArray(providerConfig.models) ? providerConfig.models : [],
-  };
+  const baseUrl =
+    typeof providerConfig.baseUrl === "string" && providerConfig.baseUrl.trim()
+      ? providerConfig.baseUrl
+      : normalizedProviderId === OLLAMA_CLOUD_PROVIDER_ID
+        ? OLLAMA_CLOUD_BASE_URL
+        : OLLAMA_DEFAULT_BASE_URL;
+  const remote = isHostedOllamaCloud(baseUrl) || normalizedProviderId === OLLAMA_CLOUD_PROVIDER_ID;
+  const models: ModelProviderConfig["models"] = [];
+  for (const model of providerConfig.models ?? []) {
+    const cloudModel = resolveOllamaCloudDefaultModel(model.id);
+    if (model.maxTokens !== undefined || (model.contextWindow === undefined && !cloudModel)) {
+      models.push(model);
+      continue;
+    }
+    // Local rows retain absence so the core owner can prefer authored/catalog caps.
+    const maxTokens =
+      remote || isCloudModelRef(model.id)
+        ? (providerConfig.maxTokens ??
+          resolveOllamaOutputBudget({
+            modelId: model.id,
+            contextWindow: model.contextWindow,
+            remote,
+          }))
+        : undefined;
+    models.push(maxTokens === undefined ? model : { ...model, maxTokens });
+  }
+  return { ...providerConfig, baseUrl, models };
 }
 
 /**

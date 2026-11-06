@@ -284,6 +284,17 @@ If the model loads cleanly but full agent turns misbehave, check transport first
 
 5. **Inspect the failing request and server logs.** Check the chat template, context window, memory pressure, and server errors. A successful text-only check does not prove that the model can reliably complete a multi-step agent task.
 
+## Output budgets
+
+OpenClaw sends the resolved model output limit to local model servers. Native
+Ollama receives it as `num_predict`; explicit request `maxTokens` takes precedence
+over authored `params.num_predict`, which takes precedence over the model cap.
+Discovered local Ollama models default to half of the 32,768-token local context
+cap (16,384 output tokens), or less for smaller windows. Ollama Cloud models keep
+their known output limits, or their context window if no separate limit is known.
+Set `params: { num_predict: -1 }` to request unlimited generation; an explicit
+request output cap still wins.
+
 ## Troubleshooting
 
 - **Gateway can't reach the proxy?** `curl http://127.0.0.1:1234/v1/models`.

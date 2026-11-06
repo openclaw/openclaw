@@ -1066,10 +1066,26 @@ describe("ollama plugin", () => {
       expect.objectContaining({
         id: "glm-5.2",
         contextWindow: 1_000_000,
-        maxTokens: 8192,
+        maxTokens: 131_072,
         reasoning: true,
       }),
     );
+  });
+
+  it("preserves hosted budgets while dynamically resolving a bare cloud model", async () => {
+    mockDiscovery([], cloudBaseUrl);
+    mockShow(["completion", "tools"], 1_000_000);
+    const config = ollamaConfig({
+      baseUrl: cloudBaseUrl,
+      api: "ollama",
+      apiKey: "test-cloud-key",
+      models: [],
+    });
+    const model = await registerProvider().prepareDynamicModel?.(
+      dynamicContext("glm-5.2", config) as never,
+    );
+    expect(model).toMatchObject({ id: "glm-5.2", maxTokens: 131_072 });
+    expect(showMock).toHaveBeenCalledWith(cloudBaseUrl, "glm-5.2", { apiKey: "test-cloud-key" });
   });
 
   it("lists and resolves GLM-5.2 from the offline cloud catalog", async () => {
@@ -1084,7 +1100,7 @@ describe("ollama plugin", () => {
       provider: "ollama-cloud",
       id: "glm-5.2",
       contextWindow: 1_000_000,
-      maxTokens: 8192,
+      maxTokens: 131_072,
       reasoning: true,
     });
     expect(model?.contextTokens).toBeUndefined();

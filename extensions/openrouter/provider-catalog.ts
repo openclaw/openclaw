@@ -9,9 +9,10 @@ import {
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
+import {
+  resolveDefaultModelMaxTokens,
+  type ModelDefinitionConfig,
+  type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   fetchWithSsrFGuard,
@@ -30,7 +31,6 @@ const OPENROUTER_LEGACY_BASE_URL = "https://openrouter.ai/v1";
 const OPENROUTER_MODELS_CACHE_TTL_MS = 60_000;
 const OPENROUTER_DEFAULT_MODEL_ID = "openrouter/auto";
 const OPENROUTER_DEFAULT_CONTEXT_WINDOW = 200000;
-const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_DEFAULT_COST = {
   input: 0,
   output: 0,
@@ -115,7 +115,7 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
         input: ["text", "image"],
         cost: OPENROUTER_DEFAULT_COST,
         contextWindow: OPENROUTER_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: OPENROUTER_DEFAULT_MAX_TOKENS,
+        maxTokens: resolveDefaultModelMaxTokens(OPENROUTER_DEFAULT_CONTEXT_WINDOW),
       },
       {
         id: "moonshotai/kimi-k2.6",
@@ -166,6 +166,10 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
   const inputModalities = readOpenRouterModalities(architecture, "input");
   const supportedParameters = filterStringEntries(record?.supported_parameters);
   const topProvider = asOptionalRecord(record?.top_provider);
+  const contextWindow =
+    asPositiveSafeInteger(topProvider?.context_length) ??
+    asPositiveSafeInteger(record?.context_length) ??
+    OPENROUTER_DEFAULT_CONTEXT_WINDOW;
   const reasoning = normalizeOpenRouterModelReasoning(record?.reasoning);
   return {
     id,
@@ -179,15 +183,12 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
       ? { compat: { ...reasoning?.compat, supportsTools: supportedParameters.includes("tools") } }
       : {}),
     cost: normalizeOpenRouterModelPricing(record?.pricing) ?? { ...OPENROUTER_DEFAULT_COST },
-    contextWindow:
-      asPositiveSafeInteger(topProvider?.context_length) ??
-      asPositiveSafeInteger(record?.context_length) ??
-      OPENROUTER_DEFAULT_CONTEXT_WINDOW,
+    contextWindow,
     maxTokens:
       asPositiveSafeInteger(topProvider?.max_completion_tokens) ??
       asPositiveSafeInteger(record?.max_completion_tokens) ??
       asPositiveSafeInteger(record?.max_output_tokens) ??
-      OPENROUTER_DEFAULT_MAX_TOKENS,
+      resolveDefaultModelMaxTokens(contextWindow),
   };
 }
 

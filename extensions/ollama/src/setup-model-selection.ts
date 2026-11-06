@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { selectPreferredLocalModelId } from "openclaw/plugin-sdk/provider-model-shared";
+import { isHostedOllamaCloud } from "./defaults.js";
 import { getOllamaLatestDedupeKey } from "./model-id.js";
 import {
   buildOllamaModelDefinition,
@@ -91,6 +92,7 @@ export function selectAppGuidedOllamaModelFromDiscovery(
 export function buildOllamaModelsConfig(
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
+  baseUrl?: string,
 ) {
   return modelNames.flatMap((name) => {
     const discovered = discoveredModelsByName?.get(name);
@@ -98,12 +100,11 @@ export function buildOllamaModelsConfig(
       return [];
     }
     return [
-      buildOllamaModelDefinition(
-        name,
-        discovered?.contextWindow,
-        discovered?.capabilities,
-        discovered,
-      ),
+      buildOllamaModelDefinition(name, discovered?.contextWindow, discovered?.capabilities, {
+        ...discovered,
+        remote:
+          isHostedOllamaCloud(baseUrl) || Boolean(discovered && isOllamaRemoteModel(discovered)),
+      }),
     ];
   });
 }

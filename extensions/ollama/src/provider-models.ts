@@ -7,6 +7,7 @@ import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   isCloudModelRef,
+  resolveDefaultModelMaxTokens,
   type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
@@ -17,9 +18,9 @@ import {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
   OLLAMA_DEFAULT_COST,
-  OLLAMA_DEFAULT_MAX_TOKENS,
+  resolveOllamaCloudDefaultModel,
+  resolveOllamaOutputBudget,
   OLLAMA_LOCAL_CONTEXT_TOKENS,
-  normalizeOllamaCloudModelId,
 } from "./defaults.js";
 import {
   buildOllamaThinkingLevelMap,
@@ -95,6 +96,7 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
 }
 
 export type OllamaModelShowInfo = {
+  remote?: boolean;
   contextWindow?: number;
   capabilities?: string[];
   thinkingLevelMap?: ModelDefinitionConfig["thinkingLevelMap"];
@@ -399,18 +401,6 @@ export function isOllamaRemoteModel(model: OllamaTagModel): boolean {
   );
 }
 
-/**
- * Cloud models are referenced both bare (`kimi-k3`) and suffixed (`kimi-k3:cloud`).
- * Both spellings must reach the same known context window, or a suffixed ref silently
- * falls back to the generic default whenever live inspection is unavailable.
- */
-function resolveOllamaCloudDefaultModel(
-  modelId: string,
-): (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number] | undefined {
-  const normalized = normalizeOllamaCloudModelId(modelId);
-  return OLLAMA_CLOUD_DEFAULT_MODELS.find((model) => model.id === normalized);
-}
-
 export function isReasoningModelHeuristic(modelId: string): boolean {
   return /r1|reasoning|think|reason/i.test(modelId);
 }
@@ -421,6 +411,10 @@ export function buildOllamaModelDefinition(
   capabilities?: string[],
   opts?: OllamaModelShowInfo,
 ): ModelDefinitionConfig {
+  const resolvedContext =
+    contextWindow ??
+    resolveOllamaCloudDefaultModel(modelId)?.contextWindow ??
+    OLLAMA_DEFAULT_CONTEXT_WINDOW;
   return {
     id: modelId,
     name: modelId,
@@ -434,11 +428,13 @@ export function buildOllamaModelDefinition(
           : capabilities.includes("thinking")),
     input: capabilities?.includes("vision") ? ["text", "image"] : ["text"],
     cost: OLLAMA_DEFAULT_COST,
-    contextWindow:
-      contextWindow ??
-      resolveOllamaCloudDefaultModel(modelId)?.contextWindow ??
-      OLLAMA_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+    contextWindow: resolvedContext,
+    maxTokens:
+      resolveOllamaOutputBudget({
+        modelId,
+        contextWindow: resolvedContext,
+        remote: opts?.remote,
+      }) ?? resolveDefaultModelMaxTokens(Math.min(resolvedContext, OLLAMA_LOCAL_CONTEXT_TOKENS)),
     ...(opts?.thinkingLevelMap ? { thinkingLevelMap: opts.thinkingLevelMap } : {}),
     compat: {
       supportsTools: capabilities?.includes("tools") ?? opts?.showInspectionFailed !== true,
@@ -452,7 +448,9 @@ export function buildDefaultOllamaCloudModelDefinition(
   model: (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number],
 ): ModelDefinitionConfig {
   return {
-    ...buildOllamaModelDefinition(model.id, model.contextWindow, [...model.capabilities]),
+    ...buildOllamaModelDefinition(model.id, model.contextWindow, [...model.capabilities], {
+      remote: true,
+    }),
     compat: {
       supportsTools: true,
       supportsUsageInStreaming: true,
@@ -625,7 +623,10 @@ export async function buildOllamaProvider(
     baseUrl: apiBase,
     api: "ollama",
     models: discovered.map((model) =>
-      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities, model),
+      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities, {
+        ...model,
+        remote: isHostedOllamaCloud(apiBase) || Boolean(model.remote_host || model.remote_model),
+      }),
     ),
   };
 }

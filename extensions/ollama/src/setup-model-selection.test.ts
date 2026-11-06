@@ -3,6 +3,7 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildOllamaModelsConfig,
   discoverOllamaModelsForSetup,
   selectAppGuidedOllamaModelFromDiscovery,
 } from "./setup-model-selection.js";
@@ -21,6 +22,29 @@ function pendingAbortableResponse(signal: AbortSignal | null | undefined): Promi
 }
 
 describe("Ollama onboarding model selection", () => {
+  it.each([
+    ["local", undefined, 16384],
+    ["minimax-m3", "https://ollama.com", 131072],
+    ["remote-alias", "https://ollama.com", 262144],
+  ] as const)(
+    "preserves the discovered %s output budget in setup",
+    (name, remote_host, expected) => {
+      const models = new Map([
+        [name, { name, contextWindow: 262144, ...(remote_host ? { remote_host } : {}) }],
+      ]);
+      expect(buildOllamaModelsConfig([name], models)[0]).toMatchObject({ maxTokens: expected });
+    },
+  );
+
+  it("uses the hosted route for bare models without remote tag metadata", () => {
+    expect(buildOllamaModelsConfig(["glm-5.2"], undefined, "https://ollama.com")[0]).toMatchObject({
+      maxTokens: 131_072,
+    });
+    expect(
+      buildOllamaModelsConfig(["glm-5.2"], undefined, "http://localhost:11434")[0],
+    ).toMatchObject({ maxTokens: 16_384 });
+  });
+
   it("selects a deterministic tools-capable model with enough context", () => {
     expect(
       selectAppGuidedOllamaModelFromDiscovery([
