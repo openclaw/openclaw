@@ -380,8 +380,8 @@ describe("gateway host desktop source", () => {
   });
 
   it("status sends no VNC credential after the live desktop configuration changes", async () => {
-    const releaseChallenge = createDeferred<void>();
-    const selected = createDeferred<void>();
+    const releaseChallenge = createDeferred();
+    const selected = createDeferred();
     let responses = 0;
     const { server } = createSocketServer(cleanups, (socket) => {
       const pending: Buffer[] = [];
