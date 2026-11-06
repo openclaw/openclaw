@@ -17,7 +17,9 @@ struct SharedDraftImportReview: View {
         Button {
             self.isPresented = true
         } label: {
-            Label("Saved shares (\(self.imports.count))", systemImage: "square.and.arrow.down")
+            Label(
+                String(format: String(localized: "Saved shares (%ld)"), self.imports.count),
+                systemImage: "square.and.arrow.down")
                 .font(OpenClawType.subheadSemiBold)
                 .padding(10)
                 .background(.regularMaterial, in: Capsule())
@@ -48,7 +50,9 @@ struct SharedDraftImportReview: View {
                             Chat: \(draft.target.sessionKey)
                             """)
                                 .font(OpenClawType.caption)
-                            Text("Expires \(draft.expiresAt, style: .relative). Nothing is sent automatically.")
+                            Text(String(
+                                format: String(localized: "Expires %@. Nothing is sent automatically."),
+                                draft.expiresAt.formatted(date: .abbreviated, time: .shortened)))
                                 .font(OpenClawType.caption)
                             Button {
                                 Task { await self.importDraft(draft) }
