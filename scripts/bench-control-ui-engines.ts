@@ -51,6 +51,11 @@ import {
   readEngineConfigurationObservation,
 } from "./lib/control-ui-engine-configuration-observer.ts";
 import { resolveEngineConfigurations } from "./lib/control-ui-engine-configurations.ts";
+import { captureEngineIdleAnimationPhases } from "./lib/control-ui-engine-idle-animation-capture.ts";
+import {
+  createEngineIdleControls,
+  isEngineIdleControl,
+} from "./lib/control-ui-engine-idle-controls.ts";
 import {
   createEngineIdleScenarios,
   isEngineIdleScenario,
@@ -131,6 +136,8 @@ const { values } = parseArgs({
     "native-audit": { type: "boolean", default: false },
     "mutation-audit": { type: "boolean", default: false },
     "cpu-throttle": { type: "string", default: "1" },
+    "idle-warmup-ms": { type: "string" },
+    "idle-animation-phases": { type: "boolean", default: false },
     "memory-soak-rounds": { type: "string", default: "10" },
   },
 });
@@ -156,6 +163,18 @@ const engines: ControlUiEngine[] = values.engines.split(",").map((name) => {
   return name;
 });
 const cpuThrottle = Number(values["cpu-throttle"]);
+const idleWarmupOverrideMs =
+  values["idle-warmup-ms"] === undefined ? undefined : Number(values["idle-warmup-ms"]);
+if (
+  idleWarmupOverrideMs !== undefined &&
+  (!Number.isInteger(idleWarmupOverrideMs) || idleWarmupOverrideMs < 0)
+) {
+  throw new Error("idle-warmup-ms must be a non-negative integer");
+}
+const resolveIdleWarmupMs = (scenario: EngineScenario) =>
+  isEngineIdleScenario(scenario)
+    ? (idleWarmupOverrideMs ?? (scenario.visibility === "hidden" ? 60_000 : 0))
+    : 0;
 if (!Number.isFinite(cpuThrottle) || cpuThrottle < 1) {
   throw new Error("cpu-throttle must be at least 1");
 }
@@ -315,6 +334,7 @@ type Observation = {
   computedTheme?: Record<string, string>;
   layers?: ControlUiLayerAudit;
   idle?: {
+    warmupMs: number;
     before: Awaited<ReturnType<typeof readEngineIdleState>>;
     after?: Awaited<ReturnType<typeof readEngineIdleState>>;
     revealed?: Awaited<ReturnType<typeof readEngineIdleState>>;
@@ -382,6 +402,7 @@ try {
     ...createEngineActionScenarios(),
     ...createEngineCompletedRunScenarios(servers[0]!.server.baseUrl),
     ...createEngineIdleScenarios(),
+    ...createEngineIdleControls(),
     ...createChatComposerScenarios(),
     ...createChatMessageScenarios(),
     ...createChatPanelScenarios().map((scenario) =>
@@ -458,6 +479,8 @@ try {
           "./lib/control-ui-engine-boot-scenarios.ts",
           "./lib/control-ui-engine-completed-run-scenarios.ts",
           "./lib/control-ui-engine-idle-scenarios.ts",
+          "./lib/control-ui-engine-idle-controls.ts",
+          "./lib/control-ui-engine-idle-animation-capture.ts",
           "./lib/control-ui-resource-counts.ts",
           "./lib/control-ui-talk-fixture.ts",
           "./lib/control-ui-long-session-probe.ts",
@@ -513,6 +536,8 @@ try {
     cpuOnly: values["cpu-only"],
     cpuProfile: values["cpu-profile"],
     nativeAudit: values["native-audit"],
+    idleWarmupOverrideMs: idleWarmupOverrideMs ?? null,
+    idleAnimationPhases: values["idle-animation-phases"],
     mutationAudit: values["mutation-audit"],
     cpuThrottle,
     memorySoakRounds,
@@ -537,17 +562,18 @@ try {
       "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
       "Opt-in memory-* scenes retain one document, drain 4.1 s retirement timers, clear synthetic request history, then force two collections at each named checkpoint. Compare warm and late checkpoints; heap/native categories/RSS and DOM wrapper/native counts have different engine-specific meanings. Memory-scene elapsed times include forced GC and snapshots and are not latency evidence.",
-    scenarios: scenarios.map(
-      ({ id, route, expected, navigation, memory, diagnostic, viewports: scenarioViewports }) => ({
-        id,
-        route,
-        expected,
-        navigation,
-        memory,
-        diagnostic,
-        viewports: scenarioViewports,
-      }),
-    ),
+    idleContract:
+      "Idle CPU spans a Node-side 30-second wait. Hidden idle defaults to 60000 ms of warmup after native visibility settles; visible idle defaults to 0 ms. An explicit idle-warmup-ms overrides either default; 0 measures the initial transition, which can include background memory reclamation. Each idle scenario records its resolved warmup. Counter/request endpoints also include measurement instrumentation setup/draining; reveal and clock recovery occur afterward. Blank/static controls retain shared observation instrumentation without loading the app or Gateway.",
+    scenarios: scenarios.map((scenario) => ({
+      id: scenario.id,
+      route: scenario.route,
+      expected: scenario.expected,
+      navigation: scenario.navigation,
+      memory: scenario.memory,
+      diagnostic: scenario.diagnostic,
+      viewports: scenario.viewports,
+      ...(isEngineIdleScenario(scenario) ? { idleWarmupMs: resolveIdleWarmupMs(scenario) } : {}),
+    })),
     ...(pageBenchmark
       ? { pageCoverage: enginePageCoverage, pageFixtureCounts: enginePageFixtureCounts }
       : {}),
@@ -556,7 +582,7 @@ try {
     for (const item of scenarios) {
       for (let pair = 0; pair < pairs; pair++) {
         const orderedEngines = pair % 2 ? engines.toReversed() : engines;
-        const slots = controlUiBenchOrder([...servers.entries()], pair);
+        const slots = [...servers.entries()];
         const orderedProfiles = pair % 2 ? networkProfiles.toReversed() : networkProfiles;
         for (const { networkProfile, engine } of orderedProfiles.flatMap((selectedProfile) =>
           orderedEngines.map((selectedEngine) => ({
@@ -585,6 +611,8 @@ try {
                   )
                 : undefined) ??
               item;
+            const idleControl = isEngineIdleControl(scenario);
+            const idleWarmupMs = resolveIdleWarmupMs(scenario);
             const artifactPrefix = `${viewport.name}-${scenario.id}-${networkProfile.name}-${pair + 1}-${engine}-${bundle}-${configuration.name.replaceAll(":", "-")}`;
             const observation: Observation = {
               configuration: configuration.name,
@@ -660,6 +688,7 @@ try {
             let memory: Awaited<ReturnType<typeof createEngineMemoryCollector>> | undefined;
             let throttle: Awaited<ReturnType<typeof context.newCDPSession>> | undefined;
             let minimizedWindow: number | undefined;
+            let idleRequests: Array<{ method: string }> | undefined;
             try {
               if (nativeBrowser) {
                 await page.setViewportSize(viewport);
@@ -735,27 +764,29 @@ try {
                   });
                 });
               }
-              await page.addInitScript(
-                ({ key, gatewayUrl, settings }) => {
-                  if (window === window.top) {
-                    localStorage.setItem(
-                      key,
-                      JSON.stringify({ ...settings, gatewayUrl, lobsterPetVisits: false }),
-                    );
-                    localStorage.setItem("openclaw.i18n.locale", settings.locale);
-                  }
-                },
-                {
-                  key: controlUiBundledSettingsStorageKey(slot.server.baseUrl),
-                  gatewayUrl: controlUiBundledGatewayUrl(slot.server.baseUrl),
-                  settings: {
-                    ...scenario.settings,
-                    theme: configuration.theme,
-                    themeMode: configuration.themeMode,
-                    locale: configuration.locale,
+              if (!idleControl) {
+                await page.addInitScript(
+                  ({ key, gatewayUrl, settings }) => {
+                    if (window === window.top) {
+                      localStorage.setItem(
+                        key,
+                        JSON.stringify({ ...settings, gatewayUrl, lobsterPetVisits: false }),
+                      );
+                      localStorage.setItem("openclaw.i18n.locale", settings.locale);
+                    }
                   },
-                },
-              );
+                  {
+                    key: controlUiBundledSettingsStorageKey(slot.server.baseUrl),
+                    gatewayUrl: controlUiBundledGatewayUrl(slot.server.baseUrl),
+                    settings: {
+                      ...scenario.settings,
+                      theme: configuration.theme,
+                      themeMode: configuration.themeMode,
+                      locale: configuration.locale,
+                    },
+                  },
+                );
+              }
               const fixture: ReturnType<typeof createScenarioFixture> = scenario.fixture
                 ?.workboardResources
                 ? createWorkboardResourceFixture(
@@ -799,14 +830,19 @@ try {
                   return sessions.list(params).result;
                 },
               };
-              const gateway = await installMockGateway(
-                page,
-                { ...fixture, awaitInitialRoster: false },
-                {
-                  requestHandlers: { ...defaults, ...scenario.createRequestHandlers?.(defaults) },
-                  afterInitScript: scenario.initScript,
-                },
-              );
+              const gateway = idleControl
+                ? undefined
+                : await installMockGateway(
+                    page,
+                    { ...fixture, awaitInitialRoster: false },
+                    {
+                      requestHandlers: {
+                        ...defaults,
+                        ...scenario.createRequestHandlers?.(defaults),
+                      },
+                      afterInitScript: scenario.initScript,
+                    },
+                  );
               if (networkProfile.httpLatencyMs) {
                 // The mock fulfills bootstrap configuration before it reaches the HTTP owner.
                 await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, async (route) => {
@@ -827,7 +863,11 @@ try {
                   );
                 }
               }
-              await scenario.prepare(page, gateway);
+              if (isEngineIdleControl(scenario)) {
+                await scenario.prepare(page);
+              } else {
+                await scenario.prepare(page, gateway!);
+              }
               if (scenario.navigation !== "measured") {
                 if (!scenario.standaloneDocument) {
                   observation.navigationPreloads = await settleInteractionNavigationPreloads(page);
@@ -836,7 +876,7 @@ try {
                 await page.evaluate(() => document.fonts.ready.then(() => undefined));
                 observation.prepareFrameIntervalMs = await frames(page);
               }
-              const before = (await gateway.getRequests()).length;
+              let before = (await gateway?.getRequests())?.length ?? 0;
               if (values.trace) {
                 // DOM snapshots execute injected script on each action and distort the profile.
                 await context.tracing.start({
@@ -892,6 +932,11 @@ try {
                   await visibility.detach();
                 }
               }
+              if (isEngineIdleScenario(scenario) && idleWarmupMs > 0) {
+                await new Promise<void>((resolve) => {
+                  setTimeout(resolve, idleWarmupMs);
+                });
+              }
               // Hide first so minimizing does not become part of hidden-idle paint counts.
               // Creation above obtains the compositor inventory while a surface is visible.
               await layerAudit?.capture();
@@ -899,22 +944,23 @@ try {
                 const idleBefore = await readEngineIdleState(page);
                 if (
                   idleBefore.document.visibility !== (scenario.visibility ?? "visible") ||
-                  idleBefore.document.gatewayPhase !== "connected"
+                  (!idleControl && idleBefore.document.gatewayPhase !== "connected")
                 ) {
                   throw new Error(
                     "Idle requires the requested native visibility and a connected Gateway",
                   );
                 }
                 observation.idle = {
+                  warmupMs: idleWarmupMs,
                   before: idleBefore,
                   fixture: {
-                    sessions: fixture.sessions.length,
-                    transcriptMessages: Object.values(fixture.sessionTranscripts ?? {}).reduce(
-                      (total, transcript) => total + transcript.messages.length,
-                      0,
-                    ),
+                    sessions: idleControl ? 0 : fixture.sessions.length,
+                    transcriptMessages: Object.values(
+                      idleControl ? {} : (fixture.sessionTranscripts ?? {}),
+                    ).reduce((total, transcript) => total + transcript.messages.length, 0),
                   },
                 };
+                before = (await gateway?.getRequests())?.length ?? 0;
               }
               measurement = await startEngineMeasurement(page, engine, {
                 trace: values.trace,
@@ -940,49 +986,54 @@ try {
                 }, artifactPrefix);
               }
               observation.evidence =
-                (await scenario.run(
-                  page,
-                  gateway,
-                  memory
-                    ? async (checkpoint) => {
-                        // MCP retirement and reconnect feedback own intentional timers up to 4 s.
-                        await page.waitForTimeout(4_100);
-                        await frames(page);
-                        const checkpointState = await page.evaluate(
-                          ({ identity, timeOrigin: initialTimeOrigin }) => {
-                            if (
-                              Reflect.get(window, "openclawMemoryDocumentIdentity") !== identity
-                            ) {
-                              throw new Error("Memory workload reloaded the document");
-                            }
-                            const requests = (window as MockGatewayWindow)
-                              .openclawControlUiE2eGateway!.requests;
-                            const clearedFixtureRequests = requests.length;
-                            requests.length = 0;
-                            return {
-                              timeOrigin: {
-                                initial: initialTimeOrigin,
-                                current: performance.timeOrigin,
+                (isEngineIdleControl(scenario)
+                  ? await scenario.run()
+                  : await scenario.run(
+                      page,
+                      gateway!,
+                      memory
+                        ? async (checkpoint) => {
+                            // MCP retirement and reconnect feedback own intentional timers up to 4 s.
+                            await page.waitForTimeout(4_100);
+                            await frames(page);
+                            const checkpointState = await page.evaluate(
+                              ({ identity, timeOrigin: initialTimeOrigin }) => {
+                                if (
+                                  Reflect.get(window, "openclawMemoryDocumentIdentity") !== identity
+                                ) {
+                                  throw new Error("Memory workload reloaded the document");
+                                }
+                                const requests = (window as MockGatewayWindow)
+                                  .openclawControlUiE2eGateway!.requests;
+                                const clearedFixtureRequests = requests.length;
+                                requests.length = 0;
+                                return {
+                                  timeOrigin: {
+                                    initial: initialTimeOrigin,
+                                    current: performance.timeOrigin,
+                                  },
+                                  clearedFixtureRequests,
+                                  resources: Reflect.get(window, "openclawResourceCounts")(),
+                                };
                               },
-                              clearedFixtureRequests,
-                              resources: Reflect.get(window, "openclawResourceCounts")(),
-                            };
-                          },
-                          { identity: artifactPrefix, timeOrigin },
-                        );
-                        const metrics = await memory!.capture(
-                          path.join(artifactDir, `${artifactPrefix}-${checkpoint}.heapsnapshot`),
-                        );
-                        observation.memory!.push({
-                          checkpoint,
-                          ...checkpointState,
-                          metrics,
-                          process: processMemory(observationBrowser),
-                        });
-                        await writeJson(`${artifactPrefix}-memory.json`, observation.memory);
-                      }
-                    : undefined,
-                )) ?? undefined;
+                              { identity: artifactPrefix, timeOrigin },
+                            );
+                            const metrics = await memory!.capture(
+                              path.join(
+                                artifactDir,
+                                `${artifactPrefix}-${checkpoint}.heapsnapshot`,
+                              ),
+                            );
+                            observation.memory!.push({
+                              checkpoint,
+                              ...checkpointState,
+                              metrics,
+                              process: processMemory(observationBrowser),
+                            });
+                            await writeJson(`${artifactPrefix}-memory.json`, observation.memory);
+                          }
+                        : undefined,
+                    )) ?? undefined;
               if (actionTiming) {
                 await actionTiming.evaluate((timing) => timing.endScenario());
               }
@@ -1008,10 +1059,11 @@ try {
               observation.metrics = captured.metrics;
               if (observation.idle) {
                 observation.idle.after = await readEngineIdleState(page);
+                idleRequests = ((await gateway?.getRequests()) ?? []).slice(before);
                 const { before: idleBefore, after } = observation.idle;
                 if (
                   after.document.visibility !== idleBefore.document.visibility ||
-                  after.document.gatewayPhase !== "connected" ||
+                  (!idleControl && after.document.gatewayPhase !== "connected") ||
                   after.document.route !== idleBefore.document.route
                 ) {
                   throw new Error("Idle changed route, Gateway connection, or native visibility");
@@ -1102,12 +1154,20 @@ try {
                     path: path.join(artifactDir, `${artifactPrefix}.before-scroll.png`),
                   });
                 }
-                observation.idle.clockRecovery = await verifyEngineIdleClocks(page, gateway);
+                observation.idle.clockRecovery = await verifyEngineIdleClocks(page, gateway!);
+              }
+              if (
+                values["idle-animation-phases"] &&
+                observation.idle &&
+                !idleControl &&
+                pair === 0
+              ) {
+                await captureEngineIdleAnimationPhases(page, artifactDir, artifactPrefix);
               }
               if (scenario.id === "sidebar-running-clock-scroll-resize") {
                 observation.evidence = {
                   ...observation.evidence,
-                  clockRecoveryChecks: (await verifyEngineIdleClocks(page, gateway)).length,
+                  clockRecoveryChecks: (await verifyEngineIdleClocks(page, gateway!)).length,
                 };
               }
               if (values["cpu-profile"]) {
@@ -1141,9 +1201,10 @@ try {
                 await writeJson(`${artifactPrefix}.inspector.json`, captured);
               }
               observation.requests = {};
-              for (const { method } of (await gateway.getRequests()).slice(
-                scenario.navigation || scenario.memory ? 0 : before,
-              )) {
+              for (const { method } of idleRequests ??
+                ((await gateway?.getRequests()) ?? []).slice(
+                  scenario.navigation || scenario.memory ? 0 : before,
+                )) {
                 observation.requests[method] = (observation.requests[method] ?? 0) + 1;
               }
               if (errors.length) {
@@ -1533,6 +1594,12 @@ await writeFile(
     "",
     `Completed ${observations.length}/${planned} observations; ${observations.filter(({ status }) => status === "failed").length} failed; ${observations.filter(({ status }) => status === "skipped").length} unsupported-viewport cells skipped. Timing summaries retain completed intervals with browser errors; failures are never passing proof. Browser-local boot milestones, metrics, counts, CPU coverage, host load and errors: [observations](observations.json), [summary](summary.json), [manifest](manifest.json).`,
     "",
+    ...(observations.some((row) => row.idle)
+      ? [
+          `Idle warmup defaults to 60000 ms for hidden scenarios and 0 ms for visible scenarios, after visibility settles. ${idleWarmupOverrideMs === undefined ? "No CLI warmup override was supplied." : `The CLI warmup override is ${idleWarmupOverrideMs} ms.`} Resolved warmup is recorded per scenario in the manifest and per idle observation. Explicit --idle-warmup-ms 0 measures the initial transition, including browser reclamation; do not extrapolate it as sustained idle CPU. Counter/request endpoints include measurement instrumentation setup/draining but exclude warmup and reveal/recovery; resourceIntervalMs records the counter window.`,
+          "",
+        ]
+      : []),
     "ResizeObserver loop errors are counted in every run, including without tracing or observer-origin diagnostics. Any browser error fails its observation and the command; completed timing intervals do not waive the zero-error requirement.",
     "",
     "| Configuration | Viewport | Scenario | Network | Bundle | Engine | ResizeObserver errors | Affected / attempted observations |",

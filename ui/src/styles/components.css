@@ -3175,6 +3175,16 @@ select.data-table-pagination__size {
   animation: btn-spinner-spin 1.6s linear infinite;
 }
 
+.session-glyph__ring {
+  animation-name: session-ring-spin;
+}
+
+@keyframes session-ring-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
 .session-glyph__ring--queued,
 .session-glyph__trace--queued .session-glyph__trace-run {
   animation-play-state: paused;

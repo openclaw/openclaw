@@ -9,8 +9,11 @@ import { parityBaseScenario } from "../control-ui-parity/fixtures.ts";
 import { dataUsageScenarios } from "./control-ui-data-usage-scenarios.ts";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { createEnginePageScenarios } from "./control-ui-engine-page-scenarios.ts";
-import { frames } from "./control-ui-interaction-navigation.ts";
-import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
+import { frames, navigation } from "./control-ui-interaction-navigation.ts";
+import {
+  interactionScenarios,
+  settleSidebarBackgroundWork,
+} from "./control-ui-interaction-scenarios.ts";
 import { readControlUiResourceCounts } from "./control-ui-resource-counts.ts";
 
 export type EngineIdleScenario = EngineScenario & { idle: true };
@@ -38,6 +41,26 @@ export async function readEngineIdleState(page: Page) {
       gatewayPhase: snapshot?.gatewayPhase,
       route: location.pathname,
       nodes: document.querySelectorAll("*").length,
+      running: [...document.querySelectorAll<HTMLElement>(".sidebar-recent-session")]
+        .filter((row) => row.querySelector(".session-glyph__ring, .session-glyph__trace-run"))
+        .map((row) => {
+          const ring = row.querySelector<HTMLElement>(
+            ".session-glyph__ring, .session-glyph__trace-run",
+          )!;
+          const bounds = ring.getBoundingClientRect();
+          const port = row.closest(".sidebar-shell__body")?.getBoundingClientRect();
+          return {
+            key: row.dataset.sessionKey,
+            visible:
+              document.visibilityState === "visible" &&
+              bounds.bottom > (port?.top ?? 0) &&
+              bounds.top < (port?.bottom ?? innerHeight) &&
+              bounds.right > 0 &&
+              bounds.left < innerWidth,
+            animation: getComputedStyle(ring).animationName,
+            clock: Boolean(row.querySelector("openclaw-elapsed-time")),
+          };
+        }),
       rows: Object.fromEntries(
         selectors.map((selector) => [selector, document.querySelectorAll(selector).length]),
       ),
@@ -263,6 +286,43 @@ export function createEngineIdleScenarios(): readonly EngineScenario[] {
     ),
     ...[false, true].map((hidden) =>
       idle(clocks, `idle-sidebar-clock-${hidden ? "hidden" : "visible"}`, hidden),
+    ),
+    ...[0, 1, 5, 20].map((count) =>
+      idle(
+        {
+          ...clocks,
+          fixtureOverrides: (_sandbox, base) => ({
+            sessions: base.sessions.map((row, index) =>
+              index > count && index <= 200
+                ? { ...row, hasActiveRun: false, activeRunIds: [], status: "done" }
+                : row,
+            ),
+          }),
+          prepare: async (page) => {
+            await navigation(page, "sessions");
+            const toggle = page.locator('[data-child-session-toggle="agent:main:interaction-a"]');
+            if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+              await toggle.click();
+            }
+            const more = page.locator('[data-show-more-children="agent:main:interaction-a"]');
+            if ((await more.count()) > 0) {
+              await more.click();
+            }
+            await page.waitForFunction(
+              (expected) =>
+                document.querySelectorAll(".sidebar-recent-session openclaw-elapsed-time")
+                  .length === expected,
+              count,
+            );
+            const viewport = page.viewportSize()!;
+            await page.mouse.move(viewport.width - 8, viewport.height - 8);
+            await page.locator('[role="tooltip"]:visible').first().waitFor({ state: "hidden" });
+            await settleSidebarBackgroundWork(page);
+          },
+        },
+        `idle-sidebar-running-${count}`,
+        false,
+      ),
     ),
   ];
 }
