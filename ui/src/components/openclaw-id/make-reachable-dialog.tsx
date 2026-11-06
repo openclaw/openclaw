@@ -126,6 +126,7 @@ export function showMakeReachableDialog(params: {
     modal.render(() => {
       const [step, setStep] = createSignal<Step>({ kind: "name" });
       const [saved, setSaved] = createSignal(false);
+      const [preparing, setPreparing] = createSignal(false);
       const [enrollmentCode, setEnrollmentCode] = createSignal("");
       const [name, setName] = createSignal(DEFAULT_CLAW_NAME);
       const [check, setCheck] = createSignal<NameCheck | null>(null);
@@ -173,16 +174,30 @@ export function showMakeReachableDialog(params: {
         queueMicrotask(() => void fillCodeFromAccount(signedIn));
       }
       // Records the address the owner root will sign; Discovery assigns it at registration.
+      // One preparation runs at a time, and only the name step accepts its answer, so a
+      // late answer never returns the dialog to a step that would make another kit.
+      // A plain flag, so a second click in the same tick sees the first one.
+      let prepareRunning = false;
       const prepare = async () => {
+        if (prepareRunning) {
+          return;
+        }
+        prepareRunning = true;
+        setPreparing(true);
         setNameError(null);
         try {
           const preparation = await params.client.request<OpenClawIdLinkPreparation>(
             "openclawId.authority",
             { action: "prepare", ...nameRequest() },
           );
-          setStep({ kind: "ownerKey", preparation });
+          if (step().kind === "name") {
+            setStep({ kind: "ownerKey", preparation });
+          }
         } catch (error) {
           setNameError(openClawIdUiError(error, "setup"));
+        } finally {
+          prepareRunning = false;
+          setPreparing(false);
         }
       };
       const finish = (linked: boolean) => {
@@ -193,6 +208,8 @@ export function showMakeReachableDialog(params: {
         try {
           const kit = await ceremony.createKit();
           const owner = params.signedIn?.email ?? params.signedIn?.name ?? null;
+          // A new kit has not been saved, whatever happened to an earlier one.
+          setSaved(false);
           setStep({
             kind: "kit",
             preparation,
@@ -366,6 +383,7 @@ export function showMakeReachableDialog(params: {
                     type="button"
                     class="btn primary"
                     disabled={
+                      preparing() ||
                       !nameRequest().enrollmentCode ||
                       !nameRequest().name ||
                       check()?.available === false

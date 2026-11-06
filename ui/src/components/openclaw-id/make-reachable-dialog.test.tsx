@@ -134,3 +134,68 @@ describe("Make reachable publication outcome", () => {
     },
   );
 });
+
+describe("Make reachable preparation", () => {
+  afterEach(() => {
+    cleanupSolid();
+    localStorage.removeItem("openclaw.openclawId.account");
+    window.dispatchEvent(new StorageEvent("storage", { key: "openclaw.openclawId.account" }));
+  });
+
+  it("asks for one preparation when Continue is pressed twice", async () => {
+    const preparations: ((value: unknown) => void)[] = [];
+    const request = vi.fn((method: string, params: { action?: string }) => {
+      if (method === "openclawId.status") {
+        return Promise.resolve({ status: { state: "on", tunnel: { state: "running" } } });
+      }
+      if (params.action === "prepare") {
+        return new Promise((resolve) => {
+          preparations.push(resolve);
+        });
+      }
+      if (params.action === "account_link_code") {
+        return Promise.resolve({ code: "synthetic-code" });
+      }
+      return Promise.resolve({ hostname: "studio-test.claws.test", available: true });
+    });
+    const signedIn = {
+      sub: "owner",
+      email: "owner@example.test",
+      name: null,
+      exp: 2_000_000_000,
+      idToken: "synthetic",
+    };
+    installSafeLocalStorageForTesting().setItem(
+      "openclaw.openclawId.account",
+      JSON.stringify(signedIn),
+    );
+    // The link code is requested only for the account this tab has published.
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "openclaw.openclawId.account",
+        newValue: JSON.stringify(signedIn),
+      }),
+    );
+    const done = showMakeReachableDialog({
+      client: { request } as unknown as GatewayBrowserClient,
+      loaderDomain: "claws.test",
+      signedIn,
+    });
+    const next = await vi.waitFor(() => {
+      const button = [...document.querySelectorAll("button")].find(
+        (candidate) => candidate.textContent?.trim() === "Continue",
+      );
+      expect(button?.disabled).toBe(false);
+      return button!;
+    });
+    next.click();
+    next.click();
+    expect(preparations).toHaveLength(1);
+    preparations[0]!({ claw_id: "synthetic-claw", hostname: "studio-test.claws.test" });
+    await click("Create recovery kit");
+    await vi.waitFor(() => expect(document.querySelector('input[type="checkbox"]')).not.toBeNull());
+    expect(preparations).toHaveLength(1);
+    await click("Cancel");
+    expect(await done).toBe(false);
+  });
+});
