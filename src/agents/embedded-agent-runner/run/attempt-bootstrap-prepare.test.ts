@@ -198,6 +198,64 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     );
   });
 
+  it.each(["present", "missing", "symlink"] as const)(
+    "keeps a rooted worktree's bootstrap inside its checkout (%s)",
+    async (agents) => {
+      const shared = await makeWorkspace("shared", {
+        "AGENTS.md": "SHARED INSTRUCTIONS MUST NOT LEAK",
+        "SOUL.md": "SHARED SOUL MUST NOT LEAK",
+      });
+      const worktree = await makeWorkspace("worktree", {
+        ...(agents === "present" ? { "AGENTS.md": "Branch instructions" } : {}),
+        "SOUL.md": "Branch soul",
+      });
+      if (agents === "symlink") {
+        await fs.symlink(path.join(shared, "AGENTS.md"), path.join(worktree, "AGENTS.md"));
+      }
+      const result = await prepare(shared, agents === "missing" ? shared : worktree, {
+        attempt: {
+          sessionRoot: worktree,
+          requireWorkspaceOnly: true,
+          cwd: path.join(worktree, "..", path.basename(shared)),
+        },
+      });
+
+      expect(result.contextFiles).toContainEqual(
+        contextFile(path.join(worktree, "SOUL.md"), "Branch soul"),
+      );
+      expect(
+        result.contextFiles.every((file) => file.path.startsWith(`${worktree}${path.sep}`)),
+      ).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("MUST NOT LEAK");
+      expect(result.contextFiles).toContainEqual(
+        instructions(
+          worktree,
+          agents === "present"
+            ? "Branch instructions"
+            : expect.stringContaining("[MISSING] Expected at:"),
+        ),
+      );
+      expect(
+        result.bootstrapInjectionStats.find((file) => file.name === "AGENTS.md")?.missing,
+      ).toBe(agents !== "present");
+    },
+  );
+
+  it("uses task bootstrap when workspaceOnly is configured without a recorded root", async () => {
+    const shared = await makeWorkspace("shared", { "AGENTS.md": "Shared instructions" });
+    const task = await makeWorkspace("task", { "AGENTS.md": "Task instructions" });
+    const result = await prepare(shared, task, {
+      attempt: {
+        config: {
+          agents: { entries: { main: { workspace: shared } } },
+          tools: { fs: { workspaceOnly: true } },
+        },
+      },
+    });
+    expect(result.contextFiles).toContainEqual(instructions(task, "Task instructions"));
+    expect(result.contextFiles).not.toContainEqual(instructions(shared, "Shared instructions"));
+  });
+
   it.each(["none", "full"])("withholds completion for unreadable AGENTS.md (%s)", async (mode) => {
     const unreadable = "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES + 1);
     const agentWorkspace = await makeWorkspace("agent-workspace", {

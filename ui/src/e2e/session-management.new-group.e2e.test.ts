@@ -58,7 +58,7 @@ suite.define(() =>
         await page.emulateMedia({ colorScheme: "dark" });
 
         await page.setViewportSize({ height: 720, width: 420 });
-        const card = page.locator("openclaw-modal-dialog .exec-approval-card");
+        const card = page.locator("openclaw-modal-dialog .oc-dialog");
         const bounds = await ui.bounds(card);
         expect(bounds.x).toBeGreaterThanOrEqual(0);
         expect(ui.right(bounds)).toBeLessThanOrEqual(420);

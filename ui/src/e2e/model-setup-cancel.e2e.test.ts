@@ -55,7 +55,7 @@ async function cancelAndLeave(page: Page, gateway: Awaited<ReturnType<typeof ins
   await page.getByText("Complete provider sign-in").waitFor();
   expect(await readReceipt()).not.toBeNull();
   await gateway.deferNext(rpc.cancel);
-  await button(page.locator("openclaw-modal-dialog"), "Cancel").click();
+  await button(page.locator("openclaw-modal-dialog openclaw-modal-actions"), "Cancel").click();
   await gateway.waitForRequest(rpc.cancel);
   expect(await page.locator("openclaw-modal-dialog").count()).toBe(1);
   await page.goBack();
@@ -138,7 +138,7 @@ suite.define(() => {
           ]);
           expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
 
-          await button(dialog, decision).click();
+          await button(dialog.locator("openclaw-modal-actions"), decision).click();
           if (decision === "Yes") {
             await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
             await page.getByText("Your reviewed model is ready.", { exact: true }).waitFor();

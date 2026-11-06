@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -113,7 +114,7 @@ describe("SQLite post-commit history maintenance", () => {
         replaced = true;
         release.resolve();
         await expect(sweep).rejects.toThrow(/file identity changed/);
-        expect(fs.readFileSync(owner.path)).toEqual(replacementBytes);
+        expectBytesEqual(fs.readFileSync(owner.path), replacementBytes, "successor database");
       } finally {
         release.resolve();
         await Promise.allSettled([sweep]);

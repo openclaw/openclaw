@@ -12,6 +12,7 @@ import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { isLoopbackGatewayUrl } from "../gateway/net.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeAuth, GatewayProbeResult } from "../gateway/probe.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
 import { readMemorySearchManagerStatus } from "../memory-host-sdk/host/types.js";
 import type { ActiveMemoryProviderResult, MemoryHealth } from "../plugins/memory-provider-types.js";
@@ -384,16 +385,36 @@ async function resolveMemoryManagerStatusSnapshot(
     return null;
   }
   try {
+    let probeFailure: { storeProbe: boolean; error: unknown } | undefined;
     try {
       const currentStatus = await readMemorySearchManagerStatus(manager);
       if (currentStatus.backend === "builtin" && manager.probeVectorStoreAvailability) {
         // Built-in vector store has a store-level probe that avoids conflating index absence with plugin failure.
-        await manager.probeVectorStoreAvailability();
+        await manager.probeVectorStoreAvailability().catch((error: unknown) => {
+          probeFailure = { storeProbe: true, error };
+        });
       } else {
-        await manager.probeVectorAvailability();
+        await manager.probeVectorAvailability().catch((error: unknown) => {
+          probeFailure = { storeProbe: false, error };
+        });
       }
     } catch {}
     const status = await readMemorySearchManagerStatus(manager);
+    if (probeFailure && status.vector) {
+      // A rejected probe leaves pre-probe facts in place. Semantic vectors are served from the
+      // store, but a semantic probe failure says nothing about the store itself.
+      return {
+        agentId,
+        ...status,
+        vector: {
+          ...status.vector,
+          ...(probeFailure.storeProbe ? { storeAvailable: false } : {}),
+          semanticAvailable: false,
+          available: false,
+          loadError: formatErrorMessage(probeFailure.error),
+        },
+      };
+    }
     return { agentId, ...status };
   } finally {
     // Status probes must not leak plugin resources such as SQLite handles.

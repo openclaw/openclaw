@@ -54,6 +54,34 @@ beforeEach(() => {
   sessionReaderMocks.readSessionEntryReadOnlyInWorker.mockReset().mockResolvedValue(undefined);
 });
 
+it.each([
+  { available: true, compactions: 0, tokens: 123 },
+  { available: false, compactions: 0, tokens: undefined },
+  { available: true, compactions: 1, tokens: 123 },
+])(
+  "records the native producer's ordered terminal context: %j",
+  async ({ available, compactions, tokens }) => {
+    const input = makeNormalizationInput(
+      makeAttempt(undefined, {
+        compactionCount: compactions,
+        attemptUsage: {
+          input: 9000,
+          output: 500,
+          contextUsage: available
+            ? { state: "available", promptTokens: 100, totalTokens: 123 }
+            : { state: "unavailable" },
+        },
+      }),
+    );
+    vi.spyOn(input.preparedRuntime, "snapshot").mockReturnValue({
+      ...input.preparedRuntime.snapshot(),
+      pluginHarnessOwnsTransport: true,
+    });
+    await normalizeEmbeddedRunAttempt(input);
+    expect(input.contextRecoveryState.currentContextSnapshot).toEqual({ tokens });
+  },
+);
+
 it.each([0, 2])(
   "retains compaction facts when parent Stop arrives during persistence (%s ingress records)",
   async (recordedCompactionCount) => {

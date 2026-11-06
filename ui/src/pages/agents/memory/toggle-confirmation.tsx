@@ -1,6 +1,7 @@
 import { action, createMemo, createOptimistic, Errored, Loading, onSettled, Show } from "solid-js";
-import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
+import { DialogHeader } from "../../../components/solid/dialog-header.tsx";
 import "../../../components/modal-dialog.tsx";
+import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 
 registerDreamingEnglish();
@@ -53,31 +54,28 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
         description={description()}
         onModal-cancel={handleCancel}
       >
-        <div class="exec-approval-card">
-          <div class="exec-approval-header">
-            <div>
-              <div id={titleId} class="exec-approval-title">
-                {title()}
-              </div>
-              <div id={descriptionId} class="exec-approval-sub">
-                {description()}
-              </div>
-            </div>
+        <div class="oc-dialog">
+          <DialogHeader
+            title={<span id={titleId}>{title()}</span>}
+            description={<p id={descriptionId}>{description()}</p>}
+            closeDisabled={saving()}
+            onClose={handleCancel}
+          />
+          <div class="oc-dialog__body">
+            <Show when={props.enabling} fallback={<div class="callout warn">{detail()}</div>}>
+              <p class="oc-dialog__row-note">{detail()}</p>
+            </Show>
+            <Errored
+              fallback={() => (
+                <div class="callout danger" role="alert">
+                  {t("dreaming.toggleConfirmation.failed")}
+                </div>
+              )}
+            >
+              <Loading>{result()}</Loading>
+            </Errored>
           </div>
-          <div
-            class={["callout", { info: props.enabling, warn: !props.enabling }]}
-            style={{ "margin-top": "12px" }}
-          >
-            {detail()}
-          </div>
-          <Errored
-            fallback={() => (
-              <div class="exec-approval-error">{t("dreaming.toggleConfirmation.failed")}</div>
-            )}
-          >
-            <Loading>{result()}</Loading>
-          </Errored>
-          <openclaw-modal-actions class="exec-approval-actions">
+          <openclaw-modal-actions class="oc-dialog__footer">
             <button class="btn" disabled={saving()} onClick={handleCancel}>
               {t("common.cancel")}
             </button>

@@ -1,5 +1,7 @@
 import type { JSX } from "@solidjs/web";
+import { t } from "../../../i18n/index.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import {
   normalizeRoleForGrouping,
   resolveMessageRole,
@@ -23,7 +25,6 @@ import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts"
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
-  prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
 import {
@@ -36,6 +37,8 @@ import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.t
 
 export type NativeMessageGroupOptions = Omit<RenderMessageGroupOptions, "frameContent"> & {
   frameContent?: JSX.Element[];
+  frameHeader?: boolean;
+  frameFooter?: boolean;
 };
 
 export type GroupMessage = MessageGroupData["messages"][number];
@@ -48,37 +51,24 @@ export function prepareGroupMessage(
   const source = prepareChatMessageRender(item.message);
   // Run frames give actions to their answer only; unframed groups apply the same rule per message.
   const ownsActions =
-    item.presentationOwnsFooter !== false &&
-    (normalizeRoleForGrouping(group.role) !== "assistant" ||
-      assistantMessageCanOwnTurnActions(item.actionMessage ?? item.message));
-  const actionSource = item.actionMessage ? prepareChatMessageRender(item.actionMessage) : source;
-  // The original mixed envelope normalizes as a tool message, but a visible
-  // assistant part still targets the original assistant's action identity/text.
-  const actionPreparation =
-    item.actionMessage && group.role === "assistant"
-      ? {
-          ...actionSource,
-          normalizedMessage: { ...actionSource.normalizedMessage, role: "assistant" },
-        }
-      : actionSource;
-  const actionDetails = resolveMessageActionDetails(actionPreparation, {
+    normalizeRoleForGrouping(group.role) !== "assistant" ||
+    assistantMessageCanOwnTurnActions(item.message);
+  const details = resolveMessageActionDetails(source, {
     ...opts,
     onReply: ownsActions ? opts.onReply : undefined,
-    messageId: item.actionKey ?? item.key,
+    messageId: item.key,
     canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
     senderLabel: resolveMessageGroupSenderLabel(group, opts),
   });
-  const details =
-    actionDetails && !ownsActions
-      ? { ...actionDetails, reactionMessageId: undefined }
-      : actionDetails;
   const fullMessage = details?.fullMessage;
   if (fullMessage) {
-    const { messageId, state: expansion } = fullMessage;
+    const { messageId } = fullMessage;
+    const expansion = opts.getAssistantMessageExpansion?.(messageId);
     // Retry transient failures on later renders, bounded so a dead loader cannot hot-loop.
     if (
-      !expansion ||
-      (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)
+      opts.loadFullAssistantMessage &&
+      (!expansion ||
+        (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT))
     ) {
       opts.onToggleAssistantMessageExpanded?.(messageId);
     }
@@ -134,6 +124,14 @@ export function resolveFileLinkOwnerOptions(
             )),
       }
     : options;
+  if (
+    group.senderSession &&
+    (sourceSessionKey !== options.sessionKey ||
+      (group.senderSession.agentId && group.senderSession.agentId !== options.agentId))
+  ) {
+    // Files search belongs to the current pane, unlike source-bound direct file references.
+    return { ...owned, onFindWorkspaceFile: undefined };
+  }
   return owned;
 }
 
@@ -147,7 +145,7 @@ export function prepareMessageGroupFrame(
   const sourceOnly = isSourceOnlyUserGroup(group);
   const showAvatar =
     normalizedRole !== "user" || Boolean(group.sender || group.senderLabel?.trim());
-  const assistantName = opts.assistantName ?? "Assistant";
+  const assistantName = opts.assistantName ?? t("chat.messages.agentName");
   const isOwnGroup = isOwnSenderGroup(group, opts.userId);
   const isPeerGroup =
     normalizedRole === "user" && Boolean(opts.userId && group.sender) && !isOwnGroup;
@@ -196,15 +194,12 @@ export function prepareMessageGroupFrame(
   const isTurnBlock =
     normalizedRole === "tool" ||
     (group.messages.length > 0 &&
-      ((!ownsRunFrame &&
-        group.messages.every((message) => message.presentationOwnsFooter === false)) ||
-        group.messages.every(({ message }) => isProviderVoiceTranscript(message)))) ||
+      group.messages.every(({ message }) => isProviderVoiceTranscript(message))) ||
     (normalizedRole === "assistant" &&
       !opts.searchResult &&
       !ownsRunFrame &&
       !isForwarded &&
-      resolveAssistantReplyPhase(group.messages[0]?.actionMessage ?? group.messages[0]?.message) ===
-        "commentary");
+      resolveAssistantReplyPhase(group.messages[0]?.message) === "commentary");
   const actionOwners = ownsRunFrame
     ? opts.frameActionOwner
       ? [opts.frameActionOwner]
@@ -242,6 +237,7 @@ export function prepareMessageGroupFrame(
     (isPeerGroup || Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown));
   const hasAvatar =
     showAvatar &&
+    opts.frameHeader !== false &&
     !isTurnBlock &&
     avatarPlacement === "gutter" &&
     (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false);
@@ -283,6 +279,7 @@ export function prepareMessageGroupFrame(
         "chat-group--forwarded": isForwarded,
         "chat-group--sender-tint": senderHue !== null,
         "chat-group--reply": holdsReplyRow,
+        "chat-group--frame-fragment": opts.frameFooter === false,
       },
     ],
     senderHue,

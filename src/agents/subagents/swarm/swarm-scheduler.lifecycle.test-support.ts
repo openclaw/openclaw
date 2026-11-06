@@ -1,6 +1,16 @@
 import { expect, vi } from "vitest";
 import * as scheduler from "./swarm-scheduler.js";
 
+export function enqueueSwarmRun(
+  params: Parameters<typeof scheduler.reserveSwarmRun>[0] &
+    Parameters<typeof scheduler.activateSwarmRun>[0],
+): void {
+  if (!scheduler.reserveSwarmRun(params)) {
+    throw new Error(`swarm scheduler run already exists: ${params.runId}`);
+  }
+  scheduler.activateSwarmRun(params);
+}
+
 let observing = false;
 
 /** Observe native effects; cleanup retains their original graph and owner identities. */
@@ -13,7 +23,6 @@ export function observeSwarmSchedulerWork() {
   const runIds = new Set<string>();
   const owners = new Set<object | undefined>();
   const reserve = scheduler.reserveSwarmRun;
-  const enqueue = scheduler.enqueueSwarmRun;
   const activate = scheduler.activateSwarmRun;
   const hold = scheduler.holdQueuedSwarmRun;
   const close = scheduler.closeSwarmScheduler;
@@ -31,15 +40,6 @@ export function observeSwarmSchedulerWork() {
     const before = new Set(list());
     try {
       return reserve(params);
-    } finally {
-      recordNewReservations(before);
-    }
-  });
-  const enqueues = vi.spyOn(scheduler, "enqueueSwarmRun").mockImplementation((params) => {
-    const before = new Set(list());
-    owners.add(params.lifecycleOwner);
-    try {
-      enqueue(params);
     } finally {
       recordNewReservations(before);
     }
@@ -92,7 +92,6 @@ export function observeSwarmSchedulerWork() {
         preparationSpies.forEach((spy) => spy.mockRestore());
         holds.mockRestore();
         activations.mockRestore();
-        enqueues.mockRestore();
         reservations.mockRestore();
       }
     },

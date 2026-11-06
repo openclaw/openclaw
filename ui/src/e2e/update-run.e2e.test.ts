@@ -210,7 +210,10 @@ suite.define(() => {
         );
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
 
-        await dialog.getByRole("button", { name: "Close", exact: true }).click();
+        await dialog
+          .locator("openclaw-modal-actions")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
         await dialog.waitFor({ state: "detached" });
         await text(page.locator("openclaw-update-run-view"), headline).first().waitFor();
         await page.locator(".update-run-view__report").scrollIntoViewIfNeeded();

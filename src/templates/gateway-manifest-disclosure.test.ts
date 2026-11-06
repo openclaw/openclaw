@@ -11,7 +11,7 @@ afterEach(() => vi.unstubAllEnvs());
 
 async function verifiedSource(name: string): Promise<Extract<TemplateReadResult, { ok: true }>> {
   const loaded = await readTemplateManifestFile(
-    path.resolve("src/templates/fixtures/workspace-agent.template.json"),
+    path.resolve("src/templates/fixtures/workspace-agent/CLAW.md"),
   );
   if (!loaded.ok) {
     throw new Error("The workspace agent fixture must be readable.");

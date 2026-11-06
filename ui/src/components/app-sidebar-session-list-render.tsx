@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import {
   presenceViewerActivity,
@@ -7,11 +7,12 @@ import {
   projectPresenceViewers,
 } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { sidebarPinnedSessionRows } from "./app-sidebar-personal-navigation.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import {
   renderPersonalSessionEmpty,
-  renderSessionMutationError,
+  renderSessionListError,
 } from "./app-sidebar-session-filter-summary.tsx";
 import type {
   RenderableSessionSection,
@@ -19,10 +20,7 @@ import type {
   PersonHeaders,
   SessionCatalogRenderSnapshot,
 } from "./app-sidebar-session-render-types.ts";
-import {
-  renderChildSessionLoadError,
-  renderPendingSessionCreateRow,
-} from "./app-sidebar-session-row-render.tsx";
+import { renderChildSessionLoadError } from "./app-sidebar-session-row-render.tsx";
 import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
 import { PersonalSessionGroups } from "./personal-session-groups.tsx";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
@@ -32,10 +30,35 @@ function RosterLoadMore(props: {
   hasMore: boolean;
   loading: boolean;
 }) {
+  const [button, setButton] = createSignal<HTMLButtonElement>();
+  // One page per entry into view: the button has to leave and come back before
+  // the next load, so a page whose rows land off-screen or a failed load never
+  // turns into a request loop. The button stays as the manual fallback.
+  // Grouped and people-sorted views place older rows inside earlier sections,
+  // so they keep the explicit button. The flat list mostly appends; when
+  // Created order or catalog sections put a page above the fold, this still
+  // loads at most one page per entry into view.
+  createIntersectionObserver(
+    () => {
+      const target = button();
+      return target ? [target] : [];
+    },
+    (entries) => {
+      const host = props.host;
+      if (
+        host.effectiveSessionsGrouping() === "none" &&
+        host.effectiveSessionSortMode() !== "people" &&
+        entries.some((entry) => entry.isIntersecting)
+      ) {
+        void host.loadMoreSidebarSessions();
+      }
+    },
+  );
   return (
     <Show when={props.hasMore}>
       <div class="sidebar-session-pagination sidebar-session-pagination--roster">
         <button
+          ref={setButton}
           type="button"
           class="sidebar-session-pagination__button"
           aria-label={
@@ -130,18 +153,9 @@ export function renderSessionList(params: {
   catalogRenderer: SessionCatalogGroupsRenderer;
 }) {
   const host = createMemo(() => params.host);
-  // A create for a rendered custom group is placed by that section instead.
-  const unplacedCreate = createMemo(() => {
-    const pending = host().sessionCreateDisplay();
-    const category = pending?.category;
-    return category && params.sections.some((section) => section.category === category)
-      ? undefined
-      : pending;
-  });
   return renderSessionListFrame(
     host,
     <div class="sidebar-recent-sessions">
-      {renderPendingSessionCreateRow(unplacedCreate)}
       {renderSessionListBody(params)}
       <RosterLoadMore
         host={host()}
@@ -154,7 +168,7 @@ export function renderSessionList(params: {
         host().connected &&
           host().sessionData.sessionsResult !== null &&
           !host().sessionData.sessionsLoading &&
-          !host().sessionData.sessionMutationError &&
+          !host().sessionData.sessionListError &&
           !params.nativeSessionsHaveMore &&
           params.catalogs.catalogs.length === 0 &&
           areSessionCatalogsSettled(host().sessionData),
@@ -198,7 +212,12 @@ function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
   );
 }
 
-export function renderSessionListFrame(host: () => SidebarSessionListHost, body: JSX.Element) {
+/** The roster leads with its agents; the session list keeps its own sections first. */
+export function renderSessionListFrame(
+  host: () => SidebarSessionListHost,
+  body: JSX.Element,
+  bodyFirst = false,
+) {
   const home = createMemo(() =>
     host().sidebarAgentsMode === "roster" ? null : host().mainSessionRow(),
   );
@@ -238,10 +257,11 @@ export function renderSessionListFrame(host: () => SidebarSessionListHost, body:
           {t("sessionsView.moveToTopLevel")}
         </div>
       ) : undefined}
-      {renderSessionMutationError(host())}
+      {renderSessionListError(host())}
+      {bodyFirst ? body : undefined}
       <PinnedSessionSection host={host()} />
       <PersonalSessionGroups host={host()} />
-      {body}
+      {bodyFirst ? undefined : body}
     </section>
   );
 }

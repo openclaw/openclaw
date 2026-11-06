@@ -29,7 +29,7 @@ with current evidence rather than starting another release.
 Read only the references needed for the selected phase:
 
 - Regular beta/stable preparation or publication: [regular release](references/regular-release.md), which routes preparation and phase-specific proof. If the request does not specify stable/full, default to beta; beta authorization does not authorize later stable promotion.
-- Backport discovery: [candidate inventory](references/backport-discovery.md). For extended-stable also read [backport preparation](references/extended-stable-backports.md); SDK/config changes need a visible maintenance-risk warning and maintainer decision.
+- Backport discovery and porting: [candidate inventory and worker brief](references/backport-discovery.md). For extended-stable also read [backport preparation](references/extended-stable-backports.md); SDK/config changes need a visible maintenance-risk warning and maintainer decision.
 - Extended-stable `.33+` Gateway publication: [extended-stable publication](references/extended-stable-publish.md). Use the shared publisher with extended-stable inputs; its non-Latest GitHub Release carries evidence without native-app or ClawHub publication.
 - Validation selection or failed proof: [validation and confidence](references/validation.md), with `$release-openclaw-ci` for workflow execution and immutable manifests.
 - Interrupted publication or registry promotion: [publication recovery](references/publication-recovery.md).
@@ -97,6 +97,12 @@ failure already exists there, record it in the PR body, and merge. During an
 active release, an admin merge is allowed for a release-tooling PR in exactly
 that situation. Red `main` still gets fixed, in parallel by a separate lane,
 never on the release's critical path.
+
+Follow the [FRV wall-time loop](../release-openclaw-ci/SKILL.md#keep-frv-off-the-idle-path):
+start remote validation promptly, repair failures as diagnostics drain, and
+minimize downtime between cycles. Include every known non-flake fix affecting
+the next run rather than knowingly carrying failures forward; overlap useful
+local checks with remote validation. This guides scheduling, not new gates.
 
 The operating objectives are approximately 20 minutes to seal validation and
 publication within an hour, not measured guarantees. Source-only children start

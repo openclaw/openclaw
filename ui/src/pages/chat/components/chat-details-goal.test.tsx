@@ -159,7 +159,7 @@ it.each(["session", "goal", "presentation", "retry"] as const)(
     const callbackFailure = changed === "retry";
     submissionError = callbackFailure
       ? "Goal save failed"
-      : "Goal update is invalid. Check the objective and try again.";
+      : "Couldn’t update the goal. Check the objective and try again.";
     if (callbackFailure) {
       pending.reject(new Error(submissionError));
     } else {

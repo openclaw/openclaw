@@ -61,7 +61,10 @@ export function createGateway(
     ((method: string) =>
       method === "sessions.search" ? { results: [], sessions: [] } : { models: [] });
   const client = createTestGatewayClient((...args) => {
-    // Creation catalogs must not consume scripted search replies.
+    // Draft chrome reads must not consume scripted search replies.
+    if (args[0] === "agent.identity.get") {
+      return null;
+    }
     if (args[0] === "environments.list") {
       return { environments: [], profiles: [] };
     }

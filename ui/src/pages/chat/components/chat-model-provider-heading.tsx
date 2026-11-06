@@ -1,6 +1,9 @@
 import { createMemo, Show, useContext } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
-import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
+import {
+  providerDisplayLabel,
+  type ProviderPresentation,
+} from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -12,6 +15,7 @@ import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
 export function ChatModelProviderHeading(props: {
   params: Pick<ChatModelPickerParams, "disabled" | "providerAuth" | "onProviderSettings">;
   provider: string;
+  presentation?: ProviderPresentation;
   options: ChatModelPickerOption[];
   favorites?: boolean;
   toggle?: boolean;
@@ -23,7 +27,9 @@ export function ChatModelProviderHeading(props: {
 }) {
   const search = useContext(ChatModelSearchContext);
   const providerLabel = () =>
-    props.favorites ? t("chat.modelControls.favorites") : providerDisplayLabel(props.provider);
+    props.favorites
+      ? t("chat.modelControls.favorites")
+      : providerDisplayLabel(props.provider, props.presentation);
   const groupLabel = () =>
     props.favorites
       ? providerLabel()
@@ -59,7 +65,7 @@ export function ChatModelProviderHeading(props: {
         when={props.toggle}
         fallback={
           <>
-            <ChatModelProviderIcon provider={props.provider} />
+            <ChatModelProviderIcon provider={props.provider} presentation={props.presentation} />
             <span class="chat-controls__provider-label">{providerLabel()}</span>
           </>
         }
@@ -84,7 +90,9 @@ export function ChatModelProviderHeading(props: {
         >
           <Show
             when={props.favorites}
-            fallback={<ChatModelProviderIcon provider={props.provider} />}
+            fallback={
+              <ChatModelProviderIcon provider={props.provider} presentation={props.presentation} />
+            }
           >
             <Icon name="heart" class="chat-controls__provider-icon" />
           </Show>

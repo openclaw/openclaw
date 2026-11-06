@@ -3,10 +3,10 @@ import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { SettingsEmpty, SettingsStatus } from "../../components/solid/settings-ui.tsx";
-import { visitTextDiff } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { visitTextDiff } from "../../lib/text-diff.ts";
 import { undoMutationFor } from "./api.ts";
 import {
   MutationButton,

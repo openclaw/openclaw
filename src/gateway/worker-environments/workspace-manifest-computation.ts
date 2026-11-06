@@ -11,13 +11,20 @@ import type {
 } from "./workspace-manifest.js";
 import type {
   StagedWorkerWorkspaceInventory,
-  StagedWorkerWorkspaceReadEntry,
+  StagedWorkerWorkspaceResult,
   WorkerWorkspaceGitHistory,
 } from "./workspace-result-inventory.js";
 
 export type WorkspaceComputationHashes = {
   owner: "gateway" | "worker";
   entries: Array<[string, string]>;
+};
+
+export type WorkspaceManifestHostEffects = {
+  "workspace.manifest.read": {
+    input: { knownTreeRoot?: string };
+    output: Uint8Array<ArrayBuffer>;
+  };
 };
 
 export type WorkspaceComputationHashResult<T> = {
@@ -76,6 +83,8 @@ export type WorkspaceStageInputSource<Raw = Uint8Array<ArrayBuffer>> =
       currentManifestRef: string;
       baseManifestRaw: Raw;
       currentManifestRaw: Raw;
+      /** Immutable blob facts supplied by the accepted checkpoint owner, never the worker. */
+      existingObjects?: Array<[string, string]>;
     }
   | {
       publication: {
@@ -123,7 +132,7 @@ export type WorkspaceManifestComputationOperations = {
   };
 } & {
   "workspace.manifest.local": {
-    input: { snapshot: Uint8Array<ArrayBuffer> };
+    input: { owner: string };
     output: LocalWorkspaceManifestValue;
   };
   "workspace.manifest.base-refresh": {
@@ -187,15 +196,19 @@ export type WorkspaceManifestComputationOperations = {
     };
   };
   "workspace.manifest.staged": {
-    input: { root: string; ref: string; buildCacheInputs?: string[] };
-    output: StagedWorkerWorkspaceInventory;
-  };
-  "workspace.manifest.entries": {
     input: {
       root: string;
-      entries: StagedWorkerWorkspaceReadEntry[];
+      ref: string;
+      buildCacheInputs?: string[];
+      stagingRoot?: string;
+      verifyContents?: boolean;
+      reconciliation?: { baseManifestRef: string; alreadyAccepted?: boolean };
     };
-    output: Uint8Array;
+    output: StagedWorkerWorkspaceInventory;
+  };
+  "workspace.manifest.result": {
+    input: WorkspaceManifestComputationOperations["workspace.manifest.staged"]["input"];
+    output: StagedWorkerWorkspaceResult;
   };
   "workspace.manifest.stage-input": {
     input: WorkspaceStageInput;

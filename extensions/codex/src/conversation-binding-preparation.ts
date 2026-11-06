@@ -236,6 +236,7 @@ export async function resolveConversationAppServerRuntime(params: {
     release: current?.release ?? (() => {}),
     assertCurrent: current?.assertCurrent ?? (async () => {}),
     source: current?.source,
+    sessionKey,
     incognito:
       source || sessionKey
         ? entry?.incognito === true || isIncognitoSessionKey(sessionKey)
@@ -295,7 +296,7 @@ async function resolveThreadBindingRuntime(params: CodexThreadBindingParams) {
     modelProvider: params.modelProvider,
     ...agentLookup,
   });
-  const { runtime, workspaceDir, assertCurrent, source, incognito, release } =
+  const { runtime, workspaceDir, assertCurrent, source, sessionKey, incognito, release } =
     await resolveConversationAppServerRuntime({
       ...params,
       modelProvider: reviewerModelProvider,
@@ -315,6 +316,7 @@ async function resolveThreadBindingRuntime(params: CodexThreadBindingParams) {
     release,
     assertCurrent,
     source,
+    sessionKey,
     incognito: incognito ?? params.incognito,
     runtime,
     workspaceDir,
@@ -327,7 +329,7 @@ async function resolveThreadBindingRuntime(params: CodexThreadBindingParams) {
 
 export async function buildConversationThreadRequestForClient(
   client: CodexAppServerClient,
-  resolved: Omit<ConversationAppServerRuntime, "release"> & {
+  resolved: Pick<ConversationAppServerRuntime, "runtime" | "workspaceDir" | "assertCurrent"> & {
     model?: string;
     modelProvider?: string;
   },
@@ -529,6 +531,7 @@ async function bindThread(params: CodexThreadBindingParams, threadId?: string) {
       binding,
       assertCurrent: resolved.assertCurrent,
       source: resolved.source,
+      sessionKey: resolved.sessionKey,
       release: resolved.release,
     };
   } finally {
@@ -611,22 +614,12 @@ export async function prepareCodexConversationBinding(params: {
           await sourceAuthority.assertCurrent();
           const source = await params.bindingStore.readAsync(sourceIdentity);
           if (source && source.threadId === params.data.source?.threadId) {
-            const sourceSessionKey =
-              sourceIdentity.sessionKey ??
-              (
-                await getSessionEntryByIdAsync({
-                  agentId: sourceIdentity.agentId,
-                  sessionId: sourceIdentity.sessionId,
-                  storePath:
-                    params.data.source.storePath ??
-                    resolveStorePath(params.config?.session?.store, {
-                      agentId: sourceIdentity.agentId,
-                    }),
-                })
-              )?.sessionKey;
+            const sourceSessionKey = sourceAuthority.sessionKey;
             if (
               sourceSessionKey &&
-              resolveActiveEmbeddedRunSessionId(sourceSessionKey) === sourceIdentity.sessionId
+              resolveActiveEmbeddedRunSessionId(sourceSessionKey, undefined, {
+                executionStartedOnly: true,
+              }) === sourceIdentity.sessionId
             ) {
               throw new Error(
                 "Codex source session has an active run; stop it before binding this conversation.",

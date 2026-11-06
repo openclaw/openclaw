@@ -343,6 +343,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         readMode: "writable",
         getSessionEntry: () => params.sessionEntry,
         classifyResult: params.classifyResult,
+        onCompactionAccounting: params.onCompactionAccounting,
       },
       async ({ sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult }) => {
         const accessProgram = params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram;

@@ -1,7 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
+import { Compile } from "typebox/compile";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { validateToolArguments } from "../../packages/llm-core/src/validation.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -55,6 +57,8 @@ import { clearToolSearchCatalog } from "./tool-search.js";
 import { createToolSurfacePresentationForTest } from "./tool-surface-plan.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
+
+vi.mock("typebox/compile", { spy: true });
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -110,6 +114,39 @@ function expectFragments(value: unknown, included: string[], excluded: string[] 
 }
 
 describe("Code Mode catalog and model-visible surface", () => {
+  it("reuses control validators across turns while retaining each turn's limits and cancellation", async () => {
+    const compile = vi.mocked(Compile);
+    const validate = (tools: AnyAgentTool[]) => {
+      for (const tool of tools) {
+        const args = tool.name === "exec" ? { code: "return 42;" } : { runId: "owned-cell" };
+        expect(
+          validateToolArguments(tool, {
+            type: "toolCall",
+            id: "call",
+            name: tool.name,
+            arguments: args,
+          }),
+        ).toEqual(args);
+      }
+    };
+    validate(createCodeModeHarness().tools);
+    compile.mockClear();
+    for (const timeoutMs of [1_000, 2_000, 3_000]) {
+      const controller = new AbortController();
+      const { tools } = createCodeModeHarness({
+        codeMode: { timeoutMs },
+        abortSignal: controller.signal,
+      });
+      validate(tools);
+      const exec = tools[0]!;
+      expect(exec.description).toContain(`${timeoutMs} ms wall-clock budget`);
+      const cancelled = new Error(`cancelled turn ${timeoutMs}`);
+      controller.abort(cancelled);
+      await expect(exec.execute("cancelled", { code: "return 42;" })).rejects.toBe(cancelled);
+    }
+    expect(compile).not.toHaveBeenCalled();
+  });
+
   it("refreshes guest metadata after catalog replacement and restriction", async () => {
     const { ctx, tools, exec } = catalog([fakeTool("lookup", "Original metadata")]);
     const read = () => exec.execute("metadata", { code: "return catalog.all();" });

@@ -47,7 +47,8 @@ import {
   isSameSubagentRunOwner,
 } from "../registry/subagent-run-generation.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 

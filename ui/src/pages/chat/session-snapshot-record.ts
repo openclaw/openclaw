@@ -20,14 +20,15 @@ import {
   chatHeaderSharingSnapshotSchema,
   chatHeaderViewersSnapshotSchema,
 } from "./chat-header-viewers-snapshot.ts";
+import { trimmedChatHistoryPagination } from "./chat-history-pagination.ts";
 import { projectChatMessageReactions } from "./chat-message-reactions-snapshot.ts";
 import { chatSessionStateSnapshotSchema } from "./chat-session-state-snapshot.ts";
-import { detailsSnapshotSchema } from "./session-details-snapshot-schema.ts";
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
   loadChatHistoryStateValidator,
   prewarmedHistoryStateValidator,
-} from "./session-snapshot-prewarm.ts";
+} from "./chat-snapshot-prewarm.ts";
+import { detailsSnapshotSchema } from "./session-details-snapshot-schema.ts";
+import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 
 const nonnegative = json.refine(json.number, (value) => value >= 0);
@@ -43,7 +44,9 @@ const completePaginationSchema = json.object(
 const morePaginationSchema = json.object(
   {
     hasMore: json.literal(true),
-    nextOffset: nonnegative,
+    nextOffset: json.optional(nonnegative),
+    olderCursor: json.optional(json.refine(json.text, (value) => value.length > 0)),
+    needsBoundary: json.optional(json.literal(true)),
     totalMessages: json.optional(nonnegative),
   },
   true,
@@ -86,6 +89,18 @@ const snapshotSchema = json.object(
           ),
           permissionMode: json.optional(permissionModeSchema),
           defaultPermissionMode: json.optional(permissionModeSchema),
+          contextWindowDisplay: json.optional(
+            json.object({
+              contextWindow: json.optional(json.text),
+              contextWindowDefault: json.optional(json.text),
+              contextWindows: json.optional(
+                json.array(
+                  json.object({ id: json.text, label: json.text, contextWindow: nonnegative }),
+                  30,
+                ),
+              ),
+            }),
+          ),
         }),
       ),
     ),
@@ -178,7 +193,8 @@ export async function parseSnapshotRecord(
   return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
 }
 
-export const CHAT_SNAPSHOT_PROJECTION_VERSION = 10;
+// Refill rows whose automatic full-message recovery was not retained for reload.
+export const CHAT_SNAPSHOT_PROJECTION_VERSION = 14;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 
 export async function createSnapshotRecord(
@@ -201,17 +217,10 @@ export async function createSnapshotRecord(
       start--;
     }
     if (start > 0) {
-      // Display rows are not Gateway page boundaries. Refill from zero on the
-      // first upward scroll; the history owner deduplicates the overlap and
-      // returns the next authoritative offset, including merged CLI histories.
+      // Display rows are not Gateway page boundaries. Reopen the held oldest
+      // source before paging; the original cursor would skip the discarded rows.
       changes.messages = messages.slice(start);
-      changes.pagination = {
-        hasMore: true,
-        nextOffset: 0,
-        ...(source.pagination.totalMessages !== undefined
-          ? { totalMessages: source.pagination.totalMessages }
-          : {}),
-      };
+      changes.pagination = trimmedChatHistoryPagination(source.pagination);
     }
     let historyChanged = false;
     const retainedMessages = changes.messages ?? messages;

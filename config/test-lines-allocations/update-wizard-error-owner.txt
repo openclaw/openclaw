@@ -1,0 +1,2 @@
+# Exercise delegated wizard errors through the registered CLI error owner.
+29

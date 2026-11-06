@@ -16,11 +16,13 @@ import {
   writePrivateUpdateHandoffChildGuard,
 } from "../../test/helpers/private-update-handoff-store.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { updateExecutorNativeEntrypoints } from "../cli/update-cli/update-command-executor-native-runtime.test-support.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import * as processGroups from "../process/child-process-tree.js";
 import * as processIdentity from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
@@ -28,6 +30,9 @@ import {
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 
 const roots = createTempDirTracker();
+const executorUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
+const leaseUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.handoffLease);
+const runtimeRoot = fileURLToPath(new URL("../../", executorUrl));
 const unix = process.platform === "win32" ? it.skip : it;
 afterEach(() => {
   vi.restoreAllMocks();
@@ -64,17 +69,15 @@ function fixture() {
   const store = createManagedHandoffLeaseStore(storeOptions);
   const pair = () => [store.read(install), store.read(slot)];
   const expectAbsent = () => expect(pair()).toEqual([{ kind: "absent" }, { kind: "absent" }]);
-  const child = path.join(root, "original-owner.mts");
-  const executorUrl = new URL("../cli/update-cli/update-command-executor.ts", import.meta.url).href;
-  const leaseUrl = new URL("./update-managed-service-handoff-lease.ts", import.meta.url).href;
+  const child = path.join(root, "original-owner.mjs");
   const crash = (mode: "ordinary" | "cancelled" = "ordinary", holderPid?: number) => {
     fs.writeFileSync(
       child,
       `
 import { createRequire } from "node:module";
 createRequire(import.meta.url)(${JSON.stringify(path.join(privateTmp, "private-handoff-guard.cjs"))});
-const { withUpdateCommandExecutor, requestUpdateCommandExecutorCancellation } = await import(${JSON.stringify(executorUrl)});
-const { createManagedHandoffLeaseStore } = await import(${JSON.stringify(leaseUrl)});
+const { withUpdateCommandExecutor, requestUpdateCommandExecutorCancellation } = await import(${JSON.stringify(executorUrl.href)});
+const { createManagedHandoffLeaseStore } = await import(${JSON.stringify(leaseUrl.href)});
 const runId = ${JSON.stringify(randomUUID())};
 await withUpdateCommandExecutor(runId, async (executor) => {
   const fence = await executor.enter(${JSON.stringify(slot)});
@@ -88,16 +91,14 @@ await withUpdateCommandExecutor(runId, async (executor) => {
 });
 `,
     );
-    const args = ["--import", "tsx", binding.nodeOption, child];
-    const result = spawnSync(resolveTestNodeExecPath(), args, {
-      cwd: fileURLToPath(new URL("../../", import.meta.url)),
+    const result = spawnSync(resolveTestNodeExecPath(), [binding.nodeOption, child], {
       env,
       encoding: "utf8",
       timeout: 10_000,
       killSignal: "SIGKILL",
     });
     expect([result.error, result.signal], result.stderr).toEqual([undefined, "SIGKILL"]);
-    assertManagedHandoffTestConsumer(binding, result.pid, path.resolve("src"));
+    assertManagedHandoffTestConsumer(binding, result.pid, runtimeRoot);
     const original = store.read(install),
       occupied = store.read(slot);
     assert(original.kind === "current" && occupied.kind === "current", "Missing crash pair");

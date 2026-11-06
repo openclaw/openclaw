@@ -4,10 +4,10 @@ import type { WorkerMachineOption } from "../../../../packages/gateway-protocol/
 import {
   compareCloudProfiles,
   resolveCloudProfileIconData,
-} from "../../components/provider-icon-data.ts";
+} from "../../components/cloud-profile-icon-data.ts";
+import { CloudProfileIcon } from "../../components/solid/cloud-profile-icon.tsx";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
-import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { machineShapeText, type CloudChoiceMenuItemsOptions } from "./cloud-target.ts";

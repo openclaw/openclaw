@@ -110,9 +110,6 @@ export async function readSessionTranscriptAccountingAsync(
     ...(Object.hasOwn(options, "includeTurnTaint")
       ? { includeTurnTaint: options.includeTurnTaint }
       : {}),
-    ...(Object.hasOwn(options, "usageEventLimit")
-      ? { usageEventLimit: options.usageEventLimit }
-      : {}),
   };
   const memory = captureSessionActorTranscriptRead(scope, signal);
   if (memory) {

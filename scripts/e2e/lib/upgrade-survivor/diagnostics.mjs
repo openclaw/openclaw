@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { publishedBackupRollback } from "./backup-rollback-summary.mjs";
+import { retirementCuts } from "./installed-recovery-observations.mjs";
 import { publishedNativeAssignments } from "./native-assignment-summary.mjs";
 import { assertPackageRecoveryEvidence } from "./package-activation-recovery.mjs";
 import { publishedPluginPolicy } from "./plugin-policy-summary.mjs";
@@ -186,6 +187,207 @@ const reasons = [
   "SQLite journal state requires an artifact-preserving reader; omitted before native open",
 ];
 const omissions = {};
+const installedRecoveryLabels = [
+  "installed recovery",
+  "installed recovery install",
+  "installed recovery stdout",
+  "installed recovery stderr",
+  "installed recovery driver error",
+  "installed recovery checkpoint",
+];
+
+function installedRecoveryCurrent(value, sanitize) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const names =
+    value.cut === null
+      ? ["next-update", "next-update-status"]
+      : [
+          "displacement",
+          "missing-status",
+          "repair",
+          "repeat-repair",
+          "retirement",
+          "resume-retirement",
+          "completed-status",
+          "archive-completed",
+        ];
+  if (
+    (value.cut !== null && !retirementCuts.includes(value.cut)) ||
+    !names.includes(value.name) ||
+    !["running", "completed", "rejected"].includes(value.state)
+  ) {
+    throw new Error();
+  }
+  const prefix = value.cut === null ? "" : `${value.cut}/`;
+  for (const [stream, extension] of [
+    ["stdout", "out"],
+    ["stderr", "err"],
+  ]) {
+    if (value[stream] !== `${prefix}${value.name}.${extension}`) {
+      throw new Error();
+    }
+  }
+  const current = {
+    cut: value.cut,
+    name: value.name,
+    state: value.state,
+    stdout: value.stdout,
+    stderr: value.stderr,
+  };
+  for (const field of ["startedAt", "elapsedMs"]) {
+    if (value[field] !== undefined) {
+      if (!Number.isSafeInteger(value[field]) || value[field] < 0) {
+        throw new Error();
+      }
+      current[field] = value[field];
+    }
+  }
+  if (value.state === "completed") {
+    if (
+      !Number.isInteger(value.status) ||
+      value.status < 0 ||
+      value.status > 255 ||
+      value.treeJoined !== true
+    ) {
+      throw new Error();
+    }
+    Object.assign(current, { status: value.status, treeJoined: true });
+  } else if (value.state === "rejected") {
+    if (typeof value.error !== "string") {
+      throw new Error();
+    }
+    current.error = sanitize(value.error, "installed recovery");
+  }
+  return current;
+}
+
+function installedRecoveryProjection(value, sanitize = (text) => text) {
+  if (value?.availability !== "captured") {
+    return { availability: "unavailable" };
+  }
+  if (
+    !/^installed-recovery-[A-Za-z0-9]+$/.test(value.runDirectory) ||
+    !["running", "passed"].includes(value.status)
+  ) {
+    throw new Error();
+  }
+  const current = installedRecoveryCurrent(value.current, sanitize);
+  const checkpoint = { availability: "unavailable" };
+  if (value.checkpoint?.availability === "captured") {
+    const observed = value.checkpoint;
+    const expectedCut =
+      current?.name === "displacement"
+        ? "displaced"
+        : current?.name === "retirement"
+          ? current.cut
+          : null;
+    if (
+      !expectedCut ||
+      observed.cut !== expectedCut ||
+      typeof observed.phase !== "string" ||
+      typeof observed.intent !== "string" ||
+      typeof observed.synced !== "boolean"
+    ) {
+      throw new Error();
+    }
+    Object.assign(checkpoint, {
+      availability: "captured",
+      cut: observed.cut,
+      phase: sanitize(observed.phase, "installed recovery checkpoint"),
+      intent: sanitize(observed.intent, "installed recovery checkpoint"),
+      synced: observed.synced,
+    });
+  }
+  return {
+    availability: "captured",
+    runDirectory: value.runDirectory,
+    status: value.status,
+    current,
+    checkpoint,
+    driverError: {
+      availability: value.driverError?.availability === "captured" ? "captured" : "unavailable",
+    },
+    logs: Object.fromEntries(
+      ["install", "stdout", "stderr"].map((name) => [
+        name,
+        sanitize(value.logs?.[name] ?? null, `installed recovery ${name}`),
+      ]),
+    ),
+  };
+}
+
+function captureInstalledRecovery(artifactRoot, observationRoot) {
+  if (!observationRoot) {
+    return { availability: "unavailable" };
+  }
+  try {
+    const summary = JSON.parse(
+      readOwned(artifactRoot, "installed-recovery.json", "installed recovery"),
+    );
+    if (
+      !/^installed-recovery-[A-Za-z0-9]+$/.test(summary?.runDirectory) ||
+      ownedPath(artifactRoot, summary.runDirectory) !== fs.realpathSync(observationRoot)
+    ) {
+      throw new Error();
+    }
+    const current = installedRecoveryCurrent(summary.current, (text) => text);
+    const snapshot = {
+      availability: "captured",
+      runDirectory: summary.runDirectory,
+      status: summary.status,
+      current,
+      checkpoint: { availability: "unavailable" },
+      // Error snippets and encoded assertion values are not text-redactor input.
+      // Validate the owned private file, but publish only its availability.
+      driverError: {
+        availability: readOwned(observationRoot, "driver.err", "installed recovery driver error")
+          ? "captured"
+          : "unavailable",
+      },
+      logs: {
+        install: readOwned(observationRoot, "install.log", "installed recovery install"),
+      },
+    };
+    if (current) {
+      for (const stream of ["stdout", "stderr"]) {
+        snapshot.logs[stream] = readOwned(
+          observationRoot,
+          current[stream],
+          `installed recovery ${stream}`,
+        );
+      }
+      if (current.name === "displacement" || current.name === "retirement") {
+        const relative = `${current.cut}/${current.name}.fault.json.observed`;
+        const raw = readOwned(observationRoot, relative, "installed recovery checkpoint");
+        if (raw !== null) {
+          try {
+            const observed = JSON.parse(raw);
+            const checkpoint = {
+              availability: "captured",
+              cut: observed.cut,
+              phase: observed.row?.phase,
+              intent: JSON.parse(observed.row?.intent_json).kind,
+              synced: observed.synced,
+            };
+            snapshot.checkpoint = installedRecoveryProjection({
+              ...snapshot,
+              checkpoint,
+            }).checkpoint;
+          } catch {
+            // A partially written checkpoint must not hide the command's captured logs.
+            omissions["installed recovery checkpoint"] = reasons[3];
+          }
+        }
+      }
+    }
+    return installedRecoveryProjection(snapshot);
+  } catch {
+    omissions["installed recovery"] = reasons[3];
+    return { availability: "unavailable" };
+  }
+}
 
 function ownedPath(root, relative) {
   if (!root || fs.lstatSync(root).isSymbolicLink()) {
@@ -1578,6 +1780,7 @@ async function capture(artifactRoot, phase, exitStatus, signal = "", observation
         : readOwned(artifactRoot, name, name);
   }
   const stateRoot = process.env.OPENCLAW_STATE_DIR;
+  report.installedRecovery = captureInstalledRecovery(artifactRoot, observationRoot);
   report.packageIntegrity = capturePackageIntegrity(observationRoot);
   report.pluginIdentity = await pluginIdentities(stateRoot, artifactRoot);
   report.migration = captureMigrationEvidence(stateRoot, artifactRoot, observationRoot);
@@ -1782,18 +1985,98 @@ function publishedNativePluginUi(snapshot, sanitize) {
   };
 }
 
+function publishedDeferredSchemaDoctor(snapshot, sanitize) {
+  const proof = snapshot.deferredSchemaDoctor;
+  if (proof === null || proof === undefined) {
+    return null;
+  }
+  const schema = (value) =>
+    value &&
+    [value.userVersion, value.metadataVersion, value.contentVersion].every(
+      (version) => Number.isSafeInteger(version) && version >= 0,
+    );
+  if (
+    snapshot.scenario !== "legacy-operator-state" ||
+    snapshot.updateRestartMode !== "manual" ||
+    proof.relativePath !== "state/openclaw.sqlite" ||
+    proof.baselineVersion !== snapshot.baseline.version ||
+    proof.baselineVersion !== "2026.9.2" ||
+    proof.candidateVersion !== snapshot.candidate.version ||
+    !/^[a-f0-9]{64}$/u.test(proof.candidateSha256) ||
+    !/^[a-f0-9]{40}$/u.test(proof.sourceSha) ||
+    !Number.isSafeInteger(proof.expectedContentVersion) ||
+    proof.expectedContentVersion < 0 ||
+    !Number.isSafeInteger(proof.baselinePublishedVersion) ||
+    proof.baselinePublishedVersion < 0 ||
+    !schema(proof.before) ||
+    !["passed", "not-observed"].includes(proof.status)
+  ) {
+    throw new Error("Invalid deferred-schema Doctor proof");
+  }
+  const tuple = (value) => ({
+    userVersion: value.userVersion,
+    metadataVersion: value.metadataVersion,
+    contentVersion: value.contentVersion,
+  });
+  const result = {
+    status: proof.status,
+    relativePath: proof.relativePath,
+    baselineVersion: proof.baselineVersion,
+    candidateVersion: sanitize(proof.candidateVersion, "summary"),
+    candidateSha256: proof.candidateSha256,
+    sourceSha: proof.sourceSha,
+    expectedContentVersion: proof.expectedContentVersion,
+    before: tuple(proof.before),
+    baselinePublishedVersion: proof.baselinePublishedVersion,
+  };
+  if (proof.status === "passed") {
+    if (
+      !schema(proof.after) ||
+      JSON.stringify(tuple(proof.after)) !== JSON.stringify(tuple(proof.before)) ||
+      proof.before.userVersion !== 15 ||
+      proof.before.userVersion !== proof.baselinePublishedVersion ||
+      proof.before.userVersion !== proof.before.metadataVersion ||
+      proof.before.userVersion >= proof.before.contentVersion ||
+      proof.before.contentVersion !== proof.expectedContentVersion ||
+      proof.doctorExitCode !== 1 ||
+      proof.diagnosticVersion !== proof.expectedContentVersion ||
+      proof.pendingMigrations !== 0 ||
+      proof.sameDatabase !== true ||
+      [
+        proof.beforeObserverFamilyUnchanged,
+        proof.cliFamilyUnchanged,
+        proof.afterObserverFamilyUnchanged,
+      ].some((value) => typeof value !== "boolean")
+    ) {
+      throw new Error("Invalid deferred-schema Doctor result");
+    }
+    Object.assign(result, {
+      after: tuple(proof.after),
+      doctorExitCode: 1,
+      diagnosticVersion: proof.diagnosticVersion,
+      pendingMigrations: 0,
+      sameDatabase: true,
+      beforeObserverFamilyUnchanged: proof.beforeObserverFamilyUnchanged,
+      cliFamilyUnchanged: proof.cliFamilyUnchanged,
+      afterObserverFamilyUnchanged: proof.afterObserverFamilyUnchanged,
+    });
+  }
+  return result;
+}
+
 function publishedSuccessSummary(artifactRoot, sanitize) {
   const raw = readOwned(artifactRoot, "summary.json", "summary");
   if (raw === null) {
     throw new Error();
   }
   const snapshot = JSON.parse(raw);
-  if (snapshot.status !== "passed") {
+  if (snapshot.status !== "passed" || !Array.isArray(snapshot.phases)) {
     throw new Error();
   }
   const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
   const nativeAssignments = publishedNativeAssignments(snapshot);
   const nativePluginUi = publishedNativePluginUi(snapshot, sanitize);
+  const deferredSchemaDoctor = publishedDeferredSchemaDoctor(snapshot, sanitize);
   let packageActivationRecovery;
   if (
     ["package-publication-recovery", "package-verification-recovery"].includes(snapshot.scenario)
@@ -1919,9 +2202,12 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     ...(pluginPolicy ? { pluginPolicy } : {}),
     ...(nativeAssignments ? { nativeAssignments } : {}),
     ...(nativePluginUi ? { nativePluginUi } : {}),
+    ...(deferredSchemaDoctor ? { deferredSchemaDoctor } : {}),
     ...(packageActivationRecovery ? { packageActivationRecovery } : {}),
     timings,
-    phases: boundedList(snapshot.phases).map((event) => {
+    // Preserve the full start/completion journal within the summary's input/output
+    // byte limits; generic collection counts reject valid long-running proofs.
+    phases: snapshot.phases.map((event) => {
       if (
         !["started", "passed", "failed"].includes(event?.status) ||
         typeof event.phase !== "string" ||
@@ -2046,6 +2332,245 @@ function failedUpdateContext(text, label) {
   }
 }
 
+function diagnosticSanitizer(redactSensitiveText, outcome) {
+  return function sanitize(text, label) {
+    if (text === null || text === undefined) {
+      return null;
+    }
+    if (typeof text !== "string" || Buffer.byteLength(text) > inputLimit) {
+      throw new Error();
+    }
+    let redacted = redactSensitiveText(text, { mode: "tools" });
+    if (outcome === "failed" && Buffer.byteLength(JSON.stringify(redacted)) > outputLimit) {
+      const context = failedUpdateContext(text, label);
+      if (context) {
+        // Keep execution order explicit; this is a diagnostic prelude, not reordered steps.
+        redacted = `${redactSensitiveText(context, { mode: "tools" })}\n\nCaptured update output (original order):\n${redacted}`;
+      }
+    }
+    // Keep the latest startup/native events after redacting the whole input.
+    const tail =
+      label === "missing-load-path/baseline-gateway.log" ||
+      label === "native-assignment-messages.jsonl";
+    const lines = redacted.split(/(?<=\n)/u);
+    if (tail) {
+      lines.reverse();
+    }
+    let result = "";
+    for (const line of lines) {
+      const next = tail ? line + result : result + line;
+      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
+        omissions[label] = "redacted output truncated at a complete line (16 KiB)";
+        break;
+      }
+      result = next;
+    }
+    return result;
+  };
+}
+
+// The scheduler survives its lane's process-group kill. Read only that attempt's
+// mounted evidence after the scheduler joins the group and settles its producer.
+export function publishInstalledRecoveryDiagnostics(
+  artifactRoot,
+  destination,
+  redactSensitiveText,
+  { cut, exitStatus, timedOut, packageSha256 },
+) {
+  if (
+    !retirementCuts.includes(cut) ||
+    typeof timedOut !== "boolean" ||
+    !/^[a-f0-9]{64}$/.test(packageSha256) ||
+    (timedOut && exitStatus === 0)
+  ) {
+    throw new Error();
+  }
+  const coordinates = phaseResult(
+    timedOut ? "installed-recovery-timeout" : "installed-recovery",
+    exitStatus,
+    null,
+  );
+  for (const label of Object.keys(omissions)) {
+    delete omissions[label];
+  }
+  const sanitize = diagnosticSanitizer(redactSensitiveText, "failed");
+  const report = {
+    ...coordinates,
+    outcome: exitStatus === 0 ? "passed" : "failed",
+    capturedAt: new Date().toISOString(),
+    host: { processGroupJoined: true, timedOut },
+    cut,
+    packageSha256,
+    installedRecovery: { availability: "unavailable" },
+    completedCuts: [],
+    commands: [],
+    nextUpdate: null,
+    omissions,
+  };
+  try {
+    const summary = JSON.parse(
+      readOwned(artifactRoot, "installed-recovery.json", "installed recovery"),
+    );
+    if (
+      !/^installed-recovery-[A-Za-z0-9]+$/.test(summary?.runDirectory) ||
+      JSON.stringify(summary.selectedCuts) !== JSON.stringify([cut]) ||
+      (summary.artifactSha256 !== undefined && summary.artifactSha256 !== packageSha256)
+    ) {
+      throw new Error();
+    }
+    report.installedRecovery = installedRecoveryProjection(
+      captureInstalledRecovery(artifactRoot, ownedPath(artifactRoot, summary.runDirectory)),
+      sanitize,
+    );
+    if (report.installedRecovery.availability !== "captured") {
+      throw new Error();
+    }
+    if (
+      report.installedRecovery.current?.cut !== undefined &&
+      report.installedRecovery.current.cut !== null &&
+      report.installedRecovery.current.cut !== cut
+    ) {
+      throw new Error();
+    }
+    const commands = summary.commands ?? [];
+    if (!Array.isArray(commands) || commands.length > 10) {
+      throw new Error();
+    }
+    report.commands = commands.map((value) => {
+      const command = installedRecoveryCurrent(value, sanitize);
+      if (
+        !command ||
+        command.state !== "completed" ||
+        (command.cut !== null && command.cut !== cut) ||
+        command.startedAt === undefined ||
+        command.elapsedMs === undefined
+      ) {
+        throw new Error();
+      }
+      return command;
+    });
+    const rows = summary.rows ?? [];
+    if (!Array.isArray(rows) || rows.length > 1) {
+      throw new Error();
+    }
+    const operationId = (value) => {
+      if (
+        typeof value !== "string" ||
+        !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value)
+      ) {
+        throw new Error();
+      }
+      return value;
+    };
+    report.completedCuts = rows.map((row) => {
+      if (
+        row.cut !== cut ||
+        row.originalHelperRepairs !== 2 ||
+        typeof row.installedVersion !== "string" ||
+        row.installedVersion.length > 128 ||
+        typeof row.interruptedPhase !== "string" ||
+        !/^[a-z-]{1,40}$/.test(row.interruptedPhase)
+      ) {
+        throw new Error();
+      }
+      const projected = {
+        cut,
+        operationId: operationId(row.operationId),
+        installedVersion: sanitize(row.installedVersion, "installed recovery"),
+        interruptedPhase: row.interruptedPhase,
+        originalHelperRepairs: 2,
+      };
+      for (const field of [
+        "missingCli",
+        "originalWriterJoined",
+        "completedViaIndependentHelper",
+        "packagePreserved",
+        "launchersPreserved",
+        "fullConfigPreserved",
+      ]) {
+        if (row[field] !== true) {
+          throw new Error();
+        }
+        projected[field] = true;
+      }
+      return projected;
+    });
+    if (summary.nextUpdate !== undefined) {
+      const next = summary.nextUpdate;
+      if (
+        next.exitCode !== 0 ||
+        next.status !== "complete" ||
+        next.receiptPhase !== "anchor-retired" ||
+        typeof next.installedVersion !== "string" ||
+        next.installedVersion.length > 128 ||
+        report.completedCuts.some((row) => row.operationId === next.operationId)
+      ) {
+        throw new Error();
+      }
+      report.nextUpdate = {
+        exitCode: 0,
+        status: "complete",
+        receiptPhase: "anchor-retired",
+        operationId: operationId(next.operationId),
+        installedVersion: sanitize(next.installedVersion, "installed recovery"),
+      };
+    }
+    if (
+      exitStatus === 0 &&
+      (summary.status !== "passed" ||
+        summary.artifactSha256 !== packageSha256 ||
+        report.completedCuts.length !== 1 ||
+        !report.nextUpdate ||
+        report.installedRecovery.current?.name !== "next-update-status" ||
+        report.installedRecovery.current.state !== "completed" ||
+        report.installedRecovery.current.status !== 0)
+    ) {
+      throw new Error();
+    }
+    if (exitStatus === 0) {
+      const expected = [
+        "displacement",
+        "missing-status",
+        "repair",
+        "repeat-repair",
+        "retirement",
+        ...(cut.startsWith("helper-") ? [] : ["resume-retirement"]),
+        "completed-status",
+        "archive-completed",
+        "next-update",
+        "next-update-status",
+      ];
+      if (
+        JSON.stringify(report.commands.map((command) => command.name)) !==
+          JSON.stringify(expected) ||
+        report.commands.some(
+          (command) =>
+            (command.status === 0) !== !["displacement", "retirement"].includes(command.name),
+        )
+      ) {
+        throw new Error();
+      }
+    }
+  } catch {
+    if (exitStatus === 0) {
+      throw new Error("Installed recovery success receipt is incomplete");
+    }
+    report.installedRecovery = { availability: "unavailable" };
+    report.completedCuts = [];
+    report.commands = [];
+    report.nextUpdate = null;
+    omissions["installed recovery"] = reasons[3];
+  }
+  writeReport(
+    artifactRoot,
+    destination,
+    exitStatus === 0 ? "summary.json" : "failure.json",
+    report,
+    publicLimit,
+  );
+  return exitStatus === 0 ? undefined : { phase: coordinates.phase, exitStatus, signal: null };
+}
+
 export function publishDiagnostics(
   artifactRoot,
   destination,
@@ -2055,6 +2580,7 @@ export function publishDiagnostics(
   for (const label of Object.keys(omissions)) {
     delete omissions[label];
   }
+  const sanitize = diagnosticSanitizer(redactSensitiveText, outcome);
   if (outcome === "passed") {
     writeReport(
       artifactRoot,
@@ -2102,6 +2628,7 @@ export function publishDiagnostics(
     "successful update plugins",
     "plugin identity",
     "package integrity",
+    ...installedRecoveryLabels,
     ...["doctor", "sessions", "archives", "sibling"].map((section) => `migration-${section}`),
     "session migration",
     ...Object.values(migrationLabels),
@@ -2110,42 +2637,14 @@ export function publishDiagnostics(
       omissions[label] = snapshot.omissions[label];
     }
   }
-  function sanitize(text, label) {
-    if (text === null || text === undefined) {
-      return null;
-    }
-    if (typeof text !== "string" || Buffer.byteLength(text) > inputLimit) {
-      throw new Error();
-    }
-    let redacted = redactSensitiveText(text, { mode: "tools" });
-    if (outcome === "failed" && Buffer.byteLength(JSON.stringify(redacted)) > outputLimit) {
-      const context = failedUpdateContext(text, label);
-      if (context) {
-        // Keep execution order explicit; this is a diagnostic prelude, not reordered steps.
-        redacted = `${redactSensitiveText(context, { mode: "tools" })}\n\nCaptured update output (original order):\n${redacted}`;
-      }
-    }
-    // Keep the latest startup/native events after redacting the whole input.
-    const tail =
-      label === "missing-load-path/baseline-gateway.log" ||
-      label === "native-assignment-messages.jsonl";
-    const lines = redacted.split(/(?<=\n)/u);
-    if (tail) {
-      lines.reverse();
-    }
-    let result = "";
-    for (const line of lines) {
-      const next = tail ? line + result : result + line;
-      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
-        omissions[label] = "redacted output truncated at a complete line (16 KiB)";
-        break;
-      }
-      result = next;
-    }
-    return result;
-  }
   for (const name of logNames) {
     report.logs[name] = sanitize(snapshot.logs?.[name], name);
+  }
+  report.installedRecovery = { availability: "unavailable" };
+  try {
+    report.installedRecovery = installedRecoveryProjection(snapshot.installedRecovery, sanitize);
+  } catch {
+    omissions["installed recovery"] = reasons[3];
   }
   for (const field of ["ExecStart", "WorkingDirectory", "supervisorWorkingDirectory"]) {
     report.service[field] = sanitize(snapshot.service?.[field], field);

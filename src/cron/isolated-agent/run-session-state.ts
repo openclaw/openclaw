@@ -75,7 +75,9 @@ function clearCronContextOwnerState(entry: SessionEntry) {
 }
 
 /** Resolved cron session plus its mutable backing store and active entry. */
-export type MutableCronSession = ReturnType<typeof resolveCronSession>;
+export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
+  contextTotalsAccounted?: true;
+};
 
 /** Commits a closed cron operation and returns its acknowledged entry. */
 export type CronSessionRowWriter = (params: {
@@ -241,6 +243,7 @@ export function createPersistCronSessionEntry(params: {
           sessionKey: params.agentSessionKey,
           initial: params.cronSession.initialSessionEntry,
           next: persistedEntry,
+          contextTotalsAccounted: params.cronSession.contextTotalsAccounted,
           creation: buildSessionCreationStamp({
             via: "cron",
             actor: params.createdActor ?? { type: "system" },
@@ -268,6 +271,7 @@ export function createPersistCronSessionEntry(params: {
       throw new CronSessionLifecycleClaimError(params.agentSessionKey);
     }
     params.cronSession.resetBoundaryPending = undefined;
+    params.cronSession.contextTotalsAccounted = undefined;
     // The storage projection may intentionally omit resume identity until its
     // transcript exists. Keep that projection out of the active run object.
     params.cronSession.sessionEntry = mergeSessionSnapshotChanges({

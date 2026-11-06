@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
 import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeJsonFile } from "../helpers/temp-repo.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -71,11 +72,6 @@ function expectRegistration(root: string, publicEntries: string[], privateEntrie
   }
 }
 
-function writeJson(root: string, file: string, value: unknown) {
-  fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-  fs.writeFileSync(path.join(root, file), `${JSON.stringify(value, null, 2)}\n`);
-}
-
 function readOutputs(root: string) {
   return outputFiles.map((file) => fs.readFileSync(path.join(root, file), "utf8"));
 }
@@ -103,18 +99,18 @@ function createFixture(
     fs.copyFileSync(path.join(repoRoot, file), path.join(root, file));
   }
   fs.mkdirSync(path.join(root, "packages/plugin-sdk/src"), { recursive: true });
-  writeJson(root, entryList, inventory.entries);
-  writeJson(root, privateList, inventory.privateEntries);
-  writeJson(root, "package.json", {
+  writeJsonFile(path.join(root, entryList), inventory.entries);
+  writeJsonFile(path.join(root, privateList), inventory.privateEntries);
+  writeJsonFile(path.join(root, "package.json"), {
     name: "sdk-registration-fixture",
     version: "1.0.0",
     type: "module",
     exports: { ".": "./index.js" },
     files: fixtureFiles,
   });
-  writeJson(root, "packages/plugin-sdk/package.json", { exports: {} });
+  writeJsonFile(path.join(root, "packages/plugin-sdk/package.json"), { exports: {} });
   for (const { file, prefix } of declarationConfigs) {
-    writeJson(root, file, { compilerOptions: { paths: declarationPaths(prefix) } });
+    writeJsonFile(path.join(root, file), { compilerOptions: { paths: declarationPaths(prefix) } });
   }
   return root;
 }
@@ -142,7 +138,7 @@ describe("plugin SDK registration CLI", () => {
     const manifest = readPackage(root);
     const exclusion = "!dist/plugin-sdk/private-entry.d.ts";
     manifest.files = manifest.files.filter((file) => file !== exclusion);
-    writeJson(root, "package.json", manifest);
+    writeJsonFile(path.join(root, "package.json"), manifest);
     const before = readOutputs(root);
 
     const result = runSync(root, "--check");
@@ -179,7 +175,7 @@ describe("plugin SDK registration CLI", () => {
       ...literalEntries.map((entry) => `dist/plugin-sdk/${entry}.d.ts`),
     ];
     for (const file of [...included, ...excluded]) {
-      writeJson(root, file, {});
+      writeJsonFile(path.join(root, file), {});
     }
     const result = runSync(root);
 
@@ -211,7 +207,7 @@ describe("plugin SDK registration CLI", () => {
       privateEntries: ["private-entry", "test-fixtures", ...formerEntries],
     });
     expect(runSync(root).status).toBe(0);
-    writeJson(root, privateList, ["private-entry", "test-fixtures"]);
+    writeJsonFile(path.join(root, privateList), ["private-entry", "test-fixtures"]);
     const manifest = readPackage(root);
     const retained = [
       "!dist/plugin-sdk/test-fixtures.js",
@@ -228,7 +224,7 @@ describe("plugin SDK registration CLI", () => {
         `!dist/plugin-sdk/${entry}.d.ts`,
       ]),
     ];
-    writeJson(root, "package.json", manifest);
+    writeJsonFile(path.join(root, "package.json"), manifest);
 
     const result = runSync(root);
 
@@ -236,7 +232,11 @@ describe("plugin SDK registration CLI", () => {
     expect(readPackage(root).files).toEqual(retained);
     expectRegistration(root, formerEntries, ["private-entry", "test-fixtures"]);
     expectStableSync(root);
-    writeJson(root, privateList, ["private-entry", "test-fixtures", ...formerEntries]);
+    writeJsonFile(path.join(root, privateList), [
+      "private-entry",
+      "test-fixtures",
+      ...formerEntries,
+    ]);
     expect(runSync(root).status).toBe(0);
     expect(readPackage(root).files).toEqual([
       ...retained,

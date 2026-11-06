@@ -140,7 +140,7 @@ suite.define(() => {
           code: "UNAVAILABLE",
           message: `${recoveryMessage} Diagnostic: ${privatePath}; token=synthetic-terminal-secret-value`,
         });
-        await page.getByText("Upload failed").waitFor();
+        await page.getByText("Couldn’t upload the file. Try again.").waitFor();
         const uploadError = page.locator(".tp-upload-card__error");
         await expect.poll(async () => await uploadError.textContent()).toContain(recoveryMessage);
         const displayedError = await uploadError.textContent();

@@ -1,5 +1,6 @@
 import "./personal-session-group-dialog.css";
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import type {
@@ -14,6 +15,7 @@ import { Icon } from "./solid/icon.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 
+registerEnglishCatalog(registerSessionOrganizationSharedEnglish);
 registerEnglishCatalog(registerSessionOrganizationEnglish);
 
 export type PersonalSessionGroupDialogOptions = {

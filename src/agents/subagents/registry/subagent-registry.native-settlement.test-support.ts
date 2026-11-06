@@ -9,12 +9,20 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import {
   createSessionEntry,
+  mockGatewayMethods,
   waitForFast,
   type SubagentRegistryHarness,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
+import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryChangesToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -90,13 +98,110 @@ export function registerForcedCollectorCompletionSettlementTests({
   findRequesterRun,
   getLifecycleHandler,
   mockPendingAgentWait,
-}: RegistryTestContext<"entries" | "callGateway" | "runSubagentAnnounceFlow"> &
+}: RegistryTestContext<
+  | "entries"
+  | "callGateway"
+  | "runSubagentAnnounceFlow"
+  | "persistRegistryRows"
+  | "loadSessionEntry"
+  | "readSessionCurrent"
+> &
   RequesterLookup & {
     getLifecycleHandler: () => (
       event: Pick<AgentEventPayload, "runId" | "stream" | "data">,
     ) => void;
     mockPendingAgentWait: () => void;
   }): void {
+  it("keeps an aborted collector yield's exact wait result after its session advances", async () => {
+    const mod = getRegistry();
+    const runId = "run-wait-collector-yield";
+    const childSessionKey = "agent:main:subagent:wait-collector-yield";
+    const sessionEntry = createSessionEntry({
+      sessionId: "sess-wait-collector-yield",
+      lifecycleRevision: "collector-revision",
+      lifecycleRunId: runId,
+      startedAt: 100,
+      updatedAt: 100,
+    });
+    vi.setSystemTime(100);
+    mocks.entries[childSessionKey] = sessionEntry;
+    mocks.loadSessionEntry.mockImplementation((scope) => mocks.entries[scope.sessionKey]);
+    mocks.readSessionCurrent.mockImplementation((scope) => mocks.entries[scope.sessionKey]);
+    const terminalPersisted = createDeferred();
+    mocks.persistRegistryRows.mockImplementation((runs, ids) => {
+      saveSubagentRegistryChangesToSqlite(runs, ids);
+      if (ids?.includes(runId) && runs.get(runId)?.execution.status === "terminal") {
+        terminalPersisted.resolve();
+      }
+    });
+    mockGatewayMethods(mocks.callGateway, {
+      "agent.wait": (request) => {
+        expect(request.params?.runId).toBe(runId);
+        mocks.entries[childSessionKey] = {
+          ...sessionEntry,
+          lifecycleRunId: "later-collector-followup",
+          status: "done",
+          startedAt: 300,
+          endedAt: 500,
+          updatedAt: 500,
+        };
+        return {
+          status: "ok",
+          startedAt: 100,
+          endedAt: 200,
+          livenessState: "paused",
+          yielded: true,
+          stopReason: "aborted",
+          terminalReply: { disposition: "visible", text: "Collector result." },
+        };
+      },
+    });
+
+    const settleRootWork = observeRootWork();
+    try {
+      await mod.registerSubagentRun({
+        runId,
+        childSessionKey,
+        sessionEntry,
+        expectsCompletionMessage: false,
+        collect: true,
+        outputSchema: { type: "object" },
+        swarmRequesterSessionKey: "agent:main:main",
+      });
+      await terminalPersisted.promise;
+    } finally {
+      // Run the zero-delay wait continuation before draining owned root work.
+      await vi.advanceTimersByTimeAsync(0);
+      await settleRootWork();
+    }
+
+    await waitForFast(() => {
+      expect(findRequesterRun(runId)).toMatchObject({
+        runId,
+        execution: {
+          status: "terminal",
+          startedAt: 100,
+          endedAt: 200,
+          outcome: { status: "ok" },
+        },
+        endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+        collectorCompletion: {
+          status: "failed",
+          schemaError: "structured_output was not called",
+        },
+      });
+    });
+    // Finished resident rows evict payloads; the persisted result owns the reply text.
+    expect(loadSubagentRegistryFromSqlite().get(runId)?.completion).toMatchObject({
+      terminalReply: { disposition: "visible", text: "Collector result." },
+      resultText: "Collector result.",
+      capturedAt: 200,
+    });
+    // A yield terminal can also look aborted (#92448); settling it must never
+    // turn the collector yield into a cancellation notice.
+    expect(findRequesterRun(runId)?.pauseReason).toBeUndefined();
+  });
+
   it("settles forced collector yield through lifecycle with captured structured output", async () => {
     vi.setSystemTime(111);
     const mod = getRegistry();

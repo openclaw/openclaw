@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { build, createLogger, type InlineConfig, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
 import {
   listDirectoryTreeStrict,
   listDirectoryTreeStrictSync,
@@ -174,6 +175,55 @@ it("omits already imported JavaScript from lazy preload tables, retaining lazy J
   expect(html).toContain(sharedName);
 });
 
+it("fetches deep composer code with the root import without evaluating or route-preloading it", async () => {
+  const config = createConfig();
+  const content = uiPath("pages/chat/components/chat-composer-plus-menu-content.tsx");
+  const subview = uiPath("pages/chat/components/chat-composer-plus-menu-subview.tsx");
+  const shared = uiPath("pages/chat/components/chat-composer-plus-menu-frame.tsx");
+  addModules(
+    config,
+    new Map([
+      [
+        content,
+        'globalThis.rootMenuReady = true; export const openDeep = () => import("./chat-composer-plus-menu-subview.tsx");',
+      ],
+      [
+        subview,
+        'import { frame } from "./chat-composer-plus-menu-frame.tsx"; globalThis.deepMenuReady = true; export const render = () => frame;',
+      ],
+      [shared, 'export const frame = "deep frame";'],
+    ]),
+    { "fixture:menu": content },
+  );
+  await writeRoot("main.js", 'globalThis.openMenu = () => import("fixture:menu");');
+  setOutput(config, {
+    codeSplitting: {
+      groups: [{ name: "deep-frame", test: (id: string) => id === shared }],
+    },
+  });
+  const { output, html } = await buildOutput(config);
+  const chunkWith = (id: string) =>
+    output.find((chunk) => chunk.type === "chunk" && id in chunk.modules);
+  const rootChunk = chunkWith(content);
+  const deepChunk = chunkWith(subview);
+  const frameChunk = chunkWith(shared);
+  const entry = output.find((chunk) => chunk.type === "chunk" && chunk.isEntry);
+  assert.ok(
+    rootChunk?.type === "chunk" &&
+      deepChunk?.type === "chunk" &&
+      frameChunk?.type === "chunk" &&
+      entry?.type === "chunk",
+  );
+  const table = /^const __vite__mapDeps=.*$/mu.exec(entry.code)?.[0];
+  expect(table).toContain(deepChunk.fileName.split("/").at(-1));
+  expect(table).toContain(frameChunk.fileName.split("/").at(-1));
+  expect(rootChunk.dynamicImports).toContain(deepChunk.fileName);
+  expect(rootChunk.imports).not.toContain(deepChunk.fileName);
+  expect(entry.imports).not.toContain(deepChunk.fileName);
+  expect(html).not.toContain(deepChunk.fileName);
+  expect(html).not.toContain(frameChunk.fileName);
+});
+
 it("keeps page styles separate from measured JavaScript boot groups", async () => {
   const config = createConfig();
   const pages = fileURLToPath(new URL("../pages/", import.meta.url));
@@ -232,6 +282,40 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
   const scripts = (await readAssets(names, ".js")).map(({ source }) => source).join("\n");
   expect(scripts).toContain(firstStyle.name);
   expect(scripts).toContain(secondStyle.name);
+});
+
+it("compresses small route boot modules while leaving deferred modules lazy", async () => {
+  const entry = uiPath("pages/chat/route-entry.ts");
+  const source = 'export const message = "Route content loaded".repeat(20);';
+  const config = createConfig();
+  await writeRoot(
+    "main.js",
+    `globalThis.load = () => import(${JSON.stringify(entry)}); globalThis.loadLazy = () => import("./lazy.js");`,
+  );
+  addModules(config, new Map([[entry, source]]));
+  const built = await buildOutput(config);
+  const chunk = built.output.find(
+    (item) => item.type === "chunk" && Object.hasOwn(item.modules, entry),
+  );
+  assert.ok(chunk?.type === "chunk");
+  expect(Buffer.byteLength(chunk.code)).toBeLessThan(4096);
+  expect(built.html).toContain(chunk.fileName);
+  expect(selectControlUiRoutePreloads(built.html, null)).not.toContain(chunk.fileName);
+  for (const [extension, decode] of [
+    ["gz", gunzipSync],
+    ["br", brotliDecompressSync],
+  ] as const) {
+    expect(decode(await fs.readFile(path.join(outDir, `${chunk.fileName}.${extension}`)))).toEqual(
+      Buffer.from(chunk.code),
+    );
+  }
+  const lazy = built.output.find(
+    (item) => item.type === "chunk" && item.facadeModuleId === path.join(root, "lazy.js"),
+  );
+  assert.ok(lazy?.type === "chunk");
+  expect(built.html).not.toContain(lazy.fileName);
+  await missingOutput(`${lazy.fileName}.gz`);
+  await missingOutput(`${lazy.fileName}.br`);
 });
 
 it.each(["login", "attachment"] as const)(
@@ -306,6 +390,15 @@ it.each(["unresolved import", "blocked output"])(
   },
 );
 
+it("keeps the WebKit text-size lock that stops iPhone Safari from boosting small text", async () => {
+  await writeRoot("lazy.css", "html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }");
+
+  const { names } = await buildOutput(createConfig());
+
+  const styles = (await readAssets(names, ".css")).map(({ source }) => source).join("\n");
+  expect(styles).toContain("-webkit-text-size-adjust:100%");
+});
+
 it("finalizes raw browser-fixture assets when precompression is omitted", async () => {
   const config = createConfig();
   await writeRoot(
@@ -374,7 +467,7 @@ it("reports completed compression work before build completion at a bounded cade
           this.emitFile({
             type: "asset",
             fileName: `assets/x/${index}.txt`,
-            source: "fixture".repeat(1024),
+            source: "fixture".repeat(3 * 1024),
           });
         }
       },

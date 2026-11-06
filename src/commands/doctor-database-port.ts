@@ -63,7 +63,6 @@ import {
   record,
   refuse,
   refuseFailure,
-  revise,
   readDatabasePortConfigSnapshot,
   stagePath,
   storeAt,
@@ -87,6 +86,7 @@ import {
   selectDatabasePortEngine,
   withDatabasePortStateOwner,
 } from "./doctor-database-port-state.js";
+import { withDatabasePortWorkingCopy } from "./doctor-database-port-working.js";
 
 export type DatabasePortOptions = {
   family?: DatabasePortFamily;
@@ -355,27 +355,6 @@ async function captureOriginals(ctx: Context, facts: Awaited<ReturnType<typeof p
   );
 }
 
-async function privateMigrate(ctx: Context, index: number, config: OpenClawConfig) {
-  ctx.phase = "private migrate";
-  const prefix = path.join(storeDirectory(ctx, index), "working-");
-  const recorded = manifest(ctx).artifacts.find((file) => file.path.startsWith(prefix));
-  const file = recorded?.path ?? `${prefix}${randomUUID()}.sqlite`;
-  if (recorded) {
-    await assertDatabaseArtifact(recorded);
-    return file;
-  }
-  await createVerifiedSqliteSnapshot({
-    sourcePath: storeAt(ctx, index).input.image,
-    targetPath: file,
-    preserveRowIds: true,
-  });
-  await runDatabasePortTask({ operation: "migrate", sourcePath: file, config }, ctx);
-  syncDatabasePortPath(file);
-  syncDatabasePortPath(path.dirname(file));
-  manifest(ctx).artifacts.push(await captureDatabaseArtifact(file));
-  revise(ctx);
-  return file;
-}
 async function stageMaterialize(ctx: Context, index: number, config: OpenClawConfig) {
   const current = manifest(ctx),
     { target } = storeAt(ctx, index);
@@ -383,46 +362,47 @@ async function stageMaterialize(ctx: Context, index: number, config: OpenClawCon
   if (target.verification) {
     return;
   }
-  const working = await privateMigrate(ctx, index, config);
-  ctx.phase = "stage/materialize";
-  const result = await runDatabasePortTask(
-    {
-      operation: "stage",
-      sourcePath: working,
-      targetPath: stagePath(ctx, index),
-      to: current.direction.to,
-      storeId: target.storeId,
-      namespace: target.intended.engine === "postgres" ? target.intended.namespace : "",
-      config: postgresConfig(config),
-      resume: true,
-      sourceVerification:
-        current.direction.from === "postgres"
-          ? JSON.parse(
-              fs.readFileSync(
-                path.join(storeDirectory(ctx, index), "postgres/manifest.json"),
-                "utf8",
-              ),
-            ).verification
-          : undefined,
-    },
-    ctx,
-  );
-  const proof = result.verification;
-  if (result.plannerStatistics) {
-    (ctx.plannerStatistics ??= []).push({
-      path: livePath(target),
-      result: result.plannerStatistics,
-    });
-  }
-  target.verification = {
-    contentHash: digest(proof.tables),
-    allocationHash: digest(proof.allocations),
-    catalogHash: result.descriptorHash,
-    rowCount: Object.values(proof.tables).reduce((sum, table) => sum + table.rows, 0),
-    ownerAdmitted: true,
-  };
-  current.artifacts.push(await captureDatabaseArtifact(stagePath(ctx, index)));
-  await record(ctx, path.join(storeDirectory(ctx, index), "verification.json"), proof);
+  await withDatabasePortWorkingCopy(ctx, index, config, async (working) => {
+    ctx.phase = "stage/materialize";
+    const result = await runDatabasePortTask(
+      {
+        operation: "stage",
+        sourcePath: working,
+        targetPath: stagePath(ctx, index),
+        to: current.direction.to,
+        storeId: target.storeId,
+        namespace: target.intended.engine === "postgres" ? target.intended.namespace : "",
+        config: postgresConfig(config),
+        resume: true,
+        sourceVerification:
+          current.direction.from === "postgres"
+            ? JSON.parse(
+                fs.readFileSync(
+                  path.join(storeDirectory(ctx, index), "postgres/manifest.json"),
+                  "utf8",
+                ),
+              ).verification
+            : undefined,
+      },
+      ctx,
+    );
+    const proof = result.verification;
+    if (result.plannerStatistics) {
+      (ctx.plannerStatistics ??= []).push({
+        path: livePath(target),
+        result: result.plannerStatistics,
+      });
+    }
+    target.verification = {
+      contentHash: digest(proof.tables),
+      allocationHash: digest(proof.allocations),
+      catalogHash: result.descriptorHash,
+      rowCount: Object.values(proof.tables).reduce((sum, table) => sum + table.rows, 0),
+      ownerAdmitted: true,
+    };
+    current.artifacts.push(await captureDatabaseArtifact(stagePath(ctx, index)));
+    await record(ctx, path.join(storeDirectory(ctx, index), "verification.json"), proof);
+  });
 }
 async function classifyConfig(ctx: Context) {
   const current = await readDatabasePortConfigSnapshot(ctx),

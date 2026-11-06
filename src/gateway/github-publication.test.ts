@@ -308,7 +308,7 @@ describe("Gateway GitHub publication", () => {
               status: "failed",
               code: "github_rejected",
               nextAction:
-                "Reopen the closed pull request or retry to create a new publication request.",
+                "GitHub pull request was closed before publication completed. Reopen the closed pull request or retry to create a new publication request.",
             }
           : { status: "published", repository: "openclaw/openclaw", url: resultUrl },
       );
@@ -402,6 +402,7 @@ describe("Gateway GitHub publication", () => {
       "\u001b[31mfatal: Authentication failed\u001b[0m",
       "https://user:fixture-password@example.test/repo?unknown=fixture-query#fixture-fragment",
       "https://user:fi'xture@example.test/repo",
+      `https://example.test/${"x".repeat(4_096)}?unknown=fixture-long-query#fixture-long-fragment`,
       "Authorization: Bearer fixture-bearer",
       `GH_TOKEN=${token}`,
       "password=fixture-secret",
@@ -409,7 +410,11 @@ describe("Gateway GitHub publication", () => {
     ].join("\n");
     overrideCommands((_command, argv) =>
       argv.includes("fetch")
-        ? { ...commandResult("", 1), stderr: Buffer.from(diagnostic) }
+        ? {
+            ...commandResult("fixture-private-stdout", 1),
+            termination: "exit",
+            stderr: Buffer.from(diagnostic),
+          }
         : undefined,
     );
     try {
@@ -417,12 +422,14 @@ describe("Gateway GitHub publication", () => {
       const message = formatErrorMessage(error);
       expect(message).toContain("fatal: Authentication failed");
       expect(message).not.toMatch(
-        /fixture-(?:password|query|fragment|bearer|secret)|example\.test/u,
+        /fixture-(?:password|query|fragment|long-query|long-fragment|bearer|secret|private-stdout)|example\.test/u,
       );
       expect(message).not.toContain(token);
       expect(message).not.toContain("\u001b");
       expect(message).not.toContain("\n");
-      const detail = message.split("Git fetch: ").at(-1)!;
+      expect(message).toContain("Git commit fetch failed (exit code 1)");
+      // Recovery can aggregate multiple independently bounded diagnostics.
+      const detail = message.slice(message.lastIndexOf("Git commit fetch"));
       expect(Buffer.byteLength(detail)).toBeLessThanOrEqual(1_024);
       expect(await coordinator.readAsync("publication-fetch-redaction")).toMatchObject({
         status: "publishing",
@@ -544,7 +551,7 @@ describe("Gateway GitHub publication", () => {
           code: "workspace_changed",
           message: "GitHub publication failed.",
           nextAction:
-            "Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
+            "GitHub publication worktree authority changed. Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
         });
         expect(commandMatchesAny("commit-tree", "push", "POST")).toEqual([]);
       });
@@ -706,20 +713,30 @@ describe("Gateway GitHub publication", () => {
     expect(commandMatches("write-tree")).toHaveLength(snapshotCommandCount);
     mocks.runCommand.mockImplementation(runCommand);
     await placements.acceptWorkspaceResult(claim);
-    const processClaim = vi
-      .spyOn(runtime.coordinator, "processClaim")
-      .mockRejectedValueOnce(new Error("transient publication failure"));
-    await expect(runtime.publishAcceptedWorkspace(claim)).rejects.toThrow(
-      "transient publication failure",
+    const publicationCallsBeforeHandoff = commandCalls.length;
+    await runtime.publishAcceptedWorkspace(claim);
+    expect(commandCalls).toHaveLength(publicationCallsBeforeHandoff);
+    expect(await runtime.coordinator.readAsync(requested.requestId)).toMatchObject({
+      status: "requested",
+    });
+    // A sweep cannot publish while result settlement still owns the workspace.
+    await runtime.reconcilePublications();
+    expect(commandCalls).toHaveLength(publicationCallsBeforeHandoff);
+    await placements.completeWorkspaceResultAndReleaseTurn(claim);
+    vi.spyOn(runtime.coordinator, "resumeSessionRequests").mockRejectedValueOnce(
+      new Error("transient publication failure"),
     );
-    expect(warnings).toEqual([expect.stringContaining("GitHub publication deferred")]);
-    processClaim.mockRestore();
+    await runtime.reconcilePublications();
+    expect(await runtime.coordinator.readAsync(requested.requestId)).toMatchObject({
+      status: "requested",
+    });
+    expect(warnings).toEqual([expect.stringContaining("GitHub publication recovery deferred")]);
     warnings.length = 0;
     vi.spyOn(runtime.coordinator, "markReportedAsync").mockImplementationOnce(() => {
       throw new Error("Gateway stopped after transcript append");
     });
 
-    await expect(runtime.publishAcceptedWorkspace(claim)).resolves.toBeUndefined();
+    await runtime.reconcilePublications();
     expect(warnings).toEqual([
       expect.stringContaining("GitHub publication result reporting deferred"),
     ]);

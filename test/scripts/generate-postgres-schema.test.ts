@@ -62,6 +62,21 @@ describe("PostgreSQL schema generation", () => {
     }
   });
 
+  it("emits promoted agent deletion indexes in both runtime artifacts", async () => {
+    const { files, report } = await generatePostgresSchemas(root);
+    for (const name of [
+      "idx_agent_session_input_completions_session_key",
+      "idx_agent_conversation_deliveries_source_session",
+    ]) {
+      const index = report.catalogs.agent!.objects.find(
+        (item) => item.kind === "index" && item.name === name,
+      );
+      expect(index?.sql).toContain(`CREATE INDEX "${name}"`);
+      expect(files["agent.postgres.sql"]).toContain(index?.sql);
+      expect(files["agent-runtime.ts"]).toContain(name);
+    }
+  });
+
   it("refuses unsupported agent objects and trigger bodies", async () => {
     const directory = fixture("");
     const file = path.join(directory, "src/state/openclaw-agent-schema.sql");

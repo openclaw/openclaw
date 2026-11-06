@@ -24,15 +24,15 @@ export function finalizeOpenClawTools(params: {
 }): AnyAgentTool[] {
   const { options, config, hookAgentId, gatewayCallerAccountId } = params;
   const allTools = guardScheduledOwnerOnlyTools(
-    applyGatewayToolPolicy(
-      finalizeAgentToolAvailability(
+    finalizeAgentToolAvailability(
+      applyGatewayToolPolicy(
         filterToolsByClientCaps(
           params.tools,
           options?.listingClientCaps ?? options?.clientCaps,
           options?.clientCaps,
         ),
+        config,
       ),
-      config,
     ),
     options?.scheduledToolTargets?.assertOwnerCurrent,
   );

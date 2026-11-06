@@ -165,3 +165,6 @@ export const loadCodexAccountUsageTestFixture = () => import("./src/account-usag
 
 export const loadCodexSubscriptionRoutingTestFixture = () =>
   import("./src/app-server/subscription-routing.test-support.js");
+
+export const loadNativeCommandGatewayTestFixture = () =>
+  import("./src/app-server/native-command-auth.test-support.js");

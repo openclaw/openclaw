@@ -12,6 +12,7 @@ import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import * as gatewayNamespace from "../../infra/gateway-lock-payload.js";
 import * as processes from "../../infra/gateway-lock-process.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
@@ -28,6 +29,7 @@ import * as databaseContext from "./update-command-database-context.js";
 import { createStage } from "./update-command-fresh-preview.test-support.js";
 import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
 import { updateCommand } from "./update-command.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -43,7 +45,7 @@ function withHostPlatform<T>(run: () => T): T {
   }
 }
 beforeEach(() => {
-  // Service platform mocks do not change the local test process's namespace.
+  // Service platform mocks retain the host's process identity and namespace.
   vi.spyOn(gatewayNamespace, "readGatewayLockProcessNamespace").mockReturnValue(hostNamespace);
   const classifyNamespace = gatewayNamespace.classifyGatewayLockProcessNamespace;
   vi.spyOn(gatewayNamespace, "classifyGatewayLockProcessNamespace").mockImplementation((...args) =>
@@ -83,6 +85,8 @@ function gatewayOwner(pid = process.pid) {
     databasePath: resolveOpenClawStateSqlitePath(),
     payload: {
       pid,
+      startTime:
+        withHostPlatform(() => processIdentity.getFileLockProcessStartTime(pid)) ?? undefined,
       processNamespace: gatewayNamespace.readGatewayLockProcessNamespace(),
       createdAt: new Date().toISOString(),
       configPath: process.env.OPENCLAW_CONFIG_PATH!,
@@ -181,16 +185,32 @@ it.each([
 
 describe("package update entry point", () => {
   const { fixture } = installFreshUpdateFixture();
-  it.each(["win32", "linux"] as const)(
-    "refuses %s package replacement before backup with an uninspectable live Gateway",
-    async (platform) => {
+  it.each([
+    ["win32", false],
+    ["linux", false],
+    ["linux", true],
+  ] as const)(
+    "refuses %s package replacement before backup with an uninspectable live Gateway (malformed preview=%s)",
+    async (platform, malformedPreview) => {
       vi.mocked(databaseContext.inspectUpdateDatabaseContexts).mockRestore();
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(process.env.HOME!, ".openclaw"));
       vi.stubEnv(
         "OPENCLAW_CONFIG_PATH",
         path.join(process.env.OPENCLAW_STATE_DIR!, "openclaw.json"),
       );
+      vi.mocked(processIdentity.getFileLockProcessStartTime).mockRestore();
       openOpenClawStateDatabase();
+      if (malformedPreview) {
+        fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, "{");
+        for (const [key, name] of [
+          ["TMPDIR", "tmp"],
+          ["XDG_CACHE_HOME", "cache"],
+        ] as const) {
+          const directory = path.join(process.env.HOME!, name);
+          fs.mkdirSync(directory, { recursive: true });
+          vi.stubEnv(key, directory);
+        }
+      }
       const candidate = path.join(process.env.HOME!, "candidate");
       await writePackageRoot(candidate, "2026.9.2");
       vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(createStage(candidate));
@@ -207,11 +227,42 @@ describe("package update entry point", () => {
         platform === "win32" ? null : ["openclaw-gateway"],
       );
       const backup = vi.spyOn(packageFilesystem, "backupNpmPackageRoot");
+      const snapshot = () =>
+        listDirectoryTreeStrictSync(process.env.HOME!).map(({ relativePath }) => relativePath);
+      const before = snapshot();
+      const databaseBefore = fs.readFileSync(resolveOpenClawStateSqlitePath());
       try {
-        await expect(updateCommand({ json: true, yes: true })).rejects.toBeInstanceOf(ExitError);
-        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-          expect.objectContaining({ status: "error", reason: "gateway-stop-unverified" }),
-        );
+        const update = updateCommand({ json: true, yes: true, dryRun: malformedPreview });
+        if (malformedPreview) {
+          const failure = await update.catch((error: unknown) => error);
+          expect(failure).toBeInstanceOf(Error);
+          expect(
+            failure instanceof ExitError
+              ? failure.code
+              : failure instanceof UpdateCommandFailure
+                ? failure.exitCode
+                : undefined,
+          ).toBe(1);
+          expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+            expect.objectContaining({
+              status: "error",
+              reason: "gateway-stop-unverified",
+              failedStep: expect.objectContaining({
+                failureFacts: expect.arrayContaining([
+                  expect.objectContaining({ code: "gateway-stop-unverified" }),
+                ]),
+              }),
+            }),
+          );
+          expect(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe("{");
+          expect(fs.readFileSync(resolveOpenClawStateSqlitePath())).toEqual(databaseBefore);
+          expect(snapshot()).toEqual(before);
+        } else {
+          await expect(update).rejects.toBeInstanceOf(ExitError);
+          expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+            expect.objectContaining({ status: "error", reason: "gateway-stop-unverified" }),
+          );
+        }
         expect(backup).not.toHaveBeenCalled();
         expect(native.stop).not.toHaveBeenCalled();
         expect(await readPackageVersion(fixture.root)).toBe("2026.9.3");

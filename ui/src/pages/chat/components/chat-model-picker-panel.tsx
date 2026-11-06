@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show, useContext } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
-import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
+import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ChatContextWindowControl } from "./chat-context-window-control.tsx";
@@ -140,18 +140,23 @@ function ModelList(props: { label: string; id: string; more?: boolean; children:
   );
 }
 
-type PanelProps = {
+type ChatModelPickerPanelProps = {
   params: ChatModelPickerParams;
   onSelectionClose: (event: MouseEvent) => void;
   searchRef: (element: HTMLInputElement) => void;
 };
 
-export function ChatModelPickerPanel(panel: PanelProps) {
+export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
   const owner = createChatModelFavoritesScope(() => panel.params.sessionKey);
   const search = useContext(ChatModelSearchContext);
   const favorites = createChatModelFavorites(owner);
   // Parent controls also publish effort and copy changes; retain unchanged model facts.
   const modelOptions = createMemo(() => panel.params.modelOptions);
+  const providerPresentation = (provider: string) =>
+    modelOptions().find((option) => option.provider === provider && option.presentation)
+      ?.presentation;
+  const providerDisplayLabel = (provider: string) =>
+    defaultProviderLabel(provider, providerPresentation(provider));
   const modelTargetGroups = createMemo(() => panel.params.targetGroups);
   const selectedModelValue = createMemo(() => panel.params.selectedModelValue);
   const selectedAgentRuntime = createMemo(() => panel.params.selectedAgentRuntime);
@@ -314,8 +319,26 @@ export function ChatModelPickerPanel(panel: PanelProps) {
         .map(({ row }) => row.key) ?? [],
   );
   const renderRow = window.renderRow;
-  const mounted = (entries: readonly ModelPickerOption[], provider: string) =>
-    entries.filter((entry) => window.has(modelRowKey(entry, provider)));
+  const mounted = (entries: readonly ModelPickerOption[], provider: string) => {
+    if (!entries.length) {
+      return [];
+    }
+    const keys = window.keys();
+    if (entries.length <= keys.length) {
+      return entries.filter((entry) => window.has(modelRowKey(entry, provider)));
+    }
+    const indexes = state().optionIndex;
+    // Each lead/more list is a contiguous slice of the prepared catalog order.
+    const first = indexes.get(modelRowKey(entries[0]!, provider))!;
+    const end = first + entries.length;
+    return keys
+      .flatMap((key) => {
+        const index = indexes.get(key);
+        return index !== undefined && index >= first && index < end ? [index] : [];
+      })
+      .toSorted((left, right) => left - right)
+      .map((index) => entries[index - first]!);
+  };
   const selectModel = (entry: ModelPickerOption, event: MouseEvent) => {
     event.stopPropagation();
     // Resetting a pin does not require the inherited model to be available.
@@ -461,6 +484,7 @@ export function ChatModelPickerPanel(panel: PanelProps) {
           <ChatModelProviderHeading
             params={panel.params}
             provider={props.provider}
+            presentation={providerPresentation(props.provider)}
             options={[...props.lead, ...props.more]}
             favorites={props.provider === FAVORITES_GROUP}
             view={searchView ?? undefined}
@@ -553,7 +577,10 @@ export function ChatModelPickerPanel(panel: PanelProps) {
                 onKeyDown={handleModelSearchKeydown}
               />
               {modelOptions().length > 0 ? (
-                <ChatModelCatalogRefresh state={panel.params.modelCatalogState} />
+                <ChatModelCatalogRefresh
+                  state={panel.params.modelCatalogState}
+                  providerLabel={providerDisplayLabel}
+                />
               ) : undefined}
             </div>
           ) : undefined}

@@ -1,11 +1,8 @@
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it } from "vitest";
-import {
-  claimCodexAppServerLiveThread,
-  isCodexAppServerLiveThreadClaimed,
-  protectCodexAppServerLiveThread,
-} from "./client-runtime.js";
+import { describe, expect, it, vi } from "vitest";
+import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import {
   createParams as createRunAttemptParams,
   setupRunAttemptTestHooks,
@@ -21,7 +18,6 @@ import {
   type CodexAttemptThreadInput as LifecycleInput,
 } from "./thread-lifecycle.test-fixtures.js";
 import {
-  failNextWarmPublication,
   retainWarmThread,
   warmPluginConfig,
 } from "./thread-lifecycle.warm-cleanup.test-support.js";
@@ -59,67 +55,57 @@ function expectNoLifecycleRequests(fixture: Awaited<ReturnType<typeof createFixt
 setupRunAttemptTestHooks({ isolateNativeSkillHome: true });
 
 describe("Codex warm subscription cleanup", () => {
-  it.for([false, true])(
-    "recovers warm publication failure with background protection=%s",
-    async (backgroundWork) => {
-      const params = fixtureParams("warm.jsonl");
-      const threadId = "warm-publication-thread";
-      let starts = 0;
+  it.for(["settlement", "cancellation", "deadline"] as const)(
+    "joins background cleanup before cold resume: %s",
+    { timeout: 15_000 },
+    async (scenario) => {
+      const params = fixtureParams("background-cold-resume.jsonl");
+      const threadId = "background-cold-resume";
       const fixture = await createFixture(async (method) => {
-        if (method === "thread/start") {
-          starts += 1;
-          return threadStartResult(starts === 1 ? threadId : "updated-policy-thread");
-        }
-        if (method === "thread/resume") {
+        if (method === "thread/start" || method === "thread/resume") {
           return threadStartResult(threadId);
         }
         throw new Error(`unexpected method: ${method}`);
       });
-      const common = {
-        client: fixture.client,
-        params,
-        userMcpServersEnabled: false,
-        developerInstructions: "original policy",
-      };
+      const common = { client: fixture.client, params, userMcpServersEnabled: false };
       const started = await startOrResumeThread(common);
       expect(await retainWarmThread(fixture.client, started)).toBe(true);
-      const releaseProtection = backgroundWork
-        ? protectCodexAppServerLiveThread(fixture.client, threadId)
-        : undefined;
-      fixture.seed(threadStartResult("active-sibling"), { loaded: true, subscribed: true });
-      const sibling = await claimCodexAppServerLiveThread(fixture.client, "active-sibling");
-      expect(sibling).toBeDefined();
-      const readerFailure = new Error("warm publication reader release failed");
-      const failedPublication = failNextWarmPublication(readerFailure);
+      const releaseProtection = protectCodexAppServerLiveThread(fixture.client, threadId);
+      fixture.request.mockClear();
+      const controller = new AbortController();
+      const resumed = startOrResumeThread({
+        ...common,
+        developerInstructions: "updated policy",
+        signal: controller.signal,
+      });
+      const outcome = resumed.catch((error: unknown) => error);
       try {
-        await expect(startOrResumeThread(common)).rejects.toBe(readerFailure);
-        failedPublication.mockRestore();
-        expect(isCodexAppServerLiveThreadClaimed(fixture.client, threadId)).toBe(false);
-
-        const retry: Parameters<typeof startOrResumeThread>[0] = backgroundWork
-          ? common
-          : {
-              ...common,
-              developerInstructions: "updated policy",
-              dynamicTools: [
-                {
-                  type: "function",
-                  name: "updated_tool",
-                  description: "updated_tool test tool",
-                  inputSchema: { type: "object", properties: {}, additionalProperties: false },
-                },
-              ],
-            };
-        await expect(startOrResumeThread(retry)).resolves.toMatchObject({
-          threadId: backgroundWork ? threadId : "updated-policy-thread",
-          lifecycle: { action: backgroundWork ? "resumed" : "started" },
-        });
-        expect(() => sibling!.assertCurrent()).not.toThrow();
-        expect(fixture.client.getCloseError()).toBeUndefined();
+        await vi.waitFor(() =>
+          expect(fixture.request.mock.calls.map(([method]) => method)).toContain("thread/read"),
+        );
+        await setImmediate();
+        expectNoLifecycleRequests(fixture);
+        if (scenario === "cancellation") {
+          const reason = new Error("cancel background cleanup wait");
+          controller.abort(reason);
+          expect(await outcome).toBe(reason);
+          expectNoLifecycleRequests(fixture);
+        } else if (scenario === "deadline") {
+          expect(await outcome).toMatchObject({
+            message: expect.stringContaining("still has background work"),
+          });
+          expectNoLifecycleRequests(fixture);
+        } else {
+          releaseProtection();
+          expect(await outcome).toMatchObject({ threadId, lifecycle: { action: "resumed" } });
+          expect(fixture.request.mock.calls.map(([method]) => method)).toContain(
+            "thread/unsubscribe",
+          );
+          expect(fixture.request.mock.calls.map(([method]) => method)).toContain("thread/resume");
+        }
       } finally {
-        failedPublication.mockRestore();
-        releaseProtection?.();
-        await sibling?.release("active-sibling");
+        releaseProtection();
+        await outcome;
       }
     },
   );

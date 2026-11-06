@@ -103,7 +103,7 @@ describe("snapshot write serialization and scheduling", () => {
     );
     expect(restored?.pagination).toEqual({
       hasMore: true,
-      nextOffset: 0,
+      needsBoundary: true,
       totalMessages: pagination.totalMessages,
     });
     expect(restored?.deltaCursor).toBe("latest-cursor");
@@ -128,7 +128,7 @@ describe("snapshot write serialization and scheduling", () => {
     await store.flush();
     const restored = await store.read(sessionKey);
     expect(restored?.messages).toEqual(messages.slice(18));
-    expect(restored?.pagination).toEqual({ hasMore: true, nextOffset: 0, totalMessages: 34 });
+    expect(restored?.pagination).toEqual({ hasMore: true, needsBoundary: true, totalMessages: 34 });
   });
 
   it.each([false, true])(
@@ -152,7 +152,7 @@ describe("snapshot write serialization and scheduling", () => {
       expect(await store.read(sessionKey)).toEqual({
         ...value,
         messages: messages.slice(-80),
-        pagination: { hasMore: true, nextOffset: 0, totalMessages: 200 },
+        pagination: { hasMore: true, needsBoundary: true, totalMessages: 200 },
       });
     },
   );
@@ -289,8 +289,8 @@ describe("snapshot write serialization and scheduling", () => {
     { name: "negative timestamp", patch: { savedAt: -1 } },
     { name: "infinite timestamp", patch: { savedAt: Infinity } },
     {
-      name: "missing next offset",
-      patch: { snapshot: { ...snapshot(), pagination: { hasMore: true } } },
+      name: "invalid older cursor",
+      patch: { snapshot: { ...snapshot(), pagination: { hasMore: true, olderCursor: 42 } } },
     },
     {
       name: "negative next offset",

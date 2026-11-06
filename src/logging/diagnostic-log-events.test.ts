@@ -1,10 +1,10 @@
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
@@ -27,7 +27,7 @@ async function logRecord(write: () => void) {
     }
   });
   write();
-  await yieldToEventLoop();
+  await waitForDiagnosticEventsDrained();
   expect(received).toHaveLength(1);
   return expectDefined(received[0], "log record");
 }
@@ -58,7 +58,7 @@ it("keeps log records out of public diagnostic listeners", async () => {
   const listener = vi.fn();
   onDiagnosticEvent(listener);
   getChildLogger().info("public listener ignores this log");
-  await yieldToEventLoop();
+  await waitForDiagnosticEventsDrained();
   expect(listener).not.toHaveBeenCalled();
 });
 
