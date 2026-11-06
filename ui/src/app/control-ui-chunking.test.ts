@@ -669,7 +669,7 @@ describe("Control UI build chunking", () => {
       expect(imports).not.toContain(newSessionChunk.fileName);
       expect(startup).not.toContain(pageChunk.fileName);
       for (const helper of helpers) {
-        const chunk = chunks.find((entry) => helper in entry.modules)!;
+        const chunk = chunks.find((candidate) => helper in candidate.modules)!;
         expect(imports).toContain(chunk.fileName);
         expect(startup).not.toContain(chunk.fileName);
       }
