@@ -612,3 +612,14 @@ Example truncate response (`--max-lines 200`):
 - [CLI reference](/cli)
 - [`openclaw resume`](/cli/resume) — attach the TUI to a recent Gateway session
 - [Cloud Workers](/gateway/cloud-workers) — sessions hosted on remote workers
+
+## Session groups
+
+List the ordered session group catalog the sidebar uses.
+
+```bash
+openclaw sessions groups
+openclaw sessions groups --json
+```
+
+Backed by the `sessions.groups.list` Gateway RPC. Group mutation stays in the Control UI; the Gateway owns the ordered catalog, so the parent `sessions` list selectors do not apply.
