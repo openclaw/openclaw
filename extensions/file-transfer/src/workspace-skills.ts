@@ -1,12 +1,35 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { AgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDirFetch } from "./node-host/dir-fetch.js";
 import { createWorkspaceFile } from "./workspace-file-create.js";
-import { runNodeWorkspaceWorker, type NodeWorkspaceWorkerOptions } from "./workspace-worker.js";
+import {
+  NODE_WORKSPACE_READ_TIMEOUT_MS,
+  runNodeWorkspaceWorker,
+  type NodeWorkspaceWorkerOptions,
+} from "./workspace-worker.js";
 
 const MAX_PAIRING_CHANGE_RETRIES = 2;
+const MAX_CONNECTION_RETRIES = 2;
+
+function isDisconnectedRead(error: unknown): boolean {
+  const record = asOptionalRecord(error);
+  const details = asOptionalRecord(record?.details);
+  const nodeError = asOptionalRecord(details?.nodeError);
+  return (
+    (record?.code === "UNAVAILABLE" &&
+      details?.code === "NOT_CONNECTED" &&
+      nodeError?.code === "NOT_CONNECTED" &&
+      details.nodeCommandDispatched === false) ||
+    (record?.code === "INVALID_REQUEST" &&
+      details?.code === "DISCONNECTED" &&
+      nodeError?.code === "DISCONNECTED" &&
+      details.nodeCommandDispatched === true)
+  );
+}
 
 function isPairingChange(error: unknown): boolean {
   const record = asOptionalRecord(error);
@@ -138,16 +161,35 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
     return envelope.result as T;
   }
   async function read<T>(operation: string, request: unknown, signal?: AbortSignal): Promise<T> {
-    // Pairing approvals advance the generation and node.invoke returns retryable PAIRING_CHANGED.
-    // Retry reads against the new generation; revoked nodes still fail after the bound.
-    for (let retries = 0; ; retries += 1) {
-      try {
-        return await call<T>(operation, request, signal);
-      } catch (error) {
-        if (!isPairingChange(error) || retries >= MAX_PAIRING_CHANGE_RETRIES) {
-          throw error;
+    const deadline = buildTimeoutAbortSignal({
+      timeoutMs: NODE_WORKSPACE_READ_TIMEOUT_MS,
+      signal: signal ? AbortSignal.any([options.signal, signal]) : options.signal,
+      operation: "workspace.skills read",
+    });
+    let pairingRetries = 0;
+    let connectionRetries = 0;
+    try {
+      for (;;) {
+        deadline.signal?.throwIfAborted();
+        try {
+          return await call<T>(operation, request, deadline.signal);
+        } catch (error) {
+          deadline.signal?.throwIfAborted();
+          // Reopening uses the same node/workspace mapping and rechecks current authority.
+          // Only reads may be replayed; the failed worker has already closed and discarded output.
+          if (isPairingChange(error) && pairingRetries < MAX_PAIRING_CHANGE_RETRIES) {
+            pairingRetries += 1;
+            continue;
+          }
+          if (!isDisconnectedRead(error) || connectionRetries >= MAX_CONNECTION_RETRIES) {
+            throw error;
+          }
+          await sleepWithAbort(1_000 * 2 ** connectionRetries, deadline.signal);
+          connectionRetries += 1;
         }
       }
+    } finally {
+      deadline.cleanup();
     }
   }
   return {
