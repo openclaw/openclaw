@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderMarkdownMath } from "./markdown-math.runtime.ts";
 import { markdownTableCopyText } from "./markdown-tables.ts";
+import { markdownVisibleText } from "./markdown-visible-text.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 describe("LaTeX", () => {
@@ -25,14 +26,11 @@ describe("LaTeX", () => {
     },
   );
 
-  it("renders inline and display math with KaTeX", () => {
-    const fragment = mathFragment(
-      toSanitizedMarkdownHtml("Inline $x^2$ and:\n\n$$\n\\frac{1}{2}\n$$"),
-    );
+  it("keeps math source searchable as visible text", () => {
+    const text = markdownVisibleText({}, "Solve $x^2$ today.\n\n$$\n\\frac{1}{2}\n$$\n\nDone.");
 
-    expect(fragment.querySelector(".katex")).not.toBeNull();
-    expect(fragment.querySelector(".katex-display")).not.toBeNull();
-    expect(fragment.textContent).toContain("x2");
+    expect(text).toContain("Solve x^2 today.");
+    expect(text).toMatch(/\\frac\{1\}\{2\}\n+Done\./u);
   });
 
   it("keeps math-looking code literal", () => {

@@ -71,7 +71,7 @@ function sourceKey(url: URL): string {
 function inlineText(tokens: readonly Token[]): string {
   return tokens
     .map((token) => {
-      if (token.type === "text" || token.type === "code_inline") {
+      if (token.type === "text" || token.type === "code_inline" || token.type === "math_inline") {
         return token.content;
       }
       return token.type === "softbreak" || token.type === "hardbreak" ? " " : "";
