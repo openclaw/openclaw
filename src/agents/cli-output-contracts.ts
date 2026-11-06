@@ -46,8 +46,8 @@ export type CliOutput = {
   resumeCheckpointId?: string;
   usage?: CliUsage;
   /**
-   * Terminal cumulative turn usage for persisted transcript accounting and turn diagnostics;
-   * live reply and context accounting keep using `usage`.
+   * Terminal cumulative turn usage for billing, persisted transcript accounting and turn
+   * diagnostics; context accounting keeps using `usage`, the latest model call.
    */
   diagnosticUsage?: CliUsage;
   toolSummary?: ToolSummaryTrace;
