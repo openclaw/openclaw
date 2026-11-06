@@ -606,14 +606,16 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/crabbox/**"
+"extensions: databricks":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/databricks/**"
+          - "docs/providers/databricks.md"
+          - "docs/plugins/reference/databricks.md"
 "extensions: deep-research":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/deep-research/**"
-"extensions: deepseek":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/deepseek/**"
 "extensions: deepgram":
   - changed-files:
       - any-glob-to-any-file:
@@ -625,6 +627,10 @@
       - any-glob-to-any-file:
           - "extensions/deepinfra/**"
           - "docs/providers/deepinfra.md"
+"extensions: deepseek":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deepseek/**"
 "extensions: featherless":
   - changed-files:
       - any-glob-to-any-file:
