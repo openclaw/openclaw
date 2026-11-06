@@ -26,8 +26,8 @@ type ComposerTextareaResizeObserverState = {
 
 type ComposerPopoverAnchorObserverState = {
   resizeObserver: ResizeObserver | null;
-  toggleObserver: MutationObserver | null;
-  stopViewportListeners: () => void;
+  panel: HTMLElement | null;
+  stopListeners: () => void;
   updateFrame: number | null;
   scheduleUpdate: () => void;
 };
@@ -68,16 +68,19 @@ function observeComposerPopoverAnchor(el: HTMLElement) {
   const viewport = window.visualViewport;
   const state: ComposerPopoverAnchorObserverState = {
     resizeObserver: null,
-    toggleObserver: null,
-    stopViewportListeners: () => {},
+    panel: null,
+    stopListeners: () => {},
     updateFrame: null,
     scheduleUpdate: () => {
-      if (state.updateFrame !== null) {
+      if (state.updateFrame !== null || !state.panel?.matches(":popover-open")) {
         return;
       }
       state.updateFrame = requestAnimationFrame(() => {
         state.updateFrame = null;
-        if (composerPopoverAnchorObservers.get(el) === state) {
+        if (
+          composerPopoverAnchorObservers.get(el) === state &&
+          state.panel?.matches(":popover-open")
+        ) {
           updateComposerPopoverAnchor(el);
         }
       });
@@ -87,24 +90,27 @@ function observeComposerPopoverAnchor(el: HTMLElement) {
     state.resizeObserver = new ResizeObserver(state.scheduleUpdate);
     state.resizeObserver.observe(el);
   }
-  if (typeof MutationObserver === "function") {
-    state.toggleObserver = new MutationObserver(state.scheduleUpdate);
-    state.toggleObserver.observe(el, {
-      attributes: true,
-      attributeFilter: ["open"],
-      subtree: true,
-    });
-  }
+  const stopShow = listen(el, "overlay-show", (event) => {
+    const panel = event.target;
+    if (
+      panel instanceof HTMLElement &&
+      panel.classList.contains("agent-chat__capability-menu-panel")
+    ) {
+      state.panel = panel;
+      // The lazy panel is present, but native opening and focus have not run.
+      updateComposerPopoverAnchor(el);
+    }
+  });
   const stopResize = listen(window, "resize", state.scheduleUpdate);
   const stopViewportResize = viewport && listen(viewport, "resize", state.scheduleUpdate);
   const stopViewportScroll = viewport && listen(viewport, "scroll", state.scheduleUpdate);
-  state.stopViewportListeners = () => {
+  state.stopListeners = () => {
+    stopShow();
     stopResize();
     stopViewportResize?.();
     stopViewportScroll?.();
   };
   composerPopoverAnchorObservers.set(el, state);
-  updateComposerPopoverAnchor(el);
 }
 
 export function disconnectComposerPopoverAnchorObserver(el: HTMLElement) {
@@ -114,8 +120,7 @@ export function disconnectComposerPopoverAnchorObserver(el: HTMLElement) {
     return;
   }
   state.resizeObserver?.disconnect();
-  state.toggleObserver?.disconnect();
-  state.stopViewportListeners();
+  state.stopListeners();
   if (state.updateFrame !== null) {
     cancelAnimationFrame(state.updateFrame);
   }
