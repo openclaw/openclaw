@@ -1,11 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
-import {
-  formatSessionSnoozeWakeTime,
-  nextSessionSnoozeWakeAt,
-  resolveSessionSnoozePresets,
-} from "./session-snooze.ts";
+import { resolveSessionSnoozePresets } from "./session-snooze-presets.ts";
+import { formatSessionSnoozeWakeTime, nextSessionSnoozeWakeAt } from "./session-snooze.ts";
 
 describe("session snooze", () => {
   it.each([
