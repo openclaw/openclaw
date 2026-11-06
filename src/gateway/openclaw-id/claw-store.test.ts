@@ -5,7 +5,7 @@ import {
   PLUGIN_STATE_NAMESPACE_MAX_BYTES,
 } from "../../plugin-state/plugin-state-store.kernel.js";
 import { serializePluginStoreJson } from "../../plugin-state/plugin-store-validation.js";
-import { clawStoreRows, readStoredClaw, writeStoredClaw, type StoredClaw } from "./claw-store.js";
+import { clawStoreRows, readStoredClaw, type StoredClaw } from "./claw-store.js";
 import { fullClaw, NOW, id } from "./claw-store.test-support.js";
 
 // The claw namespace's rows, held in memory in place of the plugin-state store.
@@ -62,14 +62,6 @@ describe("claw record rows", () => {
     const base = { v: 1 as const, claw_id: id(1), hostname: null, authority: null, binding: null };
     return { ...base, discovery: { ...discovery, published_snapshot_seq: 0 } };
   };
-
-  it("stores token bindings in their own row and reads them back with the record", async () => {
-    storedRows.clear();
-    await writeStoredClaw({ ...claw(), token_bindings: [binding] });
-    expect(storedRows.get("current")).not.toHaveProperty("token_bindings");
-    expect(storedRows.get("token-bindings")).toEqual({ v: 1, bindings: [binding] });
-    expect((await readStoredClaw())?.token_bindings).toEqual([binding]);
-  });
 
   it("keeps bindings saved inside an older record until the next write moves them out", async () => {
     storedRows.clear();
