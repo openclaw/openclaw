@@ -50,6 +50,7 @@ struct SidebarGatewayPicker: View {
     let presentation: SidebarGatewayPresentation
     let fallbackName: String
     let isSwitching: Bool
+    var isSelected: Bool = false
     let selectGateway: (String) -> Void
     let openSettings: () -> Void
 
@@ -102,6 +103,9 @@ struct SidebarGatewayPicker: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(OpenClawSidebarPalette.text)
+        .background(
+            self.isSelected ? OpenClawSidebarPalette.selection : Color.clear,
+            in: RoundedRectangle(cornerRadius: OpenClawProMetric.controlRadius, style: .continuous))
         .accessibilityLabel(self.controlName)
         .accessibilityValue(self.presentation.entries.isEmpty ? "" : self.presentation.statusTitle)
         .accessibilityHint(self.presentation.showsPicker
@@ -150,6 +154,7 @@ struct RootSidebarGatewayControl: View {
     @State private var registry = GatewaySettingsStore.GatewayRegistry.empty
     @State private var switchError: String?
     let fallbackName: String
+    var isSelected: Bool = false
     let openSettings: () -> Void
 
     var body: some View {
@@ -162,6 +167,7 @@ struct RootSidebarGatewayControl: View {
             fallbackName: self.fallbackName,
             isSwitching: self.appModel.isGatewayPickerRequestInFlight ||
                 self.gatewayController.hasPendingConnectionHandoff,
+            isSelected: self.isSelected,
             selectGateway: self.switchGateway,
             openSettings: self.openSettings)
             .onAppear { self.refreshRegistry() }

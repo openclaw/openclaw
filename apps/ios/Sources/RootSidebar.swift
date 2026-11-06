@@ -449,6 +449,9 @@ struct RootSidebar: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(OpenClawSidebarPalette.accent)
+            .background(
+                self.selectedDestination == .sessions ? OpenClawSidebarPalette.selection : Color.clear,
+                in: RoundedRectangle(cornerRadius: OpenClawProMetric.controlRadius, style: .continuous))
         }
     }
 
@@ -536,7 +539,10 @@ struct RootSidebar: View {
         VStack(spacing: 0) {
             self.separator
             HStack(spacing: 4) {
-                RootSidebarGatewayControl(fallbackName: self.gatewayName) {
+                RootSidebarGatewayControl(
+                    fallbackName: self.gatewayName,
+                    isSelected: self.selectedDestination == .gateway)
+                {
                     self.selectSidebarDestination(.gateway)
                 }
 
@@ -548,6 +554,9 @@ struct RootSidebar: View {
                 {
                     self.selectSidebarDestination(.settings)
                 }
+                .background(
+                    self.selectedDestination == .settings ? OpenClawSidebarPalette.selection : Color.clear,
+                    in: RoundedRectangle(cornerRadius: OpenClawProMetric.controlRadius, style: .continuous))
                 .accessibilityIdentifier("RootTabs.Sidebar.Destination.settings")
             }
         }

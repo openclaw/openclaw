@@ -214,6 +214,49 @@ struct RootTabsSidebarRegressionTests {
         #expect(resetRange.lowerBound < destinationRange.lowerBound)
     }
 
+    @Test func `footer and all-sessions controls reuse the destination selection background`() throws {
+        let source = try String(contentsOf: Self.rootSidebarSourceURL(), encoding: .utf8)
+        let gatewayControl = try String(
+            contentsOf: Self.rootSidebarGatewayControlSourceURL(), encoding: .utf8)
+        let sessions = try Self.extract(
+            source,
+            from: "private func sessionsSection(",
+            to: "private func pagesSection(")
+        let footer = try Self.extract(
+            source,
+            from: "private var footer: some View",
+            to: "private var mainSessionEntry:")
+        let picker = try Self.extract(
+            gatewayControl,
+            from: "struct SidebarGatewayPicker: View",
+            to: "struct RootSidebarGatewayControl: View")
+
+        let allSessionsButton = try Self.extract(
+            sessions,
+            from: "self.selectSidebarDestination(.sessions)",
+            to: "\n        }\n    }")
+        #expect(allSessionsButton.contains(
+            "self.selectedDestination == .sessions ? OpenClawSidebarPalette.selection : Color.clear"))
+        #expect(allSessionsButton.contains(".foregroundStyle(OpenClawSidebarPalette.accent)"))
+        #expect(allSessionsButton.contains("cornerRadius: OpenClawProMetric.controlRadius"))
+
+        #expect(footer.contains("isSelected: self.selectedDestination == .gateway"))
+        let settingsGear = try Self.extract(
+            footer,
+            from: "systemName: \"gearshape\"",
+            to: "RootTabs.Sidebar.Destination.settings")
+        #expect(settingsGear.contains(
+            "self.selectedDestination == .settings ? OpenClawSidebarPalette.selection : Color.clear"))
+        #expect(settingsGear.contains("cornerRadius: OpenClawProMetric.controlRadius"))
+
+        #expect(picker.contains("var isSelected: Bool = false"))
+        #expect(picker.contains(
+            "self.isSelected ? OpenClawSidebarPalette.selection : Color.clear"))
+        #expect(picker.contains(".foregroundStyle(OpenClawSidebarPalette.text)"))
+        #expect(gatewayControl.contains("struct RootSidebarGatewayControl: View"))
+        #expect(gatewayControl.contains("isSelected: self.isSelected"))
+    }
+
     private static func rootTabsSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -233,6 +276,13 @@ struct RootTabsSidebarRegressionTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/RootSidebar.swift")
+    }
+
+    private static func rootSidebarGatewayControlSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/RootSidebarGatewayControl.swift")
     }
 
     private static func openClawProComponentsSourceURL() -> URL {
