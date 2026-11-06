@@ -86,7 +86,7 @@ it("retries an unavailable watch on elapsed time even when the wall clock rolls 
   vi.spyOn(performance, "now").mockImplementation(() => elapsed);
   vi.spyOn(Date, "now").mockImplementation(() => realDateNow() + wallOffset);
   const unavailable: observation.WatchSubscription = {
-    health: () => ({ state: "unavailable" }),
+    health: () => ({ state: "unavailable", mode: "poll", directories: 0 }),
     ready: Promise.resolve(),
     reconcile: async () => {},
     close: async () => {},
