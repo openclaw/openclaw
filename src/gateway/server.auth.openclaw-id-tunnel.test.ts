@@ -15,6 +15,7 @@ import {
   listDevicePairing,
   rejectDevicePairing,
   removePairedDevice,
+  requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
@@ -335,6 +336,37 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
       expect((await listDevicePairing()).pending).toEqual([
         expect.objectContaining({ role: "operator", isRepair: true }),
       ]);
+    } finally {
+      again.ws.close();
+    }
+  });
+
+  test("a signed-out browser asking for fewer scopes reconnects with only those", async () => {
+    const { identityPath, deviceId } = await pairThenSignOut(OWNER_KEY);
+    const again = await connectTunnel(OWNER_KEY, { identityPath, scopes: ["operator.read"] });
+    try {
+      expect(again.res.ok, JSON.stringify(again.res.error)).toBe(true);
+      expect(grantedScopes(again.res)).toEqual(["operator.read"]);
+      expect((await getPairedDevice(deviceId))?.tokens?.operator?.scopes).toEqual([
+        "operator.read",
+      ]);
+    } finally {
+      again.ws.close();
+    }
+  });
+
+  test("a restore merged with a pending new role names that role and waits", async () => {
+    const { identityPath, deviceId } = await pairThenSignOut(OWNER_KEY);
+    const paired = expectDefined(await getPairedDevice(deviceId), "paired device");
+    await requestDevicePairing({ deviceId, publicKey: paired.publicKey, role: "node", scopes: [] });
+    const again = await connectTunnel(OWNER_KEY, { identityPath });
+    try {
+      expect(again.res.ok).toBe(false);
+      expect(again.res.error?.details).toMatchObject({
+        reason: "role-upgrade",
+        requestedRole: "node",
+        approvedRoles: ["operator"],
+      });
     } finally {
       again.ws.close();
     }
