@@ -53,6 +53,7 @@ import { startPluginServices, type PluginServicesHandle } from "../../../src/plu
 import { bindPluginToolCallbacks } from "../../../src/plugins/tool-factory-runtime.js";
 import { sessionChanges } from "../../../src/sessions/session-row-changes.js";
 import { drainGlobalSingletonLifecycleState } from "../../../src/shared/global-singleton.js";
+import { setUserProfileRole } from "../../../src/state/user-profile-writes.worker.js";
 import { jsonResponse, requestUrl } from "../../../src/test-helpers/http.js";
 import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
 import {
@@ -87,6 +88,8 @@ it.each([
   "admission-snapshot",
   "duplicate-admission-source",
   "refresh-before-work",
+  "source-role-revoked",
+  "source-role-reassigned",
   "queued-start-refresh",
   "queued-before-dispatch-refresh",
   "queued-during-dispatch-refresh",
@@ -566,12 +569,15 @@ it.each([
             registry,
           );
         const startServices = async () => {
-          services = await startPluginServices({
+          await startPluginServices({
             registry,
             config: cfg,
             scheduler,
             previous: services,
             throwOnStartError: true,
+            onHandle: (handle) => {
+              services = handle;
+            },
           });
         };
         await startServices();
@@ -750,8 +756,46 @@ it.each([
         prepared.close();
         captured.release();
         phase = "recovery";
+        const changedRole = scenario.startsWith("source-role-");
+        const pollsBeforeRecovery = polls;
+        if (changedRole) {
+          setUserProfileRole(
+            client.authenticatedUserProfile.profileId,
+            scenario === "source-role-revoked" ? "denied" : "research-reassigned",
+          );
+        }
         await startServices();
         let waking = clock.advanceBy(6000);
+        if (changedRole) {
+          await waking;
+          const retained = (await lookup.entries())[0]?.value;
+          expect(retained).toMatchObject({
+            state: "paused",
+            recovery: "deferred",
+            handle: { interactionId: "native-recovery-receipt" },
+          });
+          expect(retained?.result).toBeUndefined();
+          expect({ submits, polls, cancels, publications }).toEqual({
+            submits: 1,
+            polls: pollsBeforeRecovery,
+            cancels: 0,
+            publications: 0,
+          });
+          // Restoring a role does not itself grant a deferred operation new authority.
+          setUserProfileRole(
+            client.authenticatedUserProfile.profileId,
+            captured.authority.recoverySnapshot.assignedRole,
+          );
+          await clock.advanceBy(60_000);
+          expect((await lookup.entries())[0]?.value).toEqual(retained);
+          expect({ submits, polls, cancels, publications }).toEqual({
+            submits: 1,
+            polls: pollsBeforeRecovery,
+            cancels: 0,
+            publications: 0,
+          });
+          return;
+        }
         if (scenario === "stop-before-wake-admission") {
           const signal = await Promise.race([
             wakeAdmission.promise,
