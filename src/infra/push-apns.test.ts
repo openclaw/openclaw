@@ -439,6 +439,29 @@ describe("push APNs send semantics", () => {
     },
   );
 
+  it("carries the scoped chat destination without changing the alert contract", async () => {
+    const fixture = createDirectApnsSendFixture("ios-node-chat");
+    const destination = { gatewayDeviceId: "gateway-fixture", sessionKey: "agent:main:incident" };
+    await sendApnsAlert({ ...fixture, title: "Update", body: "Ready", destination });
+    const payload = requirePayload(requireSendRequest(fixture.send));
+    expectOpenClaw(payload, { kind: "push.test", nodeId: "ios-node-chat", destination });
+    expect(requireRecord(payload.aps, "aps").alert).toEqual({ title: "Update", body: "Ready" });
+  });
+
+  it("does not send a destination whose live authority was revoked", async () => {
+    const fixture = createDirectApnsSendFixture("ios-node-chat");
+    await expect(
+      sendApnsAlert({
+        ...fixture,
+        title: "Update",
+        body: "Ready",
+        destination: { gatewayDeviceId: "gateway-fixture", sessionKey: "agent:main:incident" },
+        isCurrent: async () => false,
+      }),
+    ).rejects.toThrow("APNs send invalidated");
+    expect(fixture.send).not.toHaveBeenCalled();
+  });
+
   it("keeps bounded non-JSON error reasons UTF-16 well-formed", async () => {
     const fixture = createDirectApnsSendFixture("ios-node-utf16-reason", "sandbox", {
       status: 400,

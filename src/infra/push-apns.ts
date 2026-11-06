@@ -450,6 +450,7 @@ type ApnsAlertParams = ApnsTransportParams &
   ApnsLifecycleControls & {
     title: string;
     body: string;
+    destination?: { gatewayDeviceId: string; sessionKey: string };
   };
 
 type ApnsBackgroundWakeParams = ApnsTransportParams &
@@ -473,7 +474,12 @@ export async function sendApnsAlert(params: ApnsAlertParams): Promise<ApnsPushRe
       alert: { title: params.title, body: params.body },
       sound: "default",
     },
-    openclaw: { kind: "push.test", nodeId: params.nodeId, ts: Date.now() },
+    openclaw: {
+      kind: "push.test",
+      nodeId: params.nodeId,
+      ts: Date.now(),
+      ...(params.destination ? { destination: params.destination } : {}),
+    },
   };
 
   return await sendApnsPush({ transport: params, payload, pushType: "alert" }, params);

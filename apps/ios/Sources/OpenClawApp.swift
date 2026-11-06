@@ -91,10 +91,17 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     private var pendingExecApprovalRequestedPushes: [ApprovalNotificationPrompt] = []
     private var pendingExecApprovalResolvedPushes: [ApprovalNotificationPrompt] = []
     private var pendingOpenURLs: [URL] = []
+    private var pendingChatNotification: ChatNotificationRequest?
 
     weak var appModel: NodeAppModel? {
         didSet {
             guard let model = resolvedAppModel() else { return }
+            if let request = self.pendingChatNotification {
+                self.pendingChatNotification = nil
+                Task { @MainActor in
+                    await model.handleChatNotification(request)
+                }
+            }
             if let token = pendingAPNsDeviceToken {
                 self.pendingAPNsDeviceToken = nil
                 Task { @MainActor in
@@ -127,6 +134,17 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             for value in values {
                 await perform(value)
             }
+        }
+    }
+
+    func routeChatNotification(_ request: ChatNotificationRequest) {
+        guard let model = self.resolvedAppModel() else {
+            // Only the latest user-selected destination needs a cold-launch handoff.
+            self.pendingChatNotification = request
+            return
+        }
+        Task { @MainActor in
+            await model.handleChatNotification(request)
         }
     }
 
@@ -425,6 +443,17 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                     return
                 }
                 self.routeApprovalPrompt(prompt)
+                completionHandler()
+            }
+            return
+        }
+        if response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+           let request = ChatNotificationRequest.parse(
+               notificationID: response.notification.request.identifier,
+               userInfo: response.notification.request.content.userInfo)
+        {
+            Task { @MainActor [weak self] in
+                self?.routeChatNotification(request)
                 completionHandler()
             }
             return

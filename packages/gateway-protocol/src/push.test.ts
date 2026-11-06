@@ -1,7 +1,19 @@
 // Gateway Protocol tests cover push behavior.
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
-import { PushTestResultSchema } from "./schema/push.js";
+import { PushTestParamsSchema, PushTestResultSchema } from "./schema/push.js";
+
+describe("push destination request", () => {
+  const validate = Compile(PushTestParamsSchema);
+
+  it("accepts an optional session without allowing a caller-selected Gateway", () => {
+    expect(validate.Check({ nodeId: "ios-node", sessionKey: "agent:main:incident" })).toBe(true);
+    expect(validate.Check({ nodeId: "ios-node" })).toBe(true);
+    expect(validate.Check({ nodeId: "ios-node", sessionKey: "" })).toBe(false);
+    expect(validate.Check({ nodeId: "ios-node", sessionKey: 42 })).toBe(false);
+    expect(validate.Check({ nodeId: "ios-node", gatewayDeviceId: "forged" })).toBe(false);
+  });
+});
 
 /**
  * Push protocol schema regression for APNS test results.

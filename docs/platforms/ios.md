@@ -679,6 +679,24 @@ Expected operator flow:
 4. The app publishes `push.apns.register` once it has an APNs token, the operator session is connected, and relay registration succeeds.
 5. After that, `push.test`, reconnect wakes, and wake nudges can use the stored relay-backed registration.
 
+### Open a chat from a notification
+
+To open an existing chat when its notification is tapped, include its session key:
+
+```bash
+openclaw nodes push --node <id> --title "Chat update" --body "An update is ready" --session agent:main:incident
+```
+
+The Gateway resolves the session under the caller's current access and attaches its own
+Gateway identity. On a tap, iOS checks that identity against its connected Gateway and
+resolves the existing session again using the current signed-in profile before opening it.
+Opening the chat does not send a message. Cold-launch and disconnected taps wait for the
+existing connection flow; notifications do not add a background wake mechanism.
+
+Notifications without a destination keep their existing behavior. A different Gateway,
+a missing or inaccessible session, or a refused connection leaves the current screen
+unchanged. Taps do not automatically switch Gateways or use an arbitrary deep link.
+
 ## Background alive beacons
 
 When iOS wakes the app for a silent push, background refresh, or significant-location event, the app attempts a short node reconnect and then calls `node.event` with `event: "node.presence.alive"`. The Gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only after the authenticated node device identity is known.

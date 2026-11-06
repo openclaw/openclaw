@@ -185,8 +185,12 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--title <text>", "Push title", "OpenClaw")
       .option("--body <text>", "Push body")
+      .option(
+        "--session <key>",
+        "Existing chat to open on this Gateway when the notification is tapped",
+      )
       .option("--environment <sandbox|production>", "Override APNs environment")
-      .action(async (opts: NodesRpcOpts & { environment?: string }) => {
+      .action(async (opts: NodesRpcOpts & { environment?: string; session?: string }) => {
         await runNodesCommand("push", async () => {
           const environment = normalizeOptionalLowercaseString(opts.environment);
           if (
@@ -204,6 +208,7 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
             nodeId,
             title,
             body,
+            ...(opts.session !== undefined ? { sessionKey: opts.session } : {}),
             ...(environment ? { environment } : {}),
           });
           const parsed = asRecord(result);
