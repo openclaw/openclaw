@@ -1,9 +1,17 @@
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { startOpenClawIdFeatureLifetime } from "../../lib/openclaw-id/feature-lifetime.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { installSafeLocalStorageForTesting } from "../../test-helpers/storage.ts";
 import { showMakeReachableDialog } from "./make-reachable-dialog.tsx";
+
+// Dialogs open only while the enabled feature's lifetime runs.
+let endFeature = () => {};
+beforeEach(() => {
+  endFeature = startOpenClawIdFeatureLifetime();
+});
+afterEach(() => endFeature());
 
 // Records when the owner device key is stored and announced, relative to the commit.
 const keyEvents = vi.hoisted(() => [] as string[]);
@@ -206,5 +214,32 @@ describe("Make reachable preparation", () => {
     expect(preparations).toHaveLength(1);
     await click("Cancel");
     expect(await done).toBe(false);
+  });
+});
+
+describe("Make reachable and the Labs switch", () => {
+  afterEach(() => cleanupSolid());
+
+  it("opens nothing while the feature is off", async () => {
+    endFeature();
+    const request = vi.fn();
+    const linked = await showMakeReachableDialog({
+      client: { request } as unknown as GatewayBrowserClient,
+      loaderDomain: "claws.test",
+    });
+    expect(linked).toBe(false);
+    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("closes an open dialog when the feature turns off", async () => {
+    const done = showMakeReachableDialog({
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      loaderDomain: "claws.test",
+    });
+    await vi.waitFor(() => expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull());
+    endFeature();
+    expect(await done).toBe(false);
+    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 });
