@@ -172,10 +172,11 @@ export function isSameOpenClawIdTunnelPrincipal(
   ) {
     return false;
   }
-  return (
-    left.kind === "owner" ||
-    (right.kind === "member" && left.accountId === right.accountId && left.role === right.role)
-  );
+  if (left.kind === "member" && right.kind === "member") {
+    return left.accountId === right.accountId && left.role === right.role;
+  }
+  // Owners and nodes carry no account or role; the listing above identifies them.
+  return true;
 }
 
 /** The trusted-proxy user of a member; owners act as the Gateway owner and carry none. */
