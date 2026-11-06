@@ -217,6 +217,7 @@ async function transportFailureAlert(
     );
     return;
   }
+  let outcomeReported = false;
   void state.deps
     .sendCronFailureAlert({
       job: params.job,
@@ -230,6 +231,7 @@ async function transportFailureAlert(
       threadId: params.route.threadId,
       ...(params.route.alternateRoute ? { inheritSessionThread: false as const } : {}),
       onDeliverySettled: async (outcome) => {
+        outcomeReported = true;
         const recordResult = await recordFailureAlertOutcome(
           state,
           { jobId, alertAtMs, runAtMs, lifecycleGeneration, notificationId },
@@ -246,10 +248,37 @@ async function transportFailureAlert(
         }
       },
     })
-    .catch((err: unknown) => {
+    .catch(async (err: unknown) => {
       state.deps.log.warn(
         { jobId: params.job.id, err: String(err) },
         "cron: failure alert delivery failed",
+      );
+      if (outcomeReported) {
+        // The transport reported its own settled outcome before failing.
+        return;
+      }
+      // A transport that rejects before reporting leaves no settled fact: record
+      // the deterministic failure and enqueue the in-app fallback so a
+      // transport-equipped setup cannot silently keep the "unknown" intent.
+      const recordResult = await recordFailureAlertOutcome(
+        state,
+        { jobId, alertAtMs, runAtMs, lifecycleGeneration, notificationId },
+        { delivered: false, status: "not-delivered", error: formatErrorMessage(err) },
+      );
+      if (recordResult !== "stale") {
+        await enqueueCronNotification(
+          state,
+          params.job,
+          params.payload.text ?? "",
+          "failure-alert",
+          routing,
+        );
+      }
+    })
+    .catch((err: unknown) => {
+      state.deps.log.warn(
+        { jobId: params.job.id, err: String(err) },
+        "cron: failure alert outcome recording failed",
       );
     });
 }

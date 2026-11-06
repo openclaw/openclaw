@@ -1,0 +1,2 @@
+# Regression coverage for transport rejection before outcome reporting, plus a delivered-outcome lock when the transport rejects after reporting.
+61

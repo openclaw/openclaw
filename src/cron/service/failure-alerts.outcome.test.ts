@@ -219,6 +219,67 @@ describe("cron failure alert outcome write-back", () => {
     expect(persisted).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
   });
 
+  it("records the failure and falls back when the transport rejects before reporting", async () => {
+    const send = vi.fn<SendCronFailureAlert>(async () => {
+      throw new Error("transport rejected before any send");
+    });
+    const store = fixtures.makeStorePath();
+    const job = createAlertJob({ id: "alert-outcome-transport-reject", dueAt });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const state = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => endedAt,
+      sendCronFailureAlert: send,
+    });
+    state.deps.resolveDefaultAgentId = () => "alpha";
+    await finalizeAlertOutcome({
+      state,
+      job,
+      status: "error",
+      error: "provider unavailable",
+      startedAt: dueAt,
+      endedAt,
+    });
+    expect(send).toHaveBeenCalledOnce();
+    await Promise.allSettled([send.mock.results[0]?.value]);
+    await Promise.resolve();
+    await state.op;
+    await Promise.resolve();
+    await state.op;
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+      lastFailureAlertAtMs: endedAt,
+      lastFailureNotificationDelivered: false,
+      lastFailureNotificationDeliveryStatus: "not-delivered",
+      lastFailureNotificationDeliveryError: expect.stringContaining(
+        "transport rejected before any send",
+      ),
+    });
+    expect(state.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      expect.objectContaining({ agentId: "alpha" }),
+    );
+  });
+
+  it("keeps a reported delivered outcome when the transport still rejects afterward", async () => {
+    const send = vi.fn<SendCronFailureAlert>(async (params) => {
+      await params.onDeliverySettled({ delivered: true, status: "delivered" });
+      throw new Error("cleanup failed after delivery");
+    });
+    const { store, state } = await runFailure({
+      id: "alert-outcome-reported-then-rejected",
+      sendCronFailureAlert: send,
+    });
+    await Promise.allSettled([send.mock.results[0]?.value]);
+    await Promise.resolve();
+    await state.op;
+    await Promise.resolve();
+    await state.op;
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+      lastFailureNotificationDelivered: true,
+      lastFailureNotificationDeliveryStatus: "delivered",
+    });
+  });
+
   it.each(["sibling cycle", "newer run", "retired lifecycle"] as const)(
     "rejects a delayed outcome after a %s takes ownership",
     async (replacement) => {
