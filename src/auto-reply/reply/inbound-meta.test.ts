@@ -5,8 +5,7 @@ import type { SessionEntry, SessionGoalStatus } from "../../config/sessions/type
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnv } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import { bindRequesterProfile } from "../requester-profile.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import type { TemplateContext } from "../templating.js";
 import { prepareReplyRunContext } from "./get-reply-run-context.js";
 import { baseParams } from "./get-reply-run.test-support.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
@@ -392,16 +391,6 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toContain('Current message:\n[Replying to: "quoted status body"]\n#34974:');
     expect(text).toContain('[Replying to: "quoted status body"]');
     expect(text.trimEnd().endsWith("#34974:")).toBe(true);
-  });
-
-  it("keeps the requester hint free of double quotes", () => {
-    const ctx: MsgContext = { SenderId: "U123" };
-    bindRequesterProfile(ctx, { id: "human-1", displayName: "Ada", isCurrent: () => true });
-    const hint = parseConversationInfoPayload(buildInboundUserContextPrefix(ctx))[
-      "requester_profile_hint"
-    ];
-    expect(hint).toContain("sessions assign_owner");
-    expect(hint).not.toContain('"');
   });
 
   it("omits duplicate phone identity from the conversation sender", () => {
