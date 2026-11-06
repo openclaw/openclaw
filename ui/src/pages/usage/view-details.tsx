@@ -14,6 +14,7 @@ import { UsageLogFilterMenu } from "./view-log-filter-menu.tsx";
 import { SessionLogList, type SessionLogRow } from "./view-session-log-list.tsx";
 import { renderSessionSummary } from "./view-session-summary.tsx";
 import { deriveTimeSeries, TimeSeriesCompact } from "./view-timeseries.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 function pct(part: number, total: number): number {
   return total > 0 ? (part / total) * 100 : 0;
@@ -588,8 +589,7 @@ function SessionLogs(props: {
                 </>
               )}
               <label class="usage-filters-inline session-log-has-tools">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={props.detail.logFilters.hasTools}
                   onChange={(event) =>
                     props.callbacks.onLogFiltersChange({ hasTools: event.currentTarget.checked })

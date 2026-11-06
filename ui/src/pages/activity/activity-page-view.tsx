@@ -55,6 +55,7 @@ import { renderSessionActivityView as SessionActivityView } from "./session-acti
 import { ACTIVITY_PHONE_QUERY } from "./session-activity.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 import "../../styles/activity.css";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 registerEnglishCatalog(registerActivityEnglish);
 
@@ -222,8 +223,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     function StatusFilter(props: { status: ActivityStatus }) {
       return (
         <label class="activity-status-filter">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={filters.statusFilters[props.status]}
             onChange={(event) =>
               update({

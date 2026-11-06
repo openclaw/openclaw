@@ -40,6 +40,7 @@ import { CategoryCell } from "./category-cell.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
 import type { SessionsProps } from "./view-types.ts";
 import "../../components/tooltip.ts";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 const SESSION_RUN_STATUS_LABELS = {
   queued: "sessionsView.statusQueued",
@@ -333,8 +334,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
         }}
       >
         <td class="data-table-checkbox-col">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={props.selectedKeys.has(row().key)}
             onChange={() => props.onToggleSelect(row().key)}
             aria-label={`${selectLabel()}: ${row().key}`}

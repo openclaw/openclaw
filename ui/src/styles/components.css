@@ -1292,14 +1292,6 @@ select.settings-select:not([multiple]) {
   column-gap: 10px;
 }
 
-.config-form .field.checkbox input[type="checkbox"],
-.exec-approval-skip input[type="checkbox"],
-.data-table-checkbox-col input[type="checkbox"] {
-  margin: 0;
-  width: 16px;
-  height: 16px;
-}
-
 .field input[aria-invalid="true"],
 .field textarea[aria-invalid="true"],
 .field select[aria-invalid="true"] {
@@ -2311,10 +2303,6 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 td.data-table-checkbox-col,
 td.data-table-key-col {
   background: var(--data-table-row-bg);
-}
-
-.data-table-checkbox-col input[type="checkbox"] {
-  vertical-align: middle;
 }
 
 .data-table .data-table-key-col {

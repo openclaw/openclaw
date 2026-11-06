@@ -22,6 +22,7 @@ import { SessionsAdvancedFilters } from "./sessions-filters.tsx";
 import { TranscriptSearchForm, TranscriptSearchResults } from "./transcript-search-view.tsx";
 import type { SessionsProps } from "./view-types.ts";
 import "../../styles/sessions.css";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 registerSessionMenuEnglish();
 
@@ -322,10 +323,9 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
   }
   function SelectAllOnPage() {
     return (
-      <input
-        type="checkbox"
+      <Checkbox
         checked={allSelected()}
-        prop:indeterminate={selectedOnPage() > 0 && !allSelected()}
+        indeterminate={selectedOnPage() > 0 && !allSelected()}
         onChange={() => {
           const update = allSelected() ? props.onDeselectPage : props.onSelectPage;
           update(paginated().map((r) => r.key));

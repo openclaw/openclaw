@@ -13,6 +13,7 @@ import { resolvePaletteSessionSettings, type SettingsOptions } from "./palette-s
 import { createPresentationAction } from "./submission-action.ts";
 import { repositoryIssueText } from "./submit-gates.ts";
 import { AgentSelect, RequiredSessionPlacement } from "./target-controls-view.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 type SettingsProjection = ReturnType<typeof resolvePaletteSessionSettings>;
 type FocusTarget = "back" | "search" | "workspace";
@@ -449,8 +450,7 @@ export function PaletteSessionSettingsView(properties: {
                     : undefined
                 }
               >
-                <input
-                  type="checkbox"
+                <Checkbox
                   ref={[controlRef()]}
                   checked={properties.options.preferences.remember}
                   disabled={view().locked || !properties.options.preferences.available}

@@ -14,6 +14,7 @@ import { nativeListener } from "../lib/solid-native-listener.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
+import { Checkbox } from "./solid/checkbox.tsx";
 
 registerEnglishCatalog(registerSessionOrganizationSharedEnglish);
 registerEnglishCatalog(registerSessionOrganizationEnglish);
@@ -80,8 +81,7 @@ function SessionChoice(props: {
 }) {
   return (
     <label class="personal-section-dialog__option">
-      <input
-        type="checkbox"
+      <Checkbox
         checked={props.checked}
         onChange={(event) => props.onToggle(event.currentTarget.checked)}
       />

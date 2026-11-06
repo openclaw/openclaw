@@ -5,6 +5,7 @@ import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-cha
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
+import { Checkbox } from "../../../components/solid/checkbox.tsx";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
@@ -151,10 +152,8 @@ export function openChatRewindConfirmation(btn: HTMLElement, action: () => void)
         >
           <p class="chat-confirm-popover__text">{confirmText}</p>
           <label class="chat-confirm-popover__remember">
-            <input
+            <Checkbox
               ref={(element) => (check = element)}
-              type="checkbox"
-              class="chat-confirm-popover__check"
             />
             <span>{t("chat.messages.dontAskAgain")}</span>
           </label>

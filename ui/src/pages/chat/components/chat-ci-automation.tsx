@@ -10,6 +10,7 @@ import type {
   CiAutomationOptions,
 } from "../../../lib/session-pr-automation-spec.ts";
 import type { CiAutomationJobs } from "../../../lib/session-pr-automation.ts";
+import { Checkbox } from "../../../components/solid/checkbox.tsx";
 
 registerEnglishCatalog(registerChatCiEnglish);
 
@@ -88,10 +89,8 @@ export function ChatCiAutomationView(props: ChatCiAutomationProps) {
                     when={props.menuPresentation}
                     fallback={
                       <label class="chat-ci__automation-option">
-                        <input
+                        <Checkbox
                           ref={(element) => binding.ref?.(element)}
-                          class="chat-ci__automation-checkbox"
-                          type="checkbox"
                           name={entry[0]}
                           checked={props.options[entry[0]]}
                           disabled={props.pending[entry[0]] !== undefined}

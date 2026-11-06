@@ -2362,13 +2362,6 @@ button.chat-pr__diff {
   opacity: 0.6;
 }
 
-.chat-ci__automation-checkbox {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-  cursor: var(--cursor-action);
-}
-
 .chat-ci__automation-label,
 .chat-ci__name {
   min-width: 0;

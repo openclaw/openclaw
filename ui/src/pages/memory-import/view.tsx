@@ -26,6 +26,7 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import type { MemoryImportViewProps } from "./view-types.ts";
 import "../../styles/memory-import.css";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 registerEnglishCatalog(registerMemoryImportEnglish);
 
@@ -100,8 +101,7 @@ function Collection(props: {
     <div class="settings-row settings-row--stacked memory-import__collection">
       <div class="memory-import__collection-header">
         <label class="memory-import__collection-choice">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={checked()}
             disabled={selectableIds().length === 0 || props.disabled}
             onChange={(event) =>

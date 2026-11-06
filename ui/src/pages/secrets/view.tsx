@@ -19,6 +19,7 @@ import type { SecretsStoreState } from "../../lib/secrets-store/index.ts";
 import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import "../../styles/secrets-store.css";
 import type { SecretsPageState } from "./state.ts";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 type SecretsStoreViewProps = {
   state: SecretsPageState;
@@ -393,8 +394,7 @@ function BulkDialog(props: SecretsStoreViewProps) {
           })}
         </div>
         <label class="secrets-store-checkbox">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={props.state.bulkAutoDetect}
             disabled={props.busy}
             onChange={(event) =>

@@ -15,6 +15,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { TemplateCreator } from "./creator-publication.ts";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 type CreatorView = SourceProjection<TemplateCreator, TemplateCreator>;
 
@@ -49,8 +50,7 @@ function OptionalSection(props: {
           {(item) => (
             <div class="template-creator__row">
               <label class="template-creator__row-choice">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={included(item())}
                   disabled={props.publishing}
                   onChange={(event) => {

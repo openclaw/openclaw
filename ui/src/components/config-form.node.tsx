@@ -32,6 +32,7 @@ import {
 } from "./config-form.search.ts";
 import { hintForPath, pathKey, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { SettingsToggle, SettingsToggleRow } from "./solid/settings-ui.tsx";
+import { Checkbox } from "./solid/checkbox.tsx";
 
 // Past this a segmented control stops fitting the control column at a readable size.
 const SEGMENTED_MAX_OPTIONS = 3;
@@ -400,8 +401,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
           helpContext={props.params.helpContext}
           showLabel={props.params.showLabel ?? true}
           control={
-            <input
-              type="checkbox"
+            <Checkbox
               aria-label={meta().label}
               aria-describedby={props.params.descriptionId}
               checked={checked()}

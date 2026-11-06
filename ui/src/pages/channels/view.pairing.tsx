@@ -20,6 +20,7 @@ import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ChannelRefresh } from "./view.shared.tsx";
 import type { ChannelsProps } from "./view.types.ts";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 function accountName(account: Pick<ChannelsPairingAccount, "accountLabel" | "accountId">): string {
   return account.accountLabel || account.accountId;
@@ -368,8 +369,7 @@ function PairingPromptContent(params: {
   const dialogTitle = () => t(`channels.pairing.${params.prompt.kind}DialogTitle`);
   const option = (field: "notify" | "bootstrapCommandOwner", label: string) => (
     <label class="channels-pairing-dialog__option">
-      <input
-        type="checkbox"
+      <Checkbox
         checked={params.prompt[field]}
         onChange={(event) =>
           params.props.onPairingPromptChange({ [field]: event.currentTarget.checked })

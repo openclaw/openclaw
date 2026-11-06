@@ -30,6 +30,7 @@ import { manualProviderName, ManualProviderPicker } from "./provider-picker.tsx"
 import { ModelSetupSuccessDialog } from "./success-dialog.tsx";
 import type { ModelSetupViewProps } from "./view-types.ts";
 import { ModelSetupWizard } from "./wizard-view-solid.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 registerRouteSubtitlesEnglish();
 
@@ -297,8 +298,7 @@ function NativeSessionDiscovery(
         <p class="muted">{t("modelSetup.nativeDiscovery.body")}</p>
         <p>{props.result.nativeSessionCatalogs?.map((option) => option.label).join(", ")}</p>
         <label>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={props.nativeSessionCatalogsEnabled === true}
             disabled={props.actionsDisabled}
             onChange={(event) => props.onNativeSessionCatalogsChange?.(event.currentTarget.checked)}

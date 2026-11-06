@@ -13,6 +13,7 @@ import { ChannelPicker, type ChannelPickerOption } from "./solid/channel-picker.
 import { Icon } from "./solid/icon.tsx";
 import { ModelSetupSignIn } from "./wizard-sign-in.tsx";
 import "../styles/wizard-step-controls.css";
+import { Checkbox } from "./solid/checkbox.tsx";
 
 registerEnglishCatalog(registerModelSetupEnglish);
 
@@ -471,8 +472,7 @@ function MultipleChoice(props: WizardStepControlsProps & { options: WizardStepOp
               when={props.presentation === "channels"}
               fallback={
                 <label class="wizard-step__option">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={selected().some((value) => Object.is(value, option().value))}
                     disabled={props.busy}
                     aria-invalid={props.validationErrorId ? "true" : undefined}

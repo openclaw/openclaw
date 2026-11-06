@@ -18,6 +18,7 @@ import { LibraryDialog } from "./library-dialog.tsx";
 import { libraryFileText } from "./library-file-text.ts";
 import type { LibraryDetailOutcome, SkillLibraryModel } from "./library-state.ts";
 import { SkillLibraryToolbar } from "./library-toolbar.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 
 export function SkillLibrary(props: {
   library: SkillLibraryModel;
@@ -403,8 +404,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
       </div>
       <Show when={support() && props.library.canEdit()}>
         <label class="field checkbox">
-          <input
-            type="checkbox"
+          <Checkbox
             name="library-file-executable"
             disabled={disabled()}
             checked={support()!.executable === true}
