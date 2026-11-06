@@ -36,7 +36,7 @@ export type ResearchJob = {
   /** Total interrupted authority borrows; bounded across restarts. */
   wakeFailures?: number;
 };
-export type RecoveryWake = Pick<ResearchJob, "id" | "agentId" | "sessionKey" | "sessionId"> & {
+type RecoveryWake = Pick<ResearchJob, "id" | "agentId" | "sessionKey" | "sessionId"> & {
   nextWakeAt: number;
 };
 export type Step = { state: "started" } | { state: "done"; value: unknown } | { state: "failed" };
