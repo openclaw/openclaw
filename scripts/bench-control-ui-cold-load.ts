@@ -35,6 +35,7 @@
 // --transcript-witness distinguishes native saved/live text paint in warm Chat reloads.
 // --transcript-witness-hold also holds startup for saved paint: correctness only, never timing.
 // --details-processes observes populated warm Details with one synthetic running process.
+// --details-subagent-activity observes warm Details with one ordinary settled child session.
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
@@ -300,6 +301,7 @@ const { values } = parseArgs({
     "archived-session": { type: "boolean", default: false },
     "details-session-facts": { type: "boolean", default: false },
     "details-processes": { type: "boolean", default: false },
+    "details-subagent-activity": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -402,9 +404,9 @@ if (values["late-row-facts"]) {
   values["row-facts"] = true;
   values["transcript-avatars"] = true;
 }
-if (values["details-processes"]) {
+if (values["details-processes"] || values["details-subagent-activity"]) {
   if (!values["warm-reload"]) {
-    throw new Error("details-processes requires warm-reload for the populated Details boundary");
+    throw new Error("Details workloads require warm-reload for the populated Details boundary");
   }
   values["pane-chrome-probe"] = true;
 }
@@ -933,6 +935,7 @@ const fixture = createControlUiTeamScaleFixture({
   archivedSession: values["archived-session"],
   paneChromeFacts: values["pane-chrome-facts"],
   detailsSessionFacts: values["details-session-facts"],
+  detailsSubagentActivity: values["details-subagent-activity"] ? 1 : undefined,
   transcriptMessages,
   richTranscript: values["long-session"],
   longSessionScenario: values["long-session"] ? longSessionScenario : undefined,
@@ -2030,15 +2033,20 @@ try {
     offRosterSession: values["off-roster-route"],
     sidebarView: sidebarView === "online" ? "online" : "sessions",
   };
-  const qualifyDetailsProcess = async () => {
-    if (!values["details-processes"]) {
+  const qualifyDetails = async () => {
+    if (!values["details-processes"] && !values["details-subagent-activity"]) {
       return;
     }
     const details = page.locator(".chat-details:visible");
     if (!(await details.count())) {
       await page.locator(".chat-details-toggle:visible").first().click();
     }
-    await details.locator('[data-details-group="processes"] [data-process-id]').waitFor();
+    if (values["details-processes"]) {
+      await details.locator('[data-details-group="processes"] [data-process-id]').waitFor();
+    }
+    if (values["details-subagent-activity"] && !values["archived-session"]) {
+      await details.locator(".chat-subagent-activity__row").first().waitFor();
+    }
     await details
       .locator('[data-details-group="automations"] .chat-summary__automation')
       .first()
@@ -2180,7 +2188,7 @@ try {
     }
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
     await qualifyLateRowFacts();
-    await qualifyDetailsProcess();
+    await qualifyDetails();
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
       warmInput,
@@ -2218,7 +2226,7 @@ try {
         );
         await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
         await qualifyLateRowFacts();
-        await qualifyDetailsProcess();
+        await qualifyDetails();
         const { storage: captured, ...saved } = await page.evaluate(
           persistColdLoadWarmState,
           warmInput,
@@ -2930,7 +2938,7 @@ try {
         })
       : undefined;
     const detailsGeometry =
-      values["details-processes"] && paneChrome
+      (values["details-processes"] || values["details-subagent-activity"]) && paneChrome
         ? summarizeDetailsGeometry(paneChrome.detailsFrames)
         : undefined;
     const sidebarPresentation = values["sidebar-presentation-probe"]

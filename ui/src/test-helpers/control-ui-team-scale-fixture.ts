@@ -17,6 +17,7 @@ import {
   createTeamScaleSidebarPresentation,
   teamScaleAgentIdentities,
 } from "./control-ui-sidebar-presentation.test-support.ts";
+import { createTeamScaleChildActivity } from "./control-ui-team-scale-child-activity.ts";
 import { withTeamScaleConfig } from "./control-ui-team-scale-config.ts";
 import {
   createTeamScaleHistoryFixture,
@@ -71,6 +72,8 @@ type FixtureOptions = Parameters<typeof prepareTeamScalePaneFixture>[0]["options
   rowFacts?: boolean;
   offRosterSession?: boolean;
   archivedSession?: boolean;
+  /** Ordinary child-session activity in Details, outside the Subagents collection. */
+  detailsSubagentActivity?: number;
   transcriptMessages?: number;
   richTranscript?: boolean;
   longSessionScenario?: LongSessionScenario;
@@ -129,6 +132,9 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
     counts,
     directSelectedSession: options.longSessionScenario === "direct-run",
   });
+  sessions.push(
+    ...createTeamScaleChildActivity(pinnedRows[0]!, options.detailsSubagentActivity, now),
+  );
   const { transcriptSender, paneMethodResponses, paneChromeSettings } = prepareTeamScalePaneFixture(
     {
       options,

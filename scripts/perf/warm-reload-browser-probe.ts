@@ -23,6 +23,7 @@ export function summarizeDetailsGeometry(
   let heightMovementPx = 0;
   let sectionInsertions = 0;
   let sectionRemovals = 0;
+  const sectionTopMovementPx: Record<string, number> = {};
   for (let index = 1; index < populated.length; index++) {
     const before = new Map(populated[index - 1]!.sections.map((row) => [row.section, row]));
     const after = new Map(populated[index]!.sections.map((row) => [row.section, row]));
@@ -30,7 +31,9 @@ export function summarizeDetailsGeometry(
       const from = before.get(id);
       const to = after.get(id);
       if (from && to) {
-        topMovementPx += Math.abs(to.top - from.top);
+        const movement = Math.abs(to.top - from.top);
+        topMovementPx += movement;
+        sectionTopMovementPx[id] = (sectionTopMovementPx[id] ?? 0) + movement;
       } else if (to) {
         sectionInsertions++;
       } else {
@@ -44,6 +47,10 @@ export function summarizeDetailsGeometry(
     firstPopulatedMs: first?.at ?? null,
     firstHasAutomations: first?.sections.some((row) => row.section === "automations") ?? false,
     firstProcessHeightPx: first?.sections.find((row) => row.section === "processes")?.height ?? 0,
+    firstSubagentHeightPx: first?.sections.find((row) => row.section === "subagents")?.height ?? 0,
+    finalSubagentHeightPx:
+      populated.at(-1)?.sections.find((row) => row.section === "subagents")?.height ?? 0,
+    sectionTopMovementPx,
     topMovementPx,
     heightMovementPx,
     totalVerticalMovementPx: topMovementPx + heightMovementPx,
