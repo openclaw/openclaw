@@ -587,21 +587,6 @@ extension GatewayConnectionController {
         return personal
     }
 
-    private func trustHandoffAuth(
-        override: ManualAuthOverride?,
-        stored: GatewaySettingsStore.GatewayCredentials,
-        stableID: String) -> ManualAuthOverride?
-    {
-        if let override { return override }
-        guard stored.hasCredentials else { return nil }
-        return ManualAuthOverride.explicit(
-            token: stored.token,
-            bootstrapToken: stored.bootstrapToken,
-            password: stored.password,
-            targetStableID: stableID,
-            suppressStoredDeviceAuth: stored.suppressStoredDeviceAuth)
-    }
-
     private var currentPreconnectRetry: PreconnectRetryContext? {
         guard let retry = self.preconnectRetryContext,
               retry.attemptGeneration == self.connectAttemptGeneration,
@@ -803,21 +788,6 @@ extension GatewayConnectionController {
             self.pendingForgetCleanups[stableIDKey] = nil
             scheduleOperatorFleetReconcile()
         }
-    }
-
-    private func persistActiveGateway(
-        _ entry: GatewaySettingsStore.GatewayRegistryEntry,
-        personalTailscaleAuthentication: Bool? = nil) -> Bool
-    {
-        guard GatewaySettingsStore.upsertGatewayRegistryEntry(
-            entry,
-            activate: true,
-            personalTailscaleAuthentication: personalTailscaleAuthentication)
-        else {
-            self.appModel?.gatewayStatusText = "Could not save paired gateway"
-            return false
-        }
-        return true
     }
 
     func clearPendingTrustPrompt() {

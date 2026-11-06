@@ -101,7 +101,8 @@ struct ControlUIHubScreen: View {
         let nativeAuthProvider = IOSDashboardNativeGatewayAuthProvider(appModel: self.appModel, config: config)
         let authorization = config?.ingressAuthorization
         let webContentIdentity = self.page.webContentIdentity(
-            config: config, storedOperatorToken: storedOperatorToken,
+            config: config,
+            storedOperatorToken: storedOperatorToken,
             authorityGeneration: self.appModel.operatorAuthorityGeneration)
         let url = self.page.url(config: config)
         let accessCookieAdmission = AuthenticatedControlUI.dashboardAccessCookieAdmission(
