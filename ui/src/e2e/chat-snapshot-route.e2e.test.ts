@@ -1,9 +1,18 @@
 import path from "node:path";
+import type { ResponseFrame } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { captureSnapshotRouteEvidence } from "../../test/chat-snapshot-route-evidence.test-support.ts";
+import type { GatewayBrowserClientOptions } from "../api/gateway.ts";
 import { INTERNAL_SESSION_PATH_PARAM } from "../app-route-paths.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
+import type { ApplicationRuntime } from "../app/bootstrap.ts";
+import type { ApplicationContext, ApplicationContextRequest } from "../app/context.ts";
+import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
+import type {
+  MockGatewayRequest,
+  MockGatewayWindow,
+} from "../test-helpers/control-ui-e2e-contract.ts";
+import { installControlUiE2ePageDiagnosticRing } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
@@ -16,6 +25,242 @@ const id = "b1c2cd3c-1234-4321-9876-123456789abc";
 const sessionKey = `agent:main:chat:${id}`;
 const transcript = "The cached conversation is ready before route resolution.";
 const row = createControlUiSessionRow(sessionKey, "Snapshot conversation", 1);
+
+// Serialized into this suite's mock init script; the existing private console ring owns storage.
+function captureSnapshotRouteEvidence(sessionPathParam: string): void {
+  const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+  const methods = new Set(["sessions.resolve", "sessions.describe", "chat.startup"]);
+  const seen = new WeakSet<object>();
+  let loads = 0;
+  const reason = (error: unknown) => (error instanceof Error ? error.name : "unknown");
+  const record = (event: string, read: () => object | undefined) => {
+    try {
+      const facts = read();
+      if (facts)
+        console.debug(
+          "[snapshot-route] " +
+            JSON.stringify({
+              at: performance.timeOrigin + performance.now(),
+              document: performance.timeOrigin,
+              event,
+              ...facts,
+            }),
+        );
+    } catch {
+      /* Passive evidence must preserve original results and exceptions. */
+    }
+  };
+  const identity = (value: unknown) => {
+    type Row = { key?: string; sessionKey?: string; agentId?: string };
+    const envelope = value as (Row & { session?: Row; sessionInfo?: Row }) | undefined;
+    const session = envelope?.session ?? envelope?.sessionInfo ?? envelope;
+    return { key: session?.key ?? session?.sessionKey ?? null, agentId: session?.agentId ?? null };
+  };
+  const key = (request?: MockGatewayRequest) => {
+    const params = request?.params as { reference?: unknown } | undefined;
+    return identity(params?.reference ?? params).key;
+  };
+  const data = (value: unknown) => {
+    const route = value as ChatRouteData | undefined;
+    return route?.kind === "session"
+      ? {
+          kind: route.kind,
+          ...identity(route),
+          cache: route.sessionResolutionFromCache,
+          canonical: route.canonicalLocation?.pathname,
+          source: route.canonicalLocationSource?.pathname,
+          canonicalPending: Boolean(route.canonicalLocationReady),
+        }
+      : { kind: route?.kind ?? null };
+  };
+  const tap = <F extends (...args: never[]) => unknown>(
+    original: F,
+    event: string,
+    facts: (args: Parameters<F>) => object | undefined,
+  ): F =>
+    new Proxy(original, {
+      apply(target, receiver, args) {
+        record(event, () => facts(args as Parameters<F>));
+        return Reflect.apply(target, receiver, args);
+      },
+    });
+  for (const method of ["pushState", "replaceState"] as const) {
+    history[method] = tap(history[method], "history." + method, (args) => ({
+      from: location.pathname,
+      to: args[2] == null ? null : new URL(String(args[2]), location.href).pathname,
+      source: new Error().stack,
+    }));
+  }
+  mock.resolveDeferred = tap(mock.resolveDeferred, "mock.release", ([method, reply]) =>
+    methods.has(method) ? { method, reply: identity(reply) } : undefined,
+  );
+  // Mock sockets are EventTargets, not network sockets. Read the existing request list after delivery.
+  // oxlint-disable-next-line typescript/unbound-method -- Proxy.apply preserves the intercepted socket receiver.
+  WebSocket.prototype.dispatchEvent = new Proxy(WebSocket.prototype.dispatchEvent, {
+    apply(target, receiver, args: [Event]) {
+      const result: unknown = Reflect.apply(target, receiver, args);
+      record("mock.reply.dispatched", () => {
+        const event = args[0];
+        if (!(event instanceof MessageEvent) || typeof event.data !== "string") return undefined;
+        const frame = JSON.parse(event.data) as ResponseFrame;
+        const request = mock.requests.find((candidate) => candidate.id === frame.id);
+        return frame.type === "res" && request && methods.has(request.method)
+          ? {
+              id: frame.id,
+              method: request.method,
+              key: key(request),
+              ok: frame.ok,
+              reply: identity(frame.payload),
+            }
+          : undefined;
+      });
+      return result;
+    },
+  });
+  const attach = (context: ApplicationContext) => {
+    if (seen.has(context)) return;
+    seen.add(context);
+    // bootstrap's native context supplies the full router; no product API or readiness load.
+    const router = context.router as ApplicationRuntime["router"];
+    router.navigate = tap(router.navigate, "navigation", ([routeId, , options, location]) => ({
+      routeId,
+      pathname: location?.pathname,
+      mode: options?.history,
+      source: new Error().stack,
+    }));
+    const clientChanged = () =>
+      record("rpc.observer", () => {
+        const client = context.gateway.snapshot.client;
+        if (!client || seen.has(client)) return undefined;
+        seen.add(client);
+        // Existing timing seam also covers requests issued before context publication.
+        // gateway.ts retains opts and reads this callback at each protocol settlement.
+        const options = Reflect.get(client, "opts") as GatewayBrowserClientOptions;
+        const original = options.onRequestTiming;
+        options.onRequestTiming = function (this: GatewayBrowserClientOptions, timing) {
+          try {
+            original?.call(this, timing);
+          } finally {
+            record("rpc.settled", () =>
+              methods.has(timing.method)
+                ? {
+                    id: timing.id,
+                    method: timing.method,
+                    key: key(mock.requests.find((candidate) => candidate.id === timing.id)),
+                    ok: timing.ok,
+                    reason: timing.errorCode,
+                    startedAtMs: timing.startedAtMs,
+                    endedAtMs: timing.endedAtMs,
+                  }
+                : undefined,
+            );
+          }
+        };
+        return {};
+      });
+    clientChanged();
+    context.gateway.subscribe(clientChanged);
+    const route = router.getRoute("chat");
+    if (route?.loader)
+      route.loader = new Proxy(route.loader, {
+        apply(target, receiver, args: Parameters<typeof target>) {
+          const [, options] = args;
+          const facts = {
+            load: ++loads,
+            cause: options.cause,
+            requestedKey: null as string | null,
+            reference:
+              new URLSearchParams(options.location.search).get(sessionPathParam) ??
+              options.location.pathname,
+          };
+          record("route.requested", () => {
+            const prior = data(router.getState().matches[0]?.data);
+            facts.requestedKey =
+              options.cause === "revalidate" && "key" in prior ? prior.key : null;
+            options.signal.addEventListener(
+              "abort",
+              () =>
+                record("route.aborted", () => ({
+                  ...facts,
+                  reason: reason(options.signal.reason),
+                  source: new Error().stack,
+                })),
+              { once: true },
+            );
+            return { ...facts, prior };
+          });
+          const rejected = (error: unknown) =>
+            record("route.admission", () => ({
+              ...facts,
+              decision: "rejected",
+              reason: reason(error),
+            }));
+          const accepted = (value: unknown) =>
+            record("route.admission", () => {
+              const result = data(value);
+              return {
+                ...facts,
+                result,
+                decision:
+                  options.signal.aborted || result.kind !== "session" ? "rejected" : "accepted",
+                reason: options.signal.aborted
+                  ? "aborted"
+                  : (("cache" in result ? result.cache : result.kind) ?? "redirect-or-not-found"),
+              };
+            });
+          try {
+            const result: unknown = Reflect.apply(target, receiver, args);
+            if (result instanceof Promise) void result.then(accepted, rejected);
+            else accepted(result);
+            return result;
+          } catch (error) {
+            rejected(error);
+            throw error;
+          }
+        },
+      });
+    let previous = "";
+    router.subscribe((state) =>
+      record("route.published", () => {
+        const matches = [...state.matches, ...state.pendingMatches].map((match) => ({
+          pending: state.pendingMatches.includes(match),
+          pathname: match.location.pathname,
+          status: match.status,
+          fetching: match.isFetching,
+          aborted: match.abortController.signal.aborted,
+          data: data(match.data),
+        }));
+        const serialized = JSON.stringify(matches);
+        if (serialized === previous) return undefined;
+        previous = serialized;
+        return { matches };
+      }),
+    );
+    record("observer.attached", () => ({}));
+  };
+  document.addEventListener(
+    "context-provider",
+    (event) => {
+      const incoming = event as ApplicationContextRequest;
+      if (incoming.context !== "openclaw.application" || !(event.target instanceof HTMLElement))
+        return;
+      event.target.dispatchEvent(
+        Object.assign(new Event("context-request", { bubbles: true }), {
+          context: incoming.context,
+          contextTarget: document.documentElement,
+          callback: (context: ApplicationContext) => {
+            try {
+              attach(context);
+            } catch (error) {
+              record("observer.error", () => ({ reason: reason(error) }));
+            }
+          },
+        }),
+      );
+    },
+    true,
+  );
+}
 
 async function openCachedRoute(page: Page) {
   const gateway = await installMockGateway(
@@ -54,6 +299,64 @@ async function openCachedRoute(page: Page) {
 }
 
 suite.define(() => {
+  it("retains admission and reply evidence in the existing browser event ring", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
+      async ({ page }) => {
+        const events = installControlUiE2ePageDiagnosticRing(page);
+        const gateway = await openCachedRoute(page);
+        await page.goto(new URL(`/chat/main/${id.replaceAll("-", "")}`, suite.server.baseUrl).href);
+        await page.getByText(transcript, { exact: true }).waitFor();
+        await gateway.waitForRequest("sessions.resolve");
+        await gateway.waitForRequest("chat.startup");
+        await gateway.setMethodResponse("sessions.resolve", { ok: false });
+        await gateway.resolveDeferred("sessions.resolve", { ok: false });
+        await page.locator(".session-route-not-found").waitFor();
+        // Exercise the native history seam without changing the route or issuing another RPC.
+        await page.evaluate(() => history.replaceState(history.state, "", location.href));
+        const texts = events.flatMap(({ source, details }) =>
+          source === "console" &&
+          typeof details.text === "string" &&
+          details.text.startsWith("[snapshot-route] ")
+            ? [details.text]
+            : [],
+        );
+        const facts = texts.map(
+          (text) => JSON.parse(text.slice("[snapshot-route] ".length)) as Record<string, unknown>,
+        );
+        const evidence = (name: string, fields: object = {}) =>
+          expect.objectContaining({
+            event: name,
+            at: expect.any(Number),
+            document: expect.any(Number),
+            ...fields,
+          });
+        expect(facts).toEqual(
+          expect.arrayContaining([
+            evidence("route.requested", { requestedKey: sessionKey }),
+            evidence("route.admission", { decision: "accepted" }),
+            evidence("route.admission", { decision: "rejected", reason: expect.any(String) }),
+            ...["sessions.resolve", "sessions.describe", "chat.startup"].map((method) =>
+              evidence("rpc.settled", {
+                method,
+                key: sessionKey,
+                id: expect.any(String),
+                ok: true,
+              }),
+            ),
+            evidence("mock.reply.dispatched", {
+              method: "sessions.resolve",
+              reply: { key: null, agentId: null },
+            }),
+            evidence("mock.release", { method: "sessions.resolve" }),
+            evidence("history.replaceState", { source: expect.any(String) }),
+          ]),
+        );
+        expect(JSON.stringify(facts)).not.toContain(transcript);
+      },
+    );
+  });
+
   it("keeps live metadata actions available while only message delivery waits for confirmation", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
