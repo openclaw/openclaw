@@ -174,41 +174,36 @@ it.each(["aggressive", "full"] as const)(
 );
 
 it.each(
-  ["packages", "extensions"].flatMap((root) =>
-    [false, true].map((deleted) => ({ root, deleted })),
-  ),
-)(
-  "selects resolved $root subpaths independently (deleted: $deleted)",
-  ({ root, deleted }) => {
-    const changed = `${root}/subject/src/value.ts`;
-    const manifest = `${root}/subject/package.json`;
-    const cwd = fixture({
-      [manifest]: JSON.stringify({
-        name: "@fixture/subject",
-        exports: {
-          "./value": "./src/value.ts",
-          "./other": "./src/other.ts",
-          ".": "./src/index.ts",
-        },
-      }),
-      [changed]: "export const value = 1;",
-      [`${root}/subject/scripts/generate.mjs`]: "export {};",
-      [`${root}/subject/src/other.ts`]: "export const other = 1;",
-      [`${root}/subject/src/index.ts`]: 'export * from "./bridge.js";',
-      [`${root}/subject/src/bridge.ts`]: 'export * from "./value.js";',
-      "src/readers/value.test.ts": 'import "@fixture/subject/value";',
-      "src/readers/barrel.test.ts": 'import "@fixture/subject";',
-      "src/readers/other.test.ts": 'import "@fixture/subject/other";',
-      "src/readers/unknown.test.ts": 'import "@fixture/subject/generated";',
-      "src/readers/types.test.ts": 'import type { Other } from "@fixture/subject/other";',
-    });
-    const expected = ["barrel", "unknown", "value"].map((name) => `src/readers/${name}.test.ts`);
-    if (deleted) {
-      fs.unlinkSync(path.join(cwd, changed));
-    }
-    expect(select(cwd, [changed])).toEqual(expected);
-    const all = [...expected, "src/readers/other.test.ts"].toSorted();
-    expect(select(cwd, [manifest])).toEqual(all);
-    expect(select(cwd, [`${root}/subject/scripts/generate.mjs`])).toEqual(all);
-  },
-);
+  ["packages", "extensions"].flatMap((root) => [false, true].map((deleted) => ({ root, deleted }))),
+)("selects resolved $root subpaths independently (deleted: $deleted)", ({ root, deleted }) => {
+  const changed = `${root}/subject/src/value.ts`;
+  const manifest = `${root}/subject/package.json`;
+  const cwd = fixture({
+    [manifest]: JSON.stringify({
+      name: "@fixture/subject",
+      exports: {
+        "./value": "./src/value.ts",
+        "./other": "./src/other.ts",
+        ".": "./src/index.ts",
+      },
+    }),
+    [changed]: "export const value = 1;",
+    [`${root}/subject/scripts/generate.mjs`]: "export {};",
+    [`${root}/subject/src/other.ts`]: "export const other = 1;",
+    [`${root}/subject/src/index.ts`]: 'export * from "./bridge.js";',
+    [`${root}/subject/src/bridge.ts`]: 'export * from "./value.js";',
+    "src/readers/value.test.ts": 'import "@fixture/subject/value";',
+    "src/readers/barrel.test.ts": 'import "@fixture/subject";',
+    "src/readers/other.test.ts": 'import "@fixture/subject/other";',
+    "src/readers/unknown.test.ts": 'import "@fixture/subject/generated";',
+    "src/readers/types.test.ts": 'import type { Other } from "@fixture/subject/other";',
+  });
+  const expected = ["barrel", "unknown", "value"].map((name) => `src/readers/${name}.test.ts`);
+  if (deleted) {
+    fs.unlinkSync(path.join(cwd, changed));
+  }
+  expect(select(cwd, [changed])).toEqual(expected);
+  const all = [...expected, "src/readers/other.test.ts"].toSorted();
+  expect(select(cwd, [manifest])).toEqual(all);
+  expect(select(cwd, [`${root}/subject/scripts/generate.mjs`])).toEqual(all);
+});

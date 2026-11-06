@@ -4910,7 +4910,9 @@ function resolveBoundedChangedTestTargetPlan(
               file.startsWith(`${path.posix.dirname(manifest)}/src/`) &&
               TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => file.endsWith(ext)) &&
               !isTestOnlyPath(file) &&
-              !/(?:^|\/)(?:__fixtures__|fixtures|scripts|test-fixtures|test-utils|test-helpers|test-support|testing)\//u.test(file) &&
+              !/(?:^|\/)(?:__fixtures__|fixtures|scripts|test-fixtures|test-utils|test-helpers|test-support|testing)\//u.test(
+                file,
+              ) &&
               !/\.(?:config|setup|d)\.[cm]?[jt]sx?$/u.test(file),
           )
             ? packagePaths
