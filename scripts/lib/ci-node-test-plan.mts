@@ -4412,7 +4412,18 @@ export function createSelectedNodeTestShardBundles(
           tooling,
         )
       : []),
-    ...packSelectedNodeTestJobs(projected, options.runnerBackend, canonicalFamilies, groupSeconds),
+    // Keep parallel bundles before compacting their remaining serial singletons.
+    ...packSelectedNodeTestJobs(
+      packSelectedNodeTestJobs(
+        projected,
+        options.runnerBackend,
+        canonicalFamilies,
+        groupSeconds,
+      ).map(normalizeSingletonNodeTestJob),
+      options.runnerBackend,
+      canonicalFamilies,
+      groupSeconds,
+    ),
   ];
   for (const job of selectedJobs) {
     normalizeSingletonNodeTestJob(job);
@@ -4425,7 +4436,7 @@ export function normalizeSingletonNodeTestJob<
   T extends Pick<NodeTestShard, "planConcurrency" | "groups" | "env">,
 >(job: T): T {
   if (job.planConcurrency === 2 && job.groups?.length === 1) {
-    // Packing is settled: no sibling can overlap this child. Explicit group
+    // No sibling can overlap this child. Explicit group
     // limits survive projection; unpinned groups still need the two-worker ceiling.
     job.planConcurrency = 1;
     if (job.groups[0]?.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined) {
@@ -4479,7 +4490,7 @@ function packSelectedNodeTestJobs(
       job.planConcurrency,
       job.groups.some(isExclusiveCompactGroup),
       Object.entries(job.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
-      job.timeoutMinutes,
+      job.planConcurrency === 1 ? undefined : job.timeoutMinutes,
     ]);
   const seconds = (bin: readonly CompactNodeTestShard[]) =>
     bin.reduce(
@@ -4489,6 +4500,8 @@ function packSelectedNodeTestJobs(
         compactPreparationSeconds(job.pretestBuildMode, runnerBackend),
       0,
     ) + compactPreparationSeconds(bin[0]!.pretestBuildMode, runnerBackend);
+  const timeoutMinutes = (bin: readonly CompactNodeTestShard[]) =>
+    Math.min(...bin.map((job) => job.timeoutMinutes ?? 60));
   const testSeconds = (bin: readonly CompactNodeTestShard[]) =>
     bin[0]!.planConcurrency === 2
       ? estimateParallelTestSeconds(
@@ -4541,6 +4554,7 @@ function packSelectedNodeTestJobs(
         groups.length <= COMPACT_NODE_TEST_JOB_GROUPS &&
         (job.planConcurrency === 1 || new Set(families).size === families.length) &&
         seconds(combined) <= cap(combined) &&
+        seconds(combined) <= timeoutMinutes(combined) * 60 &&
         (job.planConcurrency !== 2 || testSeconds(combined) <= COMPACT_SERIAL_NODE_TEST_JOB_SECONDS)
       );
     },
@@ -4550,6 +4564,9 @@ function packSelectedNodeTestJobs(
         groups: bin.flatMap((job) => job.groups),
         predictedSeconds: Math.ceil(seconds(bin)),
         predictedTestSeconds: testSeconds(bin),
+        ...(bin.some((job) => job.timeoutMinutes !== bin[0]!.timeoutMinutes)
+          ? { timeoutMinutes: timeoutMinutes(bin) }
+          : {}),
       }),
     )
     .toSorted((a, b) => a.checkName.localeCompare(b.checkName));
@@ -4792,6 +4809,10 @@ function createCompactNodeTestShardBundles(
   );
   const groupsByRunner = new Map<string, [NodeTestShardGroup, ...NodeTestShardGroup[]]>();
   const synthesizedSplitSeconds = new Map<string, number>();
+  const selectedToolingTimings =
+    selectedToolingFiles && options.runnerBackend === "hybrid"
+      ? readToolingFileTimings("blacksmith")
+      : undefined;
   const runnerRank = (group: Pick<NodeTestShardGroup, "runner">) =>
     [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER, EXTRA_LARGE_NODE_TEST_RUNNER].indexOf(
       group.runner,
@@ -4856,8 +4877,7 @@ function createCompactNodeTestShardBundles(
     const selectedTooling =
       (selectedToolingFiles && group.configs.includes(TOOLING_CONFIG)) || reducedToolingTier;
     if (selectedTooling) {
-      // Keep the parent's admission cost and partition policy, but never report
-      // a precise subset as a sample of the complete canonical stripe.
+      // Keep partition and timing identity separate from precise file selection.
       plannedGroups = plannedGroups.flatMap((planned) => {
         const includePatterns = (
           planned.group.includePatterns ?? listToolingGroupFiles(planned.group.configs)
@@ -4869,9 +4889,33 @@ function createCompactNodeTestShardBundles(
                 !isReleaseOnlyToolingTestFile(file)) ||
               keepPrExemptRuntimeFile(file)),
         );
-        return includePatterns?.length
-          ? [{ ...planned, group: { ...planned.group, includePatterns } }]
-          : [];
+        if (!includePatterns?.length) {
+          return [];
+        }
+        const measuredSelection =
+          selectedToolingTimings &&
+          isParallelToolingGroup(planned.group) &&
+          !planned.group.requiresDist &&
+          !planned.group.pretestBuildMode &&
+          includePatterns.every((file) => selectedToolingTimings[file] !== undefined);
+        return [
+          {
+            group: { ...planned.group, includePatterns },
+            // Known files need not reserve the discarded siblings' wall time.
+            // Retain startup headroom per process; unknown selections keep the parent floor.
+            seconds: measuredSelection
+              ? Math.max(
+                  DEFAULT_WHOLE_GROUP_SECONDS,
+                  estimateParallelToolingSeconds(
+                    planned.group,
+                    includePatterns,
+                    options.runnerBackend,
+                    selectedToolingTimings,
+                  ),
+                )
+              : planned.seconds,
+          },
+        ];
       });
       const generation = createCompactSplitTimingGeneration({
         configs: group.configs,

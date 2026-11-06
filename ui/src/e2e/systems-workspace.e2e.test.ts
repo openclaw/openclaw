@@ -128,7 +128,6 @@ suite.define(() => {
           });
           await page.goto(suite.server.baseUrl + "new");
           await waitForControlUiRoute(page, { routeId: "new-session" });
-          const shifts = await observeLayoutShifts(page);
           const inventoryReads = await gateway.deferNext("environments.list");
           const backupReads = await gateway.deferNext("backup.status");
           await page.evaluate(() => {
@@ -136,6 +135,9 @@ suite.define(() => {
           });
           await gateway.waitForRequest("environments.list", { after: inventoryReads });
           await gateway.waitForRequest("backup.status", { after: backupReads });
+          await waitForControlUiRoute(page, { routeId: "systems" });
+          await page.locator(".systems-body").waitFor();
+          const shifts = await observeLayoutShifts(page);
           if (width <= 640) {
             await page.getByRole("button", { name: "Show statistics" }).click();
           }

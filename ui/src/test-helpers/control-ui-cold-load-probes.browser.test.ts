@@ -18,7 +18,11 @@ describe("serialized cold-load probes", () => {
         const script = doc.createElement("script");
         script.textContent = `
         const __name = fn => fn;
-        const frames = [];
+        const frames = [], tasks = [];
+        window.MessageChannel = class {
+          port1 = { addEventListener: (_, callback) => this.deliver = callback, start() {}, close() {} };
+          port2 = { postMessage: () => tasks.push(() => this.deliver()), close() {} };
+        };
         window.requestAnimationFrame = callback => { frames.push(callback); return frames.length; };
         const aside = document.createElement("aside");
         aside.className = "sidebar";
@@ -28,15 +32,15 @@ describe("serialized cold-load probes", () => {
         document.body.append(aside);
         (${sidebarPresentationProbe.toString()})();
         window.sidebarProof = (async () => {
-          frames.shift()(0);
+          frames.shift()(0); tasks.shift()();
           if (${blank}) {
             aside.firstElementChild.innerHTML = "";
             await Promise.resolve();
-            frames.shift()(0);
+            frames.shift()(0); tasks.shift()();
             aside.dataset.snapshotState = "live";
             aside.firstElementChild.innerHTML = row;
             await Promise.resolve();
-            frames.shift()(0);
+            frames.shift()(0); tasks.shift()();
           }
           return __sidebarPresentation.read();
         })();

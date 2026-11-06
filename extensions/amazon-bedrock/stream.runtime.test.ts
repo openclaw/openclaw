@@ -265,6 +265,13 @@ describe("Bedrock thinking request composition", () => {
     ["explicit request cap", adaptive, { reasoning: "high", maxTokens: 32_000 }, 32_000, "high"],
     ["native cap with thinking off", adaptive, { reasoning: "off" }, 128_000, undefined],
     ["descriptive profile name", named, { reasoning: "xhigh" }, undefined, "xhigh"],
+    [
+      "authored 32768 cap",
+      { ...named, maxTokens: 32_768 },
+      { reasoning: "xhigh" },
+      32_768,
+      "xhigh",
+    ],
     ["native alias", nativeAlias, { reasoning: "xhigh", temperature: 0.2 }, undefined, "xhigh"],
     ["clamped alias", clampedAlias, { reasoning: "max", temperature: 0.2 }, undefined, "high"],
   ] as const)(

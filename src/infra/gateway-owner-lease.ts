@@ -156,6 +156,7 @@ export async function assertGatewayOwnerLeaseStopped(
         signal,
         // Offline custody follows restored files; cached read admission can retain the old inode.
         expectedSourceIdentity: readDatabasePathIdentitySync(pathname),
+        reuse: true,
       });
       authority.assertCurrent();
       releaseSnapshot = retainSnapshotTempDirectory(
