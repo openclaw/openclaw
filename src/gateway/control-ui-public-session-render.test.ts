@@ -244,6 +244,10 @@ describe("public session document", () => {
     expect(skeleton.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
     expect(skeleton.querySelectorAll(".list-row")).toHaveLength(4);
     expect(pending.match(/<script/g)).toHaveLength(1);
+    // The busy tile is decorative; the status text stays the announced part.
+    const busy = pendingMain.querySelector(".entry-status .busy")!;
+    expect(busy.getAttribute("aria-hidden")).toBe("true");
+    expect(pendingMain.querySelector(".entry-status p")?.textContent).toBe("Checking access…");
     expect(pending).toContain(
       "[data-entry-pending] .app-skeleton{display:none}</style></noscript>",
     );
