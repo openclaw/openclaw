@@ -49,17 +49,17 @@ suite.define(() => {
       sessions: [{ key: "agent:main:main", sessionId: "recall-session" }],
       methodResponses: {
         "chat.startup": {
-          messages: Array.from({ length: 80 }, (_, index) => message(index + 3)),
+          messages: Array.from({ length: 180 }, (_, index) => message(index + 3)),
           hasMore: true,
-          nextOffset: 80,
+          nextOffset: 180,
           olderCursor: "older-recall",
-          totalMessages: 82,
+          totalMessages: 182,
           sessionId: "recall-session",
         },
         "chat.history": {
           messages: [message(1), message(2)],
           hasMore: false,
-          totalMessages: 82,
+          totalMessages: 182,
           sessionId: "recall-session",
         },
       },
@@ -82,7 +82,7 @@ suite.define(() => {
         )
         .toEqual([text, caret, caret]);
     };
-    await thread.getByText(/^History entry 82\./).waitFor();
+    await thread.getByText(/^History entry 182\./).waitFor();
     await waitForChatScrollIdle(page);
     expect(await gateway.getRequests("chat.history")).toHaveLength(0);
     await recallPrompt("ArrowUp", "Latest prompt");
