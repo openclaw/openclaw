@@ -87,6 +87,7 @@ vi.mock("../runtime-plan/build.js", () => ({
   }) => ({
     resolvedRef: { provider, modelId },
     auth: preparedAuthPlan,
+    prompt: { resolveSystemPromptContribution: () => undefined },
     transport: { resolveExtraParams: () => ({}) },
   }),
 }));
