@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { loadChatDetailsDesktopComposition } from "./components/chat-details-desktop-loader.ts";
+import { createIdleImport } from "../../lib/idle-import.ts";
 import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
   snapshotStoreGeneration,
@@ -22,6 +22,10 @@ export type PrewarmedSnapshot = {
 };
 
 let pending: PrewarmedSnapshot | undefined;
+const detailsComposition = createIdleImport(
+  () => import("./components/chat-details-desktop-loader.ts"),
+  (module) => void module.loadChatDetailsDesktopComposition().catch(() => undefined),
+);
 export let prewarmedHistoryStateValidator:
   | typeof import("../../lib/protocol-validators.generated/history-state.js").isChatHistoryState
   | undefined;
@@ -60,7 +64,7 @@ export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
         const docking = asOptionalRecord(details?.docking);
         // Placement supplies this prefetch hint; validation still owns display admission.
         if (docking?.wide === true) {
-          void loadChatDetailsDesktopComposition().catch(() => undefined);
+          void detailsComposition.load().catch(() => undefined);
         }
         return record;
       })

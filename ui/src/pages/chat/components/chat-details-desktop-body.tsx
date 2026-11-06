@@ -1,13 +1,52 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createMemo, onSettled } from "solid-js";
+import { Show, createMemo, createSignal, lazy, onSettled } from "solid-js";
 import { DETAILS_SECTION_MOTION } from "../../../components/details-section-motion-options.ts";
+import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
+import { loadChatDetailsDesktopComposition } from "./chat-details-desktop-loader.ts";
+import { ChatDetailsLoading } from "./chat-details-loading.tsx";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import "../../../styles/chat/details-desktop-body.css";
 
 export type ChatDetailsHandoff = {
   onLoading: (loading: boolean) => void;
   onReady: () => void;
 };
+
+const ChatDetailsDesktopComposition = lazy(loadChatDetailsDesktopComposition, {
+  export: "ChatDetailsDesktopComposition",
+});
+
+export function ChatDetailsDesktopContent(props: {
+  chat?: ChatDetailsProps;
+  presented: boolean;
+  dismissed: boolean;
+  cachedReady: boolean;
+  progressMenuRef: (menu: MenuHandle | undefined) => void;
+  onHideProgress: () => void;
+}) {
+  const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
+  return (
+    <ChatDetailsDesktopBody presented={props.presented} onScrollPortRef={setScrollport}>
+      {(handoff) => (
+        <ChatLazyBoundary
+          fallback={!props.cachedReady && <ChatDetailsLoading onChange={handoff.onLoading} />}
+        >
+          <ChatDetailsDesktopComposition
+            scrollport={scrollport()}
+            onReady={handoff.onReady}
+            props={props.chat}
+            presented={props.presented}
+            dismissed={props.dismissed}
+            progressMenuRef={props.progressMenuRef}
+            onHideProgress={props.onHideProgress}
+          />
+        </ChatLazyBoundary>
+      )}
+    </ChatDetailsDesktopBody>
+  );
+}
 
 /** One scroll owner around Session and Progress; mounted only by the desktop host. */
 export function ChatDetailsDesktopBody(props: {

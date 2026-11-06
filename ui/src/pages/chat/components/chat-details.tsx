@@ -19,8 +19,8 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
-import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
-import { loadChatDetailsDesktopComposition } from "./chat-details-desktop-loader.ts";
+import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
+import { loadChatDetailsSession } from "./chat-details-desktop-loader.ts";
 import { ChatDetailsLoading } from "./chat-details-loading.tsx";
 import "../../../styles/chat/details.css";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
@@ -32,11 +32,8 @@ const ChatDetailsProgress = lazy(() => import("./chat-details-progress.tsx"), {
   export: "ChatDetailsProgress",
 });
 
-const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
+const ChatDetailsSession = lazy(loadChatDetailsSession, {
   export: "ChatDetailsSession",
-});
-const ChatDetailsDesktopComposition = lazy(loadChatDetailsDesktopComposition, {
-  export: "ChatDetailsDesktopComposition",
 });
 const ChatDetailsMobileHostContent = lazy(() => import("../chat-details-mobile-host-content.tsx"), {
   export: "ChatDetailsMobileHostContent",
@@ -585,37 +582,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       close(true);
     }
   };
-  function SessionContent(content: { children: Element; onLoading?: (loading: boolean) => void }) {
+  function SessionContent(content: { children: Element }) {
     return (
       <Show when={sessionOpened()}>
-        <ChatLazyBoundary
-          fallback={!cachedReady() && <ChatDetailsLoading onChange={content.onLoading} />}
-        >
+        <ChatLazyBoundary fallback={!cachedReady() && <ChatDetailsLoading />}>
           {content.children}
         </ChatLazyBoundary>
       </Show>
-    );
-  }
-  function DesktopContent() {
-    const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
-    return (
-      <ChatDetailsDesktopBody presented={isPresented() && opened()} onScrollPortRef={setScrollport}>
-        {(handoff) => (
-          <SessionContent onLoading={handoff.onLoading}>
-            <ChatDetailsDesktopComposition
-              scrollport={scrollport()}
-              onReady={handoff.onReady}
-              props={props.chat}
-              presented={isPresented() && opened()}
-              dismissed={intent() === "closed"}
-              progressMenuRef={(menu) => {
-                progressMenu = menu;
-              }}
-              onHideProgress={hideProgress}
-            />
-          </SessionContent>
-        )}
-      </ChatDetailsDesktopBody>
     );
   }
   return (
@@ -727,7 +700,16 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                 }
               >
                 <Show when={sessionOpened()}>
-                  <DesktopContent />
+                  <ChatDetailsDesktopContent
+                    chat={props.chat}
+                    presented={isPresented() && opened()}
+                    dismissed={intent() === "closed"}
+                    cachedReady={cachedReady()}
+                    progressMenuRef={(menu) => {
+                      progressMenu = menu;
+                    }}
+                    onHideProgress={hideProgress}
+                  />
                 </Show>
               </Show>
             )}

@@ -1,2 +1,2 @@
-107
-# First-pane/dock and held-Environment regressions, plus closed-destination lazy loading.
+125
+# First-pane/dock, held Environment, closed-destination loading and independent paint witnesses.
