@@ -310,6 +310,9 @@ Eligible core-source and core-test PRs use targeted type checks when every selec
 Numeric test-budget records retain full guard coverage without widening an
 otherwise scoped source/test compiler and lint selection.
 
+Selected singleton compiler rows share setup in pairs within the existing
+two-compiler limit. Full stripes and rows carrying root partitions stay unchanged.
+
 Scoped PR plans inspect the four root-test partitions separately and select every
 partition that consumes a changed input, including type-only imports. A change
 used only by tooling tests checks that partition; shared setup can select all
