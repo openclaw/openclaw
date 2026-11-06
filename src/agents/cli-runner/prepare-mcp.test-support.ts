@@ -509,7 +509,7 @@ export function registerCliMcpPreparationTests({
     expect(revoke).toHaveBeenCalledExactlyOnceWith(processToken);
     expect(mcpDeliveryCapture).toBe(true);
     expect(systemPrompt).toContain("`send`: `target` + `message`; target required this turn");
-    expect(systemPrompt).not.toContain("current source is default target");
+    expect(systemPrompt).not.toContain("this conversation is the default target");
     await preparedBackend.cleanup?.();
     expect(revoke).toHaveBeenCalledOnce();
     expect(revokeMinted).toHaveBeenCalledExactlyOnceWith(mint.mock.results[0]?.value);

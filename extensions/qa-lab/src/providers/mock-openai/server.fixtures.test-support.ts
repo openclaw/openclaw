@@ -1,3 +1,4 @@
+import { buildHarnessVisibleReplyGuidance } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { expect } from "vitest";
 import type { startQaMockOpenAiServer } from "./server.js";
 import {
@@ -11,6 +12,12 @@ import {
 } from "./server.test-harness.js";
 
 type Options = Record<string, unknown>;
+
+export const currentReplyPolicy = buildHarnessVisibleReplyGuidance({
+  sourceReplyDeliveryMode: "message_tool_only",
+  messageToolAvailable: true,
+  currentConversation: { currentChannelProvider: "telegram", currentChannelId: "123" },
+});
 
 export function settleParent(
   server: Pick<Awaited<ReturnType<typeof startQaMockOpenAiServer>>, "terminalRequesters">,

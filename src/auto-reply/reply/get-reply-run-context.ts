@@ -531,7 +531,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       promptSessionCtx.SenderIsBot === true &&
       terminalReplyExpectation === "optional")
       ? sourceReplyDeliveryMode === "message_tool_only"
-        ? `${ROOM_EVENT_PARTICIPATION_RULE} To respond visibly, use message(action=send); your final text here stays private either way.`
+        ? `${ROOM_EVENT_PARTICIPATION_RULE} Your final response is not automatically sent here. A visible reply requires the message tool.`
         : ROOM_EVENT_PARTICIPATION_RULE
       : inboundEventKind === "user_request" && sourceReplyDeliveryMode === "message_tool_only"
         ? MESSAGE_TOOL_ONLY_DELIVERY_HINT

@@ -89,12 +89,13 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
 }
 
+const SOURCE_DELIVERY_DEFAULTS_GUIDANCE = "Current-turn delivery rules override these defaults.";
+
 /**
  * Builds trusted group/channel delivery guidance.
  *
  * Room names, members, and history are rendered separately as untrusted inbound
- * context. Legacy automatic delivery posts text final replies directly, but
- * files/images/attachments still need message(action=send).
+ * context. Keep delivery defaults for harnesses that supply only turn overrides.
  */
 function buildGroupChatContext(params: {
   sessionCtx: TemplateContext;
@@ -107,19 +108,19 @@ function buildGroupChatContext(params: {
     normalizeOptionalLowercaseString(params.sessionCtx.ChatType) === "channel"
       ? "channel"
       : "group chat";
-  const destinationLabel = `this ${sharedChatNoun}`;
 
   const lines = [`You are in a ${providerLabel} ${sharedChatNoun}.`];
   if (messageToolOnly) {
     lines.push(
-      `Normal final replies are private and are not automatically sent to ${destinationLabel}. To post visible output here, use the message tool with action=send; the target defaults to ${destinationLabel}.`,
+      "By default, your final response is not automatically sent here. Visible replies require the message tool.",
     );
   } else {
     lines.push(
-      `Your text replies are automatically sent to ${destinationLabel} unless the current-turn context says final replies stay private. For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send). Use message(action=send) only when you need to send files, images, or other attachments to this same ${sharedChatNoun === "channel" ? "channel/thread" : "group/topic"}.`,
+      "By default, your final response is sent here automatically. Use the message tool for attachments when available.",
     );
   }
   lines.push(
+    SOURCE_DELIVERY_DEFAULTS_GUIDANCE,
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
   );
   const channelId = normalizeChatChannelId(provider) ?? provider ?? "";
@@ -157,12 +158,11 @@ function buildDirectChatContext(params: {
     `You are in a ${providerLabel} direct conversation.`,
     ...(params.sourceReplyDeliveryMode === "message_tool_only"
       ? [
-          "Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation.",
-          "If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.",
+          "By default, your final response is not automatically sent here. Visible replies require the message tool.",
+          "If no reply is needed, do not send one.",
         ]
-      : [
-          "Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
-        ]),
+      : ["By default, your final response is sent here automatically."]),
+    SOURCE_DELIVERY_DEFAULTS_GUIDANCE,
   ].join(" ");
 }
 

@@ -131,7 +131,9 @@ it("carries the worker-read path through delivery and plugin prompts without cal
     expect(resolveTtsPrefsPath(config)).toBe(path.join(root, "settings", "tts.json"));
     sql.expectIdle();
     const hint = await buildHint(cfg, "main", { messageToolOnly: true });
-    expect(hint).toContain("Use message(action=send) with voiceText");
+    expect(hint).toContain(
+      "When the message tool is available, use message(action=send) with voiceText",
+    );
     expect(hint).toContain("voiceProvider/voiceId");
     expect(hint).not.toContain("[[tts:");
     const preparedTtsPreferences = await prepareTtsPreferences();

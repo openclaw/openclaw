@@ -68,6 +68,7 @@ export function buildCliVisibleReplyGuidance(
     | "messageProvider"
     | "currentChannelId"
     | "sourceReplyDeliveryMode"
+    | "messageToolFinalByDefault"
   >,
   options: Pick<
     Parameters<typeof buildHarnessVisibleReplyGuidance>[0],
@@ -77,6 +78,7 @@ export function buildCliVisibleReplyGuidance(
   return buildHarnessVisibleReplyGuidance({
     ...options,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    messageToolFinalByDefault: params.messageToolFinalByDefault,
     currentConversation: {
       agentSessionKey: params.sessionKey,
       currentChannelProvider: params.messageChannel ?? params.messageProvider,

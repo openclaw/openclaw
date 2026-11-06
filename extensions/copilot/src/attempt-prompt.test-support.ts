@@ -61,7 +61,7 @@ export function registerCopilotPromptTests({
         expect(content).not.toContain("## Delegation");
         expect(content).toContain(
           routed
-            ? "is your complete reply."
+            ? "Set `final=true`, or omit it, for a completed reply to this conversation."
             : "OpenClaw delivers your final response automatically to the caller",
         );
       },

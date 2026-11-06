@@ -39,18 +39,13 @@ export function planSubagentFanoutTurn(params: {
     input.filter((item) => item.role === "system" || item.role === "developer"),
     body,
   );
-  const fanoutRequiresFinalMessage =
-    /visible source replies are not automatically delivered for this run\.\s*use `?message\(action=send\)`?[\s\S]*set `?final=true`?/i.test(
-      currentFanoutInstructions,
-    );
   // Delivery mode belongs to this turn's instructions, not earlier transcript
   // turns whose private-reply policy may no longer apply.
   const fanoutHasPrivateSourceReply =
     isSubagentFanoutPrompt &&
-    (fanoutRequiresFinalMessage ||
-      /visible reply must use `?message\(action=send\)`?;\s*final text is private/i.test(
-        currentFanoutInstructions,
-      ));
+    /your final response is not automatically sent here for this turn\.\s*you must use `?message\(action=send\)`?/i.test(
+      currentFanoutInstructions,
+    );
   const fanoutRequiresMessageTool = fanoutHasPrivateSourceReply && canCallMessage;
   if (
     scenarioState.subagentFanoutPhase === 3 &&
@@ -66,7 +61,7 @@ export function planSubagentFanoutTurn(params: {
       ? buildToolCallEventsWithArgs("message", {
           action: "send",
           message,
-          ...(fanoutRequiresFinalMessage ? { final: true } : {}),
+          final: true,
         })
       : buildAssistantEvents(message);
   };

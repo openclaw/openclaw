@@ -241,7 +241,8 @@ export const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
   /qa group message unavailable fallback check/i;
 export const QA_STRANDED_FINAL_RECOVERY_PROMPT_RE = /qa stranded final recovery check/i;
 const QA_STRANDED_FINAL_RETRY_FAILURE_PROMPT_RE = /qa stranded final retry failure check/i;
-export const QA_STRANDED_FINAL_RETRY_PROMPT_RE = /you did not call message\(action=send\)/i;
+export const QA_STRANDED_FINAL_RETRY_PROMPT_RE =
+  /your previous final response was not sent automatically/i;
 const QA_STRANDED_FINAL_RETRY_FAILURE_MARKER = "QA-STRANDED-RETRY-FAIL-RAW";
 export const QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE =
   /telegram current session_status qa check/i;

@@ -19,15 +19,15 @@ export function messageToolOwnsVisibleReply(params: {
 export function buildMessageToolTargetGuidance(requireExplicitMessageTarget: boolean): string {
   return requireExplicitMessageTarget
     ? "`send`: `target` + `message`; target required this turn."
-    : "`send`: `message`; current source is default target. Set `target` only elsewhere.";
+    : "`send`: `message`; this conversation is the default target. Set `target` only for another destination.";
 }
 
-/** States when a message send ends this turn, if the run changes the default. */
+/** States the omitted-final behavior when the run changes the send default. */
 export function buildMessageToolFinalityGuidance(
   messageToolFinalByDefault: boolean | undefined,
 ): string | undefined {
   return messageToolFinalByDefault === false
-    ? "A send ends this turn only with `final=true`. With `final` omitted, the turn continues after the send, so finish every remaining step."
+    ? "For sends this turn, omitting `final` means `final=false`. After a nonfinal send, continue any remaining work. Set `final=true` only after finishing the work and including all pending answers."
     : undefined;
 }
 
@@ -43,7 +43,10 @@ export function buildHarnessVisibleReplyGuidance(params: {
     return [
       "This turn has no current conversation. Reply normally in your final assistant message; OpenClaw delivers your final response automatically to the caller.",
       params.messageToolAvailable ? buildMessageToolTargetGuidance(true) : undefined,
-      "Commentary is optional progress and may be hidden. Include answers to every still-pending user question, including questions received during ongoing work, in your final response.",
+      params.messageToolAvailable
+        ? buildMessageToolFinalityGuidance(params.messageToolFinalByDefault)
+        : undefined,
+      "Include all pending answers in your final response; do not rely on intermediate narration being delivered.",
       params.uiPresentation ? buildUiPresentationPrompt(params.uiPresentation) : undefined,
     ]
       .filter(Boolean)
@@ -52,22 +55,25 @@ export function buildHarnessVisibleReplyGuidance(params: {
   const omittedFinalCompletes = params.messageToolFinalByDefault !== false;
   const deliveryGuidance = messageToolOwnsVisibleReply(params)
     ? params.messageToolAvailable
-      ? `Visible source replies are not automatically delivered for this run. Use \`message(action=send)\` for source output. For progress, set \`final=false\`. Set \`final=true\`${omittedFinalCompletes ? ", or omit it," : ""} for a completed reply to the current source. An added reaction to the current source message with \`final=true\` can also complete the reply. Do not repeat delivered content.`
-      : "No source-conversation reply can be sent from this turn. Final assistant text remains private and returns to the invoking workflow; it is not automatically delivered to the source conversation."
+      ? "Your final response is not automatically sent here for this turn. You MUST use `message(action=send)` for visible text replies here."
+      : "No reply can be sent to this conversation from this turn. Your final response returns to the invoking workflow; it is not sent to this conversation."
     : params.messageToolAvailable
-      ? `Use \`message\` with \`final=false\` for progress. A completed send to the current source conversation (\`final=true\`${omittedFinalCompletes ? ", or omitted" : ""}) or an added reaction to its current message with \`final=true\` is your complete reply. Do not repeat delivered content. Otherwise, OpenClaw delivers your final response automatically.`
+      ? "OpenClaw delivers your final response automatically unless you have already completed the reply to this conversation with the message tool."
       : "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
   const targetGuidance =
     params.messageToolAvailable && params.requireExplicitMessageTarget !== undefined
       ? buildMessageToolTargetGuidance(params.requireExplicitMessageTarget)
       : undefined;
   const pendingReplyGuidance = params.messageToolAvailable
-    ? "Commentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered."
+    ? "Deliver all pending answers before finishing; do not rely on narration being delivered."
     : !messageToolOwnsVisibleReply(params)
-      ? "Commentary is optional progress and may be hidden. Include answers to every still-pending user question, including questions received during ongoing work, in your final response."
+      ? "Include all pending answers in your final response; do not rely on intermediate narration being delivered."
       : undefined;
   return [
     deliveryGuidance,
+    params.messageToolAvailable
+      ? `Use \`message(action=send, final=false)\` for chat updates and mid-task answers, then resume work. Set \`final=true\`${omittedFinalCompletes ? ", or omit it," : ""} for a completed reply to this conversation. Finish work before that send; do not expect another model step after confirmed final delivery. You MUST NOT repeat it in your final response or another send. If reactions are permitted, adding a reaction to the current message with \`final=true\` can also complete the reply.`
+      : undefined,
     targetGuidance,
     params.messageToolAvailable
       ? buildMessageToolFinalityGuidance(params.messageToolFinalByDefault)

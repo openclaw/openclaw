@@ -285,6 +285,6 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("`send`: `target` + `message`; target required this turn");
-    expect(prompt).not.toContain("current source is default target");
+    expect(prompt).not.toContain("this conversation is the default target");
   });
 });

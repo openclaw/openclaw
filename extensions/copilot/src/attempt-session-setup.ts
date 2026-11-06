@@ -138,6 +138,7 @@ export async function createCopilotSessionSetup(params: {
                 currentMessagingTarget: input.currentMessagingTarget,
               },
               requireExplicitMessageTarget: promptToolPolicy.requireExplicitMessageTarget,
+              messageToolFinalByDefault: input.messageToolFinalByDefault,
             }),
             buildCredentialSafetyPrompt({
               controlToolsAvailable:

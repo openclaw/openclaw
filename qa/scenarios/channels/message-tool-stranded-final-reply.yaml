@@ -35,7 +35,7 @@ scenario:
       expectedMarker: QA-STRANDED-85714
       expectedPrivateFinal: "QA-STRANDED-85714：近 7 日營收較前期增加 5.09%，已連續兩週回升。最大風險是集中：前五大站台占正營收 86.5%，已超過 85% 觀察門檻。近 30 日最大單一產品占 44.2%，亦超過 40% 門檻。建議先維持成長節奏並優先降低集中風險，不建議只看總額就全面加碼。成長主因仍待業務確認，我尚未取得該線的回覆。"
       privateFinalLogNeedle: "source-reply/private-final"
-      retryPromptNeedle: "you did not call message(action=send)"
+      retryPromptNeedle: "Your previous final response was not sent automatically."
 
 flow:
   steps:

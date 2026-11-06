@@ -313,22 +313,20 @@ describe("direct CLI command continuity", () => {
       expect(second.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
       expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
 
-      expect(first.systemPrompt).toContain("Current-session final text normally routes to source");
-      expect(first.systemPrompt).toContain(
-        "If turn says final private, visible output uses `message(action=send)`",
-      );
+      expect(first.systemPrompt).toContain("Your final response is normally sent here");
+      expect(first.systemPrompt).toContain("Follow any current-turn delivery override.");
       expect(first.params.prompt).toContain(
-        "Visible source replies are not automatically delivered for this run.",
+        "Your final response is not automatically sent here for this turn.",
       );
       expect(first.params.prompt).toContain(
         "`send`: `target` + `message`; target required this turn.",
       );
       expect(first.params.transcriptPrompt).toBe("first ask");
       expect(second.params.prompt).toContain(
-        "OpenClaw delivers your final response automatically.",
+        "OpenClaw delivers your final response automatically unless",
       );
       expect(second.params.prompt).not.toContain(
-        "Visible source replies are not automatically delivered for this run.",
+        "Your final response is not automatically sent here for this turn.",
       );
       expect(second.params.transcriptPrompt).toBe("second ask");
 

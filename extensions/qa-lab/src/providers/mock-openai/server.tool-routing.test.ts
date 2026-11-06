@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { expect, it, describe } from "vitest";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
 import type { AnthropicMessage } from "./mock-openai-contracts.js";
-import { settleParent } from "./server.fixtures.test-support.js";
+import { currentReplyPolicy, settleParent } from "./server.fixtures.test-support.js";
 import {
   type AnthropicResponse,
   ANTHROPIC_GUEST_CODE_MODE_TOOLS,
@@ -217,8 +217,7 @@ it.each([true])("honors protocol failure %s over accepted catalog details", asyn
 it.each([
   {
     scenario: "silent",
-    instructions:
-      "## Messaging\n### message tool\nVisible source replies are not automatically delivered for this run. Use message(action=send) for user-visible source-channel output. When the message is the completed reply to the current source conversation, set final=true.",
+    instructions: "## Messaging\n### message tool\n" + currentReplyPolicy,
     completion:
       "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n[Internal task completion event]\nTask: qa-terminal-silent\nResult: (no output)\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
     target: "message",

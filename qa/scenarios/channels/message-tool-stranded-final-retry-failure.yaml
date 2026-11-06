@@ -34,7 +34,7 @@ scenario:
       prompt: "qa stranded final retry failure check. Include `QA-STRANDED-RETRY-FAIL-RAW` in a thorough multi-sentence answer, but do not call any tool."
       rawMarker: QA-STRANDED-RETRY-FAIL-RAW
       expectedDiagnostic: "I generated a reply but could not deliver it to this chat. Please try again."
-      retryPromptNeedle: "you did not call message(action=send)"
+      retryPromptNeedle: "Your previous final response was not sent automatically."
 
 flow:
   steps:

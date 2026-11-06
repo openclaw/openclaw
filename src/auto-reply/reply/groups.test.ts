@@ -95,37 +95,39 @@ it("keeps untrusted group labels and members out of trusted guidance", () => {
 });
 
 it.each([
-  ["telegram", "direct", "conversation"],
-  ["discord", "group", "group chat"],
-  ["mattermost", "channel", "channel"],
-])(
-  "keeps automatic and private delivery guidance distinct for %s %s",
-  (provider, kind, destination) => {
-    const automatic = sourceContext(provider, kind);
-    const privateReply = sourceContext(provider, kind, true);
-    expect(automatic).toContain(`automatically sent to this ${destination}`);
-    expect(privateReply).toContain(`not automatically sent to this ${destination}`);
-    expect(privateReply).toContain("Normal final replies are private");
-    expect(privateReply).toContain("message tool with action=send");
-    expect(privateReply).toContain("do not call message(action=send)");
-    expect(privateReply).not.toContain("Your replies are automatically sent");
-    if (kind === "direct") {
-      expect(automatic).not.toContain("NO_REPLY");
-      expect(privateReply).not.toContain("NO_REPLY");
-    } else {
-      expect(privateReply).toContain("send confirmations before ending silently");
-    }
-    if (kind === "channel") {
-      expect(automatic).not.toContain("group chat");
-      expect(privateReply).toContain("visible channel response");
-      expect(privateReply).not.toContain("visible group response");
-      expect(privateReply).not.toContain("posted to the group");
-    }
-    expect(privateReply.includes("wrap bare URLs like <https://example.com>")).toBe(
-      provider === "discord",
-    );
-  },
-);
+  ["telegram", "direct"],
+  ["discord", "group"],
+  ["mattermost", "channel"],
+])("keeps automatic and private delivery guidance distinct for %s %s", (provider, kind) => {
+  const automatic = sourceContext(provider, kind);
+  const privateReply = sourceContext(provider, kind, true);
+  expect(automatic).toContain("By default, your final response is sent here automatically");
+  expect(privateReply).not.toContain("target defaults");
+  expect(privateReply).toContain("By default, your final response is not automatically sent here");
+  expect(privateReply).toContain("Visible replies require the message tool");
+  expect(privateReply).not.toContain("By default, your final response is sent here automatically");
+  for (const context of [automatic, privateReply]) {
+    expect(context).toContain("Current-turn delivery rules override these defaults.");
+    // Conversation defaults do not know tool availability, target policy or run finality.
+    expect(context).not.toContain("final=false");
+    expect(context).not.toContain("final=true");
+  }
+  if (kind === "direct") {
+    expect(automatic).not.toContain("NO_REPLY");
+    expect(privateReply).not.toContain("NO_REPLY");
+  } else {
+    expect(privateReply).toContain("send confirmations before ending silently");
+  }
+  if (kind === "channel") {
+    expect(automatic).not.toContain("group chat");
+    expect(privateReply).toContain("visible channel response");
+    expect(privateReply).not.toContain("visible group response");
+    expect(privateReply).not.toContain("posted to the group");
+  }
+  expect(privateReply.includes("wrap bare URLs like <https://example.com>")).toBe(
+    provider === "discord",
+  );
+});
 
 it("reads markdown table guidance from channel metadata", () => {
   setChannels([

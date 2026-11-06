@@ -4,9 +4,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildCurrentInboundPrompt } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import * as gitCoauthorPrompt from "../../agents/git-coauthor-prompt.js";
+import { buildMessagingSection } from "../../agents/system-prompt-messaging.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import * as userPreferences from "../../state/user-preferences.js";
 import { bindRequesterProfile } from "../requester-profile.js";
+import { buildHarnessVisibleReplyGuidance } from "../source-reply-delivery-mode.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { prepareReplyRunContext, PreparedReplyRunContext } from "./get-reply-run-context.js";
 import { prepareReadyReply } from "./get-reply-run-context.test-support.js";
@@ -110,6 +112,78 @@ it.each([
   },
 );
 
+it.each(
+  (["direct", "group", "channel"] as const).flatMap((ChatType) =>
+    (["automatic", "message_tool_only"] as const).flatMap((sessionMode) =>
+      (["automatic", "message_tool_only"] as const).map((turnMode) => ({
+        ChatType,
+        sessionMode,
+        turnMode,
+      })),
+    ),
+  ),
+)(
+  "keeps $ChatType/$sessionMode defaults compatible with $turnMode turn delivery",
+  async ({ ChatType, sessionMode, turnMode }) => {
+    const sessionCtx = context("Please report progress, then finish the task.", {
+      Provider: "discord",
+      Surface: "discord",
+      ChatType,
+      InboundEventKind: "user_request",
+    });
+    const prepared = await prepareReadyReply({
+      ctx: sessionCtx,
+      sessionCtx,
+      cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+      opts: {
+        sourceReplyDeliveryMode: turnMode,
+        sessionPromptSourceReplyDeliveryMode: sessionMode,
+      },
+    });
+    const envelope = prepared.buildPromptBodies({ prefixedBody: prepared.prefixedBodyBase });
+    expect(prepared.sourceReplyDeliveryMode).toBe(turnMode);
+    const prompt = [
+      ...buildMessagingSection({
+        isMinimal: false,
+        availableTools: new Set(["message"]),
+        inlineButtonsEnabled: false,
+        delegationSectionRenders: false,
+        runtimeChatType: ChatType,
+        sourceReplyDeliveryMode: sessionMode,
+      }),
+      ...prepared.extraSystemPromptParts,
+      currentPrompt(envelope),
+      buildHarnessVisibleReplyGuidance({
+        sourceReplyDeliveryMode: prepared.sourceReplyDeliveryMode,
+        messageToolAvailable: true,
+        currentConversation: { currentChannelProvider: "discord", currentChannelId: "123" },
+        requireExplicitMessageTarget: false,
+      }),
+    ].join("\n\n");
+    expect(prompt).toContain("message(action=send, final=false)");
+    expect(prompt).toContain("Current-turn delivery rules override these defaults.");
+    expect(prompt).toContain(
+      turnMode === "message_tool_only"
+        ? "Your final response is not automatically sent here for this turn."
+        : "OpenClaw delivers your final response automatically unless you have already completed the reply",
+    );
+    expect(prompt).toContain(
+      sessionMode === "automatic"
+        ? "By default, your final response is sent here automatically"
+        : "By default, your final response is not automatically sent here",
+    );
+    expect(prompt).toContain("for chat updates and mid-task answers, then resume work");
+    expect(prompt).toContain("do not expect another model step after confirmed final delivery");
+    expect(prompt).not.toContain("Do not repeat delivered content.");
+    expect(prompt).not.toContain("For ordinary text, do not use the message tool");
+    expect(prompt).not.toContain("Use message(action=send) only when");
+    expect(prompt).not.toContain("status updates between tool calls are still shown");
+    expect(prompt.includes("reply only when directly addressed or you can add clear value")).toBe(
+      ChatType !== "direct",
+    );
+  },
+);
+
 it("keeps Telegram reply text beside its marker", async () => {
   const threadNote = "[Thread starter - for context]\nPlanning the picnic next month.";
   const sessionCtx = context("Tldr", {
@@ -178,7 +252,10 @@ it.each(["message_tool_only", "automatic"] as const)(
     expect(text).toContain(
       "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.",
     );
-    for (const directive of ["message(action=send)", "your final text here stays private"]) {
+    for (const directive of [
+      "A visible reply requires the message tool",
+      "Your final response is not automatically sent here",
+    ]) {
       expect(text.includes(directive)).toBe(sourceReplyDeliveryMode === "message_tool_only");
     }
     for (const prompt of [text, resumableText]) {

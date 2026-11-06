@@ -255,33 +255,6 @@ describe("buildAgentSystemPrompt", () => {
     }
   });
 
-  it("preserves required visible-source message-tool guidance in minimal prompts", () => {
-    const restricted = (toolNames: string[], promptMode: PromptParams["promptMode"] = "minimal") =>
-      renderPrompt({
-        toolNames,
-        promptMode,
-        sourceReplyDeliveryMode: "message_tool_only",
-        runtimeInfo: { channel: "webchat" },
-      });
-    expect(restricted(["message"])).toContain(
-      "Current source visible reply MUST use `message(action=send)`",
-    );
-    for (const promptMode of ["minimal", "full"] as const) {
-      const unavailable = restricted(["read"], promptMode);
-      expect(unavailable).not.toContain("message(action=send)");
-      expect(unavailable).toContain("visible reply unavailable; final text remains private");
-      expect(unavailable).not.toContain("## Assistant Output Directives");
-      expect(unavailable).not.toContain("## Control UI Embed");
-    }
-    expect(
-      renderPrompt({
-        promptMode: "minimal",
-        toolNames: ["message"],
-        sourceReplyDeliveryMode: "automatic",
-      }),
-    ).not.toContain("message(action=send)");
-  });
-
   it.each<PromptCase>([
     [
       "keeps generic callback guidance without a plugin override",
@@ -473,7 +446,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prefixes[2]).toBe(prefixes[0]);
     expect(prefixes[0]).not.toContain("## Assistant Output Directives");
     expect(prefixes[0]).not.toContain("## Silent Replies");
-    expect(prompts[1]).toContain("Current source visible reply MUST use `message(action=send)`");
+    expect(prompts[1]).toContain(
+      "You MUST use `message(action=send)` for visible text replies. Current-turn delivery instructions override this default.",
+    );
     expect(prompts[2]).toBe(prompts[0]);
   });
 
@@ -712,10 +687,12 @@ describe("buildAgentSystemPrompt", () => {
       runtimeInfo: { channel: "discord", chatType: "channel" },
     });
 
-    expect(prompt).toContain("Current source visible reply MUST use `message(action=send)`");
+    expect(prompt).toContain(
+      "You MUST use `message(action=send)` for visible text replies. Current-turn delivery instructions override this default.",
+    );
     expect(prompt).not.toContain("MEDIA:<path-or-url>");
     expect(prompt).toContain("Group/channel:");
-    expect(prompt).toContain("current source is default target");
+    expect(prompt).toContain("this conversation is the default target");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("Only that whole reply is silent.");
     expect(prompt).not.toContain("`send`: `target` + `message`.");

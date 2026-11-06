@@ -48,8 +48,8 @@ export function buildTurnDeliveryContextFragments(
   if (turnMode !== session.sourceReplyDeliveryMode) {
     lines.push(
       turnMode === "message_tool_only"
-        ? "This turn's final text is private. A visible reply to the current source MUST use `message(action=send)` (or a final reaction with `message(action=react, final=true)`); without the tool the user gets nothing."
-        : "This turn's final text goes to the current source automatically. Do not also send it with the message tool.",
+        ? "This turn's final response is not automatically sent here. You MUST use `message(action=send)` for visible text replies here. If reactions are permitted, `message(action=react, final=true)` can complete the reply by adding a reaction to the current message. Without the message tool, no reply can be sent here."
+        : "For this turn, reply normally in your final assistant message; OpenClaw delivers it here automatically. You MUST NOT send the same reply both with the message tool and in your final response.",
     );
   }
   const requireExplicitTarget =

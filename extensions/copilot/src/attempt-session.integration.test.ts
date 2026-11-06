@@ -116,6 +116,36 @@ describe("Copilot canonical session persistence", () => {
     expect(manager.getSessionTarget()).toBeUndefined();
   });
 
+  it("carries the run's nonfinal send default into SDK delivery instructions", async () => {
+    const { params } = await fixture();
+    const message: AnyAgentTool = {
+      name: "message",
+      label: "Message",
+      description: "Send a reply",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    };
+    const sdk = copilot.makeFakeSdk();
+    const result = await copilot.runCopilotAttempt(
+      {
+        ...params,
+        promptMode: "minimal",
+        disableTools: false,
+        messageChannel: "discord",
+        currentChannelId: "123",
+        sourceReplyDeliveryMode: "message_tool_only",
+        messageToolFinalByDefault: false,
+        hostCapabilities: createCopilotTestHostCapabilities(() => [message]),
+      },
+      { pool: copilot.makeFakePool(sdk) },
+    );
+    expect(result.terminal).toEqual({ kind: "ok" });
+    const config = expectDefined(sdk.createSession.mock.calls[0]?.[0], "SDK session config");
+    const instructions = (config.systemMessage as { content: string }).content;
+    expect(instructions).toContain("omitting `final` means `final=false`");
+    expect(instructions).not.toContain("or omit it");
+  });
+
   it("requires an exact durable target even when a persistent manager is supplied", async () => {
     const { target, tempDir, params } = await fixture();
     const manager = await SessionManager.openAsync(target, tempDir);

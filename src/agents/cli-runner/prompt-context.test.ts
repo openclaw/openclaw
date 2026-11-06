@@ -1,7 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { buildCliSessionDriftNote } from "../cli-session-drift.js";
 import * as media from "../media-generation-task-status.js";
-import { buildCliCurrentPrompt, prepareCliTurnPromptContext } from "./prompt-context.js";
+import {
+  buildCliCurrentPrompt,
+  buildCliVisibleReplyGuidance,
+  prepareCliTurnPromptContext,
+} from "./prompt-context.js";
 import type { CliReusableSession } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -117,3 +121,19 @@ it("lets a whole-system hook replacement remove ordinary Claude Runtime facts", 
   expect(turn).toMatchObject({ systemPrompt: "Replacement instructions.", prompt: "Hello" });
   expect(turn.promptContext?.appendContext).not.toContain(runtimeFacts);
 });
+
+it.each(["123", undefined])(
+  "carries the non-final send default with current channel id %s",
+  (currentChannelId) => {
+    const text = buildCliVisibleReplyGuidance(
+      {
+        messageChannel: "telegram",
+        currentChannelId,
+        messageToolFinalByDefault: false,
+      },
+      { messageToolAvailable: true },
+    );
+    expect(text).toContain("omitting `final` means `final=false`");
+    expect(text).not.toContain("or omit it");
+  },
+);
