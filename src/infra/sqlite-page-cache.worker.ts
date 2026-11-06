@@ -34,7 +34,19 @@ export type PageCacheProgress = PayloadWarmStats & {
 };
 
 function readIo() {
-  const io = fs.readFileSync("/proc/self/io", "utf8");
+  let io: string;
+  try {
+    io = fs.readFileSync("/proc/self/io", "utf8");
+  } catch (error) {
+    // Stock WSL kernels ship no CONFIG_TASKSTATS procfs I/O accounting, so the
+    // read fails with ENOENT and warming proceeds with zeroed, unmetered byte
+    // counters instead of aborting every maintenance cycle.
+    // SAFETY: Node filesystem errors expose `code`; only ENOENT is benign here.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { readBytes: 0, diskBytes: 0 };
+    }
+    throw error;
+  }
   return {
     readBytes: Number(/^rchar: (\d+)$/m.exec(io)?.[1] ?? 0),
     diskBytes: Number(/^read_bytes: (\d+)$/m.exec(io)?.[1] ?? 0),
