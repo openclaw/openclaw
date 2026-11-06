@@ -5,22 +5,30 @@
 // was listed, so a revocation can tell whether it covers that listing.
 import type { IrohEndpointKey, KeyFingerprint } from "../keys.js";
 import type { UnixSeconds } from "../statements/types.js";
-import type { AuthorityState, MemberRecord, OwnerDeviceRecord } from "./state.js";
+import { nodeRemovalEvents, withoutNodes } from "./nodes.js";
+import type { AuthorityEvent, AuthorityState, MemberRecord, OwnerDeviceRecord } from "./state.js";
 
 /** Default: owner devices not admitted for 90 days are dropped. */
 export const OWNER_DEVICE_INACTIVITY_SECONDS = 90 * 86400;
 /** Default: member peer keys not admitted for 30 days are dropped. */
 export const MEMBER_PEER_KEY_INACTIVITY_SECONDS = 30 * 86400;
+/** Default: unattended nodes have the same inactivity window as member browsers. */
+export const NODE_INACTIVITY_SECONDS = 30 * 86400;
 /** `last_seen` moves only when it is at least this much older, so admissions rarely write. */
 export const LAST_SEEN_RESOLUTION_SECONDS = 3600;
 
 /** How long keys may go unused before the Gateway drops them. */
-export type InactivityWindows = { ownerDeviceSeconds: number; memberPeerKeySeconds: number };
+export type InactivityWindows = {
+  ownerDeviceSeconds: number;
+  memberPeerKeySeconds: number;
+  nodeSeconds: number;
+};
 
 /** The default {@link InactivityWindows}. */
 export const DEFAULT_INACTIVITY_WINDOWS: InactivityWindows = {
   ownerDeviceSeconds: OWNER_DEVICE_INACTIVITY_SECONDS,
   memberPeerKeySeconds: MEMBER_PEER_KEY_INACTIVITY_SECONDS,
+  nodeSeconds: NODE_INACTIVITY_SECONDS,
 };
 
 /** The seq at which an owner device was listed (0 when its record predates listing seqs). */
@@ -54,6 +62,7 @@ export function memberPeerListedSeq(
  */
 export function peerKeyListedSeq(state: AuthorityState, key: IrohEndpointKey): number | undefined {
   const seqs = [
+    state.nodes[key]?.listed_seq,
     ...Object.values(state.owner_devices).map((record) => ownerPeerListedSeq(record, key)),
     ...Object.values(state.members).map((member) => memberPeerListedSeq(member, key)),
   ].filter((seq): seq is number => seq !== undefined);
@@ -108,7 +117,13 @@ export function withoutOwnerDevices(
         !remove.has(invite.created_by),
     ),
   );
-  return { state: { ...state, owner_devices, invites }, peers: [...new Set(peers)] };
+  const node_invites = Object.fromEntries(
+    Object.entries(state.node_invites).filter(
+      ([, invite]) =>
+        invite.status !== "open" || invite.created_by === "root" || !remove.has(invite.created_by),
+    ),
+  );
+  return { state: { ...state, owner_devices, invites, node_invites }, peers: [...new Set(peers)] };
 }
 
 /** Removes peer keys from every member (members themselves stay listed). */
@@ -150,7 +165,8 @@ export function withoutMemberBrowsers(
 }
 
 /**
- * Records that `peerKey` was admitted at `now`, on its owner device or member entry.
+ * Records admission at `now`, or authenticated activity for a long-lived node connection.
+ * Node callers refresh on activity too, so continuously connected nodes do not expire.
  * Returns null when nothing moved (unknown key, or seen within the resolution).
  */
 export function recordSeen(
@@ -179,7 +195,12 @@ export function recordSeen(
       return [account, { ...member, last_seen: { ...member.last_seen, [peerKey]: now } }];
     }),
   );
-  return changed ? { ...state, owner_devices, members } : null;
+  const node = state.nodes[peerKey];
+  const nodes =
+    node && stale(node.last_seen)
+      ? { ...state.nodes, [peerKey]: { ...node, last_seen: now } }
+      : state.nodes;
+  return changed || nodes !== state.nodes ? { ...state, owner_devices, members, nodes } : null;
 }
 
 // When a member peer key was last admitted; a key without a record counts from `fallback`.
@@ -196,7 +217,7 @@ export function dropInactive(
   state: AuthorityState,
   now: UnixSeconds,
   windows: InactivityWindows = DEFAULT_INACTIVITY_WINDOWS,
-): { state: AuthorityState; peers: IrohEndpointKey[] } | null {
+): { state: AuthorityState; peers: IrohEndpointKey[]; events: AuthorityEvent[] } | null {
   const idleOwners = Object.entries(state.owner_devices)
     .filter(([, record]) => now - record.last_seen > windows.ownerDeviceSeconds)
     // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
@@ -206,13 +227,18 @@ export function dropInactive(
       (key) => now - memberKeySeen(member, key, now) > windows.memberPeerKeySeconds,
     ),
   );
-  if (idleOwners.length === 0 && idleKeys.length === 0) {
+  // SAFETY: nodes is keyed by IrohEndpointKey; Object.entries widens keys to string.
+  const idleNodes = Object.entries(state.nodes)
+    .filter(([, node]) => now - node.last_seen > windows.nodeSeconds)
+    .map(([key]) => key as IrohEndpointKey);
+  if (idleOwners.length === 0 && idleKeys.length === 0 && idleNodes.length === 0) {
     return null;
   }
   const owners = withoutOwnerDevices(state, idleOwners);
   return {
-    state: withoutMemberPeerKeys(owners.state, idleKeys),
-    peers: [...new Set([...owners.peers, ...idleKeys])],
+    state: withoutNodes(withoutMemberPeerKeys(owners.state, idleKeys), idleNodes),
+    peers: [...new Set([...owners.peers, ...idleKeys, ...idleNodes])],
+    events: idleNodes.length ? nodeRemovalEvents(idleNodes) : [],
   };
 }
 
@@ -222,6 +248,7 @@ export function nextInactivityDrop(
   windows: InactivityWindows = DEFAULT_INACTIVITY_WINDOWS,
 ): UnixSeconds | null {
   const due = [
+    ...Object.values(state.nodes).map((node) => node.last_seen + windows.nodeSeconds + 1),
     ...Object.values(state.owner_devices).map(
       (record) => record.last_seen + windows.ownerDeviceSeconds + 1,
     ),

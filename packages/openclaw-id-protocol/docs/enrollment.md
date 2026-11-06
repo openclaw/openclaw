@@ -192,3 +192,97 @@ the Gateway (a failed publication), the Gateway refuses the statement as `seq_co
 republishes its snapshot and mails N's device fingerprint a `notice` with `event: "seq_conflict"`
 and `ref` = its current seq. While N still holds R it re-reads the K_gw-signed snapshot, checks
 it is at least `ref`, and signs again at that seq + 1; otherwise it asks the user to retry.
+
+## Headless node enrollment
+
+Nodes have their own W key class: no account, member role, owner device D or owner
+capabilities. W is generated and kept locally by the node. A node must never be enrolled as
+an owner device or member to make connectivity work. The authority rejects overlap in either
+direction, including an owner D or R with the same raw bytes as node W.
+
+1. An owner device with `invite` (or R) creates an invite ID and 32-byte secret with
+   `generateInviteSecret`, derives the existing `deriveInviteProofKey(secret)`, signs
+   `NodeInviteCap { claw_id, invite_id, label, created_at, expires_at, secret_hash }`, and
+   calls `registerNodeInvite(state, cap, proofKey, context)` directly. K_gw alone cannot
+   register one. Node invites are always single-use; no audience/account or role is present.
+2. `buildNodeJoinLink` encodes `NodeJoinLink` as
+   `openclaw-node://join#i=<invite_id>.<base64url secret>&c=<claw_id>&r=<fp(R) hex>&h=<hostname>&relay=<URL>`.
+   Values are URL-encoded. `parseNodeJoinLink` is the strict CLI/deep-link decoder. All five
+   fields must occur exactly once; unknown fields, query, path, credentials and malformed
+   secrets/pins are refused. The relay must be HTTPS (HTTP only on localhost testbeds),
+   without credentials, query or fragment. The link has no long-lived key. Treat the whole
+   fragment as a secret: never put it in logs, analytics or an HTTP request target.
+3. The node generates W locally, computes `computeNodeRedemptionProof(proofKey, parts)`:
+   HMAC-SHA-256(proof key, `"openclaw/node-invite-proof/v1\0"` || JCS({ claw_id, invite_id,
+   peer_key })), lowercase hex. The existing proof-key derivation is shared, but the HMAC
+   domain and signed statement type are separate from member invitations.
+4. W signs `NodeRedemption { claw_id, invite_id, peer_key, proof, requested_at }`. The
+   envelope's `signer` is `ed25519:` with the same raw 32 bytes as `peer_key` (`iroh:`).
+   The node sends `node_redemption` mail with W-signed Discovery authentication, no bearer
+   token. `submitNodeRedemption(state, input, now)` checks W, invite, expiry and HMAC, then
+   records **pending**, reserves the invite and notifies owners. It admits nothing.
+5. An owner with `manage_members` (or R) signs `MembershipChange` at current seq + 1,
+   `add_node { peer_key, label, invite_id }`, directly at the Gateway. It must match the
+   pending node W; it consumes the invite. `deny_invite { invite_id }` also handles nodes.
+   Owner-device approval through the mailbox is refused. R retains its existing mailbox
+   supremacy, but must still name a matching pending node redemption.
+6. The node polls `getNodeDescriptor` using W, honoring rate-limit backoff. Only when W is
+   in the verified current-binding snapshot's `node_peer_keys` may Discovery return the
+   descriptor and snapshot. The node checks the link's claw ID, root fingerprint and hostname
+   with `verifyBindingForPin`, applies `assessFreshness` to the snapshot, and dials only the
+   verified K_srv. A pending/denied node gets no descriptor through node authentication.
+   No node mailbox-read permission or user sign-in is needed.
+
+### Discovery bootstrap routing
+
+The join link deliberately does not identify a Discovery API origin. A claw hostname and
+an iroh relay URL may both differ from Discovery; clients **must not infer** the API origin
+from either. Joining therefore takes two inputs: the link and a deployment-selected Discovery
+base URL. The headless command contract is
+`openclaw node join <link> --discovery-url <https-origin>`.
+An explicit flag wins over the node's saved deployment configuration; a distribution may
+supply a documented deployment default only when neither exists. This protocol defines no
+universal production origin. With no configured origin, fail before generating W or sending
+mail and request `--discovery-url`. The Control UI's copyable join command must include its
+configured Discovery origin, especially for staging and independently hosted deployments.
+
+The Discovery base is an HTTPS origin without userinfo, path (except `/`), query or fragment;
+HTTP is permitted only for localhost testbeds. API paths in `DISCOVERY_ENDPOINTS` are resolved
+against that origin. Store the chosen origin alongside the node's enrollment for subsequent
+polling/reconnect. This is routing configuration, not authority: the link's claw ID, hostname
+and root fingerprint must still verify the descriptor, binding and snapshot before dialing.
+Never send the invite secret or proof key to the configured Discovery origin.
+
+### Node authority and lifecycle
+
+`AuthorityState.nodes` is keyed by W. `NodeRecord` holds `label`, `listed_seq`, `added_by`
+(root or approving owner fingerprint), `last_seen` and `invite_id`. `node_invites` is a
+separate map of `NodeInviteRecord`. Both invite maps share an ID namespace and a total
+`MAX_INVITES` cap (100), the one-week registration limit and spent-record cleanup.
+Removing an owner deletes the open node invites it registered, as for member invites;
+already admitted nodes do not become owner approval descendants.
+
+`MAX_NODES` is 256. Reapproving a still-listed node through a fresh pending invitation
+preserves its listing seq and inactivity clock. `isAdmitted` includes node keys; `isNode`
+distinguishes node-only principals. `snapshotBody` includes sorted `node_peer_keys` in the
+K_gw-signed snapshot, never in owner/member lists.
+
+`remove_node { peer_key }` and `Revocation { target_kind: "peer_key" }` remove nodes.
+Revocation obeys the existing listing-seq rule, so replay cannot remove a fresh reapproval.
+Removal emits `disconnect`, `invalidate_tokens`, `remove_node_pairings` (all naming W),
+and `publish_snapshot`. The Gateway removes only node-role pairings whose provenance is
+that W, never unrelated pairings. The authority itself stores no device pairing IDs.
+
+`recordSeen` rate-limits node `last_seen` writes to hourly. The Gateway calls it for node
+admission and authenticated node tunnel activity (including heartbeats), so a healthy
+long-lived connection does not expire just because it has not reconnected. `InactivityWindows.nodeSeconds`
+defaults to `NODE_INACTIVITY_SECONDS` (30 days); `nextInactivityDrop` includes nodes.
+`dropInactive` returns the dropped peer keys and node-removal `events`; the Gateway performs
+its existing owner/member inactivity effects too and advances/publishes its membership state.
+As for existing member invites, expiry of an unresolved pending redemption after seven days
+belongs to the Gateway's persistence/scheduling owner.
+
+On the first node-role connect after signed admission, the Gateway may automatically approve
+that W's node device pairing and initial command surface. This is a one-time Gateway action,
+not owner/member authority. A later manual pairing removal must suppress automatic re-pairing;
+it does not silently become a new invitation. The Gateway owns that provenance and suppression.

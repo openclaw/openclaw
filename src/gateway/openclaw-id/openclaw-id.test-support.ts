@@ -202,7 +202,7 @@ export async function redemptionMail(params: {
   proofKey: Uint8Array;
   accountId: string;
   email: string;
-}): Promise<{ message: MailboxMessage; peerKey: IrohEndpointKey }> {
+}) {
   const signer = await generateEd25519Signer();
   const peerKey = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
   const parts = {
@@ -238,6 +238,6 @@ export async function redemptionMail(params: {
       payload: { kind: "invite_redemption", redemption },
       received_at: nowSeconds(),
       expires_at: nowSeconds() + 86400,
-    },
+    } satisfies MailboxMessage,
   };
 }
