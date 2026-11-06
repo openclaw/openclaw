@@ -259,7 +259,7 @@ describe("Control UI performance budgets", () => {
         ],
         [dependency, "console.log('runtime');"],
         [css, ":root{color:rebeccapurple}"],
-      ]) {
+      ] as const) {
         const file = path.join(distDir, "assets", name);
         fs.writeFileSync(file, source);
         if (!sidecars) {
