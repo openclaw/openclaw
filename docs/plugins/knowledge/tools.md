@@ -134,6 +134,11 @@ most 16 KiB), and 1–20 `items`. Each item has `text`, a claim `kind`, an
 optional `subject`, an optional `about`, an `origin` of `source` (default) or
 `user_belief`, and optional dates. Agent inference is rejected.
 
+Retry an interrupted remember with the same request ID and identical input. If
+an identical retry reports a payload mismatch after an upgrade, inspect its
+mutation receipt and use `knowledge_resume` for the accepted request's original
+ID. Do not create a replacement request.
+
 `about` is the saver's own description of what the claim concerns, such as
 `"bundled plugin hot reload, PR #180466"`. It needs no lookup and does not have
 to match a page. It is stored on the claim as `subject_hint`.
