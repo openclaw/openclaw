@@ -8,7 +8,13 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 
 type PromptExecutionAttempt = Pick<
   RunEmbeddedAgentParams,
-  "config" | "imageOrder" | "images" | "media" | "userTurnTranscriptRecorder" | "workspaceDir"
+  | "config"
+  | "imageOrder"
+  | "images"
+  | "inputProvenance"
+  | "media"
+  | "userTurnTranscriptRecorder"
+  | "workspaceDir"
 > & { model: { input?: string[] } };
 type PromptImageResult = Awaited<ReturnType<typeof detectAndLoadPromptImages>>;
 
@@ -43,7 +49,11 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   const { attempt } = input;
   let localRoots: readonly string[] | undefined;
   const result = await detectAndLoadPromptImages({
-    prompt: input.prompt,
+    // Non-human text is context, not an implicit attachment; admitted media still hydrates.
+    prompt:
+      attempt.inputProvenance && attempt.inputProvenance.kind !== "external_user"
+        ? ""
+        : input.prompt,
     workspaceDir: input.effectiveWorkspace,
     agentWorkspaceDir: attempt.workspaceDir,
     model: attempt.model,

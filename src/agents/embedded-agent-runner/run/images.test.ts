@@ -75,6 +75,34 @@ describe("prompt image preparation", () => {
     expect(roots).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, "external_user", "inter_session", "internal_system"] as const)(
+    "only infers text paths for human input (%s), preserving admitted images",
+    async (kind) => {
+      const workspaceDir = await imageWorkspace({
+        "diagram.png": undefined,
+        "attachment.png": undefined,
+      });
+      const result = await prepareEmbeddedAttemptPromptExecution({
+        attempt: {
+          workspaceDir,
+          model: { input: ["text", "image"] },
+          inputProvenance: kind ? { kind } : undefined,
+          images: [pngImage()],
+          media: [{ kind: "image", path: path.join(workspaceDir, "attachment.png") }],
+          imageOrder: ["offloaded", "inline"],
+        },
+        mediaOwnerAgentId: "main",
+        effectiveFsWorkspaceOnly: true,
+        effectiveWorkspace: workspaceDir,
+        prompt: "Review ./diagram.png",
+        skipPromptSubmission: false,
+      });
+      const human = kind === undefined || kind === "external_user";
+      expect(result.images).toEqual(Array.from({ length: human ? 3 : 2 }, () => pngImage()));
+      expect(result.failedMediaCount).toBe(0);
+    },
+  );
+
   it("resolves roots once for several files and still rejects a file outside them", async () => {
     const workspaceDir = tempDirs.make("openclaw-prompt-images-");
     const deniedDir = tempDirs.make("openclaw-prompt-denied-");
