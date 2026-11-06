@@ -5,7 +5,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
 import type { GuestWelcomeHandle } from "../../app/guest-welcome-handle.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
-import type { ChatDefaultModelRecovery } from "./chat-default-model-recovery.ts";
+import type { ChatDefaultModelRecoveryReader } from "./chat-default-model-recovery.types.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { renderGuestWelcomeStatus } from "./components/chat-guest-welcome-status.tsx";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
@@ -52,7 +52,7 @@ export type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
   // Resolve after the first pane frame prepares the Solid owner's permission facts.
   readProviderReview?: () => ChatProviderReviewOwner | undefined;
   runError?: ChatRunError | null;
-  defaultModelRecovery?: ChatDefaultModelRecovery;
+  defaultModelRecovery?: ChatDefaultModelRecoveryReader;
   onRefresh?: () => void;
   onDismissWorkspaceConflict?: () => void;
   workspaceConflict?: WorkspaceResultConflict | null;

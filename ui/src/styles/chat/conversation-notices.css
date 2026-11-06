@@ -295,16 +295,3 @@ summary.chat-error__mobile-header {
     animation-duration: 0.01ms;
   }
 }
-
-.chat-composer-neighbor-card.chat-model-recovery {
-  grid-template-columns: 18px minmax(0, 1fr);
-  padding: 12px;
-}
-
-.chat-model-recovery .btn {
-  grid-column: 2;
-  justify-self: start;
-  max-width: 100%;
-  white-space: normal;
-  text-align: start;
-}

@@ -20,6 +20,7 @@ import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { formatUiErrorDetails } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createChatDefaultModelRecovery } from "./chat-default-model-recovery.ts";
 import { isChatSendReconnecting } from "./chat-send-presentation.ts";
 import type { ChatComposerNoticesProps, ChatViewNoticesProps } from "./chat-view-notices.tsx";
 import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
@@ -482,18 +483,14 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
   );
   return (
     <>
-      <Show when={props.runError && props.defaultModelRecovery}>
+      <Show when={props.defaultModelRecovery?.(createChatDefaultModelRecovery)}>
         {(recovery) => (
-          <div class="chat-composer-neighbor-card chat-model-recovery" role="status">
-            <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
-              <Icon name="refresh" />
-            </span>
+          <div class="chat-composer-neighbor-card chat-error chat-model-recovery" role="status">
             <span>{t("chat.modelControls.switchOnlyHelp")}</span>
             <button
-              class="btn btn--sm"
+              class="btn btn--sm chat-error__refresh"
               type="button"
               data-chat-default-model-recovery
-              disabled={!props.connected}
               onClick={() => void recovery().switchModel()}
             >
               {t("chat.modelControls.switchToDefault", { model: recovery().modelLabel })}

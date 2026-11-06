@@ -5,15 +5,13 @@ import {
   isSessionRuntimePinned,
   resolveModelRuntimeEntry,
 } from "../../lib/model-runtime-choice.ts";
+import type { ChatDefaultModelRecovery } from "./chat-default-model-recovery.types.ts";
 import { readChatSettingsTargetRow, switchChatModel } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { readChatModelCatalogState } from "./chat-state-refresh.ts";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 
-export type ChatDefaultModelRecovery = {
-  modelLabel: string;
-  switchModel: () => Promise<boolean>;
-};
+export type { ChatDefaultModelRecovery } from "./chat-default-model-recovery.types.ts";
 
 /** Explicit selection only: never replay a failed prompt or modify its fallback policy. */
 export function createChatDefaultModelRecovery(
