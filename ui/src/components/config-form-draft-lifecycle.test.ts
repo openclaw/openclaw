@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as schemaValidation from "@openclaw/normalization-core/json-schema";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   connectionSchemaFixture,
   disposeConfigFormFixture,
@@ -7,6 +8,7 @@ import {
   renderTextInputFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
+import type { ConfigNodeRenderParams } from "./config-form.node.shared.ts";
 
 function input(container: Element, selector: string): HTMLInputElement {
   return container.querySelector<HTMLInputElement>(selector)!;
@@ -27,6 +29,55 @@ describe("config form draft lifetimes", () => {
     disposeConfigFormFixture(container);
     container.remove();
   });
+  it("validates absent structured values only when their draft inputs change", () => {
+    const validate = vi.spyOn(schemaValidation, "isJsonSchemaValueValid");
+    onTestFinished(() => validate.mockRestore());
+    let schema: ConfigNodeRenderParams["schema"] = {
+      type: "object",
+      properties: { name: { type: "string", title: "Name" } },
+    };
+    const render = (overrides: Partial<ConfigNodeRenderParams> = {}) =>
+      renderNodeFixture(container, {
+        schema,
+        value: undefined,
+        path: ["connection"],
+        onPatch: vi.fn(),
+        ...overrides,
+      });
+    const validations = () => validate.mock.calls.filter(([input]) => input === schema).length;
+    const structuredDraft = () => container.querySelector("openclaw-config-form-structured-draft");
+    render();
+    expect(validations()).toBe(1);
+    expect(structuredDraft()).toBeNull();
+
+    render({ disabled: true, contextLabel: "Connection" });
+    render({ disabled: false, contextLabel: "Server" });
+    expect(validations()).toBe(1);
+
+    render({ value: { name: "Saved" } });
+    expect(input(container, "input").value).toBe("Saved");
+    expect(validations()).toBe(1);
+    render();
+    expect(validations()).toBe(2);
+
+    schema = { ...schema, required: ["name"] };
+    render();
+    expect(validations()).toBe(1);
+    expect(structuredDraft()).not.toBeNull();
+    render({ isRequired: true });
+    expect(structuredDraft()).toBeNull();
+    expect(validations()).toBe(1);
+    render();
+    expect(structuredDraft()).not.toBeNull();
+    expect(validations()).toBe(2);
+    render({ structuredDraftOwner: true });
+    expect(structuredDraft()).toBeNull();
+    expect(validations()).toBe(2);
+    render();
+    expect(structuredDraft()).not.toBeNull();
+    expect(validations()).toBe(3);
+  });
+
   it("preserves an invalid JSON draft on an equal acknowledgment until its source changes", () => {
     const onPatch = vi.fn();
     const render = (replaced: boolean) =>
