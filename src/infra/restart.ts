@@ -43,4 +43,3 @@ export function deferGatewayRestartUntilIdle(
 ): RestartDeferralHandle {
   return deferRestartUntilIdle(opts, scheduledRequest);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

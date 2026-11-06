@@ -15,7 +15,10 @@ import {
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import {
+  enqueueSystemEvent,
+  resetSystemEventsForTest,
+} from "openclaw/plugin-sdk/system-event-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   cleanupDreamingServicesForTest,
