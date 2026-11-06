@@ -37,11 +37,13 @@ beforeEach(() => {
   }));
 });
 
-vi.mock("../config/config.js", () => ({
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
   getRuntimeConfig: getRuntimeConfigMock,
 }));
 
-vi.mock("./http-utils.js", () => ({
+vi.mock("./http-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-utils.js")>()),
   authorizeGatewayHttpRequestOrReply: authorizeGatewayHttpRequestOrReplyMock,
   resolveSharedSecretHttpOperatorScopes: resolveSharedSecretHttpOperatorScopesMock,
   resolveOpenAiCompatibleHttpSenderIsOwner: resolveOpenAiCompatibleHttpSenderIsOwnerMock,
@@ -52,7 +54,8 @@ vi.mock("./session-utils-store.js", async (importOriginal) => ({
   loadGatewaySessionEntryReadOnlyAsync: async (...args: unknown[]) => loadSessionEntryMock(...args),
 }));
 
-vi.mock("./session-transcript-readers.js", () => ({
+vi.mock("./session-transcript-readers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-transcript-readers.js")>()),
   readSessionMessagesAsync: readSessionMessagesMock,
   readSessionMessagesMatchingIdAsync: async (scope: unknown, messageId: string) =>
     (await readSessionMessagesMock(scope)).filter(
