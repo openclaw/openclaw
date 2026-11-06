@@ -10,8 +10,8 @@ import {
   onSettled,
   Show,
 } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { RetryAction } from "../../components/solid/settings-ui.tsx";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../../lib/format-error.ts";

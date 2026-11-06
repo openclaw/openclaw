@@ -1,6 +1,6 @@
 import { createMemo, For, onSettled, Show, type Accessor } from "solid-js";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { IconButton } from "../../../components/solid/icon-button.tsx";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";

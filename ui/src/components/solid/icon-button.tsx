@@ -32,7 +32,7 @@ export type IconButtonProps = ButtonAttributes &
   IconButtonStyle & {
     /** Accessible name; also the tooltip unless `tooltip` replaces or disables it. */
     label: string;
-    icon: IconName | JSX.Element;
+    icon: IconName | Exclude<JSX.Element, string>;
     /** Pass for toggles: the button reports and paints its on state. */
     pressed?: boolean;
     busy?: boolean;
@@ -64,7 +64,7 @@ export function IconButton(props: IconButtonProps) {
       aria-pressed={props.pressed === undefined ? undefined : props.pressed ? "true" : "false"}
       aria-busy={props.busy ? "true" : undefined}
     >
-      {typeof props.icon === "string" ? <Icon name={props.icon as IconName} /> : props.icon}
+      {typeof props.icon === "string" ? <Icon name={props.icon} /> : props.icon}
     </button>
   );
   return props.tooltip === false ? (

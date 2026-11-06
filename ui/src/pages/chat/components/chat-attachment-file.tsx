@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Loading, Show } from "solid-js";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { IconButton } from "../../../components/solid/icon-button.tsx";
+import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";

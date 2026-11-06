@@ -1,6 +1,6 @@
 import { Show } from "solid-js";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { IconButton } from "../../../components/solid/icon-button.tsx";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
 
