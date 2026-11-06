@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
+import type { DecisionBatchV2 } from "../decisions/types-v2.js";
 import { executeOpenAIDecision, type OpenAIDecisionExecution } from "./decisions-openai-runtime.js";
-import type { DecisionBatchV2 } from "./decisions/types-v2.js";
 
 const guard = vi.hoisted(() => ({ fetch: vi.fn() }));
 

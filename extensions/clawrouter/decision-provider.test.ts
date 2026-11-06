@@ -4,7 +4,6 @@ import type { DecisionBatchV2, DecisionProviderContextV2 } from "openclaw/plugin
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildClawRouterDecisionProvider } from "./decision-provider.js";
-import { discardClawRouterErrorBody } from "./decision-provider.runtime.js";
 
 const batch: DecisionBatchV2 = {
   state: { type: "text", text: "Only supplied evidence" },
@@ -249,30 +248,31 @@ it.each(["/v1/catalog", "/v1/native/openai/v1/decisions"])(
   },
 );
 
-it.each(["pending", "rejected"])(
-  "starts %s catalog error-body cancellation without waiting for it to settle",
-  async (settlement) => {
-    const cancel = vi.fn(() =>
-      settlement === "pending"
-        ? new Promise<void>(() => {})
-        : Promise.reject(new Error("synthetic cancellation failure")),
-    );
-    const response = new Response(new ReadableStream({ cancel }), {
-      status: 429,
-      headers: { "retry-after": "2" },
-    });
-    const outcome = await Promise.race([
-      Promise.resolve()
-        .then(() => discardClawRouterErrorBody(response))
-        .then(() => "returned"),
-      new Promise<string>((resolve) => {
-        setTimeout(() => resolve("hung"), 250);
-      }),
-    ]);
-    expect(outcome).toBe("returned");
-    expect(cancel).toHaveBeenCalledOnce();
-  },
-);
+it("classifies a rate-limited catalog when the connection dies mid-body and closes its transport", async () => {
+  const closed = Promise.withResolvers<void>();
+  await fixture(
+    async (origin, seen) => {
+      expect(await evaluate(origin)).toEqual({
+        status: "unavailable",
+        reason: "rate-limited",
+        retryAfterMs: 2000,
+      });
+      await closed.promise;
+      expect(seen.map(({ path }) => path)).toEqual(["/v1/catalog"]);
+    },
+    (path, response) => {
+      if (path === "/v1/catalog") {
+        response.statusCode = 429;
+        response.setHeader("retry-after", "2");
+        response.on("close", () => closed.resolve());
+        response.write("synthetic-router-key private evidence");
+        response.socket.destroy();
+      } else {
+        response.end(JSON.stringify(catalog()));
+      }
+    },
+  );
+});
 
 it.each(["/v1/catalog", "/v1/native/openai/v1/decisions"])(
   "rejects malformed and credential-reflecting JSON at %s",
