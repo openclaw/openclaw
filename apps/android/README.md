@@ -532,6 +532,27 @@ This app is native Kotlin + Jetpack Compose.
 - For many non-structural code/resource changes: use Android Studio **Apply Changes**.
 - For structural/native/manifest/Gradle changes: do full reinstall (`pnpm android:run`).
 
+## Experimental OpenClaw ID node enrollment
+
+Explicitly paste or scan an `openclaw-node://join` invitation in Gateway setup
+or Add Gateway. Supply the separate **Discovery HTTPS origin** from the owner;
+the app does not infer it from the invitation hostname or relay. Confirm the
+node-only request, then compare the six-digit verification code and declared
+commands/capabilities with the owner's approval screen.
+
+This target connects **only the node session**. It never grants Android chat,
+operator access, embedded Control UI credentials, or a direct WebSocket fallback.
+The existing direct and Cloudflare connection paths remain separate. The node key
+and trust high-water marks use the existing Keystore-backed credential store;
+Forget removes that target's node key. A removed or unadmitted node stops retrying
+and requires a new invitation from the owner.
+
+Native transport packaging is required. A development build without the shared
+native adapter reports that the transport is unavailable rather than dialing the
+logical hostname directly. JNI loading, native keep-alive, ABI packaging,
+Keystore behavior, foreground-service recovery, and the invitation UI require
+Android build/device qualification; pure JVM tests do not establish those claims.
+
 ## Connect / Pair
 
 1. Start the gateway (on your main machine):
