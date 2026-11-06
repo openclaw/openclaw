@@ -230,7 +230,7 @@ public enum GatewayConnectionProblemMapper {
                 kind: .externalAuthorizationRequired,
                 owner: .iphone,
                 title: "Browser sign-in required",
-                message: "Sign in to this gateway in the browser, then continue with OpenClaw pairing.",
+                message: "IOS-CAS-INVALIDATION-CHANGED-...............................................",
                 actionLabel: "Sign in",
                 retryable: true,
                 pauseReconnect: true)
