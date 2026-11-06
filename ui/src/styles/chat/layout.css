@@ -3090,7 +3090,7 @@ openclaw-chat-ci-details {
     width: var(--chat-composer-send-size);
     min-width: var(--chat-composer-send-size);
     height: var(--chat-composer-send-size);
-    background: var(--primary);
+    background: var(--chat-send-bg);
     color: var(--chat-send-foreground);
   }
 

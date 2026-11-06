@@ -21,6 +21,7 @@ import { observeScrollState } from "./scroll-state-observer.ts";
 import { CloudProfileIcon } from "./solid/cloud-profile-icon.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Menu } from "./solid/menu.tsx";
+import { nextRadio, RadioMark } from "./solid/radio.tsx";
 
 registerSessionOrganizationEnglish();
 
@@ -291,26 +292,13 @@ function renderSessionPlacementPicker(
     ) {
       return;
     }
-    if (!["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-      return;
-    }
     const buttons = rows().flatMap((row) => {
       const button = destinationButtons.get(row.key);
       return button?.isConnected && !button.disabled && !button.closest("[inert]") && !button.hidden
         ? [button]
         : [];
     });
-    const index = buttons.findIndex((button) => button === event.target);
-    const next =
-      event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? buttons.length - 1
-          : (index +
-              (event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 1) +
-              buttons.length) %
-            buttons.length;
-    const button = buttons[next];
+    const button = nextRadio(event, buttons);
     const row = rows().find((candidate) => candidate.key === button?.dataset.value);
     if (button && row) {
       event.preventDefault();
@@ -516,7 +504,6 @@ function DestinationGroup(props: {
                     type="button"
                     role="radio"
                     aria-checked={selected() ? "true" : "false"}
-                    aria-pressed={selected() ? "true" : "false"}
                     class="session-move__destination"
                     data-value={row().key}
                     tabindex={props.tabKey === row().key ? 0 : -1}
@@ -554,7 +541,7 @@ function DestinationGroup(props: {
                         {resolveCloudProfileIconData(row().profile).label}
                       </span>
                     </Show>
-                    <span class="session-move__radio" aria-hidden="true" />
+                    <RadioMark checked={selected()} disabled={Boolean(row().disabledReason)} />
                   </button>
                   <Show when={configuration()}>
                     {(renderConfig) => <>{renderConfig()(row().profile!)}</>}

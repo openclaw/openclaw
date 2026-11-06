@@ -3,6 +3,7 @@ import type { SessionBranch } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { nextRadio, RadioMark } from "../../../components/solid/radio.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import "./chat-session-versions-mobile.css";
@@ -91,23 +92,22 @@ export function ChatSessionVersionsMobile(props: ChatSessionVersionsMobileProps)
           aria-describedby={props.branchSwitchDisabledReason ? `${id}-disabled` : undefined}
           aria-busy={props.query.status === "loading" ? "true" : "false"}
           onKeyDown={(event) => {
-            const backward = event.key === "ArrowUp" || event.key === "ArrowLeft";
-            if (!backward && event.key !== "ArrowDown" && event.key !== "ArrowRight") {
-              return;
-            }
-            event.stopPropagation();
-            event.preventDefault();
             const radios = order.ids.flatMap((key) => {
               const button = buttons.get(key);
               return button?.isConnected ? [button] : [];
             });
-            const index = radios.findIndex((radio) => radio === event.target);
-            if (index < 0 || props.branchSwitchDisabledReason) {
+            const next = nextRadio(event, radios);
+            if (!next) {
               return;
             }
-            const next = radios[(index + (backward ? -1 : 1) + radios.length) % radios.length];
-            next?.focus();
-            next?.click();
+            // The sheet must not also scroll or switch panes on these keys.
+            event.stopPropagation();
+            event.preventDefault();
+            if (props.branchSwitchDisabledReason) {
+              return;
+            }
+            next.focus();
+            next.click();
           }}
         >
           <For each={order.ids}>
@@ -144,7 +144,7 @@ export function ChatSessionVersionsMobile(props: ChatSessionVersionsMobileProps)
                         }
                         onClick={() => select(version())}
                       >
-                        <span class="chat-session-versions-mobile__radio" aria-hidden="true" />
+                        <RadioMark checked={version().active} />
                         <span class="chat-session-versions-mobile__copy">
                           <span class="chat-session-versions-mobile__title">
                             {version().headline || t("chat.sessionHeader.untitledBranch")}

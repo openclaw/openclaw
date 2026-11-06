@@ -1,7 +1,7 @@
 # Deep Research
 
-An opt-in bundled research tool. Enable `deep-research` and allow `deep_research`
-in the agent's tool policy. Supply a question; the host selects its configured API model. An explicit model
+A default-enabled, lazy bundled research tool. Existing plugin allowlists and tool policy still apply. Disable it with `plugins.entries.deep-research.enabled: false`.
+Supply a question; the host selects its configured API model. An explicit model
 override requires the existing plugin LLM policy permission. An optional
 `requiredAuthMode: "oauth"` refuses other credential modes through the auth owner.
 The controller uses ordinary `llm.complete` calls and existing policy-checked
@@ -19,3 +19,13 @@ All branches share bounded model/search/fetch call admission and a deadline.
 Token totals are observational, not a hard token or dollar budget. The feature never chooses a fallback provider or account. The host may rotate
 its configured eligible auth profiles; use an authorized `model@profile` override
 to pin one credential owner. Retrieved source text is untrusted.
+
+Jobs, operation receipts, cancellation intent, and results are retained for seven days.
+Use `deep_research` to inspect, resume, cancel, and retrieve a job. Reuse the start
+idempotency key. Recovery reacquires current conversation authority; an unknown
+submission remains indeterminate and is never blindly repeated.
+
+Google managed research is available only when explicitly configured. Its provider
+citations remain provider-attributed, distinct from locally retrieved source text;
+its duration and cost are provider-controlled. See [Deep research](../../docs/tools/deep-research.md)
+for setup, budgets, cancellation, and recovery behavior.
