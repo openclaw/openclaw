@@ -185,9 +185,13 @@ export class TranscriptInitialRange {
     if (this.viewportOnly) {
       return this.normalRange({ ...range, overscan: 0 }, this.rowIndexes);
     }
-    // Arriving rows can shrink their estimates on either side of the viewport.
-    // Keep both neighbours, including during jumps, until their sizes settle.
-    return this.normalRange(range, this.rowIndexes);
+    // Start lookahead with reader motion, before the first large step can expose
+    // unpainted rows. Keep both sides while arriving row estimates settle.
+    const moving = this.isReaderMoving();
+    return this.normalRange(
+      moving ? { ...range, overscan: Math.max(6, range.overscan) } : range,
+      this.rowIndexes,
+    );
   }
 
   private endIndexes(): number[] {
@@ -326,6 +330,7 @@ export class TranscriptInitialRange {
   }
 
   recordReaderMovement(delta: number): void {
+    const starting = !this.isReaderMoving();
     this.idleStep = 1;
     this.idleMeasureStep = 1;
     const now = performance.now();
@@ -337,6 +342,11 @@ export class TranscriptInitialRange {
       direction: Math.sign(delta),
     };
     this.finish();
+    if (starting) {
+      // Motion changes overscan even when the visible row indexes stay put.
+      this.refresh();
+      this.invalidate();
+    }
   }
 
   readonly measureElement = (
