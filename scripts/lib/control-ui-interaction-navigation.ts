@@ -82,7 +82,7 @@ export async function scrollTranscriptToTop(page: Page) {
       }
       await page.mouse.wheel(0, -distance);
       await page.waitForFunction(
-        ({ selector, previous }) => document.querySelector(selector)!.scrollTop < previous,
+        (position) => document.querySelector(position.selector)!.scrollTop < position.previous,
         { selector, previous },
       );
     }
@@ -92,7 +92,7 @@ export async function scrollTranscriptToTop(page: Page) {
   }
   await thread.getByText("Transcript 0 message 0.", { exact: false }).waitFor();
   await page.waitForFunction(
-    (selector) => document.querySelector(selector)?.scrollTop === 0,
+    (query) => document.querySelector(query)?.scrollTop === 0,
     selector,
   );
   await frames(page);
