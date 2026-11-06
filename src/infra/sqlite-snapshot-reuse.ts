@@ -101,9 +101,7 @@ function readSource(
       ].join("|"),
       main,
       newestMs: Math.max(Number(main.mtimeMs), Number(frames?.mtimeMs ?? 0)),
-      quiescentMs: [main, frames].some(
-        (stat) => stat && stat.mtimeNs % 1_000_000_000n === 0n,
-      )
+      quiescentMs: [main, frames].some((stat) => stat && stat.mtimeNs % 1_000_000_000n === 0n)
         ? COARSE_CLOCK_QUIESCENT_MS
         : FINE_CLOCK_QUIESCENT_MS,
     };
