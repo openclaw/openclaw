@@ -63,13 +63,17 @@ async function serve(
     await stop(error instanceof KeyFileRefusedError ? TUNNEL_EXIT_KEY_REFUSED : 1);
     return;
   }
-  const endpoint = await binding.bind({
-    secretKey: key,
-    relayUrl: start.relayUrl,
-    alpns: [TUNNEL_ALPN_BYTES],
-    ...(start.bindAddr ? { bindAddr: start.bindAddr } : {}),
-  });
-  key.fill(0);
+  let endpoint: IrohEndpoint;
+  try {
+    endpoint = await binding.bind({
+      secretKey: key,
+      relayUrl: start.relayUrl,
+      alpns: [TUNNEL_ALPN_BYTES],
+      ...(start.bindAddr ? { bindAddr: start.bindAddr } : {}),
+    });
+  } finally {
+    key.fill(0);
+  }
   owned.endpoint = endpoint;
   if (owned.stopping) {
     // The Gateway left while the endpoint was binding: close it instead of serving.
