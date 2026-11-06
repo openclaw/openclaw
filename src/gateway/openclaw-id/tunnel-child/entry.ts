@@ -22,6 +22,31 @@ function send(message: TunnelToGatewayMessage): void {
   process.send?.(message);
 }
 
+// What this child owns. stop() closes it so Node exits on its own.
+const owned: { endpoint?: IrohEndpoint; server?: IngressServer; stopping: boolean } = {
+  stopping: false,
+};
+
+// Ends the child without forcing termination (nodejs/node#64274): records the exit
+// status, closes the endpoint and its connections, then releases the IPC channel, whose
+// message and disconnect listeners are the last things keeping the event loop alive.
+async function stop(code: number): Promise<void> {
+  if (owned.stopping) {
+    return;
+  }
+  owned.stopping = true;
+  process.exitCode = code;
+  try {
+    await (owned.server ? owned.server.shutdown() : owned.endpoint?.close());
+  } finally {
+    process.removeAllListeners("message");
+    process.removeAllListeners("disconnect");
+    if (process.connected) {
+      process.disconnect?.();
+    }
+  }
+}
+
 // Binds the endpoint, announces ready and serves until the endpoint closes.
 async function serve(
   binding: IrohBinding,
@@ -35,7 +60,8 @@ async function serve(
   } catch (error) {
     // SAFETY: loadOrCreateEndpointKey throws only Error instances (fs errors and KeyFileRefusedError).
     log(`key refused: ${(error as Error).message}`);
-    process.exit(error instanceof KeyFileRefusedError ? TUNNEL_EXIT_KEY_REFUSED : 1);
+    await stop(error instanceof KeyFileRefusedError ? TUNNEL_EXIT_KEY_REFUSED : 1);
+    return;
   }
   const endpoint = await binding.bind({
     secretKey: key,
@@ -44,6 +70,12 @@ async function serve(
     ...(start.bindAddr ? { bindAddr: start.bindAddr } : {}),
   });
   key.fill(0);
+  owned.endpoint = endpoint;
+  if (owned.stopping) {
+    // The Gateway left while the endpoint was binding: close it instead of serving.
+    await endpoint.close();
+    return;
+  }
   const server = new IngressServer({
     endpoint,
     target: { socketPath: start.ingress.socketPath },
@@ -77,7 +109,10 @@ async function serve(
   };
   takeOver(handle);
 
-  installShutdown(server);
+  owned.server = server;
+  // SIGTERM/SIGINT close connections with `shutdown` and the endpoint, then exit 0.
+  process.on("SIGTERM", () => void stop(0));
+  process.on("SIGINT", () => void stop(0));
   const endpointId = endpoint.id();
   log(`iroh tunnel up: server=${logFingerprint(endpointId)} key=${created ? "created" : "loaded"}`);
   send({
@@ -109,32 +144,18 @@ function followHomeRelay(endpoint: IrohEndpoint, onChange: (state: RelayState) =
   });
 }
 
-// SIGTERM/SIGINT: close connections with `shutdown` and the endpoint, then exit 0.
-// A lost IPC channel means the Gateway died: exit so no orphan holds the key and socket.
-function installShutdown(server: IngressServer): void {
-  let stopping = false;
-  const stop = async () => {
-    if (stopping) {
-      return;
-    }
-    stopping = true;
-    await server.shutdown();
-    process.exit(0);
-  };
-  process.on("SIGTERM", () => void stop());
-  process.on("SIGINT", () => void stop());
-  process.on("disconnect", () => void stop());
-}
-
 function main(): void {
   let binding: IrohBinding;
   try {
     binding = loadIrohBinding();
   } catch (error) {
     log(error instanceof Error ? error.message : String(error));
-    process.exit(TUNNEL_EXIT_UNAVAILABLE);
+    // Nothing is open yet, so setting the status lets the child exit.
+    process.exitCode = TUNNEL_EXIT_UNAVAILABLE;
+    return;
   }
-  process.on("disconnect", () => process.exit(0));
+  // A lost IPC channel means the Gateway died: stop so no orphan holds the key and socket.
+  process.on("disconnect", () => void stop(0));
   // Messages that arrive before the server is up are replayed to it in order.
   const pending: GatewayToTunnelMessage[] = [];
   let handler: ((message: GatewayToTunnelMessage) => void) | undefined;
@@ -155,7 +176,7 @@ function main(): void {
     started = true;
     serve(binding, message, takeOver).catch((error: unknown) => {
       log(`fatal: ${(error instanceof Error ? error.message : String(error)).split("\n")[0]}`);
-      process.exit(1);
+      void stop(1);
     });
   });
 }
