@@ -14,6 +14,8 @@ export type NodeHostOpenClawIdTarget = {
   pin: ClawPin & { claw_id: string };
   evidence: BindingEvidence;
   relayUrl: string;
+  /** Deployment-selected routing; never derived from hostname or relay. */
+  discoveryUrl?: string;
 };
 
 export function parseNodeHostOpenClawIdTarget(value: unknown): NodeHostOpenClawIdTarget {
@@ -43,6 +45,25 @@ export function parseNodeHostOpenClawIdTarget(value: unknown): NodeHostOpenClawI
   ) {
     throw new Error("invalid OpenClaw ID relay URL");
   }
+  let discoveryUrl: string | undefined;
+  if (value.discoveryUrl !== undefined) {
+    const discovery = typeof value.discoveryUrl === "string" ? URL.parse(value.discoveryUrl) : null;
+    const localHttp =
+      discovery?.protocol === "http:" &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(discovery.hostname);
+    if (
+      !discovery ||
+      (!localHttp && discovery.protocol !== "https:") ||
+      discovery.username ||
+      discovery.password ||
+      discovery.pathname !== "/" ||
+      discovery.search ||
+      discovery.hash
+    ) {
+      throw new Error("invalid OpenClaw ID Discovery origin");
+    }
+    discoveryUrl = discovery.origin;
+  }
   const binding = parseStatement(value.evidence.binding, "ServerBinding");
   if (!binding.ok) {
     throw new Error("invalid OpenClaw ID ServerBinding");
@@ -56,5 +77,6 @@ export function parseNodeHostOpenClawIdTarget(value: unknown): NodeHostOpenClawI
     },
     evidence: { root_pub: value.evidence.root_pub, binding: binding.statement },
     relayUrl: relay.href,
+    ...(discoveryUrl ? { discoveryUrl } : {}),
   };
 }

@@ -472,6 +472,13 @@ sequence, signed ServerBinding, and relay hint. The node verifies the binding an
 dials only its `K_srv`; a failed tunnel never falls back to a direct WebSocket.
 IP transports remain enabled so iroh can establish a direct encrypted path.
 
+The public target can also retain `discoveryUrl`, the deployment-selected Discovery
+API origin for future enrollment and descriptor refresh. It is never inferred from
+the claw hostname or relay URL. This transport-only preview does not select a
+Discovery default or implement `node join`; enrollment will resolve the configured
+origin and `--discovery-url` override. The origin must use HTTPS (HTTP is allowed
+only for localhost testbeds), without credentials, a path, query, or fragment.
+
 The node's iroh secret key is generated locally and stored separately at
 `$OPENCLAW_STATE_DIR/node-openclaw-id/endpoint.key` (32 bytes, mode `0600`). It is
 not a Gateway token and is never written into configuration or worker descriptors.
