@@ -5,13 +5,17 @@ import { markdownInlineChildren } from "./markdown-text-replacements.ts";
 
 /** Local catalog links retain a useful route when opened outside the chat surface. */
 export function markdownTemplatePackage(raw: string, basePath?: string): string | null {
-  const url = URL.parse(raw, globalThis.location.href);
-  if (!url || url.origin !== globalThis.location.origin || url.search || url.hash) {
+  const location = globalThis.location;
+  if (!location) {
+    return null;
+  }
+  const url = URL.parse(raw, location.href);
+  if (!url || url.origin !== location.origin || url.search || url.hash) {
     return null;
   }
   return templateCatalogPackageNameFromPath(
     url.pathname,
-    basePath ?? resolveControlUiPaths(globalThis.location.pathname)[0],
+    basePath ?? resolveControlUiPaths(location.pathname)[0],
   );
 }
 

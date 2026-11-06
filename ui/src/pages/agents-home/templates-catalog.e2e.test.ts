@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vites
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
@@ -379,6 +380,13 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await shell.getByRole("button", { name: /Plugins/ }).waitFor();
     expect(await shell.boundingBox()).toEqual(bounds);
     expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
+    await evaluateControlUiContext(page, (app) => app.navigateAndWait("templates"));
+    await modal.waitFor({ state: "hidden" });
+    await evaluateControlUiContext(page, (app) =>
+      app.navigateAndWait("chat", { pathname: "/chat/main" }),
+    );
+    await page.locator("a.markdown-template-link:visible").waitFor();
+    expect(await modal.count()).toBe(0);
   });
 
   it("distinguishes an empty catalog from no matching templates", async () => {

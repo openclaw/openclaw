@@ -1,12 +1,24 @@
-import { createMemo, createUniqueId, Errored, lazy, Loading, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  createUniqueId,
+  Errored,
+  lazy,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { ApplicationContext } from "../app/context.ts";
 import { registerTemplatesEnglish } from "../i18n/locales/en-templates.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { createTimeout } from "../lib/reactive/timers.ts";
 import { TemplateArtwork } from "../pages/agents-home/template-artwork.tsx";
 import { searchTemplates } from "../pages/agents-home/templates-catalog-client.ts";
+import { markdownTemplatePackage } from "./markdown-template-links.ts";
 import { Popover } from "./solid/popover.tsx";
-import type { TemplateReference } from "./template-reference-surface.tsx";
+import type { TemplateReference, TemplateReferenceSource } from "./template-reference-surface.tsx";
 import "../styles/template-reference.css";
 
 registerEnglishCatalog(registerTemplatesEnglish);
@@ -15,26 +27,84 @@ const TemplateDialog = lazy(() => import("../pages/agents-home/templates-catalog
 });
 
 export function TemplateReferenceView(props: {
-  application?: ApplicationContext;
-  active: TemplateReference | null;
-  preview: TemplateReference | null;
+  presented: boolean;
+  source: TemplateReferenceSource;
+  intent: TemplateReference;
   onDismiss: () => void;
-  onKeep: () => void;
-  onLeave: () => void;
-  onOpen: (value: TemplateReference) => void;
-  onClose: () => void;
 }) {
+  const current = () =>
+    props.presented &&
+    props.intent.client === props.source().gatewayClient &&
+    props.intent.sessionKey === props.source().sessionKey;
+  return (
+    <Show when={current() && props.source().applicationContext}>
+      {(application) => (
+        <ScopedTemplateReferenceView
+          application={application()}
+          intent={props.intent}
+          onDismiss={props.onDismiss}
+        />
+      )}
+    </Show>
+  );
+}
+
+function ScopedTemplateReferenceView(props: {
+  application: ApplicationContext;
+  intent: TemplateReference;
+  onDismiss: () => void;
+}) {
+  const [opened, setOpened] = createSignal<TemplateReference | null>(null);
+  // A click is an opening command, not hover state; leaving must not close its modal.
+  onSettled(() => {
+    if (props.intent.type === "click") {
+      setOpened(props.intent);
+    }
+  });
+  const preview = () => (props.intent.type === "click" ? props.intent : opened());
+  const close = createTimeout(() => {
+    if (!preview()) {
+      props.onDismiss();
+    }
+  }, 180);
+  // Hover/leave commands do not replace the card or repeat its catalog read.
+  const target = createMemo(() => props.intent, {
+    equals: (a, b) =>
+      a.anchor === b.anchor && a.client === b.client && a.sessionKey === b.sessionKey,
+  });
+  // These listeners only exist while a reference is mounted, never at chat boot.
+  onSettled(() => {
+    const initialAnchor = target().anchor;
+    const leave = () => close.schedule();
+    const enter = () => close.cancel();
+    const stops = [
+      listen(initialAnchor, "pointerleave", leave),
+      listen(initialAnchor, "focusout", leave),
+      listen(initialAnchor, "pointerenter", enter),
+      listen(initialAnchor, "focusin", enter),
+    ];
+    // A cold lazy load can finish after the pointer already left the initialAnchor.
+    if (!initialAnchor.matches(":hover, :focus")) {
+      leave();
+    }
+    return () => stops.forEach((stop) => stop());
+  });
   const id = createUniqueId();
   return (
     <>
-      <Show when={props.active} keyed>
+      <Show when={!preview() && target()} keyed>
         {(value) => {
-          const entry = createMemo(
-            async () =>
-              (await searchTemplates(value.client, value.packageName, 100)).find(
-                (item) => item.packageName === value.packageName,
-              ) ?? null,
-          );
+          const entry = createMemo(async () => {
+            const packageName = markdownTemplatePackage(
+              value.anchor.href,
+              props.application.basePath,
+            );
+            return packageName
+              ? ((await searchTemplates(value.client, packageName, 100)).find(
+                  (item) => item.packageName === packageName,
+                ) ?? null)
+              : null;
+          });
           return (
             <Popover
               id={id}
@@ -51,10 +121,10 @@ export function TemplateReferenceView(props: {
               class="template-reference-card"
             >
               <div
-                onPointerEnter={() => props.onKeep()}
-                onPointerLeave={() => props.onLeave()}
-                onFocusIn={() => props.onKeep()}
-                onFocusOut={() => props.onLeave()}
+                onPointerEnter={() => close.cancel()}
+                onPointerLeave={() => close.schedule(180)}
+                onFocusIn={() => close.cancel()}
+                onFocusOut={() => close.schedule(180)}
               >
                 <Errored fallback={() => <p role="status">{t("templatesCatalog.unavailable")}</p>}>
                   <Loading fallback={<p role="status">{t("templatesCatalog.loading")}</p>}>
@@ -86,7 +156,7 @@ export function TemplateReferenceView(props: {
                 <button
                   type="button"
                   class="btn template-reference-card__view"
-                  onClick={() => props.onOpen(value)}
+                  onClick={() => setOpened(value)}
                 >
                   {t("templatesCatalog.viewTemplate")}
                 </button>
@@ -95,13 +165,24 @@ export function TemplateReferenceView(props: {
           );
         }}
       </Show>
-      <Show when={props.preview && props.application} keyed>
+      <Show when={preview() && props.application} keyed>
         {(application) => (
           <ApplicationProvider value={application}>
             <TemplateDialog
-              initialPackageName={props.preview!.packageName}
+              initialPackageName={markdownTemplatePackage(
+                preview()!.anchor.href,
+                props.application?.basePath,
+              )!}
               modal
-              onClose={() => props.onClose()}
+              onClose={() => {
+                const anchor = preview()?.anchor;
+                props.onDismiss();
+                onSettled(() => {
+                  if (anchor?.isConnected) {
+                    anchor.focus({ preventScroll: true });
+                  }
+                });
+              }}
             />
           </ApplicationProvider>
         )}
