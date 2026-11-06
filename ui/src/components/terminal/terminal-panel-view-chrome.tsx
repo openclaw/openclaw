@@ -26,7 +26,7 @@ export function TerminalPanelHostedActions(props: {
         <openclaw-tooltip prop:content={t("terminal.dockBottom")}>
           <button
             ref={nativeListener("click", () => props.view().onDock("bottom"))}
-            class="rail-header__action"
+            class="oc-icon-button oc-icon-button--28 rail-header__action"
             type="button"
             aria-label={t("terminal.dockBottom")}
             disabled={props.view().dockDisabled}
@@ -293,7 +293,7 @@ export function Actions(props: { state: TerminalPanelViewState; dialogId: string
             <button
               ref={(element) => props.state.picker.triggerRef(element)}
               class={
-                props.state.picker.hosted ? "rail-header__action" : "rail-header__action tp-icon"
+                props.state.picker.hosted ? "oc-icon-button oc-icon-button--28 rail-header__action" : "oc-icon-button oc-icon-button--28 rail-header__action tp-icon"
               }
               type="button"
               title={props.state.picker.hosted ? undefined : t("terminal.sessions")}

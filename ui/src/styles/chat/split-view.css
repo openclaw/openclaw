@@ -504,7 +504,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   display: flex;
 }
 
-.chat-header-session-menu__trigger > .oc-menu-item__label {
+.chat-pane__header--mobile .chat-header-session-menu__trigger > .oc-menu-item__label {
   display: flex;
   align-items: center;
   justify-content: center;

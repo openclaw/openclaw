@@ -6,6 +6,7 @@ import {
 } from "../../app/stale-chunk-reload.ts";
 import { registryFor } from "../../components/overlay-registry.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import "../../styles/chat/mobile-host.css";
@@ -145,7 +146,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
                   <header class="rail-header">
                     <strong>{definition().label}</strong>
                     <button
-                      class="rail-header__action"
+                      class="oc-icon-button oc-icon-button--28 rail-header__action"
                       type="button"
                       aria-label={t("chat.sidebarColumns.close", { panel: definition().label })}
                       onClick={() => props.callbacks.closeSlot(panel().slot)}
@@ -323,17 +324,14 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
       </div>
       <Show when={props.externalPanelsToggle}>
         <div class="sidebar-region__panels-toggle">
-          <openclaw-tooltip prop:content={t("chat.sessionHeader.panels")}>
-            <button
-              type="button"
-              class="btn btn--ghost btn--icon chat-icon-btn chat-pane__panels-toggle"
-              aria-label={t("chat.sessionHeader.panels")}
-              aria-expanded={sideVisible() ? "true" : "false"}
-              onClick={() => props.callbacks.setOpen(!sideVisible())}
-            >
-              <Icon name={sideVisible() ? "sessionPanelsActive" : "sessionPanels"} />
-            </button>
-          </openclaw-tooltip>
+          <IconButton
+            size={28}
+            class="chat-pane__panels-toggle"
+            label={t("chat.sessionHeader.panels")}
+            icon={sideVisible() ? "sessionPanelsActive" : "sessionPanels"}
+            aria-expanded={sideVisible() ? "true" : "false"}
+            onClick={() => props.callbacks.setOpen(!sideVisible())}
+          />
         </div>
       </Show>
       <div

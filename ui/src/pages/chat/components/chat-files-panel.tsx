@@ -192,7 +192,7 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
     const browseClick = nativeListener("click", showBrowser);
     <button
       ref={[(element) => (browseAction = element), browseClick]}
-      class="rail-header__action"
+      class="oc-icon-button oc-icon-button--28 rail-header__action"
       type="button"
       aria-label={t("chat.sidePanel.files")}
       title={t("chat.sidePanel.files")}
