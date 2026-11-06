@@ -854,7 +854,7 @@ suite.define(() => {
             event.scenario === "expiry-restoration",
         );
         expect(calls).toHaveLength(1);
-        await browser.close();
+        await suite.closeBrowserContext(browser);
         console.log("MCP expiry proof:", proofDir);
       },
     });
