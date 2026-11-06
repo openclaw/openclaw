@@ -3,6 +3,7 @@ import type { Agent, AfterToolCallContext } from "openclaw/plugin-sdk/agent-core
 import { describe, expect, it, vi } from "vitest";
 import {
   commitInternalToolTurnInput,
+  getInternalToolSteeringAllowance,
   getInternalToolTurnCompletion,
   getInternalToolTurnInputScope,
 } from "../../../../packages/agent-core/src/internal-hooks.js";
@@ -29,7 +30,10 @@ function fixture(
   const previousAfterToolCall = previous
     ? vi.fn(typeof previous === "function" ? previous : async () => structuredClone(previous))
     : undefined;
-  const agent = { afterToolCall: previousAfterToolCall } as unknown as Agent;
+  const agent = {
+    state: { tools: [] },
+    afterToolCall: previousAfterToolCall,
+  } as unknown as Agent;
   const onDeliveredSourceReply = vi.fn();
   installMessageToolTerminalHook({ agent, ...route, onDeliveredSourceReply });
   return {
@@ -275,6 +279,45 @@ describe("message-tool-only source replies", () => {
       },
     });
     expect(f.onDeliveredSourceReply.mock.calls.length > 0).toBe(expected);
+  });
+
+  it("reinstalls the source-reply allowance on refreshed tools without stacking hooks", () => {
+    const originalMessageTool = { name: "message" } as Agent["state"]["tools"][number];
+    const agent = { state: { tools: [originalMessageTool] } } as unknown as Agent;
+    const refreshSteeringAllowance = installMessageToolTerminalHook({
+      agent,
+      sourceReplyDeliveryMode: "message_tool_only",
+      config: {},
+      currentProvider: "test-channel",
+      currentAccountId: "account-1",
+      currentChannelId: "chat123",
+      currentThreadId: "thread-1",
+      sessionKey: "agent:main:test-channel:chat123",
+    } as Parameters<typeof installMessageToolTerminalHook>[0] & {
+      config: object;
+      currentProvider: string;
+      currentAccountId: string;
+      currentChannelId: string;
+      currentThreadId: string;
+      sessionKey: string;
+    });
+    const afterToolCall = agent.afterToolCall;
+    const refreshedMessageTool = { name: "message" } as Agent["state"]["tools"][number];
+    agent.state.tools = [refreshedMessageTool];
+
+    refreshSteeringAllowance();
+
+    expect(agent.afterToolCall).toBe(afterToolCall);
+    expect(
+      getInternalToolSteeringAllowance(refreshedMessageTool)?.({
+        action: "send",
+        channel: "test-channel",
+        accountId: "account-1",
+        target: "chat123",
+        threadId: "thread-1",
+        message: "explicit reply",
+      }),
+    ).toBe(true);
   });
 
   it("preserves a committed final source reply when later presentation fails", async () => {
