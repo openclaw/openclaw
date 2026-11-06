@@ -306,6 +306,9 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(chrome.launch).toHaveBeenCalledTimes(3);
     expect(chrome.stop).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(30_000);
+    // The cooldown window is measured on the monotonic clock, so rolling the wall
+    // clock back must not keep the retry blocked while the window has expired.
+    vi.setSystemTime(new Date(Date.now() - 60_000));
     await expect(cooledDown.ensureBrowserAvailable()).rejects.toThrow("Failed to start Chrome CDP");
     expect(chrome.launch).toHaveBeenCalledTimes(4);
   });

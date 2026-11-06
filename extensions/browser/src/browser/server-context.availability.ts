@@ -109,7 +109,7 @@ function recordManagedLaunchFailure(profileState: ProfileRuntimeState, err: unkn
     consecutiveFailures >= MANAGED_LAUNCH_FAILURE_THRESHOLD
       ? Math.min(MANAGED_LAUNCH_COOLDOWN_MAX_MS, MANAGED_LAUNCH_COOLDOWN_BASE_MS * 2 ** exponent)
       : 0;
-  const now = Date.now();
+  const now = performance.now();
   profileState.managedLaunchFailure = {
     consecutiveFailures,
     ...(cooldownMs > 0 ? { cooldownUntil: now + cooldownMs } : {}),
@@ -124,7 +124,7 @@ function assertManagedLaunchNotCoolingDown(profileName: string, profileState: Pr
     return;
   }
   const cooldownUntil = failure.cooldownUntil ?? 0;
-  const remainingMs = cooldownUntil - Date.now();
+  const remainingMs = cooldownUntil - performance.now();
   if (remainingMs <= 0) {
     return;
   }
