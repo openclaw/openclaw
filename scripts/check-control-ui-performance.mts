@@ -54,10 +54,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Generated-name-normalized main measurement plus 64 B toolchain headroom.
-  // Retired copy, browser fallbacks, and unused initializers: measured head plus 64 B.
+  // Normalized measurements: retain the tighter Chat cap; New Session has 64 B headroom.
   chatBootJsGzipBytes: 1_288_098,
-  newBootJsGzipBytes: 797_539,
+  newBootJsGzipBytes: 797_241,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -67,13 +66,13 @@ const controlUiPerformanceBudgets = {
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
   // Normalized shared application chunk plus 64 B toolchain headroom.
-  largestJsGzipBytes: 560_350,
+  largestJsGzipBytes: 560_283,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
   // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
   totalCssGzipBytes: 324_684,
-  totalCssRawBytes: 1_675_382,
+  totalCssRawBytes: 1_675_356,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

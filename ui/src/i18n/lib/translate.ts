@@ -275,7 +275,7 @@ export const i18n = new I18nManager();
 export const t = (key: string, params?: Record<string, string>) => i18n.t(key, params);
 export const translateActive = (key: string) => i18n.translateActive(key);
 
-if (typeof process !== "undefined" && (process.env?.VITEST || process.env?.NODE_ENV === "test")) {
+if (import.meta.env?.MODE === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.i18nManagerTestApi")] = {
     createI18nManager() {
       return new I18nManager();

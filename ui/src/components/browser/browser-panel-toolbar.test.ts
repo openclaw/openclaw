@@ -3,6 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { NativeBrowserMessage, NativeBrowserTab } from "../../app/native-browser-bridge.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
+import { stubResizeObserver } from "../../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "../panel-hosted-tabs.ts";
@@ -270,7 +271,7 @@ describe("Browser recovery", () => {
       configurable: true,
       value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
     });
-    vi.stubGlobal("ResizeObserver", undefined);
+    stubResizeObserver();
   });
 
   afterEach(() => {
