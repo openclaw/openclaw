@@ -128,8 +128,6 @@ export async function readGitHubPublicationReadiness(
     observation = unavailable(source.cause);
   }
   const remedies: SessionGitHubReadinessResult["remedies"] = [];
-  // Unbound publication custody is normal before workspace preparation. It does
-  // not require changing sessions or establish whether local work is allowed.
   if (
     observation.custody.kind === "changed" ||
     observation.custody.kind === "archived" ||
