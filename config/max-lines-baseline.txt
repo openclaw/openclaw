@@ -313,7 +313,6 @@ src/gateway/session-reset-service.ts
 src/gateway/session-utils.test.ts
 src/gateway/sessions-patch.test.ts
 src/gateway/talk/handlers/index.test.ts
-src/gateway/talk/handlers/index.ts
 src/gateway/talk/relay/index.test.ts
 src/gateway/test-helpers.server.ts
 src/gateway/watch-node-http.ts

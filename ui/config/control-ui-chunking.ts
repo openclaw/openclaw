@@ -197,11 +197,23 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "deferred-ui-support";
     case "ui/src/components/mcp-app-catalog.tsx":
     case "ui/src/lib/mcp-app-catalog.ts":
+    case "ui/src/components/mcp-app-security.ts":
+    case "ui/src/lib/mcp-app-message-content.ts":
+    case "ui/src/lib/protocol-validators.generated/board.js":
+    case "ui/src/lib/board/provider.ts":
+    case "ui/src/lib/board/gateway-provider.ts":
+    case "ui/src/lib/board/provider-helpers.ts":
+    case "ui/src/lib/board/provider-signals.ts":
+    case "ui/src/lib/board/mcp-app-view-cache.ts":
+    case "ui/src/lib/board/widget-names.ts":
+    case "ui/src/lib/board/widget-ticket-lifetime.ts":
     case "ui/src/i18n/locales/en-mcp-app.ts":
+    case "ui/src/lib/reactive/format.ts":
+    case "ui/src/lib/permission-error.ts":
+    case "ui/src/i18n/locales/en-permission-errors.ts":
     case "ui/src/components/mcp-app-launch.ts":
     case "ui/src/lib/sessions/session-create-params.ts":
-    case "packages/gateway-protocol/src/question-media.ts":
-      // Shared catalogs and session parameters must not pull Chat into other routes.
+      // Shared Board/MCP owners, catalogs, and labels must not load Chat's styles on other routes.
       return "deferred-ui-support";
     case "ui/src/lib/page-request.ts":
     case "ui/src/lib/checkout-snapshot.ts":
@@ -441,6 +453,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown.ts":
     case "ui/src/components/github-link-target.ts":
     case "ui/src/components/markdown-assistant-transcript.ts":
+    case "ui/src/components/markdown-block-presentation.ts":
     case "ui/src/components/markdown-code-blocks.ts":
     case "ui/src/components/markdown-copy.ts":
     case "ui/src/components/markdown-details.ts":

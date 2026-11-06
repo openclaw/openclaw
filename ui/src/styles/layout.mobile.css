@@ -235,7 +235,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   text-decoration: none;
 }
 
-:is(.mobile-header__retry, .mobile-header__machine) {
+.mobile-header__retry,
+.mobile-header__machine {
   cursor: var(--cursor-action);
   pointer-events: auto;
 }

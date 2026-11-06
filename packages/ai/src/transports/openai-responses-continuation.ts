@@ -211,6 +211,29 @@ function normalizeAssistantReplayInput(
     ) {
       return item;
     }
+    // Unchanged frozen wire items can reuse their JSON projection. Mutable/opaque
+    // inputs still need rest-copy semantics (getters, prototypes and omitted fields).
+    if (
+      !fromResponse &&
+      getAiTransportHost().immutableData?.isDeeplyFrozenPlainData(item) &&
+      !("id" in item) &&
+      !("status" in item) &&
+      !("toJSON" in item) &&
+      (!("call_id" in item) ||
+        (Object.prototype.propertyIsEnumerable.call(item, "call_id") &&
+          canonicalizeToolCallId(item.call_id, undefined) === item.call_id)) &&
+      (item.type !== "message" ||
+        !Array.isArray(item.content) ||
+        (!("toJSON" in item.content) &&
+          item.content.every(
+            (part) =>
+              !isRecord(part) ||
+              part.type !== "output_text" ||
+              (!("annotations" in part) && !("logprobs" in part) && !("toJSON" in part)),
+          )))
+    ) {
+      return item;
+    }
     const { id: rawId, status: _status, ...stableItem } = item;
     if (item.type === "function_call_output") {
       // Output ID and status affect replayed input; keep them in the prefix comparison.
@@ -246,8 +269,16 @@ function normalizeAssistantReplayInput(
 }
 
 // Compare tool results by their uniquely identified call occurrence, not a lossy ID alias.
-function normalizeContinuationHistory(input: readonly unknown[]): unknown[] | undefined {
+type NormalizedContinuationHistory = {
+  items: unknown[];
+  callOwners: Map<number, object>;
+};
+
+function normalizeContinuationHistory(
+  input: readonly unknown[],
+): NormalizedContinuationHistory | undefined {
   const normalized = normalizeAssistantReplayInput(input);
+  const callOwners = new Map<number, object>();
   const calls = responseToolCalls(input);
   const ownerByReplayShape = toolCallOwnerByReplayShape(calls);
   let callIndex = 0;
@@ -256,6 +287,7 @@ function normalizeContinuationHistory(input: readonly unknown[]): unknown[] | un
     if (!isRecord(item) || !isRecord(normalizedItem)) {
       continue;
     }
+    let callId: object;
     if (item.type === "function_call") {
       if (typeof normalizedItem.call_id !== "string") {
         return undefined;
@@ -264,23 +296,44 @@ function normalizeContinuationHistory(input: readonly unknown[]): unknown[] | un
       if (callOwner !== callIndex) {
         return undefined;
       }
-      normalizedItem.call_id = { callOwner };
+      callId = { callOwner };
       callIndex += 1;
+    } else if (item.type === "function_call_output" && typeof item.call_id === "string") {
+      const owner = ownerByReplayShape.get(item.call_id);
+      if (owner === null) {
+        return undefined;
+      }
+      callId =
+        owner === undefined
+          ? { unknownCallId: canonicalizeToolCallId(item.call_id, undefined) }
+          : { callOwner: owner };
+    } else {
       continue;
     }
-    if (item.type !== "function_call_output" || typeof item.call_id !== "string") {
-      continue;
+    if (normalizedItem === item && !("toJSON" in normalized)) {
+      callOwners.set(index, callId);
+    } else {
+      const ownedItem = normalizedItem === item ? { ...normalizedItem } : normalizedItem;
+      ownedItem.call_id = callId;
+      normalized[index] = ownedItem;
     }
-    const owner = ownerByReplayShape.get(item.call_id);
-    if (owner === null) {
-      return undefined;
-    }
-    normalizedItem.call_id =
-      owner === undefined
-        ? { unknownCallId: canonicalizeToolCallId(item.call_id, undefined) }
-        : { callOwner: owner };
   }
-  return normalized;
+  return { items: normalized, callOwners };
+}
+
+function projectContinuationHistory(history: NormalizedContinuationHistory): unknown {
+  const projected = projectJsonObject(history.items);
+  // Immutable tool sources project before replacing their call IDs. Copy the cached
+  // projection so call ownership remains request-local and cannot poison later comparisons.
+  if (Array.isArray(projected)) {
+    for (const [index, callId] of history.callOwners) {
+      const item: unknown = projected[index];
+      if (isRecord(item)) {
+        projected[index] = { ...item, call_id: callId };
+      }
+    }
+  }
+  return projected;
 }
 
 export function responsesContinuationRequestFingerprint(
@@ -483,7 +536,10 @@ export function resolveResponsesContinuationRequest(
     if (
       normalizedPrevious === undefined ||
       normalizedCurrent === undefined ||
-      !jsonValuesEqual(normalizedCurrent, normalizedPrevious)
+      !isDeepStrictEqual(
+        projectContinuationHistory(normalizedCurrent),
+        projectContinuationHistory(normalizedPrevious),
+      )
     ) {
       return { request, continuationStatus: "history_changed" };
     }

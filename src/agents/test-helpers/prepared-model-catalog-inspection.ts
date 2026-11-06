@@ -18,6 +18,8 @@ export type CatalogInspectionTask = Omit<PreparedModelCatalogWorkerTask, "value"
     expectedCredential?: string;
     failCatalog?: boolean;
     copyProbePath?: string;
+    observeConfigSnapshots?: boolean;
+    collectConfigCaptures?: boolean;
   };
 };
 
@@ -33,6 +35,13 @@ export type CatalogInspection = {
   authoredRef?: ReturnType<typeof getAuthoredConfigSecretRef>;
   resolvedEnvRef?: ReturnType<typeof getAuthoredConfigSecretRef>;
   plans: Array<Awaited<ReturnType<typeof planOpenClawModelsJsonSourceWithInput>>>;
+  configSnapshots?: Array<{
+    id: number;
+    frozen: boolean;
+    valuesMatchRequest: boolean;
+    factsMatchRequest: boolean;
+  }>;
+  configCaptureCollection?: { live: number[]; controlCollected: boolean };
 };
 
 export function createCatalogInspectionPool(env: NodeJS.ProcessEnv) {

@@ -15,6 +15,7 @@ export type GatewayAuthenticatedUserProfile = {
 
 export type RemoteIngressPrincipalSnapshot = Readonly<{
   bindingId: string;
+  recoverySource?: Readonly<{ pluginId: string; audienceId: string; recoveryId: string }>;
   authenticatedUserProfile: GatewayAuthenticatedUserProfile;
   preparedSessionProfile: UserProfileIdentity;
   operatorRoleActor: GatewayOperatorRoleActor;

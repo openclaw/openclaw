@@ -3497,16 +3497,14 @@ select.data-table-pagination__size {
 }
 
 /* Sidebar numbers stay tabular so counts and elapsed times hold their column. */
-:is(
-  .session-row-badge,
-  .session-row-trail,
-  .sidebar-child-session-toggle__count,
-  .sidebar-session-group-count,
-  .sidebar-agent-roster__unread,
-  .sidebar-issues-button__count,
-  .viewer-avatar--overflow,
-  .sidebar-session-tree__show-more
-) {
+.session-row-badge,
+.session-row-trail,
+.sidebar-child-session-toggle__count,
+.sidebar-session-group-count,
+.sidebar-agent-roster__unread,
+.sidebar-issues-button__count,
+.viewer-avatar--overflow,
+.sidebar-session-tree__show-more {
   font-variant-numeric: tabular-nums lining-nums;
 }
 
@@ -3531,53 +3529,243 @@ select.data-table-pagination__size {
   width: 26px;
 }
 
-/* One hover, disabled and corner treatment for every field and field-like trigger. */
-:where(
-  .field :is(input, textarea, select),
-  .settings-input,
-  select.settings-select,
-  .picker-select__trigger,
-  .agent-select__trigger,
-  .multi-select,
-  .usage-date-input,
-  .usage-select,
-  .usage-query-input,
-  .sessions-sort select,
-  .dashboards-search input,
-  .dashboards-select select,
-  .data-table-search input,
-  .cron-search-box input,
-  .input
-) {
+/* Keep zero-specificity leaf selectors flat: a mixed ancestor family makes
+   unrelated elements pay for repeated matching during style resolution. */
+:where(.field) :where(input, textarea, select),
+:where(.settings-input),
+:where(select.settings-select),
+:where(.picker-select__trigger),
+:where(.agent-select__trigger),
+:where(.multi-select),
+:where(.usage-date-input),
+:where(.usage-select),
+:where(.usage-query-input),
+:where(.sessions-sort) :where(select),
+:where(.dashboards-search) :where(input),
+:where(.dashboards-select) :where(select),
+:where(.data-table-search) :where(input),
+:where(.cron-search-box) :where(input),
+:where(.input) {
   corner-shape: superellipse(1.5);
   transition: border-color var(--duration-fast) var(--ease-out);
-
-  &::placeholder {
-    color: var(--muted);
+}
+:where(.field) :where(input, textarea, select)::placeholder,
+:where(.settings-input)::placeholder,
+:where(select.settings-select)::placeholder,
+:where(.picker-select__trigger)::placeholder,
+:where(.agent-select__trigger)::placeholder,
+:where(.multi-select)::placeholder,
+:where(.usage-date-input)::placeholder,
+:where(.usage-select)::placeholder,
+:where(.usage-query-input)::placeholder,
+:where(.sessions-sort) :where(select)::placeholder,
+:where(.dashboards-search) :where(input)::placeholder,
+:where(.dashboards-select) :where(select)::placeholder,
+:where(.data-table-search) :where(input)::placeholder,
+:where(.cron-search-box) :where(input)::placeholder,
+:where(.input)::placeholder {
+  color: var(--muted);
+}
+:where(.field) :where(input, textarea, select):focus-visible:focus-visible,
+:where(.settings-input):focus-visible:focus-visible,
+:where(select.settings-select):focus-visible:focus-visible,
+:where(.picker-select__trigger):focus-visible:focus-visible,
+:where(.agent-select__trigger):focus-visible:focus-visible,
+:where(.multi-select):focus-visible:focus-visible,
+:where(.usage-date-input):focus-visible:focus-visible,
+:where(.usage-select):focus-visible:focus-visible,
+:where(.usage-query-input):focus-visible:focus-visible,
+:where(.sessions-sort) :where(select):focus-visible:focus-visible,
+:where(.dashboards-search) :where(input):focus-visible:focus-visible,
+:where(.dashboards-select) :where(select):focus-visible:focus-visible,
+:where(.data-table-search) :where(input):focus-visible:focus-visible,
+:where(.cron-search-box) :where(input):focus-visible:focus-visible,
+:where(.input):focus-visible:focus-visible,
+:where(.field) :where(input, textarea, select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.settings-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(select.settings-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.picker-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.agent-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.multi-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-date-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.dashboards-select) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
+  border-color: var(--field-focus-border);
+  outline: none;
+}
+@media (forced-colors: active) {
+  :where(.field) :where(input, textarea, select):focus-visible:focus-visible,
+  :where(.settings-input):focus-visible:focus-visible,
+  :where(select.settings-select):focus-visible:focus-visible,
+  :where(.picker-select__trigger):focus-visible:focus-visible,
+  :where(.agent-select__trigger):focus-visible:focus-visible,
+  :where(.multi-select):focus-visible:focus-visible,
+  :where(.usage-date-input):focus-visible:focus-visible,
+  :where(.usage-select):focus-visible:focus-visible,
+  :where(.usage-query-input):focus-visible:focus-visible,
+  :where(.sessions-sort) :where(select):focus-visible:focus-visible,
+  :where(.dashboards-search) :where(input):focus-visible:focus-visible,
+  :where(.dashboards-select) :where(select):focus-visible:focus-visible,
+  :where(.data-table-search) :where(input):focus-visible:focus-visible,
+  :where(.cron-search-box) :where(input):focus-visible:focus-visible,
+  :where(.input):focus-visible:focus-visible,
+  :where(.field) :where(input, textarea, select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.settings-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(select.settings-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.picker-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.agent-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.multi-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-date-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.dashboards-select) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
+    outline-offset: 2px;
+    outline: 2px solid selecteditem;
   }
-
-  &:focus-visible:focus-visible,
-  &[aria-expanded="true"]:not(.oc-menu-item) {
-    outline: none;
-    border-color: var(--field-focus-border);
-  }
-
-  @media (forced-colors: active) {
-    &:focus-visible:focus-visible,
-    &[aria-expanded="true"]:not(.oc-menu-item) {
-      outline: 2px solid SelectedItem;
-      outline-offset: 2px;
-    }
-  }
-
-  &:hover:not(:disabled, :focus-visible, :focus-within, [aria-expanded="true"], [data-disabled]) {
+}
+@media (hover: hover) {
+  :where(.field)
+    :where(input, textarea, select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.settings-input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(select.settings-select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.picker-select__trigger):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.agent-select__trigger):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.multi-select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.usage-date-input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.usage-select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.usage-query-input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.sessions-sort)
+    :where(select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.dashboards-search)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.dashboards-select)
+    :where(select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.data-table-search)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.cron-search-box)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ) {
     border-color: var(--border-strong);
   }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
+}
+:where(.field) :where(input, textarea, select):disabled,
+:where(.settings-input):disabled,
+:where(select.settings-select):disabled,
+:where(.picker-select__trigger):disabled,
+:where(.agent-select__trigger):disabled,
+:where(.multi-select):disabled,
+:where(.usage-date-input):disabled,
+:where(.usage-select):disabled,
+:where(.usage-query-input):disabled,
+:where(.sessions-sort) :where(select):disabled,
+:where(.dashboards-search) :where(input):disabled,
+:where(.dashboards-select) :where(select):disabled,
+:where(.data-table-search) :where(input):disabled,
+:where(.cron-search-box) :where(input):disabled,
+:where(.input):disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Ghost triggers have no border to recolor, so focus draws one in the same place. */

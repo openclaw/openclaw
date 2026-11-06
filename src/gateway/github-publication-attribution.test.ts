@@ -39,8 +39,9 @@ import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
+// mock-isolation: Synthetic checkpoints isolate publication from real repository and session state.
 vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
-  withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
+  withSessionRepositoryPublicationCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
 
 function createPerson(accountId: number, login: string) {

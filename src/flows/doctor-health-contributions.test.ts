@@ -798,7 +798,6 @@ describe("doctor health contributions", () => {
             "noteSessionTranscriptHealth",
           )
           .mockResolvedValue(undefined);
-        const cfg = { agents: { entries: { main: {} } } };
         if (credentialWork !== "none") {
           mocks.maybeMigrateModelCatalogCredentials.mockResolvedValue({
             detected: 0,
@@ -809,7 +808,7 @@ describe("doctor health contributions", () => {
           });
         }
         const ctx = createDoctorContext({
-          cfg,
+          cfg: { agents: { entries: { main: {} } } },
           retirementOnly: true,
           shouldRepair: true,
           env: state.env,
@@ -826,13 +825,14 @@ describe("doctor health contributions", () => {
         expect(transcripts).toHaveBeenCalledOnce();
         if (credentialWork !== "none") {
           expect(ctx.retirementOnly).toBe(false);
+          expect(ctx.runtime.error).toHaveBeenCalledWith(
+            "Retirement-only Doctor widened: doctor:auth-profile-migration",
+          );
           expect(mocks.detectLegacyStateMigrations).toHaveBeenCalled();
           return;
         }
         expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
         expect(ctx.retirementOnly).toBe(true);
-        expect(mocks.maybeMigrateLegacyPluginModelCatalogs).toHaveBeenCalledOnce();
-        expect(mocks.maybeMigrateModelCatalogCredentials).toHaveBeenCalledOnce();
         expect(routes).toHaveBeenCalledOnce();
         expect(mocks.repairCronCodexModelRefsAfterConfigWrite).toHaveBeenCalledOnce();
         // The initial writer and strict final validation each read the persisted config.
@@ -2483,15 +2483,13 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps legacy cron store opt-in for default lint selection", async () => {
-    const contribution = requireDoctorContribution("doctor:legacy-cron");
-    expect(contribution.healthCheckIds).toEqual([
+    expect(requireDoctorContribution("doctor:legacy-cron").healthCheckIds).toEqual([
       "core/doctor/legacy-whatsapp-crontab",
       "core/doctor/legacy-cron-store",
+      "core/doctor/cron-inference-accounts",
     ]);
 
     const ctx = createDoctorLintFixture({ cron: { store: "/tmp/openclaw-cron/jobs.json" } });
-
-    expect(mocks.collectLegacyCronStoreHealthFindings).not.toHaveBeenCalled();
 
     mocks.collectLegacyCronStoreHealthFindings.mockResolvedValueOnce([
       {
@@ -2505,7 +2503,7 @@ describe("doctor health contributions", () => {
     await expectOptInLintFindings(ctx, "core/doctor/legacy-cron-store", [
       expect.objectContaining({ checkId: "core/doctor/legacy-cron-store" }),
     ]);
-    expect(mocks.collectLegacyCronStoreHealthFindings).toHaveBeenCalledWith({ cfg: ctx.cfg });
+    expect(mocks.collectLegacyCronStoreHealthFindings.mock.calls).toEqual([[{ cfg: ctx.cfg }]]);
   });
 
   it("defers channel package-state loading only until post-core plugin convergence", async () => {

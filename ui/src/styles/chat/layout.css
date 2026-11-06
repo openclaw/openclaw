@@ -243,8 +243,9 @@ openclaw-pending-session-create {
   color: var(--muted);
 }
 
-/* Same system colors as browser find, so matches read in every theme. */
-::highlight(openclaw-chat-search) {
+/* Search ranges only span .chat-text; keep browser-find colors without making
+   unrelated UI elements participate in highlight matching. */
+.chat-text::highlight(openclaw-chat-search) {
   background-color: Mark;
   color: MarkText;
 }
@@ -330,7 +331,8 @@ openclaw-pending-session-create {
   corner-shape: superellipse(1.5);
 }
 
-:is(.chat-composer-neighbor-card, .session-suggestion) {
+.chat-composer-neighbor-card,
+.session-suggestion {
   padding: 10px 12px;
 }
 
