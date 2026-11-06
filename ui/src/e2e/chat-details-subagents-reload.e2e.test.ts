@@ -30,9 +30,12 @@ suite.define(() => {
           detailsSubagentActivity: 2,
         });
         const sessionKey = fixture.selectedSessionKey;
-        const children = fixture.scenario.sessions!.filter(
-          (row) =>
-            row.parentSessionKey === sessionKey && row.label?.startsWith("Synthetic child review "),
+        const childLabels = fixture.scenario.sessions!.flatMap(({ parentSessionKey, label }) =>
+          parentSessionKey === sessionKey &&
+          typeof label === "string" &&
+          label.startsWith("Synthetic child review ")
+            ? [label]
+            : [],
         );
         await page.addInitScript(
           ({ key, settings }) => {
@@ -72,8 +75,8 @@ suite.define(() => {
         await gateway.resolveDeferred("connect");
         const details = await openChatDetails(page);
         const group = details.locator('[data-details-group="subagents"]');
-        await group.getByText(children[0]!.label!, { exact: true }).waitFor();
-        await group.getByText(children[1]!.label!, { exact: true }).waitFor();
+        await group.getByText(childLabels[0]!, { exact: true }).waitFor();
+        await group.getByText(childLabels[1]!, { exact: true }).waitFor();
         await page.waitForFunction(() => {
           const pane = document.querySelector(".chat-pane-cache__pane--active");
           const cache = pane && Reflect.get(pane, "state")?.chatMessagesBySession;
@@ -130,7 +133,7 @@ suite.define(() => {
         });
         expect(first.sections.some((section) => section.id === "subagents")).toBe(true);
         expect(first.rows).toBe(2);
-        expect(first.labels).toEqual(children.map((row) => row.label));
+        expect(first.labels).toEqual(childLabels);
         expect(
           await group.locator("button.chat-subagent-activity__row:not(:disabled), a").count(),
         ).toBe(0);

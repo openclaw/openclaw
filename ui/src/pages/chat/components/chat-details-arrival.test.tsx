@@ -307,7 +307,7 @@ it.each(["empty", "unavailable", "unavailable-with-parent-facts"] as const)(
     await advance();
     expect(view.group("subagents")?.textContent).toContain("Cached review");
     expect(remember).not.toHaveBeenCalled();
-    const parent = { key: view.initial.sessionKey, kind: "direct" };
+    const parent = { key: view.initial.sessionKey, kind: "direct" as const };
     view.update(
       outcome === "empty"
         ? { subagentSessions: [parent] }
