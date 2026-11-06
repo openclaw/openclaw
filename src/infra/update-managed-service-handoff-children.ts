@@ -1,6 +1,6 @@
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
-import { findCommandReservationHolders } from "../process/command-reservation-census.js";
+import { findCommandReservationCandidates } from "../process/command-reservation-census.js";
 import type {
   createManagedHandoffLeaseDatabase,
   LeaseTable,
@@ -35,18 +35,16 @@ function reservationAbandoned(
     return false;
   }
   try {
-    const reservation = lease.key.slice(lease.key.lastIndexOf("/") + 1);
-    return findCommandReservationHolders(reservation).length === 0;
+    return findCommandReservationCandidates(lease.updatedAt).length === 0;
   } catch {
     return false;
   }
 }
 
 /**
- * Only group extinction closes a binding. A reservation has no process identity, so
- * it closes when its spawner is dead and no process carries its marker. Reservations
- * from releases without the marker close on spawner death alone: repair must not stay
- * fenced forever by a child that could only have started in the instant before a kill.
+ * Only group extinction closes a binding. A reservation has no process identity: it
+ * closes when its spawner is dead and no process born at reservation time remains.
+ * A reservation must not fence repair forever when its spawner was killed first.
  */
 export function managedCommandUnsettled(
   lease: ManagedHandoffLease,

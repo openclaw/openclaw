@@ -176,7 +176,6 @@ export async function retainUpdateDoctorProcesses(
         throw error;
       }
       return {
-        env: retained.env,
         spawned(identity: CommandProcessIdentity) {
           // Publish the owned PID before binding so a failed bind cannot leave anonymous custody.
           slot.identity = identity;

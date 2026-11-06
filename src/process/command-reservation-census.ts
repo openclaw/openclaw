@@ -1,72 +1,94 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
-import { ProcSafeError } from "@openclaw/proc-safe/errors";
-import { readProcessCommand } from "@openclaw/proc-safe/inspect";
-import { readDarwinProcessCensus } from "./darwin-process-inspection.js";
+import { listProcesses } from "@openclaw/proc-safe/inspect";
 
-/** Every command spawned under a durable reservation carries its name before exec. */
-export const COMMAND_RESERVATION_ENV = "OPENCLAW_UPDATE_COMMAND_RESERVATION";
+// A reservation spawns within the same tick (agent tools: after a short admission await).
+const BORN_AFTER_RESERVATION_MS = 15_000;
+// Linux reports boot time in whole seconds.
+const CLOCK_SLACK_MS = 2_000;
+const LINUX_CLOCK_TICKS_PER_SECOND = 100;
 
-const CENSUS_TIMEOUT_MS = 5_000;
+type ProcessBirth = { pid: number; ppid?: number; bornAtMs?: number; zombie: boolean };
 
-function readLinuxHolders(reservation: string): number[] {
-  const needle = `${COMMAND_RESERVATION_ENV}=${reservation}\0`;
-  const holders: number[] = [];
+function readLinuxProcessBirths(): ProcessBirth[] {
+  const bootSeconds = Number(/^btime (\d+)$/m.exec(readFileSync("/proc/stat", "utf8"))?.[1]);
+  if (!Number.isFinite(bootSeconds)) {
+    throw new Error("Linux boot time is unavailable");
+  }
+  const uid = process.getuid?.();
+  const births: ProcessBirth[] = [];
   for (const name of readdirSync("/proc")) {
     if (!/^\d+$/.test(name)) {
       continue;
     }
     try {
-      const environment = readFileSync(`/proc/${name}/environ`, "latin1");
-      if (`\0${environment}`.includes(`\0${needle}`)) {
-        holders.push(Number(name));
+      const uids = /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/m.exec(
+        readFileSync(`/proc/${name}/status`, "utf8"),
+      );
+      if (uids?.slice(1).some((id) => Number(id) === uid) !== true) {
+        continue;
       }
-    } catch (error) {
-      // Exited tasks and other accounts' processes cannot be this Doctor's command.
-      if (!["ENOENT", "ESRCH", "EACCES", "EPERM"].includes(extractErrorCode(error) ?? "")) {
-        throw error;
-      }
+      // comm may contain spaces and parentheses; the fields follow its final ")".
+      const stat = readFileSync(`/proc/${name}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      births.push({
+        pid: Number(name),
+        ppid: Number(fields[1]),
+        bornAtMs: bootSeconds * 1_000 + (Number(fields[19]) * 1_000) / LINUX_CLOCK_TICKS_PER_SECOND,
+        zombie: fields[0] === "Z",
+      });
+    } catch {
+      // The task exited during enumeration.
     }
   }
-  return holders;
+  return births;
 }
 
-function readDarwinHolders(reservation: string): number[] {
-  const holders: number[] = [];
-  for (const member of readDarwinProcessCensus(CENSUS_TIMEOUT_MS)) {
-    if (member.owner === "different" || member.state.startsWith("Z") || member.pid === 0) {
-      continue;
-    }
-    try {
-      const command = readProcessCommand(member.pid, {
-        environmentKeys: [COMMAND_RESERVATION_ENV],
-      });
-      if (command?.environment[COMMAND_RESERVATION_ENV] === reservation) {
-        holders.push(member.pid);
-      }
-    } catch (error) {
-      // macOS withholds envp from hardened executables; only this PID stays unobserved.
-      if (
-        !(error instanceof ProcSafeError) ||
-        !["incomplete", "layout-mismatch", "access-denied", "operation-failed"].includes(error.code)
-      ) {
-        throw error;
-      }
-    }
-  }
-  return holders;
+function readDarwinProcessBirths(): ProcessBirth[] {
+  return listProcesses({ timeoutMs: 5_000 }).flatMap((row) =>
+    row.owner === "different"
+      ? []
+      : [
+          {
+            pid: row.pid,
+            ppid: row.parentPid,
+            bornAtMs: row.identity ? row.identity.startTimeMicros / 1_000 : undefined,
+            zombie: row.state === "zombie",
+          },
+        ],
+  );
 }
 
 /**
- * PIDs still carrying a reservation's marker. Once its reserving process is dead no
- * new holder can appear, so an empty census stays true. Throws when unavailable.
+ * Same-account processes that may be the command an unbound reservation spawned: it
+ * can only have started in the instant after reservation, and its spawner never got
+ * to record which PID it was. Unreadable start times stay candidates. A dead spawner
+ * starts nothing new, so an empty result stays true. Throws when no census is possible.
  */
-export function findCommandReservationHolders(reservation: string): number[] {
-  if (process.platform === "linux") {
-    return readLinuxHolders(reservation);
+export function findCommandReservationCandidates(reservedAtMs: number): number[] {
+  const births =
+    process.platform === "linux"
+      ? readLinuxProcessBirths()
+      : process.platform === "darwin"
+        ? readDarwinProcessBirths()
+        : undefined;
+  if (!births) {
+    throw new Error(`Command reservation census is unavailable on ${process.platform}.`);
   }
-  if (process.platform === "darwin") {
-    return readDarwinHolders(reservation);
+  // The inspecting command's own launchers are not the reserved command.
+  const byPid = new Map(births.map((birth) => [birth.pid, birth]));
+  const inspector = new Set<number>();
+  for (let pid: number | undefined = process.pid; pid && !inspector.has(pid); ) {
+    inspector.add(pid);
+    pid = byPid.get(pid)?.ppid;
   }
-  throw new Error(`Command reservation census is unavailable on ${process.platform}.`);
+  return births
+    .filter(
+      ({ pid, bornAtMs, zombie }) =>
+        !zombie &&
+        !inspector.has(pid) &&
+        (bornAtMs === undefined ||
+          (bornAtMs >= reservedAtMs - CLOCK_SLACK_MS &&
+            bornAtMs <= reservedAtMs + BORN_AFTER_RESERVATION_MS)),
+    )
+    .map(({ pid }) => pid);
 }

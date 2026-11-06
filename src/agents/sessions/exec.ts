@@ -145,7 +145,7 @@ export async function execCommand(
         executionIntent: "agent-tool",
         argv,
         cwd,
-        env: { ...resolveCommandEnv({ argv }), ...custody?.env },
+        env: resolveCommandEnv({ argv }),
         exactEnv: true,
         ownProcessTree: true,
         stdinMode: "pipe-closed",

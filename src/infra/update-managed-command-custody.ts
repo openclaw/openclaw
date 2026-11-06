@@ -6,7 +6,6 @@ import type {
   CommandProcessCustody,
   CommandProcessIdentity,
 } from "../process/command-process-custody.types.js";
-import { COMMAND_RESERVATION_ENV } from "../process/command-reservation-census.js";
 import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
   managedCommandCustody,
@@ -137,7 +136,6 @@ export async function createManagedCommandProcessCustody(options: {
       }
       let bound = false;
       return {
-        env: { [COMMAND_RESERVATION_ENV]: child },
         spawned(identity) {
           options.assertCurrent?.();
           // The original spawner still joins this child's close and group extinction.

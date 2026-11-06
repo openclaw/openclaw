@@ -617,14 +617,13 @@ export function spawnCommandWithInvocation<
     env: commandEnv,
     windowsVerbatimArguments,
   });
-  const reservation = reserveCommandProcessCustody([invocation.command, ...invocation.args]);
   const commandOptions: CommandSpawnOptions = {
     ...execaOptions,
     cancelSignal: inheritScopeCancellation
       ? resolveCommandProcessSignal(cancelSignal)
       : cancelSignal,
     ...(scope ? { killDescendants: true } : {}),
-    env: reservation?.env ? { ...commandEnv, ...reservation.env } : commandEnv,
+    env: commandEnv,
     extendEnv: false,
     shell: false,
     windowsHide: invocation.windowsHide,
@@ -638,6 +637,7 @@ export function spawnCommandWithInvocation<
     // The 1s margin absorbs broker scheduling lag; the execution-only check cannot relabel an exited root.
     remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
   }
+  const reservation = reserveCommandProcessCustody([invocation.command, ...invocation.args]);
   const child: CommandSubprocess<CommandSpawnOptions> =
     broker && remoteOptions
       ? spawnBrokerCommand(

@@ -18,8 +18,8 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as processGroups from "../process/child-process-tree.js";
 import { runUtf8CommandWithTimeout } from "../process/exec-runner.js";
+import * as reservationCensus from "../process/command-reservation-census.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
-import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { createManagedCommandProcessCustody } from "./update-managed-command-custody.js";
 import {
@@ -94,7 +94,7 @@ describe.skipIf(process.platform === "win32")("managed command process custody",
           [
             process.execPath,
             "-e",
-            "process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(process.env.OPENCLAW_UPDATE_COMMAND_RESERVATION?'owned':'unmarked'));",
+            "process.stdin.resume();process.stdin.on('end',()=>process.stdout.write('owned'));",
           ],
           {
             timeoutMs: 10_000,
@@ -196,6 +196,7 @@ describe.skipIf(process.platform === "win32")("managed command process custody",
 
   it("retains every installation after helper death until the tracked group exits, including orphan rows", async () => {
     const f = fixture();
+    const candidates = vi.spyOn(reservationCensus, "findCommandReservationCandidates");
     const binding = createManagedHandoffTestBinding(f.privateTmp);
     const childEnv = writePrivateUpdateHandoffChildGuard(f.databasePath, f.privateTmp);
     const env = childEnv({
@@ -218,13 +219,10 @@ describe.skipIf(process.platform === "win32")("managed command process custody",
       const namespaces = f.roots
         .slice(0, -1)
         .map((root) => `${root}/.openclaw-update-child-delegated`);
-      const startedPidPath = path.join(f.directory, "reservation-child.pid");
       const child = path.join(f.directory, "custody-owner.mts");
       fs.writeFileSync(
         child,
         `
-import { spawn } from "node:child_process";
-import fs from "node:fs";
 import { createManagedCommandProcessCustody } from ${JSON.stringify(new URL("./update-managed-command-custody.ts", import.meta.url).href)};
 import { createManagedHandoffLeaseStore } from ${JSON.stringify(new URL("./update-managed-service-handoff-lease.ts", import.meta.url).href)};
 const store = createManagedHandoffLeaseStore();
@@ -245,9 +243,7 @@ command.custody.reserve([process.execPath, "-e", "process.stdin.resume()"]).spaw
 // Reopen an orphan produced before canonical anchors existed, without using the new producer.
 const orphan = store.acquire(${JSON.stringify(`${f.roots.at(-1)!}/.openclaw-update-child-historical-command`)}, "tracked-owner", {kind:"update", custody:"reserved"});
 if (orphan.kind !== "acquired" || !store.bindUpdateChildren([orphan.lease], store.processIdentity(${holder.pid}))) throw new Error("Historical orphan fixture failed");
-const pending = (await createManagedCommandProcessCustody({ roots: [${JSON.stringify(pendingRoot)}], runId: "pending-owner", databaseIdentity: command.databaseIdentity })).custody.reserve([process.execPath]);
-const started = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore", env: { ...process.env, ...pending.env } });
-fs.writeFileSync(${JSON.stringify(startedPidPath)}, String(started.pid));
+(await createManagedCommandProcessCustody({ roots: [${JSON.stringify(pendingRoot)}], runId: "pending-owner", databaseIdentity: command.databaseIdentity })).custody.reserve([process.execPath]);
 process.kill(process.pid, "SIGKILL");
 `,
       );
@@ -289,11 +285,11 @@ process.kill(process.pid, "SIGKILL");
       if (retained.kind !== "current") {
         throw new Error("Missing pending reservation");
       }
-      // The killed spawner left a child that started before it could bind an identity.
+      // A process born at reservation time may be the command its killed spawner started.
+      candidates.mockReturnValue([4242]);
       expect(f.store.releaseCommandReservation(retained.lease)).toBe(false);
-      const startedPid = Number(fs.readFileSync(startedPidPath, "utf8"));
-      process.kill(startedPid, "SIGKILL");
-      await vi.waitFor(() => expect(isPidDefinitelyDead(startedPid)).toBe(true));
+      expect(f.store.acquire(pendingRoot, "next", { kind: "update" }).kind).toBe("busy");
+      candidates.mockReturnValue([]);
 
       holder.kill("SIGKILL");
       await closed;
