@@ -4124,12 +4124,6 @@ html.openclaw-native-web-chrome
   width: 22px;
   height: 22px;
 }
-.gateway-connection-view__dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--muted);
-}
 
 .gateway-connection-view h1 {
   margin: 0;

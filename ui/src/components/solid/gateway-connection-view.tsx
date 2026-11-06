@@ -44,11 +44,12 @@ export function GatewayConnectionView(props: {
       data-connection-state={state()}
     >
       <div class="gateway-connection-view__body">
-        <div class="gateway-connection-view__mark" aria-hidden="true">
-          <Show when={busy()} fallback={<span class="gateway-connection-view__dot" />}>
+        {/* Only a busy screen shows the status tile; a settled one leads with its title. */}
+        <Show when={busy()}>
+          <div class="gateway-connection-view__mark" aria-hidden="true">
             <span class="session-run-spinner" />
-          </Show>
-        </div>
+          </div>
+        </Show>
         <h1 id="gateway-connection-title">{t("connection.workspace." + state() + ".title")}</h1>
         <p class="gateway-connection-view__description" role="status" aria-live="polite">
           {t("connection.workspace." + state() + ".description")}
