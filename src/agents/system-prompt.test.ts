@@ -452,7 +452,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Bootstrap Pending");
-    expect(prompt.match(/## \/tmp\/openclaw\/BOOTSTRAP\.md/g)).toHaveLength(1);
+    // BOOTSTRAP.md is inside the workspace, so it should use relative path
+    expect(prompt.match(/## BOOTSTRAP\.md/g)).toHaveLength(1);
     expect(prompt.match(/Ask who I am\./g)).toHaveLength(1);
   });
 
@@ -755,10 +756,17 @@ describe("buildAgentSystemPrompt", () => {
     );
     for (const [index, cwd] of ["/tmp/repo-a", "/tmp/repo-b"].entries()) {
       const prefix = prompts[index]!.split(SYSTEM_PROMPT_CACHE_BOUNDARY)[0];
-      expect(prefix).toContain(`## Directory Roles\nWorking directory: ${cwd} (`);
-      expect(prefix).toContain("Agent workspace: /tmp/openclaw");
+      // Directory roles (with absolute paths) should be below the cache boundary for cross-workspace cache sharing
+      expect(prefix).not.toContain(`## Directory Roles`);
+      expect(prefix).not.toContain(`Working directory: ${cwd}`);
+      expect(prefix).not.toContain("Agent workspace: /tmp/openclaw");
       expect(prefix).not.toContain("## Workspace\n");
+      // The directory section should be below the cache boundary
+      const suffix = prompts[index]!.split(SYSTEM_PROMPT_CACHE_BOUNDARY)[1];
+      expect(suffix).toContain(`## Directory Roles\nWorking directory: ${cwd} (`);
+      expect(suffix).toContain("Agent workspace: /tmp/openclaw");
     }
+    // Stable prefix should be identical across different runtimeCwd values
     expect(prompts[2]).toBe(prompts[0]);
   });
 

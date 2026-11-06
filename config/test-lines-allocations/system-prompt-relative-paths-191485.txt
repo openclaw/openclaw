@@ -1,0 +1,3 @@
+# Test lines added for issue #191485: Keep absolute workspace paths out of cached system-prompt prefix
+# Tests for relative heading paths, directory roles below cache boundary, content hashes in cache key, and cross-workspace provider cache proof
+540

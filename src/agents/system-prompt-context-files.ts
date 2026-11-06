@@ -35,8 +35,12 @@ export function prepareContextFilesForPrompt<T extends EmbeddedContextFile>(
     order?: ReadonlyMap<string, number>;
     caseInsensitivePathOrder?: boolean;
     trimBasename?: boolean;
+    workspaceDir?: string;
   } = {},
 ) {
+  const workspaceDir = options.workspaceDir
+    ? normalizeContextFilePath(options.workspaceDir)
+    : undefined;
   return contextFiles
     .map((file) => {
       const path = normalizeContextFilePath(file.path);
@@ -45,10 +49,18 @@ export function prepareContextFilesForPrompt<T extends EmbeddedContextFile>(
         options.trimBasename === false
           ? rawBasename.toLowerCase()
           : normalizeLowercaseStringOrEmpty(rawBasename);
+      // Compute heading path: relative to workspaceDir if inside workspace, otherwise absolute path
+      let headingPath = path;
+      if (workspaceDir && path.startsWith(workspaceDir + "/")) {
+        headingPath = path.slice(workspaceDir.length + 1);
+      } else if (workspaceDir && path === workspaceDir) {
+        headingPath = ".";
+      }
       return {
         file,
         path,
         basename,
+        headingPath,
         order: (options.order ?? CONTEXT_FILE_ORDER).get(basename) ?? Number.MAX_SAFE_INTEGER,
       };
     })
@@ -90,8 +102,8 @@ export function buildProjectContextSection(files: ReturnType<typeof prepareConte
     lines.push(PERSONAL_USER_CONTEXT_INSTRUCTIONS);
   }
   lines.push("");
-  for (const { file } of files) {
-    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
+  for (const { file, headingPath } of files) {
+    lines.push(`## ${headingPath}`, "", sanitizeContextFileContentForPrompt(file.content), "");
   }
   return lines;
 }
