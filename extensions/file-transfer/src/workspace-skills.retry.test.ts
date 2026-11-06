@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createNodeWorkspaceSkills } from "./workspace-skills.js";
 import type { NodeWorkspaceWorkerOptions } from "./workspace-worker.js";
@@ -105,13 +106,16 @@ it("keeps one read deadline across connection attempts", async () => {
   let calls = 0;
   const open = vi.fn<NodeWorkspaceWorkerOptions["openDuplex"]>(
     async ({ signal }) =>
-      await new Promise<never>((_resolve, reject) => {
+      await new Promise<unknown>((resolve, reject) => {
         if (++calls === 1) {
           setTimeout(() => reject(disconnected()), 50_000);
           return;
         }
         // An active transport honors the caller's abort; it does not invent its own timeout.
-        signal!.addEventListener("abort", () => reject(signal!.reason as Error), { once: true });
+        signal!.addEventListener("abort", () => resolve(signal!.reason), { once: true });
+      }).then((reason) => {
+        assert(reason instanceof Error);
+        throw reason;
       }),
   );
   const result = reader(open).readInstructions("/node/workspace/skills/tool/SKILL.md", {});
