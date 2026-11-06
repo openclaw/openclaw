@@ -406,6 +406,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let openEarlierRest = "";
   let openEarlierEpoch = -1;
   let openEarlierSource = -1;
+  let openEarlierLearned = false;
+  let openEarlierShown = 0;
   const consumeEarlierBlock = (text: string, source: number | undefined) => {
     const earlierRest = source === undefined ? "" : (earlierRests.get(source) ?? "");
     const rest = earlierRest.startsWith(text) ? earlierRest : earlierRest.trimStart();
@@ -423,9 +425,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       ? openEarlierRest
       : openEarlierRest.trimStart();
     const sameOpen = source === openEarlierSource && openEarlierEpoch + 1 === previewEpoch;
-    if (!hasStreamingFinalText && sameOpen && openRest.startsWith(text) && currentMatches) {
-      openEarlierRest = "";
-      return true;
+    if (!hasStreamingFinalText && sameOpen && openRest.startsWith(text)) {
+      // The copy advances past each block it heads, whether that block is suppressed or appended.
+      openEarlierRest = openRest.slice(text.length);
+      const shown = previewText.slice(Math.max(previewBlockOffset, openEarlierShown));
+      const shownRest = shown.startsWith(text) ? shown : shown.trimStart();
+      // Before a cursor is known the block appends, as an unmatched block would.
+      if (openEarlierLearned && shownRest.startsWith(text)) {
+        openEarlierShown = previewText.length - shownRest.length + text.length;
+        return true;
+      }
+      openEarlierLearned = true;
     }
     return false;
   };
@@ -1614,7 +1624,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (
               !hasStreamingFinalText &&
               streaming?.isActive() &&
-              previewBlockOffset > 0 &&
               previewText &&
               streamText.endsWith(continuedPreview(previewText))
             ) {
@@ -1623,6 +1632,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               );
               openEarlierEpoch = previewEpoch;
               openEarlierSource = previewEpoch + sourceIndexOffset;
+              openEarlierLearned = previewBlockOffset > 0;
+            } else if (!previewText && openEarlierEpoch + 1 === previewEpoch) {
+              // A message without text, such as a tool call, keeps the earlier card's copy.
+              openEarlierEpoch = previewEpoch;
             }
             // Snapshots cover one assistant message. Freeze earlier prose at the
             // source boundary so tool continuations cannot replace it.
@@ -1630,6 +1643,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             lastPartial = "";
             previewText = "";
             previewBlockOffset = 0;
+            openEarlierShown = 0;
             closedPreviewText = "";
             previewEpoch += 1;
             modelWaitLine = "";
