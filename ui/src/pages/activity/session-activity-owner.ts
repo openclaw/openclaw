@@ -1,8 +1,10 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath, activityPersonLocation } from "../../app-route-paths.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
@@ -67,8 +69,10 @@ export function createSessionActivity(notify: () => void) {
     | {
         controller: AbortController;
         completion: ReturnType<typeof createDeferredCore<void>>;
+        presentation: ReturnType<typeof createDeferredCore<void>>;
       }
     | undefined;
+  let read: { promise: Promise<void> } | undefined;
   let summaryPending: AbortController | undefined;
   const summaryAttempts = new Map<string, string>();
   const summaryRetries = new Set<string>();
@@ -118,6 +122,7 @@ export function createSessionActivity(notify: () => void) {
     clearTimeout(bucketRollover);
     bucketRollover = undefined;
     eventRefresh.reset();
+    pendingRequest?.presentation.resolve();
     pendingRequest?.controller.abort();
     pendingRequest = undefined;
     resetSummaries();
@@ -129,6 +134,7 @@ export function createSessionActivity(notify: () => void) {
 
   function resetQuery(): void {
     suspendRequests();
+    read = undefined;
     incomplete = false;
     currentError = undefined;
     currentClient = null;
@@ -389,7 +395,9 @@ export function createSessionActivity(notify: () => void) {
           }
         }
         if (!requiresRefresh && !incomplete && !changesOverflowed) {
-          eventRefresh.scheduleFallback();
+          if (currentFilters !== "current") {
+            eventRefresh.scheduleFallback();
+          }
           return;
         }
       }
@@ -478,10 +486,18 @@ export function createSessionActivity(notify: () => void) {
       void ensureSummaries();
       return Promise.resolve();
     }
+    pendingRequest?.presentation.resolve();
     pendingRequest?.controller.abort();
     eventRefresh.absorb();
-    const pending = { controller: new AbortController(), completion: createDeferredCore() };
+    const pending = {
+      controller: new AbortController(),
+      completion: createDeferredCore(),
+      presentation: createDeferredCore(),
+    };
     pendingRequest = pending;
+    read = pending.presentation;
+    // The owner can finish while no view is mounted; a later reader still sees the rejection.
+    void read.promise.catch(() => undefined);
     currentClient = client;
     currentQueryKey = queryKey;
     currentFilters = filters;
@@ -527,10 +543,16 @@ export function createSessionActivity(notify: () => void) {
       })
       .catch((error: unknown) => {
         if (pendingRequest === pending && !pending.controller.signal.aborted) {
+          if (error instanceof GatewayRequestError && error.gatewayCode === "FORBIDDEN") {
+            currentResult = undefined;
+            historyRows.reset();
+            resetSummaries();
+          }
           if (filters === "current") {
             incomplete = false;
           }
-          currentError = error instanceof Error ? error.message : String(error);
+          currentError = formatUiError(error);
+          pending.presentation.reject(error);
         }
       })
       .finally(() => {
@@ -541,6 +563,7 @@ export function createSessionActivity(notify: () => void) {
           notify();
         }
         pending.completion.resolve();
+        pending.presentation.resolve();
       });
     return pending.completion.promise;
   }
@@ -556,6 +579,9 @@ export function createSessionActivity(notify: () => void) {
     return connected && (requestState !== "idle" || incomplete);
   }
   return {
+    get read() {
+      return read;
+    },
     get result() {
       return currentResult;
     },

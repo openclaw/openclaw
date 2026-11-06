@@ -1,4 +1,5 @@
 import { BROWSER_IMAGE_MIME_TYPES } from "../../../src/shared/browser-image-mime-types.js";
+import { downloadBlobFile } from "../lib/download.ts";
 import { downloadImageBlob } from "../lib/image-download.ts";
 import { resolveSafeExternalUrl } from "../lib/open-external-url.ts";
 
@@ -18,11 +19,6 @@ function mimeTypeEssence(value: string): string {
   return value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
 }
 
-function dataUrlMimeType(source: string): string | undefined {
-  const mediaType = /^data:([^,]*)/i.exec(source)?.[1];
-  return mediaType === undefined ? undefined : mimeTypeEssence(mediaType);
-}
-
 export async function resolveLightboxOriginalUrl(
   source: string,
   current: () => boolean,
@@ -34,7 +30,8 @@ export async function resolveLightboxOriginalUrl(
   if (prefix !== "data:" && prefix !== "blob:") {
     return { url: source };
   }
-  const sourceType = prefix === "data:" ? dataUrlMimeType(source) : undefined;
+  const mediaType = prefix === "data:" ? /^data:([^,]*)/i.exec(source)?.[1] : undefined;
+  const sourceType = mediaType === undefined ? undefined : mimeTypeEssence(mediaType);
   // Top-level active blobs inherit the app origin; only browser image MIME is safe.
   if (prefix === "data:" && (!sourceType || !BROWSER_IMAGE_MIME_TYPES.has(sourceType))) {
     return null;
@@ -64,7 +61,13 @@ export async function downloadLightboxImage(
         }
         return response.blob();
       });
-  if (!BROWSER_IMAGE_MIME_TYPES.has(mimeTypeEssence(blob.type))) {
+  const mimeType = mimeTypeEssence(blob.type);
+  if (mimeType === "image/svg+xml") {
+    // Preserve the original file without creating an active SVG download URL.
+    downloadBlobFile(title, new Blob([blob], { type: "application/octet-stream" }), 30_000);
+    return;
+  }
+  if (!BROWSER_IMAGE_MIME_TYPES.has(mimeType)) {
     throw new Error("Unsupported image download");
   }
   downloadImageBlob(blob, title);

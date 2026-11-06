@@ -12,7 +12,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
+import { initialDoctorHealthContribution } from "./doctor-health-contributions-selection.test-support.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
 
@@ -118,20 +118,7 @@ it.skipIf(process.platform !== "win32").each([
     const sqliteShmFiles = new Set(databases.map((database) => `${database}-shm`));
     const before = readPreservedFiles(preservedFiles, sqliteShmFiles);
     const mode = missing ? undefined : fs.statSync(stateDir).mode;
-    const unrelatedRunner = vi.fn(async () => {
-      throw new Error("An unrelated Doctor contribution ran");
-    });
-    const contribution = resolveInitialDoctorHealthContributions({
-      runStructuredHealthRepairs: unrelatedRunner,
-      runGatewayConfigHealth: unrelatedRunner,
-      runAuthProfileMigration: unrelatedRunner,
-      runAuthProfileHealth: unrelatedRunner,
-      runGatewayAuthHealth: unrelatedRunner,
-      runLegacyStateHealth: unrelatedRunner,
-    }).find((entry) => entry.id === "doctor:state-integrity");
-    if (!contribution) {
-      throw new Error("Missing state-integrity contribution");
-    }
+    const contribution = initialDoctorHealthContribution("doctor:state-integrity");
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const options = { nonInteractive: true };
     const sharedContext = { cfg, configPath, env, runtime };
@@ -200,7 +187,6 @@ it.skipIf(process.platform !== "win32").each([
     expect(cfg).toEqual({ agents: { entries: { main: {} } } });
     expect(env[cloudVariable]).toBe(placement === "ambient-env-only" ? undefined : cloudRoot);
     expect(fs.existsSync(stateDir) && fs.statSync(stateDir).mode).toBe(missing ? false : mode);
-    expect(unrelatedRunner).not.toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   },

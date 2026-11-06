@@ -1,12 +1,15 @@
 import type { WorkerProvider } from "../../plugins/types.js";
+import { assertWorkerResourceReceiptMatch } from "../../plugins/worker-resource-receipt.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
+import { requireWorkerLeaseStatus } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
 export type WorkerRuntimeRefreshInFlight = {
@@ -35,11 +38,16 @@ type WorkerRuntimeRefreshOptions = Pick<
   | "ensureNodeWorkerBundle"
   | "bootstrapWorker"
   | "credentialBroker"
+  | "callProvider"
+  | "withLock"
 > &
   Pick<
     ReturnType<typeof createWorkerProviderOwnerLifecycle>,
-    "requireCurrentOwner" | "stopOwner" | "identityResolverFor"
-  >;
+    "requireCurrentOwner" | "stopOwner" | "identityResolverFor" | "lifecycleLease"
+  > & {
+    ownerSignal: AbortSignal;
+    providerFor: (providerId: string) => WorkerProvider;
+  };
 
 export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOptions) {
   const { store, callBootstrap, requireCurrentOwner, stopOwner, identityResolverFor } = options;
@@ -50,6 +58,7 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
     provider: WorkerProvider,
     installation: WorkerInstallationArtifact | undefined,
     signal?: AbortSignal,
+    assertRequesterCurrent?: () => void,
   ) => {
     if (
       !installation ||
@@ -89,6 +98,7 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
       }
       const assertCurrent = () => {
         signal?.throwIfAborted();
+        assertRequesterCurrent?.();
         const current = requireCurrentOwner(record);
         if (options.isStopping() || current.destroyRequestedAtMs !== null) {
           throw serviceError("invalid_state", "Worker runtime refresh owner is stopping");
@@ -156,5 +166,96 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
       settled.resolve();
     }
   };
-  return { refresh, read: (environmentId: string) => inFlight.get(environmentId) };
+  // Retained wake already owns the environment lock; share the resumer without reacquiring it.
+  const resumeNodeInOperation = async (
+    environmentId: string,
+    request: { signal: AbortSignal; assertCurrent: () => void },
+  ) => {
+    request.assertCurrent();
+    const record = store.get(environmentId);
+    if (!record) {
+      throw serviceError("invalid_state", "Worker environment is unavailable");
+    }
+    const provider = options.providerFor(record.providerId);
+    const preparation = readWorkerPreparation(record.profileSnapshot);
+    const resume = provider.resumeNode;
+    const deviceId = record.nodeDeviceId;
+    if (!resume || !preparation || !deviceId || !record.leaseId) {
+      return;
+    }
+    const signal = AbortSignal.any([request.signal, options.ownerSignal]);
+    let open = true;
+    const assertCurrent = () => {
+      signal.throwIfAborted();
+      request.assertCurrent();
+      const current = requireCurrentOwner(record);
+      if (
+        !open ||
+        options.isStopping() ||
+        current.state !== record.state ||
+        !["ready", "idle", "attached"].includes(current.state) ||
+        current.sharedHost !== false ||
+        current.destroyRequestedAtMs !== null ||
+        current.attachedSessionIds.length !== (record.state === "attached" ? 1 : 0) ||
+        current.attachedSessionIds[0] !== record.attachedSessionIds[0]
+      ) {
+        throw serviceError("invalid_state", "Worker node recovery owner changed");
+      }
+    };
+    const lease = {
+      ...options.lifecycleLease(record, record.leaseId),
+      signal,
+    };
+    try {
+      assertCurrent();
+      await options.callProvider(environmentId, "resume-node", async () => {
+        assertCurrent();
+        // A persisted isolation default cannot authorize a process launch. This
+        // observation qualifies recovery only; ordinary turn admission owns loss.
+        const inspection = await provider.inspect(lease);
+        assertWorkerResourceReceiptMatch(record.resourceReceipt, inspection.resourceReceipt);
+        requireWorkerLeaseStatus(inspection);
+        assertCurrent();
+        if (inspection.status !== "active" || inspection.sharedHost !== false) {
+          throw serviceError(
+            "invalid_state",
+            "Worker node recovery requires an active dedicated lease",
+          );
+        }
+        await resume({
+          ...lease,
+          deviceId,
+          nodeBootstrapSha256: preparation.artifacts.nodeBootstrapSha256,
+          openclawVersion: preparation.artifacts.openclawVersion,
+          platform: preparation.target.platform,
+          assertCurrent,
+        });
+        assertCurrent();
+      });
+    } finally {
+      // Timeout closes this invocation, while callProvider retains unsettled work.
+      open = false;
+    }
+  };
+  const resumeNode: typeof resumeNodeInOperation = (environmentId, request) =>
+    options.withLock(environmentId, () =>
+      resumeNodeInOperation(environmentId, {
+        ...request,
+        assertCurrent: () => {
+          request.assertCurrent();
+          if (store.get(environmentId)?.state !== "attached") {
+            throw serviceError(
+              "invalid_state",
+              "Worker node recovery requires an attached environment",
+            );
+          }
+        },
+      }),
+    );
+  return {
+    refresh,
+    resumeNode,
+    resumeNodeInOperation,
+    read: (environmentId: string) => inFlight.get(environmentId),
+  };
 }

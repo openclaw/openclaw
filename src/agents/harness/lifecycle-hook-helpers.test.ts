@@ -1,3 +1,5 @@
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const log = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
@@ -17,19 +19,20 @@ const EVENT = {
 };
 
 const ctx = { runId: "run-1", sessionKey: "agent:main:session-1" };
-function finalize(
-  hookRunner: Parameters<typeof runAgentHarnessBeforeAgentFinalizeHook>[0]["hookRunner"],
-  event: Parameters<typeof runAgentHarnessBeforeAgentFinalizeHook>[0]["event"] = EVENT,
-  context = ctx,
-) {
-  return runAgentHarnessBeforeAgentFinalizeHook({ event, ctx: context, hookRunner });
-}
-function finalizer(result: unknown, event: Parameters<typeof finalize>[1] = EVENT, context = ctx) {
+type FinalizeParams = Parameters<typeof runAgentHarnessBeforeAgentFinalizeHook>[0];
+function finalizer(results: unknown[], event: FinalizeParams["event"] = EVENT, context = ctx) {
   const hookRunner = {
     hasHooks: () => true,
-    runBeforeAgentFinalize: vi.fn().mockResolvedValue(result),
-  };
-  return () => finalize(hookRunner as never, event, context);
+    runBeforeAgentFinalize: async () => (results.length > 1 ? results.shift() : results[0]),
+  } as never;
+  return () => runAgentHarnessBeforeAgentFinalizeHook({ event, ctx: context, hookRunner });
+}
+async function expectRevisions(run: ReturnType<typeof finalizer>, reasons: (string | undefined)[]) {
+  for (const reason of reasons) {
+    await expect(run()).resolves.toEqual(
+      reason === undefined ? { action: "continue" } : { action: "revise", reason },
+    );
+  }
 }
 function retry<Key>(instruction: string, idempotencyKey: Key) {
   return { instruction, idempotencyKey, maxAttempts: 1 };
@@ -40,6 +43,54 @@ describe("agent harness lifecycle hook helpers", () => {
     log.warn.mockClear();
     Reflect.deleteProperty(globalThis, Symbol.for("openclaw.pluginFinalizeRetryBudget"));
   });
+
+  it.each(["agent_end", "before_agent_finalize"] as const)(
+    "releases hydrated message-loader state while %s is still running",
+    async (hook) => {
+      const entered = Promise.withResolvers<void>();
+      const pending = Promise.withResolvers<void>();
+      let receivedMessages: unknown[] | undefined;
+      const dispatch = async (event: { messages: unknown[] }) => {
+        receivedMessages = event.messages;
+        entered.resolve();
+        await pending.promise;
+      };
+      const hookRunner = {
+        hasHooks: () => true,
+        runAgentEnd: dispatch,
+        runBeforeAgentFinalize: dispatch,
+      } as never;
+      function start() {
+        const attempt = { text: "completed" };
+        const reference = new WeakRef(attempt);
+        const params = {
+          ctx,
+          hookRunner,
+          event: bindAgentHarnessHookMessages({ ...EVENT }, async () => [
+            { role: "assistant", content: attempt.text },
+          ]),
+        };
+        const completion =
+          hook === "agent_end"
+            ? awaitAgentHarnessAgentEndHook(params)
+            : runAgentHarnessBeforeAgentFinalizeHook(params);
+        return { reference, completion };
+      }
+      const running = start();
+      try {
+        await entered.promise;
+        expect(receivedMessages).toEqual([{ role: "assistant", content: "completed" }]);
+        const control = new WeakRef({});
+        await setImmediate();
+        queryObjects(WeakRef);
+        expect(control.deref()).toBeUndefined();
+        expect(running.reference.deref()).toBeUndefined();
+      } finally {
+        pending.resolve();
+        await running.completion;
+      }
+    },
+  );
 
   it.each(["agent_end", "before_agent_finalize"] as const)(
     "loads %s evidence only for its subscriber and skips delivery when loading fails",
@@ -78,158 +129,76 @@ describe("agent harness lifecycle hook helpers", () => {
     },
   );
 
-  it("resolves after agent_end hooks settle", async () => {
+  it.each([false, true])("dispatches agent_end with unrefTimeout=%s", async (unrefTimeout) => {
     const { promise: agentEndSettled, resolve: releaseHook } = Promise.withResolvers<void>();
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
       runAgentEnd: vi.fn(() => agentEndSettled),
     };
 
-    const run = awaitAgentHarnessAgentEndHook({
-      ctx,
-      event: EVENT,
-      hookRunner: hookRunner as never,
-    });
+    const params = { ctx, event: EVENT, hookRunner: hookRunner as never };
+    const run = unrefTimeout
+      ? runAgentHarnessAgentEndHook(params)
+      : awaitAgentHarnessAgentEndHook(params);
     let resolved = false;
-    void run.then(() => {
-      resolved = true;
-    });
+    if (run) {
+      void run.then(() => {
+        resolved = true;
+      });
+    }
 
     await Promise.resolve();
-    expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
-    expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledExactlyOnceWith(
       EVENT,
-      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
-      { unrefTimeout: false },
+      expect.objectContaining(ctx),
+      { unrefTimeout },
     );
     expect(resolved).toBe(false);
     releaseHook();
-    await expect(run).resolves.toBeUndefined();
-    expect(resolved).toBe(true);
-  });
-
-  it("can leave agent_end timeouts unref'd for fire-and-forget callers", async () => {
-    const hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
-      runAgentEnd: vi.fn(async () => undefined),
-    };
-
-    runAgentHarnessAgentEndHook({
-      ctx,
-      event: EVENT,
-      hookRunner: hookRunner as never,
-    });
-    await Promise.resolve();
-
-    expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
-      EVENT,
-      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
-      { unrefTimeout: true },
-    );
+    if (!unrefTimeout) {
+      await expect(run).resolves.toBeUndefined();
+      expect(resolved).toBe(true);
+    }
   });
 
   it("keys finalize retry budgets by context run id when the event omits run id", async () => {
-    const hookRunner = {
-      hasHooks: () => true,
-      runBeforeAgentFinalize: vi.fn().mockResolvedValue({
-        action: "revise",
-        retry: retry("revise from context run", "stable"),
-      }),
-    };
-    const eventWithoutRunId = {
-      ...EVENT,
-      runId: undefined,
-      sessionId: "shared-session",
-    };
-
-    const run = () =>
-      finalize(hookRunner as never, eventWithoutRunId, {
+    const run = finalizer(
+      [{ action: "revise", retry: retry("revise from context run", "stable") }],
+      { ...EVENT, runId: undefined, sessionId: "shared-session" },
+      {
         runId: "run-from-context",
         sessionKey: "agent:main:shared-session",
-      });
-    await expect(run()).resolves.toEqual({ action: "revise", reason: "revise from context run" });
-    await expect(run()).resolves.toEqual({ action: "continue" });
+      },
+    );
+    await expectRevisions(run, ["revise from context run", undefined]);
   });
 
-  it("preserves merged revise reasons when retry metadata is present", async () => {
-    const run = finalizer({
-      action: "revise",
-      reason: "fix generated baseline\n\nrerun the focused tests",
-      retry: retry("rerun the focused tests", "merged-reason"),
-    });
-
-    await expect(run()).resolves.toEqual({
-      action: "revise",
-      reason: "fix generated baseline\n\nrerun the focused tests",
-    });
-  });
-
-  it("honors a later finalize retry candidate after an earlier candidate is spent", async () => {
+  it("preserves merged reasons and advances to the next unspent finalize retry", async () => {
     const firstRetry = retry("regenerate artifacts", "artifacts");
     const secondRetry = retry("rerun focused tests", "tests");
     const result = {
       action: "revise",
-      reason: "retry generated artifacts\n\nretry focused tests",
+      reason: "regenerate artifacts\n\nretry focused tests",
       retry: firstRetry,
+      retryCandidates: [firstRetry, secondRetry],
     };
-    // retryCandidates is intentionally non-enumerable in production hook
-    // results, so callers do not serialize internal retry bookkeeping.
-    Object.defineProperty(result, "retryCandidates", {
-      enumerable: false,
-      value: [firstRetry, secondRetry],
-    });
-    const run = finalizer(result);
+    const run = finalizer([result]);
 
-    await expect(run()).resolves.toEqual({
-      action: "revise",
-      reason: "retry generated artifacts\n\nretry focused tests\n\nregenerate artifacts",
-    });
-    await expect(run()).resolves.toEqual({
-      action: "revise",
-      reason: "retry generated artifacts\n\nretry focused tests\n\nrerun focused tests",
-    });
+    await expectRevisions(run, [result.reason, result.reason + "\n\nrerun focused tests"]);
   });
 
-  it("falls back to retry instruction keys when retry idempotency keys are malformed", async () => {
-    const run = finalizer({
-      action: "revise",
-      retry: retry("retry with a safe key", { invalid: true }) as never,
-    });
-
-    await expect(run()).resolves.toEqual({
-      action: "revise",
-      reason: "retry with a safe key",
-    });
-    await expect(run()).resolves.toEqual({ action: "continue" });
-  });
-
-  it("does not collide fallback retry keys for long instructions with shared prefixes", async () => {
+  it("deduplicates malformed retry keys by full instruction without prefix collisions", async () => {
     // Fallback keys include a digest of the full instruction. Prefix-only
     // truncation would spend unrelated long retry requests together.
     const sharedPrefix = "x".repeat(180);
     const firstInstruction = `${sharedPrefix} first`;
     const secondInstruction = `${sharedPrefix} second`;
-    const hookRunner = {
-      hasHooks: () => true,
-      runBeforeAgentFinalize: vi
-        .fn()
-        .mockResolvedValueOnce({
-          action: "revise",
-          retry: retry(firstInstruction, { invalid: true }),
-        })
-        .mockResolvedValueOnce({
-          action: "revise",
-          retry: retry(secondInstruction, { invalid: true }),
-        }),
-    };
+    const run = finalizer([
+      { action: "revise", retry: retry(firstInstruction, { invalid: true }) },
+      { action: "revise", retry: retry(secondInstruction, { invalid: true }) },
+      { action: "revise", retry: retry(firstInstruction, { invalid: true }) },
+    ]);
 
-    await expect(finalize(hookRunner as never)).resolves.toEqual({
-      action: "revise",
-      reason: firstInstruction,
-    });
-    await expect(finalize(hookRunner as never)).resolves.toEqual({
-      action: "revise",
-      reason: secondInstruction,
-    });
+    await expectRevisions(run, [firstInstruction, secondInstruction, undefined]);
   });
 });

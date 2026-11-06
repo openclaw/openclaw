@@ -4,8 +4,6 @@ import { parseInlineOptionToken } from "./inline-option-token.js";
 
 // Command carriers are executables that can hide the real command behind
 // wrapper-specific options, environment assignments, or shell-style splitting.
-export const COMMAND_CARRIER_EXECUTABLES = new Set(["sudo", "doas", "env", "command", "builtin"]);
-
 export const SOURCE_EXECUTABLES = new Set([".", "source"]);
 
 const MAX_ENV_SPLIT_PAYLOAD_DEPTH = 32;
@@ -309,23 +307,18 @@ function resolveOptionCarrierArgv(argv: string[]): string[] | null {
   return null;
 }
 
-export function resolveCarrierCommandArgv(
-  argv: string[],
-  depth = 0,
-  options?: { includeExec?: boolean },
-): string[] | null {
+export function resolveCarrierCommandArgv(argv: string[]): string[] | null {
   const executable = normalizeExecutableToken(argv[0] ?? "");
   switch (executable) {
     case "env":
-      return resolveEnvCarriedArgv(argv, depth);
+      return resolveEnvCarriedArgv(argv);
     case "command":
     case "builtin":
       return resolveCommandBuiltinCarriedArgv(argv);
     case "sudo":
     case "doas":
-      return resolveOptionCarrierArgv(argv);
     case "exec":
-      return options?.includeExec ? resolveOptionCarrierArgv(argv) : null;
+      return resolveOptionCarrierArgv(argv);
     default:
       return null;
   }

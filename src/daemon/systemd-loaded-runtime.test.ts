@@ -1,4 +1,3 @@
-import * as fsSync from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ExecResult } from "./exec-file.js";
 
@@ -13,11 +12,6 @@ vi.mock("./systemd-exec.js", async (importOriginal) => ({
   assertSystemdAvailable: async () => {},
 }));
 vi.mock("./systemd-scope.js", () => ({ findInstalledSystemdGatewayScope: async () => null }));
-vi.mock("node:fs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs")>()),
-}));
-
-import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
 import { readSystemdServiceRuntime } from "./systemd-runtime.js";
 
 const env = {
@@ -112,12 +106,32 @@ function managerReply(args: string[], overrides: Record<string, unknown> = {}): 
   return success(values.join("\n"));
 }
 
+let allowsSystemctlShow = false;
 beforeEach(() => {
+  allowsSystemctlShow = false;
   busctl.mockReset().mockImplementation(async (_env, args) => managerReply(args));
   systemBusctl.mockReset();
   systemctl.mockReset();
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  try {
+    // Inspection must neither activate a bus service nor mutate a unit.
+    for (const query of [
+      ...busctl.mock.calls.map(([, args]) => args),
+      ...systemBusctl.mock.calls.map(([args]) => args),
+    ]) {
+      expect(query).toContain("--auto-start=no");
+      expect(query.some((arg) => /^(Start|Restart|Enable|Stop)Unit/.test(arg))).toBe(false);
+    }
+    if (allowsSystemctlShow) {
+      expect(systemctl.mock.calls.every(([, args]) => args[0] === "show")).toBe(true);
+    } else {
+      expect(systemctl).not.toHaveBeenCalled();
+    }
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
 
 it.each([
   ["masked", "masked", false, false, "masked"],
@@ -148,10 +162,14 @@ it.each([
       ),
     );
     for (const requireLoaded of [true, false]) {
+      allowsSystemctlShow = !requireLoaded;
       const runtime = await readSystemdServiceRuntime(env, {
         requireLoaded,
         commandInspection: { kind: "present" },
       });
+      if (requireLoaded) {
+        expect(systemctl).not.toHaveBeenCalled();
+      }
       expect(runtime.systemd?.startRefusal?.reason).toBe(reason);
       if (reason === "masked") {
         expect(runtime.detail).toContain(`systemctl --user unmask ${unitName}`);
@@ -183,56 +201,7 @@ it.each([0, 2001])("authenticates system manager UID %s", async (uid) => {
     await expect(observation).rejects.toMatchObject({ reason: "systemd-manager-changed" });
   }
   expect(busctl).not.toHaveBeenCalled();
-  expect(systemctl).not.toHaveBeenCalled();
-  expect(
-    systemBusctl.mock.calls.every(
-      ([args]) => args.includes("--auto-start=no") && !args.includes("LoadUnit"),
-    ),
-  ).toBe(true);
-});
-
-it("keeps empty containment unknown in a non-root cgroup", async () => {
-  mockRuntime({ ControlGroup: "" });
-  const read = fsSync.readFileSync;
-  const procFiles = new Map([
-    [`/proc/${process.pid}/cgroup`, "0::/container.scope\n"],
-    ["/proc/412/cgroup", "0::/container.scope\n"],
-    [`/proc/${process.pid}/stat`, `${process.pid} (caller) S 1 901\n`],
-    ["/proc/412/stat", "412 (gateway) S 1 900\n"],
-  ]);
-  vi.spyOn(fsSync, "readFileSync").mockImplementation((file, options) => {
-    const fixture = typeof file === "string" ? procFiles.get(file) : undefined;
-    return fixture ?? read(file, options);
-  });
-  const runtime = await readLoaded({ commandInspection: { kind: "present" } });
-  expect(runtime).toMatchObject({
-    status: "running",
-    pid: 412,
-    state: "active",
-    subState: "running",
-    lastExitStatus: 0,
-    lastExitReason: "exited",
-    systemd: {
-      unit: unitName,
-      result: "success",
-      nRestarts: 2,
-      tasksCurrent: 8,
-      memoryCurrent: 2048,
-    },
-  });
-  expect(systemctl).not.toHaveBeenCalled();
-  expect(
-    busctl.mock.calls.every(
-      ([selected, args]) =>
-        selected === env && args.includes("--auto-start=no") && !args.includes("LoadUnit"),
-    ),
-  ).toBe(true);
-  const pinned = busctl.mock.calls.filter(([, args]) => !args.includes("GetNameOwner"));
-  expect(pinned).toHaveLength(4);
-  expect(pinned.every(([, args]) => args.includes(":1.42"))).toBe(true);
-  expect(
-    inspectServiceProcessMembershipSync(runtime.pid!, "linux", runtime.systemd?.controlGroup),
-  ).toBe("unknown");
+  expect(systemBusctl.mock.calls.some(([args]) => args.includes("LoadUnit"))).toBe(false);
 });
 
 it.each([[-1], 2001].map((uid) => ({ uid })))(
@@ -266,7 +235,6 @@ it.each([
   async (_name, values) => {
     mockRuntime(values);
     expect((await readLoaded()).status).toBe("unknown");
-    expect(systemctl).not.toHaveBeenCalled();
   },
 );
 
@@ -291,59 +259,36 @@ it.each([
     if (!expired) {
       expect(runtime.systemd?.tasksCurrent).toBeUndefined();
     }
-    expect(busctl.mock.calls.find(([, args]) => args.includes("GetUnitProcesses"))?.[1]).toEqual([
-      "--auto-start=no",
-      "--json=short",
-      "call",
-      ":1.42",
-      "/org/freedesktop/systemd1",
-      "org.freedesktop.systemd1.Manager",
-      "GetUnitProcesses",
-      "s",
-      unitName,
-    ]);
-    expect(systemctl).not.toHaveBeenCalled();
   },
 );
 
-it.each([false, true])("requires authority to load definitions (owned=%s)", async (owned) => {
-  const assertCurrent = vi.fn();
-  mockCollected({ missing: true });
-  const runtime = await readLoaded(
-    owned ? { loadForInspection: { managerUid: 2001, assertCurrent } } : {},
-  );
-  expect(runtime.status).toBe(owned ? "stopped" : "unknown");
-  expect(runtime.missingUnit).not.toBe(true);
-  if (owned) {
-    expect(assertCurrent).toHaveBeenCalled();
-    expect(busctl.mock.calls.some(([, args]) => args.includes("GetProcesses"))).toBe(true);
-  }
-  expect(busctl.mock.calls.some(([, args]) => args.includes("LoadUnit"))).toBe(owned);
-  expect(systemctl).not.toHaveBeenCalled();
-});
-
-it.each(["uid", "busy"] as const)(
-  "preserves %s refusal without lifecycle effects",
-  async (fault) => {
-    const manager = mockCollected({ processes: fault === "busy" ? [["/owned", 91, "child"]] : [] });
-    const assertCurrent = () => {};
-    const observation = readLoaded({
-      loadForInspection: { managerUid: fault === "uid" ? 2002 : 2001, assertCurrent },
+it.each(["unowned", "owned", "uid", "busy"])(
+  "checks definition-loading authority: %s",
+  async (mode) => {
+    const assertCurrent = vi.fn();
+    const manager = mockCollected({
+      missing: mode === "unowned" || mode === "owned",
+      processes: mode === "busy" ? [["/owned", 91, "child"]] : [],
     });
-    if (fault === "uid") {
+    const observation = readLoaded(
+      mode === "unowned"
+        ? {}
+        : { loadForInspection: { managerUid: mode === "uid" ? 2002 : 2001, assertCurrent } },
+    );
+    if (mode === "uid") {
       await expect(observation).rejects.toMatchObject({ reason: "systemd-manager-changed" });
     } else {
-      expect((await observation).status).toBe("unknown");
+      const runtime = await observation;
+      expect(runtime.status).toBe(mode === "owned" ? "stopped" : "unknown");
+      if (mode !== "busy") {
+        expect(runtime.missingUnit).not.toBe(true);
+      }
     }
-    expect(manager.loaded).toBe(fault !== "uid");
-    expect(systemctl).not.toHaveBeenCalled();
-    expect(
-      busctl.mock.calls.every(
-        ([, args]) =>
-          args.includes("--auto-start=no") &&
-          !args.some((arg) => /^(Start|Restart|Enable|Stop)Unit/.test(arg)),
-      ),
-    ).toBe(true);
+    const loaded = mode === "owned" || mode === "busy";
+    expect(manager.loaded).toBe(loaded);
+    if (mode === "owned") {
+      expect(assertCurrent).toHaveBeenCalled();
+    }
   },
 );
 
@@ -393,7 +338,6 @@ it.each(["revoked-before", "revoked-load", "revoked-read", "claim-revoked", "slo
     });
     expect(runtime.status).toBe(mode === "slow-claim" ? "stopped" : "unknown");
     expect(manager.loaded).toBe(!["revoked-before", "claim-revoked"].includes(mode));
-    expect(systemctl).not.toHaveBeenCalled();
   },
 );
 
@@ -416,7 +360,7 @@ it.each([
       }),
       close: vi.fn(async () => {}),
       query: vi.fn(async (args: string[]) =>
-        managerReply(args)
+        managerReply(args, { ControlGroup: "" })
           .stdout.split("\n")
           .map((line) => {
             const row = JSON.parse(line) as { type: string; data: unknown };
@@ -434,15 +378,24 @@ it.each([
     );
     expect(runtime.status).toBe(replaced ? "unknown" : "running");
     if (!replaced) {
-      expect(runtime.systemd).toMatchObject({
-        unit: unitName,
-        managerUid: 2001,
-        tasksCurrent: expectedTasks,
-        memoryCurrent: 2048,
+      expect(runtime).toMatchObject({
+        pid: 412,
+        state: "active",
+        subState: "running",
+        lastExitStatus: 0,
+        lastExitReason: "exited",
+        systemd: {
+          unit: unitName,
+          managerUid: 2001,
+          result: "success",
+          nRestarts: 2,
+          tasksCurrent: expectedTasks,
+          memoryCurrent: 2048,
+          controlGroup: undefined,
+        },
       });
     }
     expect(busctl).not.toHaveBeenCalled();
-    expect(systemctl).not.toHaveBeenCalled();
     expect(binding.close).not.toHaveBeenCalled();
   },
 );

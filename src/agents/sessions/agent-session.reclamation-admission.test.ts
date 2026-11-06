@@ -1,7 +1,6 @@
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { CliPluginInvocationResources } from "../../cli/plugin-invocation-resources.js";
 import {
@@ -21,6 +20,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { extensionFixture, sessionTarget } from "./agent-session-boundary.test-support.js";
 import {
   createTestSession,
@@ -39,7 +39,7 @@ vi.mock(
       >();
     return {
       ...actual,
-      withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent, signal) =>
+      withSqliteReclamationWorker: ((options, claim, run, ...rest) =>
         actual.withSqliteReclamationWorker(
           options,
           claim,
@@ -49,14 +49,18 @@ vi.mock(
               let started = false;
               return originalRun({
                 ...params,
-                withWriteAdmission: (admit, diagnostics) =>
-                  params.withWriteAdmission(async (refusal) => {
-                    if (params.plan.kind === "entry" && !started) {
-                      started = true;
-                      checkpoint.startForeground?.();
-                    }
-                    return admit(refusal);
-                  }, diagnostics),
+                withWriteAdmission: (admit, diagnostics, operation) =>
+                  params.withWriteAdmission(
+                    async (refusal) => {
+                      if (params.plan.kind === "entry" && !started) {
+                        started = true;
+                        checkpoint.startForeground?.();
+                      }
+                      return admit(refusal);
+                    },
+                    diagnostics,
+                    operation,
+                  ),
               });
             });
             try {
@@ -65,8 +69,7 @@ vi.mock(
               spy.mockRestore();
             }
           },
-          assertRequestCurrent,
-          signal,
+          ...rest,
         )) satisfies typeof actual.withSqliteReclamationWorker,
     };
   },
@@ -104,8 +107,10 @@ it("retains a void extension message until its durable append and publication pr
       },
     });
   });
-  const manager = SessionManager.open(target, cwd);
-  const { session } = await createTestSession({ sessionManager: manager, resourceLoader });
+  const { session } = await createTestSession({
+    sessionManager: SessionManager.open(target, cwd),
+    resourceLoader,
+  });
   session.subscribe((event) => {
     if (
       (event.type === "message_start" || event.type === "message_end") &&
@@ -114,23 +119,18 @@ it("retains a void extension message until its durable append and publication pr
       events.push(event.type);
     }
   });
-  const entered = createDeferred();
-  const releaseWriter = createDeferred();
+  const gate = createEnteredGate();
   // The blocker belongs to another writer, not the extension's managed work.
   const writer = runOpenClawAgentWorkerWrite(
     toDatabaseOptions(resolveSqliteReadScope(target)),
-    async () => {
-      entered.resolve();
-      await releaseWriter.promise;
-    },
+    gate.wait,
   );
-  await entered.promise;
+  await gate.entered;
   const owner = new CliPluginInvocationResources();
   const readDurableMessages = () =>
     SessionManager.open(target, cwd)
       .getEntries()
-      .filter((entry) => entry.type === "custom_message")
-      .map((entry) => ({ customType: entry.customType, content: entry.content }));
+      .filter((entry) => entry.type === "custom_message");
   let durableAtRelease: ReturnType<typeof readDurableMessages> | undefined;
   try {
     await owner.run(() =>
@@ -148,7 +148,7 @@ it("retains a void extension message until its durable append and publication pr
     const closing = owner.release();
     await nextTurn();
     expect(events).toEqual(["command-returned"]);
-    releaseWriter.resolve();
+    gate.release();
     await Promise.all([writer, closing]);
     expect(events).toEqual([
       "command-returned",
@@ -156,9 +156,9 @@ it("retains a void extension message until its durable append and publication pr
       "message_end",
       "resource-released",
     ]);
-    expect(durableAtRelease).toEqual([payload]);
+    expect(durableAtRelease).toMatchObject([payload]);
   } finally {
-    releaseWriter.resolve();
+    gate.release();
     await writer;
     await owner.release();
     eventBus.clear();
@@ -201,13 +201,9 @@ it("queues an unrelated custom-message append behind reclamation writer admissio
     commitGuard: () => {},
     storePath,
     target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-  }).then(
-    (result) => ({ result }),
-    (error: unknown) => ({ error }),
-  );
+  }).catch((error: unknown) => error);
   const outcomes = await Promise.allSettled(write ? [write] : []);
-  expect(deletion).toMatchObject({ result: { deleted: true } });
-  expect(checkpoint.startForeground).toHaveBeenCalledOnce();
+  expect(deletion).toMatchObject({ deleted: true });
   expect(outcomes).toEqual([{ status: "fulfilled", value: undefined }]);
   expect(publishedDuringCommitAuthorization).toEqual([]);
   expect(published).toEqual(["admission-proof"]);

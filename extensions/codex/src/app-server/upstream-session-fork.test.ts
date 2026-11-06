@@ -108,10 +108,7 @@ beforeEach(() => {
   boundaryMocks.listTurns.mockReset();
   linkMocks.delete.mockReset();
   linkMocks.upsert.mockReset().mockReturnValue(true);
-  transcriptMocks.importHistory.mockReset().mockResolvedValue({
-    importedMessages: 1,
-    omittedMessages: 0,
-  });
+  transcriptMocks.importHistory.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(async () => {

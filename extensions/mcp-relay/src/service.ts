@@ -6,7 +6,11 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { ownsGrant, type RelayCaller } from "./caller.js";
 import type { GatewayRequest } from "./gateway-request.js";
-import { GrantBindings, isRetiredBindingError } from "./grant-bindings.js";
+import {
+  registerRelayPrincipalRecovery,
+  GrantBindings,
+  isRetiredBindingError,
+} from "./grant-bindings.js";
 import {
   capResult,
   codeHash,
@@ -53,7 +57,6 @@ type ServiceOptions = {
     request: GatewayRequest,
   ) => Promise<unknown>;
   socketFactory?: (url: string) => RelaySocket;
-  random?: () => number;
 };
 
 export class RelayService {
@@ -78,8 +81,12 @@ export class RelayService {
     this.#ingress = options.controlUiIngress;
   }
 
-  start(): void {
-    this.#options.scheduler.schedule({ id: "connect", delayMs: 0, run: () => this.#connect() });
+  async start(): Promise<void> {
+    const { scheduler } = this.#options;
+    scheduler.signal.throwIfAborted();
+    await registerRelayPrincipalRecovery(this.#ingress, this.#options.state, scheduler.signal);
+    scheduler.signal.throwIfAborted();
+    scheduler.schedule({ id: "connect", delayMs: 0, run: () => this.#connect() });
   }
 
   async stop(): Promise<void> {
@@ -493,15 +500,14 @@ export class RelayService {
         return;
       }
       if (typeof frame.type === "string" && frame.type.startsWith("ui.")) {
-        const uiStatus = this.#uiStatus();
-        if (this.#ui && uiStatus.available) {
+        if (this.#ui) {
           this.#ui.receive(frame);
         } else if (typeof frame.sid === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(frame.sid)) {
           sendControlFrame({
             type: "ui.error",
             sid: frame.sid,
             code: "unavailable",
-            message: uiStatus.reason,
+            message: this.#uiStatus().reason,
           });
         } else {
           socket.close(4400, "Invalid UI frame");
@@ -568,10 +574,7 @@ export class RelayService {
   #retry(closeCode: number): void {
     const base =
       closeCode === 4401 ? 60_000 : Math.min(60_000, 1000 * 2 ** Math.min(this.#attempt++, 6));
-    const delayMs = Math.min(
-      60_000,
-      Math.round(base * (0.8 + (this.#options.random ?? Math.random)() * 0.4)),
-    );
+    const delayMs = Math.min(60_000, Math.round(base * (0.8 + Math.random() * 0.4)));
     this.#options.scheduler.schedule({ id: "connect", delayMs, run: () => this.#connect() });
   }
 

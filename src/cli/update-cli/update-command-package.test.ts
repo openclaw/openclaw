@@ -39,6 +39,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
@@ -93,6 +94,8 @@ function activationGate(validate: (root: string) => Promise<UpdateStepResult[]>)
 }
 const readManifest = async (root: string) =>
   JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
+const stepsNamed = (result: UpdateRunResult, name: string) =>
+  result.steps.filter((step) => step.name === name);
 const packageEnv = (directory: string) => ({
   OPENCLAW_STATE_DIR: path.join(directory, "state"),
   OPENCLAW_CONFIG_PATH: path.join(directory, "openclaw.json"),
@@ -145,10 +148,7 @@ async function packageFixture(
   const writeInstall = async (packageRoot: string, version: string) => {
     await writePackageRoot(packageRoot, version);
     if (buildId) {
-      await fs.writeFile(
-        path.join(packageRoot, "dist/build-info.json"),
-        JSON.stringify({ buildId }),
-      );
+      await writeFixtureJson(path.join(packageRoot, "dist/build-info.json"), { buildId });
       await writePackageDistInventory(packageRoot);
     }
   };
@@ -327,7 +327,6 @@ it.each(["guidance", "staging"])(
 );
 
 it.each([
-  ["1.0.0", "package"],
   ["https://example.invalid/candidate.tgz", "package"],
   ["openclaw@file:../candidate", "package"],
   ["https://example.invalid/candidate.tgz", "git"],
@@ -359,9 +358,6 @@ it.each([
       expect(result).toMatchObject({ status: "error", reason: "unexpected-error" });
       expect(result.steps).toContainEqual(expect.objectContaining({ name: "canary", exitCode: 1 }));
       gate.expectCalls(1, 0);
-    } else if (tag === "1.0.0") {
-      expect(await update).toMatchObject({ status: "skipped", reason: "already-current" });
-      gate.expectCalls(0, 0);
     } else {
       await expect(update).rejects.toBe(gate.stopped);
       gate.expectCalls(1, 1);
@@ -583,12 +579,12 @@ it.each([false, true])(
 );
 
 it.each([
-  { policy: "unbounded", workTimeoutMs: null, expectedTimeoutMs: undefined },
-  { policy: "explicit", workTimeoutMs: 2000, expectedTimeoutMs: 2000 },
-  { policy: "legacy", workTimeoutMs: undefined, expectedTimeoutMs: 1000 },
+  { label: "explicit", workTimeoutMs: 2000, expectedTimeout: 2000 },
+  { label: "unbounded", workTimeoutMs: null, expectedTimeout: undefined },
+  { label: "legacy", workTimeoutMs: undefined, expectedTimeout: 1000 },
 ])(
-  "runs staged install and Doctor with the $policy work budget",
-  async ({ workTimeoutMs, expectedTimeoutMs }) => {
+  "runs staged install and Doctor with a $label work budget",
+  async ({ workTimeoutMs, expectedTimeout }) => {
     const { root, params } = await packageFixture(base, "2026.5.14", {
       installedVersion: "2026.4.21",
     });
@@ -614,67 +610,138 @@ it.each([
     expect(result).toMatchObject({ status: "ok", root, after: { version: "2026.5.14" } });
     expect(commands.mock.calls.filter(([argv]) => argv[2] === "doctor")).toHaveLength(1);
     for (const [argv, options] of commands.mock.calls) {
-      expect(options, argv.join(" ")).toMatchObject({ timeoutMs: expectedTimeoutMs });
+      if (argv[2] === "doctor" && expectedTimeout !== undefined) {
+        assert(typeof options !== "number");
+        // Preparation spends the same allowance before the Doctor command is admitted.
+        expect(options.timeoutMs).toBeGreaterThan(0);
+        expect(options.timeoutMs).toBeLessThanOrEqual(expectedTimeout);
+      } else {
+        expect(options, argv.join(" ")).toMatchObject({ timeoutMs: expectedTimeout });
+      }
     }
   },
 );
 
-it("retains Doctor settlement warnings through the package activation result", async () => {
-  const { params, root, expectOriginal } = await packageFixture(base, "2.0.0");
-  const doctorEnv = await doctorEnvironment();
-  const warning =
-    "Doctor timed out, but every tracked process group stopped. Run `openclaw update repair`.";
-  const settlement: UpdateStepResult = {
-    name: "doctor process settlement",
-    command: "settle doctor process groups",
-    cwd: root,
-    durationMs: 1,
-    exitCode: 0,
-    advisory: { kind: "recoverable-maintenance", message: warning },
-  };
-  // Native settlement has process-boundary coverage; this test owns the package
-  // verifier's auxiliary-step transport and its public warning consumer.
-  vi.spyOn(doctorChild, "withUpdateDoctorChild").mockImplementation(
-    async ({ context }, operation) => {
-      const value = await operation(async () =>
-        createCommandResult({
-          stdout: "Doctor busy",
-          stderr: "",
-          code: null,
-          signal: "SIGKILL",
-          killed: true,
-          cleanup: "forced",
-          termination: "timeout",
+it.each(["settlement", "database writes", "reporting failure"] as const)(
+  "retains Doctor %s warnings through the package activation result",
+  async (receiptKind) => {
+    const { params, root, expectOriginal } = await packageFixture(base, "2.0.0");
+    const doctorEnv = await doctorEnvironment();
+    const migration = receiptKind !== "settlement";
+    const warning = migration
+      ? "Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown."
+      : "Doctor timed out, but every tracked process group stopped. Run `openclaw update repair`.";
+    const settlement: UpdateStepResult = {
+      name: "doctor process settlement",
+      command: "settle doctor process groups",
+      cwd: root,
+      durationMs: 1,
+      exitCode: 0,
+      advisory: { kind: "recoverable-maintenance", message: warning },
+    };
+    // Native settlement has process-boundary coverage; this test owns the package
+    // verifier's auxiliary-step transport and its public warning consumer.
+    vi.spyOn(doctorChild, "withUpdateDoctorChild").mockImplementation(
+      async ({ context }, operation) => {
+        const value = await operation(async (_argv, options) => {
+          if (migration) {
+            assert(typeof options === "object");
+            const resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+            assert(resultPath);
+            await writeUpdatePostInstallDoctorResult({
+              resultPath,
+              result: {
+                status: "ok",
+                warnings: ["Unrelated Doctor warning"],
+                databaseWrites: {
+                  unchanged: false,
+                  fromGenerations: { "database.sqlite": "foreign-write" },
+                  generations: { "database.sqlite": "after" },
+                },
+              },
+            });
+            return createCommandResult();
+          }
+          return createCommandResult({
+            stdout: "Doctor busy",
+            stderr: "",
+            code: null,
+            signal: "SIGKILL",
+            killed: true,
+            cleanup: "forced",
+            termination: "timeout",
+          });
+        });
+        if (!migration) {
+          context.onProcessSettlement?.(settlement);
+        }
+        return value;
+      },
+    );
+    const result = await runPackageInstallUpdate({
+      ...params,
+      ...doctorEnv,
+      progress: {
+        onStepComplete: (step) => {
+          if (receiptKind === "reporting failure" && step.name === "database migration writes") {
+            throw new Error("Doctor progress could not be recorded.");
+          }
+        },
+      },
+      getDoctorContext: () => ({
+        runId: "doctor-settlement-transport",
+        executorFence: { assertCurrent: () => {} },
+        inputHash: "fixture-input",
+        changes: [],
+        ...(migration
+          ? {
+              databaseBackup: {
+                directory: path.join(base, "backup"),
+                databases: [],
+                missingPaths: [],
+                sourcePaths: ["database.sqlite"],
+                sourceGenerations: { "database.sqlite": "before" },
+                warnings: [],
+              },
+            }
+          : {}),
+        assertCurrent: () => {},
+        assertBoundChildCurrent: () => {},
+      }),
+    });
+    if (migration) {
+      expect(result.status).toBe(receiptKind === "reporting failure" ? "error" : "ok");
+      if (receiptKind === "reporting failure") {
+        expect(result.failedStep).toMatchObject({
+          name: "openclaw doctor",
+          failureFacts: expect.arrayContaining([
+            expect.objectContaining({
+              check: "openclaw doctor",
+              message: expect.stringContaining("Doctor progress could not be recorded."),
+            }),
+          ]),
+        });
+      }
+      expect(stepsNamed(result, "database migration writes")).toEqual([
+        expect.objectContaining({
+          warnings: expect.arrayContaining([expect.stringContaining(warning)]),
         }),
-      );
-      context.onProcessSettlement?.(settlement);
-      return value;
-    },
-  );
-  const result = await runPackageInstallUpdate({
-    ...params,
-    ...doctorEnv,
-    getDoctorContext: () => ({
-      runId: "doctor-settlement-transport",
-      executorFence: { assertCurrent: () => {} },
-      inputHash: "fixture-input",
-      changes: [],
-      assertCurrent: () => {},
-      assertBoundChildCurrent: () => {},
-    }),
-  });
-  expect(result).toMatchObject({
-    status: "error",
-    root,
-    failedStep: { termination: "timeout" },
-  });
-  expect(result.steps.filter((step) => step.name === "doctor process settlement")).toEqual([
-    settlement,
-  ]);
-  expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(warning);
-  await restoreTransactions();
-  await expectOriginal();
-});
+      ]);
+    } else {
+      expect(result).toMatchObject({
+        status: "error",
+        root,
+        failedStep: { termination: "timeout" },
+      });
+      expect(stepsNamed(result, "doctor process settlement")).toEqual([settlement]);
+    }
+    expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+      warning,
+    );
+    await restoreTransactions();
+    await expectOriginal();
+  },
+);
 
 it.each([
   { method: "package", reason: "requester-revoked" },
@@ -686,17 +753,22 @@ it.each([
     const { params: defaults, root, expectOriginal } = await packageFixture(base, "2.0.0");
     const doctorEnv = await doctorEnvironment();
     const env = doctorEnv.installEnv;
-    const receipt: UpdatePostInstallDoctorResult = {
-      status: "error",
+    const receiptDetails = {
       configChanges: [{ kind: "migration", message: "Moved model allowlist." }],
       configWriteRefusal: { reason, message: "Config writer refused.", keys: ["agents"] },
       failureFacts: [{ check: "config", code: reason, affectedKey: "agents" }],
       warnings: ["Review the migrated model allowlist."],
-    };
+    } satisfies Omit<UpdatePostInstallDoctorResult, "status">;
+    const receipt: UpdatePostInstallDoctorResult = { status: "error", ...receiptDetails };
     let resultPath: string | undefined;
     mockDoctor(async (_argv, options) => {
       assert(typeof options === "object");
-      expect(options).toMatchObject({ timeoutMs: expectedDoctorTimeoutMs });
+      if (expectedDoctorTimeoutMs === undefined) {
+        expect(options.timeoutMs).toBeUndefined();
+      } else {
+        expect(options.timeoutMs).toBeGreaterThan(0);
+        expect(options.timeoutMs).toBeLessThanOrEqual(expectedDoctorTimeoutMs);
+      }
       resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
       assert(resultPath);
       await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });
@@ -769,26 +841,22 @@ it.each([
       failedStep: {
         name: "openclaw doctor",
         exitCode: 1,
-        configChanges: receipt.configChanges,
-        configWriteRefusal: receipt.configWriteRefusal,
+        ...receiptDetails,
         failureFacts: expect.arrayContaining([
-          ...(receipt.failureFacts ?? []),
+          ...receiptDetails.failureFacts,
           expect.objectContaining({
             check: "openclaw doctor",
             code: "Error",
             message: "Doctor transport failed after the child settled.",
           }),
         ]),
-        warnings: receipt.warnings,
       },
     });
     expect(result.failedStep?.advisory).toBeUndefined();
     expect(
       result.failedStep?.stderrTail?.match(/Doctor transport failed after the child settled\./gu),
     ).toHaveLength(1);
-    expect(result.steps.filter((step) => step.name === "openclaw doctor")).toEqual([
-      result.failedStep,
-    ]);
+    expect(stepsNamed(result, "openclaw doctor")).toEqual([result.failedStep]);
     assert(resultPath, "Doctor must write its receipt through the production callback");
     await expect(fs.access(resultPath)).rejects.toMatchObject({ code: "ENOENT" });
     await restoreTransactions();

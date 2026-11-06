@@ -36,6 +36,7 @@ describe("hybrid project ranking", () => {
         textWeight: 0,
         activeProjectKeys,
         mmr: { enabled: true, lambda: 0.7 },
+        temporalDecay: { enabled: false, halfLifeDays: 30 },
       });
     } finally {
       iterator.mockRestore();

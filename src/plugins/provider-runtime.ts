@@ -1,4 +1,4 @@
-import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { createSystemPromptCacheBoundaryStripper } from "@openclaw/ai/internal/shared";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -19,10 +19,7 @@ import { providerUsageLabel } from "../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
-import type {
-  PluginMetadataRegistryView,
-  PluginMetadataSnapshot,
-} from "./plugin-metadata-snapshot.types.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import {
   resolvePluginOwnedProviderAuthWith,
   resolveProviderAuthScope,
@@ -55,14 +52,11 @@ import {
   type PreparedSyntheticAuthFacts,
 } from "./provider-synthetic-auth.js";
 import {
-  resolveCatalogHookProviderPluginIds,
   resolveOwningPluginIdsForProviderRef,
   resolveUsageHookProviderPluginContracts,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
-import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
-  ProviderAugmentModelCatalogContext,
   ProviderDeferSyntheticProfileAuthContext,
   ProviderResolveSyntheticAuthContext,
   ProviderCreateStreamFnContext,
@@ -159,41 +153,6 @@ export {
   wrapProviderSimpleCompletionStreamFn,
 };
 
-function resolveProviderPluginsForCatalogHooks(params: {
-  providerIds?: readonly string[];
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
-}): ProviderPlugin[] {
-  const workspaceDir =
-    params.workspaceDir ??
-    params.metadataSnapshot?.workspaceDir ??
-    getActivePluginRegistryWorkspaceDirFromState();
-  const env = params.env ?? process.env;
-  const onlyPluginIds = resolveCatalogHookProviderPluginIds({
-    config: params.config,
-    workspaceDir,
-    env,
-    metadataSnapshot: params.metadataSnapshot,
-  });
-  if (onlyPluginIds.length === 0 || params.providerIds?.length === 0) {
-    return [];
-  }
-  const providers = resolveProviderPluginsForHooks({
-    ...params,
-    workspaceDir,
-    env,
-    onlyPluginIds,
-    providerRefs: params.providerIds,
-    pluginMetadataSnapshot: params.metadataSnapshot,
-  });
-  const providerIds = params.providerIds;
-  return providerIds
-    ? providers.filter((provider) => matchesAnyProviderPluginRef(provider, providerIds))
-    : providers;
-}
-
 export const runProviderDynamicModel = normalizedRuntimeHook("resolveDynamicModel");
 
 export function resolveProviderSystemPromptContribution(
@@ -256,10 +215,7 @@ export function transformProviderSystemPrompt(
   },
 ): string {
   const plugin = ensureProviderRuntimePluginHandle(params).plugin;
-  const textTransforms = mergePluginTextTransforms(
-    resolveRuntimeTextTransforms(),
-    plugin?.textTransforms,
-  );
+  const textTransforms = mergePluginTextTransforms(plugin?.textTransforms);
   const transformed =
     plugin?.transformSystemPrompt?.(params.context) ?? params.context.systemPrompt;
   return applyPluginTextReplacements(transformed, textTransforms?.input);
@@ -271,7 +227,6 @@ export function resolveProviderTextTransforms(
   },
 ): PluginTextTransforms | undefined {
   return mergePluginTextTransforms(
-    resolveRuntimeTextTransforms(),
     ensureProviderRuntimePluginHandle(params).plugin?.textTransforms,
   );
 }
@@ -380,12 +335,17 @@ export function normalizeProviderTransportWithPlugin(
     return undefined;
   }
 
+  // Other plugins may only tidy a transport within its origin; another origin would receive
+  // this provider's credential.
+  const origin = (url?: string) => (url ? URL.parse(url)?.origin : undefined);
+  const requestOrigin = origin(params.context.baseUrl);
   for (const candidate of resolveProviderPluginsForHooks(params)) {
-    if (!candidate.normalizeTransport || candidate === matchedPlugin) {
-      continue;
-    }
-    const normalized = candidate.normalizeTransport(context);
-    if (normalized && hasTransportChange(normalized)) {
+    const normalized =
+      candidate === matchedPlugin ? undefined : candidate.normalizeTransport?.(context);
+    const keepsOrigin =
+      !normalized?.baseUrl ||
+      (requestOrigin !== undefined && origin(normalized.baseUrl) === requestOrigin);
+    if (normalized && hasTransportChange(normalized) && keepsOrigin) {
       return normalized;
     }
   }
@@ -444,14 +404,8 @@ export function resolveProviderStreamFn(
   if (!streamFn || plugin?.supportsSystemPromptCacheBoundary) {
     return streamFn ?? undefined;
   }
-  return (model, context, options) =>
-    streamFn(
-      model,
-      context.systemPrompt
-        ? { ...context, systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt) }
-        : context,
-      options,
-    );
+  const stripCacheBoundary = createSystemPromptCacheBoundaryStripper();
+  return (model, context, options) => streamFn(model, stripCacheBoundary(context), options);
 }
 
 export function resolveProviderTransportTurnStateWithPlugin(
@@ -579,8 +533,6 @@ export function listProviderUsagePluginDescriptors(params: {
 export { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
 
 export const formatProviderAuthProfileApiKeyWithPlugin = runtimeHook("formatApiKey");
-
-export const buildProviderAuthDoctorHintWithPlugin = asyncRuntimeHook("buildAuthDoctorHint");
 
 export const resolveProviderCacheTtlEligibility = runtimeHook("isCacheTtlEligible");
 
@@ -824,18 +776,4 @@ export function shouldDeferProviderSyntheticProfileAuthWithPlugin(
   return undefined;
 }
 
-export async function augmentModelCatalogWithProviderPlugins(params: {
-  providerIds?: readonly string[];
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
-  context: ProviderAugmentModelCatalogContext;
-}) {
-  const supplemental: ProviderAugmentModelCatalogContext["entries"] = [];
-  for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
-    supplemental.push(...((await plugin.augmentModelCatalog?.(params.context)) ?? []));
-  }
-  return supplemental;
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+export { augmentModelCatalogWithProviderPlugins } from "./provider-catalog-augment.js";

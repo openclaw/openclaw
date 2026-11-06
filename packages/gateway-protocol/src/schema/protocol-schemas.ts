@@ -1,15 +1,14 @@
 import { MigrationProtocolSchemas } from "./migrations.js";
-import { composeProtocolSchemaFragments } from "./protocol-schema-composer.js";
 import { DerivedProtocolSchemas } from "./protocol-schema-selection.js";
 import type { Registry } from "./protocol-schema-types.js";
 import { SessionPlacementProtocolSchemas } from "./session-placement.js";
 
 /** Public schema registry keyed by stable protocol schema name. */
-export const ProtocolSchemas: Registry = composeProtocolSchemaFragments([
-  DerivedProtocolSchemas,
-  MigrationProtocolSchemas,
-  SessionPlacementProtocolSchemas,
-] as const);
+export const ProtocolSchemas: Registry = {
+  ...DerivedProtocolSchemas,
+  ...MigrationProtocolSchemas,
+  ...SessionPlacementProtocolSchemas,
+};
 
 export {
   MIN_CLIENT_PROTOCOL_VERSION,

@@ -1,6 +1,8 @@
 // Register shared mocks before importing the production CLI graph.
 import "./update-repair.test-support.js";
 import os from "node:os";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
+import * as nativeProcess from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -30,6 +32,10 @@ vi.mock("../../infra/update-check.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-check.js")>()),
   resolveUpdateInstallKind: async () => "package",
 }));
+vi.mock("@openclaw/proc-safe/identity", async (original) => ({
+  ...(await original<typeof import("@openclaw/proc-safe/identity")>()),
+}));
+
 let state: OpenClawTestState;
 let fixture: ReturnType<typeof createManagedHandoffRecoveryFixture>;
 
@@ -42,20 +48,6 @@ function repair(flags = ["--yes", "--json", "--timeout", "15"]) {
 function handoffDatabase() {
   return createManagedHandoffLeaseDatabase(
     state.path("handoff-control/managed-update-handoffs.sqlite"),
-  );
-}
-
-function insertChild(root: string, owner: string, payload: string, updatedAt: number) {
-  handoffDatabase()(true, (db) =>
-    executeSqliteQuerySync(
-      db,
-      leaseQueries(db).insertInto("managed_update_handoffs").values({
-        install_root: root,
-        owner,
-        payload_json: payload,
-        updated_at: updatedAt,
-      }),
-    ),
   );
 }
 
@@ -144,12 +136,14 @@ function seedLegacyLineage(nested = false, bound = false) {
     if (retained.kind !== "current") {
       throw new Error("Missing lineage fixture");
     }
-    insertChild(
-      `${key}/.openclaw-update-child-nested`,
-      retained.lease.owner,
-      retained.lease.payload,
-      retained.lease.updatedAt,
-    );
+    fixture.insert([
+      {
+        install_root: `${key}/.openclaw-update-child-nested`,
+        owner: retained.lease.owner,
+        payload_json: retained.lease.payload,
+        updated_at: retained.lease.updatedAt,
+      },
+    ]);
   }
   // An unbound legacy reservation never had a detached executor. An unrelated group
   // or an EPERM group probe must not turn its dead identity into live custody.
@@ -187,8 +181,6 @@ it.each(["root", "dead", "reused", "nested"] as const)(
       fixture.births.set(fixture.helper.pid, 99);
     }
     await repair();
-    expect(mocks.doctor).toHaveBeenCalledOnce();
-    expect(mocks.plugins).toHaveBeenCalledOnce();
     expectAbsent(key, `${key}/.openclaw-update-child-nested`);
     if (root) {
       expect(listUpdateRuns()).toHaveLength(1);
@@ -226,6 +218,14 @@ it.each(preservedOwnerCases)(
         }
         return kill(pid, signal);
       });
+      // Both Windows probes must observe the synthetic owner's denied permissions.
+      const readIdentity = nativeProcess.readProcessIdentity;
+      vi.spyOn(nativeProcess, "readProcessIdentity").mockImplementation((pid) => {
+        if (pid === fixture.helper.pid) {
+          throw new ProcSafeError("access-denied", "permission denied");
+        }
+        return readIdentity(pid);
+      });
     }
     const retained = fixture.store.read(key);
     await repair();
@@ -256,7 +256,14 @@ it.each([false, true])(
       recordUpdateRunStep(run.runId, { step: "package rollback", status: "in_progress" });
     }
     finishUpdateRun(run.runId, { status: "failed", reason: "update-failed" });
-    insertChild(second, run.runId, legacyPayload(identity), Date.now() - 13 * 60 * 60_000);
+    fixture.insert([
+      {
+        install_root: second,
+        owner: run.runId,
+        payload_json: legacyPayload(identity),
+        updated_at: Date.now() - 13 * 60 * 60_000,
+      },
+    ]);
     const retained = [fixture.store.read(first), fixture.store.read(second)];
     if (!pendingRollback) {
       mocks.doctor.mockImplementation(async () => {

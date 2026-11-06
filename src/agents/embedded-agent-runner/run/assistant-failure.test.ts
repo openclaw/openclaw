@@ -77,13 +77,15 @@ function makeExhaustedCredentialFailureInput() {
 function setAttempt(
   input: AssistantFailureInput,
   assistant: AssistantMessage,
-  attempt = makeEmbeddedRunnerAttempt({
-    assistantTexts: [],
+  overrides: Parameters<typeof makeEmbeddedRunnerAttempt>[0] = {
+    currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+  },
+) {
+  const attempt = makeEmbeddedRunnerAttempt({
     lastAssistant: assistant,
     currentAttemptAssistant: assistant,
-    currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-  }),
-) {
+    ...overrides,
+  });
   Object.assign(input.normalizedAttempt, {
     attempt,
     attemptAssistant: assistant,
@@ -134,15 +136,12 @@ function makeIdleTimeoutFailureInput(options?: { replaySafe?: boolean }) {
     hadPotentialSideEffects: !replaySafe,
     replaySafe,
   };
-  const attempt = makeEmbeddedRunnerAttempt({
+  setAttempt(fixture.input, assistant, {
     terminal: { kind: "timeout", phase: "prompt", source: "idle" },
-    lastAssistant: assistant,
-    currentAttemptAssistant: assistant,
     toolMetas: replaySafe ? [] : [{ toolName: "write", replaySafe: false }],
     replayMetadata,
     currentAttemptReplayMetadata: replayMetadata,
   });
-  setAttempt(fixture.input, assistant, attempt);
   fixture.input.emptyErrorRetries = 0;
   fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
   return fixture;
@@ -151,16 +150,10 @@ function makeIdleTimeoutFailureInput(options?: { replaySafe?: boolean }) {
 function makeTerminalStreamFailureInput(assistant: AssistantMessage) {
   const fixture = makeExhaustedCredentialFailureInput();
   const assistantText = assistant.content.find((part) => part.type === "text")?.text;
-  setAttempt(
-    fixture.input,
-    assistant,
-    makeEmbeddedRunnerAttempt({
-      assistantTexts: assistantText ? [assistantText] : [],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    }),
-  );
+  setAttempt(fixture.input, assistant, {
+    assistantTexts: assistantText ? [assistantText] : [],
+    currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+  });
   setRuntimeModel(fixture.input, assistant.provider, assistant.model);
   fixture.input.runtime.lastProfileId = undefined;
   fixture.input.emptyErrorRetries = 0;
@@ -217,6 +210,76 @@ async function streamIncompleteMistralResponseOverLoopback() {
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it.each([
+    "404 model not found",
+    "404 model_not_found",
+    "model-not-found",
+    "unknown model: mock-1",
+    "models/gemini-missing is not found for API version v1beta",
+    "mock-1 was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic-retirement)",
+    "No endpoints found for synthetic/missing",
+    "The model mock-1 has been deprecated.",
+  ])("advances to the fallback model without rotating credentials for %s", async (errorMessage) => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    setAttempt(fixture.input, buildEmbeddedRunnerAssistant({ stopReason: "error", errorMessage }));
+    const requests: string[] = [];
+    let profile = 0;
+    fixture.input.failover.advanceAuthProfile = vi.fn(async () => ++profile < 3);
+    const result = await runWithModelFallback({
+      cfg: createModelFallbackConfig("anthropic/mock-1", ["google/mock-2"]),
+      provider: "anthropic",
+      model: "mock-1",
+      sessionId: `session:missing-${errorMessage}`,
+      skipAuthProfileRuntime: true,
+      run: async (provider, model) => {
+        if (provider === "anthropic") {
+          for (;;) {
+            requests.push(`${provider}/${model}/profile-${profile}`);
+            await handleEmbeddedAssistantFailure(fixture.input);
+          }
+        }
+        requests.push(`${provider}/${model}`);
+        return "fallback complete";
+      },
+    });
+    expect(result.result).toBe("fallback complete");
+    expect(requests).toEqual(["anthropic/mock-1/profile-0", "google/mock-2"]);
+    expect(fixture.input.failover.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "401 unauthorized",
+    "429 quota exceeded",
+    "The model does not exist or you do not have access",
+    "model not found for this plan",
+    "404 page not found",
+    "not_found_error",
+    "HTTP 400 not_found_error: model: mock-1 (request_id: synthetic)",
+    "unknown model: permission denied",
+  ])("retains profile recovery for %s", async (errorMessage) => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    setAttempt(fixture.input, buildEmbeddedRunnerAssistant({ stopReason: "error", errorMessage }));
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).resolves.toMatchObject({
+      action: "retry",
+    });
+    expect(fixture.advanceAuthProfile).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces a missing model without rotating when no fallback is configured", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    fixture.input.runInput.fallbackConfigured = false;
+    setAttempt(
+      fixture.input,
+      buildEmbeddedRunnerAssistant({ stopReason: "error", errorMessage: "unknown model: mock-1" }),
+    );
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
+      reason: "model_not_found",
+    });
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
   it("surfaces storage failure without replaying the run or rotating credentials", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
     fixture.input.normalizedAttempt.attemptAssistant = buildEmbeddedRunnerAssistant({
@@ -313,11 +376,7 @@ describe("handleEmbeddedAssistantFailure", () => {
       errorMessage: "server_error: provider failed",
       errorCode: "server_error",
     });
-    setAttempt(
-      fixture.input,
-      assistant,
-      makeEmbeddedRunnerAttempt({ lastAssistant: assistant, currentAttemptAssistant: assistant }),
-    );
+    setAttempt(fixture.input, assistant, {});
     setRuntimeModel(fixture.input, "openai", "gpt-5.6-luna");
     fixture.input.providerOwner = {
       id: "openai",
@@ -467,13 +526,10 @@ describe("handleEmbeddedAssistantFailure", () => {
         stopReason: "error",
         errorMessage,
       });
-      const attempt = makeEmbeddedRunnerAttempt({
+      setAttempt(fixture.input, assistant, {
         terminal: { kind: "timeout", phase: "prompt", source: "external" },
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
         currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
       });
-      setAttempt(fixture.input, assistant, attempt);
       fixture.input.emptyErrorRetries = 0;
       fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
 
@@ -523,12 +579,7 @@ describe("handleEmbeddedAssistantFailure", () => {
       content: [{ type: "text", text: "" }],
       usage: createMockUsage(0, 0),
     });
-    const attempt = makeEmbeddedRunnerAttempt({
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    setAttempt(fixture.input, assistant, attempt);
+    setAttempt(fixture.input, assistant);
     fixture.input.emptyErrorRetries = 0;
 
     await expect(handleEmbeddedAssistantFailure(fixture.input)).resolves.toMatchObject({

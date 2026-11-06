@@ -7,16 +7,15 @@ import {
 import { hasBrowserControlWork } from "../browser-control-state.js";
 import { BROWSER_PROXY_COMMAND, BROWSER_PROXY_UPLOAD_COMMAND } from "../browser-node-commands.js";
 import {
-  assertBrowserProxyFileCountWithinLimit,
   assertBrowserProxyFileBytesWithinLimits,
   BROWSER_PROXY_ERROR_ENVELOPE,
   BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
   createBrowserProxyFailure,
+  collectBrowserProxyFilePaths,
   type BrowserProxyEnvelope,
   type BrowserProxyFile,
   type BrowserProxyRoute,
   type BrowserProxyUploadV1,
-  visitBrowserProxyFilePaths,
 } from "../browser-proxy-envelope.js";
 import { resolveBrowserProxyTimeoutMs } from "../browser-proxy-timeouts.js";
 import {
@@ -119,48 +118,8 @@ function resolveBrowserProxyConfig(cfg = loadBrowserConfigForRuntimeRefresh()) {
   };
 }
 
-let browserControlReady: Promise<void> | null = null;
-let admittedBrowserControlState: ReturnType<typeof getBrowserControlState> = null;
-
 export function hasBrowserNodeHostWork(): boolean {
   return hasBrowserControlWork() || hasBrowserProxyUploadWork();
-}
-
-async function ensureBrowserControlService(): Promise<void> {
-  const current = getBrowserControlState();
-  // Admission survives config refresh only for this exact live runtime generation.
-  if (current && current === admittedBrowserControlState) {
-    return;
-  }
-  if (browserControlReady) {
-    return browserControlReady;
-  }
-  const startup = (async () => {
-    const cfg = loadBrowserConfigForRuntimeRefresh();
-    const resolved = resolveBrowserConfig(cfg.browser, cfg);
-    if (!resolved.enabled) {
-      throw new Error(await describeBrowserControlUnavailable(cfg));
-    }
-    const started = await startBrowserControlServiceFromConfig();
-    if (!started) {
-      throw new Error(await describeBrowserControlUnavailable(cfg));
-    }
-    admittedBrowserControlState = started;
-  })();
-  browserControlReady = startup.finally(() => {
-    // Share pending failures, but never keep settled startup as runtime authority.
-    browserControlReady = null;
-  });
-  return browserControlReady;
-}
-
-function collectBrowserProxyPaths(payload: unknown): string[] {
-  const paths = new Set<string>();
-  visitBrowserProxyFilePaths(payload, (filePath) => {
-    paths.add(filePath.trim());
-    assertBrowserProxyFileCountWithinLimit(paths.size);
-  });
-  return [...paths];
 }
 
 async function readBrowserProxyFiles(filePaths: string[]): Promise<BrowserProxyFile[]> {
@@ -313,7 +272,9 @@ export async function runBrowserProxyCommand(
     throw new Error("INVALID_REQUEST: owned tab close requires POST");
   }
 
-  await ensureBrowserControlService();
+  if (!(await startBrowserControlServiceFromConfig())) {
+    throw new Error(await describeBrowserControlUnavailable());
+  }
   invocationSignal?.throwIfAborted();
   const cfg = loadBrowserConfigForRuntimeRefresh();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
@@ -361,7 +322,7 @@ export async function runBrowserProxyCommand(
   assertCurrent();
 
   const timeoutMs = resolveBrowserProxyTimeoutMs(params.timeoutMs);
-  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineAt = performance.now() + timeoutMs;
   const timeoutDetails = {
     method,
     path,
@@ -439,7 +400,7 @@ export async function runBrowserProxyCommand(
     await discardStagedBrowserProxyUpload(stagedUpload);
     throw error;
   }
-  const remainingTimeoutMs = deadlineAt - Date.now();
+  const remainingTimeoutMs = deadlineAt - performance.now();
   if (remainingTimeoutMs <= 0) {
     await discardStagedBrowserProxyUpload(stagedUpload);
     throw new Error(formatBrowserProxyTimeoutMessage({ ...timeoutDetails, status: null }));
@@ -507,8 +468,8 @@ export async function runBrowserProxyCommand(
     });
   }
 
-  const paths = collectBrowserProxyPaths(result);
-  const files = paths.length > 0 ? await readBrowserProxyFiles(paths) : undefined;
+  const paths = collectBrowserProxyFilePaths(result);
+  const files = paths.size > 0 ? await readBrowserProxyFiles([...paths]) : undefined;
 
   const payload: BrowserProxyEnvelope = {
     result,

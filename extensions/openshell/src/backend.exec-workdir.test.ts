@@ -5,35 +5,28 @@ import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { SandboxBackendHandle } from "openclaw/plugin-sdk/sandbox";
-import {
-  resolvePreferredOpenClawTmpDir,
-  tempWorkspace,
-  type TempWorkspace,
-} from "openclaw/plugin-sdk/temp-path";
+import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
+import type { TempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createOpenShellSandboxBackendFactory } from "./backend.js";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { resolveOpenShellPluginConfig } from "./config.js";
+import {
+  cliMocks,
+  sandboxMocks as sdkMocks,
+  createOpenShellSandboxBackendFactory as createFactory,
+  installOpenShellBackendMocks,
+  resetOpenShellBackendMocks,
+  uninstallOpenShellBackendMocks,
+} from "./openshell-backend.test-support.js";
+import {
+  createOpenShellTestWorkspace,
+  expectFiles,
+  writeFiles,
+} from "./openshell-fs.test-support.js";
 import { createOpenShellBackendSandboxConfig } from "./openshell.test-support.js";
 
-const sdkMocks = vi.hoisted(() => ({
-  runSshSandboxCommand: vi.fn(),
-  disposeSshSandboxSession: vi.fn(),
-  prepareSshSandboxExec: vi.fn(),
-}));
-
-const cliMocks = vi.hoisted(() => ({
-  runOpenShellCli: vi.fn(),
-  createOpenShellSshSession: vi.fn(),
-}));
-
-vi.mock("openclaw/plugin-sdk/sandbox", async (importOriginal) => {
-  return { ...(await importOriginal<typeof import("openclaw/plugin-sdk/sandbox")>()), ...sdkMocks };
-});
-
-vi.mock("./cli.js", async (importOriginal) => {
-  return { ...(await importOriginal<typeof import("./cli.js")>()), ...cliMocks };
-});
+beforeAll(installOpenShellBackendMocks);
+afterAll(uninstallOpenShellBackendMocks);
 
 const tempWorkspaces: TempWorkspace[] = [];
 const createdBackends: SandboxBackendHandle[] = [];
@@ -57,7 +50,7 @@ async function createBackend(
     workspaceAccess = "rw",
     ...config
   } = params;
-  const factory = createOpenShellSandboxBackendFactory({
+  const factory = createFactory({
     pluginConfig: resolveOpenShellPluginConfig(config),
   });
   const backend = await factory({
@@ -73,10 +66,7 @@ async function createBackend(
 }
 
 async function createWorkspace(prefix = "workspace") {
-  const workspace = await tempWorkspace({
-    rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: `openclaw-openshell-${prefix}-`,
-  });
+  const workspace = await createOpenShellTestWorkspace(prefix);
   tempWorkspaces.push(workspace);
   return await fs.realpath(workspace.dir);
 }
@@ -86,14 +76,6 @@ async function createRoots(scopeKey: string, params: Parameters<typeof createBac
   const agentWorkspaceDir = await createWorkspace("agent");
   const backend = await createBackend(scopeKey, workspaceDir, { agentWorkspaceDir, ...params });
   return { workspaceDir, agentWorkspaceDir, backend };
-}
-
-async function writeFiles(root: string, files: Record<string, string>) {
-  for (const [name, contents] of Object.entries(files)) {
-    const target = path.join(root, name);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, contents);
-  }
 }
 
 async function finalize(backend: SandboxBackendHandle, token: unknown) {
@@ -106,7 +88,7 @@ function prepare(backend: SandboxBackendHandle, command = "true", workdir?: stri
 
 async function withExec(
   backend: SandboxBackendHandle,
-  check: (exec: Awaited<ReturnType<typeof prepare>>) => Promise<void> | void,
+  check: (exec: Awaited<ReturnType<typeof prepare>>) => Promise<void> | void = () => {},
   command = "true",
   workdir?: string,
 ) {
@@ -119,24 +101,31 @@ async function withExec(
   return exec;
 }
 
+function startExec(backend: SandboxBackendHandle, command = "true") {
+  const pending = prepare(backend, command);
+  // Observe failures immediately, including when an earlier assertion starts cleanup.
+  void pending.catch(() => {});
+  let finalization: Promise<void> | undefined;
+  const finish = () =>
+    (finalization ??= pending.then((exec) => finalize(backend, exec.finalizeToken)));
+  return { pending, finish };
+}
+
 async function withConcurrentExecs(
   first: SandboxBackendHandle,
   second: SandboxBackendHandle,
   check: (pending: ReturnType<typeof prepare>, releaseFirst: () => Promise<void>) => Promise<void>,
 ) {
-  const firstExec = await prepare(first, "first");
-  const secondPreparation = prepare(second, "second");
-  const settled = Promise.allSettled([secondPreparation]);
-  let firstFinalization: Promise<void> | undefined;
-  const releaseFirst = () => (firstFinalization ??= finalize(first, firstExec.finalizeToken));
+  const held = startExec(first, "first");
+  await held.pending;
+  const next = startExec(second, "second");
   try {
-    await check(secondPreparation, releaseFirst);
+    await check(next.pending, held.finish);
   } finally {
     try {
-      await releaseFirst();
+      await held.finish();
     } finally {
-      await settled;
-      await finalize(second, (await secondPreparation).finalizeToken);
+      await next.finish();
     }
   }
 }
@@ -185,23 +174,19 @@ const sshCalls = (command: string) =>
     String(params.remoteCommand).includes(command),
   );
 const cliActions = () => cliMocks.runOpenShellCli.mock.calls.map(([params]) => params.args[1]);
+function expectRuntimeLookups(...backends: SandboxBackendHandle[]) {
+  expect(cliCalls("get").map(([params]) => params.args[2])).toEqual(
+    backends.map((backend) => backend.runtimeId),
+  );
+}
 function expectNoRemoteWork() {
   expect(cliMocks.runOpenShellCli).not.toHaveBeenCalled();
   expect(cliMocks.createOpenShellSshSession).not.toHaveBeenCalled();
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
-  cliMocks.createOpenShellSshSession.mockResolvedValue({
-    host: "openshell-test",
-  });
+  resetOpenShellBackendMocks();
   cliMocks.runOpenShellCli.mockResolvedValue(cliResult());
-  sdkMocks.prepareSshSandboxExec.mockImplementation(
-    async ({ session }: { session: { host: string } }) => ({
-      argv: [session.host],
-      cleanup: async () => {},
-    }),
-  );
   sdkMocks.runSshSandboxCommand.mockImplementation(async ({ remoteCommand }) =>
     sshResult(String(remoteCommand).includes("openclaw-validate-workdir") ? "/sandbox\n" : ""),
   );
@@ -243,12 +228,11 @@ it("validates locally and uploads the workspace once when exec begins", async ()
     "pwd",
     "/sandbox",
   );
-  const nestedFile = path.join(workspaceDir, "nested", "note.txt");
   const bridge = createBridge(backend, workspaceDir);
   await bridge.writeFile({ filePath: "nested/note.txt", data: "nested", mkdir: true });
   expect(cliMocks.runOpenShellCli).toHaveBeenLastCalledWith({
     context: expect.objectContaining({ sandboxName: backend.runtimeId }),
-    args: uploadArgs(nestedFile, "/sandbox/nested/note.txt"),
+    args: uploadArgs(path.join(workspaceDir, "nested/note.txt"), "/sandbox/nested/note.txt"),
     cwd: workspaceDir,
   });
   expect(backend.runtimeId).toMatch(/^oc-[a-f0-9]{16}$/u);
@@ -405,16 +389,13 @@ it("downloads the primary root without reconciling the writable containing agent
     }
     return cliResult();
   });
-  const exec = await prepare(backend, "true");
-  await finalize(backend, exec.finalizeToken);
+  await withExec(backend);
 
-  await expect(
-    Promise.all([
-      fs.readFile(path.join(agentWorkspaceDir, "agent-only"), "utf8"),
-      fs.readFile(path.join(workspaceDir, "primary-only"), "utf8"),
-      fs.readFile(path.join(agentWorkspaceDir, "project/agent-shadow.txt"), "utf8"),
-    ]),
-  ).resolves.toEqual(["local-agent", "remote-primary", "preserved-shadow"]);
+  await expectFiles(agentWorkspaceDir, {
+    "agent-only": "local-agent",
+    "project/agent-shadow.txt": "preserved-shadow",
+  });
+  await expectFiles(workspaceDir, { "primary-only": "remote-primary" });
   expect(cliCalls("download").map(([params]) => params.args.at(-2))).toEqual([remoteWorkspaceDir]);
 });
 
@@ -482,41 +463,84 @@ it.each([
   },
 );
 
-it.each(["aliased host", "shared runtime", "independent workspaces"])(
-  "preserves execution ownership for %s",
-  async (topology) => {
-    const firstWorkspace = await createWorkspace("first");
-    const secondWorkspace = await createWorkspace("second");
-    const secondWorkspaceDir =
-      topology === "aliased host" ? path.join(secondWorkspace, "alias") : secondWorkspace;
-    if (topology === "aliased host") {
-      await fs.symlink(firstWorkspace, secondWorkspaceDir, "junction");
-    }
-    const first = await createBackend("agent:workspace:first", firstWorkspace);
-    const second = await createBackend(
-      topology === "shared runtime" ? "agent:workspace:first" : "agent:workspace:second",
-      secondWorkspaceDir,
-    );
+it("serializes execution through aliased host paths", async () => {
+  const workspace = await createWorkspace("first");
+  const alias = path.join(await createWorkspace("second"), "alias");
+  await fs.symlink(workspace, alias, "junction");
+  const first = await createBackend("agent:workspace:first", workspace);
+  const second = await createBackend("agent:workspace:second", alias);
+  await withConcurrentExecs(first, second, async (pending, releaseFirst) => {
+    await setImmediate();
+    expect(cliActions()).toEqual(["get"]);
+    await releaseFirst();
+    await pending;
+    expect(cliActions()).toEqual(["get", "download", "get"]);
+  });
+});
 
-    await withConcurrentExecs(first, second, async (secondPreparation, releaseFirst) => {
-      const blocked = topology !== "independent workspaces";
-      if (blocked) {
-        await setImmediate();
-        expect(cliActions()).toEqual(["get"]);
-        await releaseFirst();
+it("reserves both workspace keys while waiting without blocking independent work", async () => {
+  const sharedHost = await createWorkspace("shared-host");
+  const laterHost = await createWorkspace("later-host");
+  const independentHost = await createWorkspace("independent-host");
+  const first = await createBackend("agent:reservation:first", sharedHost);
+  const second = await createBackend("agent:reservation:shared", sharedHost);
+  const third = await createBackend("agent:reservation:shared", laterHost);
+  const independent = await createBackend("agent:reservation:independent", independentHost);
+  const canonicalize = securityRuntime.canonicalPathFromExistingAncestor;
+  const admissions = new Map<string, ReturnType<typeof createDeferred<void>>>();
+  const pathSpy = vi
+    .spyOn(securityRuntime, "canonicalPathFromExistingAncestor")
+    .mockImplementation(async (...args) => {
+      const canonicalPath = await canonicalize(...args);
+      const admitted = admissions.get(args[0]);
+      if (admitted) {
+        // Resume the test after the real caller's path continuation reserves its keys.
+        queueMicrotask(() => admitted.resolve());
       }
-      await secondPreparation;
-      if (blocked) {
-        expect(cliActions()).toEqual(["get", "download", "get"]);
-      } else {
-        expect(cliCalls("get").map(([params]) => params.args[2])).toEqual([
-          first.runtimeId,
-          second.runtimeId,
-        ]);
-      }
+      return canonicalPath;
     });
-  },
-);
+  const cleanups: Array<() => Promise<void>> = [];
+  let cleanupResults: PromiseSettledResult<void>[];
+  const start = (backend: SandboxBackendHandle) => {
+    const exec = startExec(backend);
+    cleanups.push(exec.finish);
+    return exec;
+  };
+  try {
+    const held = start(first);
+    const firstExec = await held.pending;
+    const secondAdmitted = createDeferred<void>();
+    admissions.set(sharedHost, secondAdmitted);
+    const waiting = start(second);
+    await Promise.race([secondAdmitted.promise, waiting.pending]);
+    const thirdAdmitted = createDeferred<void>();
+    admissions.set(laterHost, thirdAdmitted);
+    const later = start(third);
+    await Promise.race([thirdAdmitted.promise, later.pending]);
+    const unrelated = start(independent);
+    await unrelated.pending;
+    await setImmediate();
+    expectRuntimeLookups(first, independent);
+    await unrelated.finish();
+    await held.finish();
+    await waiting.pending;
+    // Repeated completed-token cleanup must not release the successor's lease.
+    await finalize(first, firstExec.finalizeToken);
+    expectRuntimeLookups(first, independent, second);
+    await waiting.finish();
+    await later.pending;
+    expectRuntimeLookups(first, independent, second, third);
+  } finally {
+    // Start every finalizer together: either historical admission order can otherwise deadlock.
+    cleanupResults = await Promise.allSettled(cleanups.map((finish) => finish()));
+    pathSpy.mockRestore();
+  }
+  for (const result of cleanupResults) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+  }
+});
 
 it.each(["exec preparation", "mirror publication", "SSH cleanup"])(
   "releases workspace ownership after failed %s",
@@ -545,8 +569,7 @@ it.each(["exec preparation", "mirror publication", "SSH cleanup"])(
         failure === "SSH cleanup" ? "cleanup failed" : "download failed",
       );
     }
-    const secondExec = await prepare(second, "second");
-    await finalize(second, secondExec.finalizeToken);
+    await withExec(second, undefined, "second");
   },
 );
 
@@ -567,8 +590,7 @@ it("refreshes materialized skills once per handle, not between remote operations
   const skillsWorkspaceDir = await createWorkspace("remote-skills");
   await writeFiles(skillsWorkspaceDir, { "skills/demo/SKILL.md": "# Demo\n" });
   const backend = await createAdoptedRemoteBackend("1\n", skillsWorkspaceDir);
-  const firstExec = await prepare(backend, "first");
-  await finalize(backend, firstExec.finalizeToken);
+  await withExec(backend, undefined, "first");
   const initialUploads = seedUploadCalls().length;
   expect(initialUploads).toBeGreaterThan(0);
   const initialClears = sshCalls("rm -rf").length;
@@ -597,18 +619,17 @@ it("serializes initial seed publication across handles without serializing later
     }
     return cliResult();
   });
-  const firstPreparation = prepare(first, "first");
-  let secondPreparation: typeof firstPreparation | undefined;
-  let preparationsSettled: Promise<PromiseSettledResult<Awaited<typeof firstPreparation>>[]> =
-    Promise.allSettled([firstPreparation]);
+  const held = startExec(first, "first");
+  let next: ReturnType<typeof startExec> | undefined;
   try {
-    await Promise.race([seedStarted.promise, firstPreparation]);
+    await Promise.race([seedStarted.promise, held.pending]);
     let secondStarted = false;
-    secondPreparation = prepare(second, "second").then((prepared) => {
+    next = startExec(second, "second");
+    const secondPreparation = next.pending.then((prepared) => {
       secondStarted = true;
       return prepared;
     });
-    preparationsSettled = Promise.allSettled([firstPreparation, secondPreparation]);
+    void secondPreparation.catch(() => {});
     try {
       await setImmediate();
       expect(cliCalls("get")).toHaveLength(1);
@@ -616,7 +637,7 @@ it("serializes initial seed publication across handles without serializing later
     } finally {
       releaseSeed.resolve();
     }
-    await firstPreparation;
+    await held.pending;
     await secondPreparation;
     const uploads = seedUploadCalls();
     expect(uploads).toHaveLength(1);
@@ -627,12 +648,9 @@ it("serializes initial seed publication across handles without serializing later
     // An assertion or preparation failure must not leave work using a deleted workspace.
     releaseSeed.resolve();
     try {
-      await finalize(first, (await firstPreparation).finalizeToken);
+      await held.finish();
     } finally {
-      await preparationsSettled;
-      if (secondPreparation) {
-        await finalize(second, (await secondPreparation).finalizeToken);
-      }
+      await next?.finish();
     }
   }
 });

@@ -1,10 +1,5 @@
 import type { ContentBlock, SessionUpdate } from "@agentclientprotocol/sdk";
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "../utils.js";
-
-const DEFAULT_MAX_SESSIONS = 200;
-const DEFAULT_MAX_EVENTS_PER_SESSION = 5_000;
-const DEFAULT_MAX_SERIALIZED_BYTES = 16 * 1024 * 1024;
 
 export type AcpEventLedgerEntry = {
   seq: number;
@@ -44,36 +39,11 @@ export type AcpEventLedger = {
     update: SessionUpdate;
   }) => Promise<void>;
   markIncomplete: (params: { sessionId: string; sessionKey: string }) => Promise<void>;
+  readSessionKey: (params: { sessionId: string }) => Promise<string | undefined>;
   readReplay: (params: { sessionId: string; sessionKey: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionId: (params: { sessionId: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionKey: (params: { sessionKey: string }) => Promise<AcpEventLedgerReplay>;
 };
-
-export type AcpLedgerOptions = {
-  maxSessions?: number;
-  maxEventsPerSession?: number;
-  maxSerializedBytes?: number;
-  now?: () => number;
-};
-
-export type AcpMutableLedgerState = ReturnType<typeof normalizeAcpLedgerOptions>;
-
-export function normalizeAcpLedgerOptions(options: AcpLedgerOptions = {}) {
-  return {
-    maxSessions: resolveIntegerOption(options.maxSessions, DEFAULT_MAX_SESSIONS, { min: 1 }),
-    maxEventsPerSession: resolveIntegerOption(
-      options.maxEventsPerSession,
-      DEFAULT_MAX_EVENTS_PER_SESSION,
-      { min: 1 },
-    ),
-    maxSerializedBytes: resolveIntegerOption(
-      options.maxSerializedBytes,
-      DEFAULT_MAX_SERIALIZED_BYTES,
-      { min: 1_024 },
-    ),
-    now: options.now ?? Date.now,
-  };
-}
 
 export function createAcpPromptUpdates(prompt: readonly ContentBlock[]): SessionUpdate[] {
   return prompt.map((content) => ({

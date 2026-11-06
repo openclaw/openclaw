@@ -5,17 +5,22 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
-type PublicationRows = WeakMap<
-  records.MaterializedRow["materialized"],
-  {
-    facts: readonly unknown[];
-    views: Map<string, Readonly<GatewaySessionRow>>;
-    target: SessionSharingTarget;
-  }
->;
+export type SessionRowView = {
+  facts: readonly unknown[];
+  row: Readonly<GatewaySessionRow>;
+  modelRows?: Readonly<GatewaySessionRow>[];
+};
+
 type Publication = {
   factsRevision: number;
-  rows: PublicationRows;
+  rows: WeakMap<
+    records.MaterializedRow["materialized"],
+    {
+      facts: readonly unknown[];
+      views: Map<string, SessionRowView[]>;
+      target: SessionSharingTarget;
+    }
+  >;
   lists: SessionListViewCache;
 };
 export type PublicationView = () => Publication;
@@ -89,7 +94,6 @@ export function prepareSessionRowPublicationView(
         // A new selection cannot make frozen, previously served rows unsafe to compare.
         for (const list of publication.lists.values()) {
           list.selection = undefined;
-          list.partitions = undefined;
           publication.lists.update(list);
         }
       }

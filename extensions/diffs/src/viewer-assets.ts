@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 
 export const VIEWER_ASSET_PREFIX = "/plugins/diffs/assets/";
 export const VIEWER_RUNTIME_PATH = `${VIEWER_ASSET_PREFIX}viewer-runtime.js`;
@@ -48,9 +47,7 @@ function createViewerAssetHandler(
   let cache: RuntimeAssetCache | null = null;
 
   const loadRuntimeAssets = async (): Promise<RuntimeAssetCache> => {
-    const runtimeUrl = await resolveRuntimeFileUrl(relativePaths);
-    const runtimeFilePath = fileURLToPath(runtimeUrl);
-    const runtimeBody = await fs.readFile(runtimeFilePath);
+    const runtimeBody = await readRuntimeBody(relativePaths);
     const hash = crypto.createHash("sha1").update(runtimeBody).digest("hex").slice(0, 12);
     return {
       runtimeBody,
@@ -78,14 +75,12 @@ function createViewerAssetHandler(
   };
 }
 
-async function resolveRuntimeFileUrl(relativePaths: readonly string[]): Promise<URL> {
+async function readRuntimeBody(relativePaths: readonly string[]): Promise<Buffer> {
   let missingFileError: NodeJS.ErrnoException | null = null;
 
   for (const relativePath of relativePaths) {
-    const candidateUrl = new URL(relativePath, import.meta.url);
     try {
-      await fs.stat(fileURLToPath(candidateUrl));
-      return candidateUrl;
+      return await fs.readFile(new URL(relativePath, import.meta.url));
     } catch (error) {
       if (isMissingFileError(error)) {
         missingFileError = error;

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import * as killSession from "../agents/subagents/registry/subagent-control-session.js";
 import * as bookkeeping from "../agents/subagents/registry/subagent-registry-lifecycle-bookkeeping.js";
 import { applySessionEntryExactReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
@@ -7,7 +8,6 @@ import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-w
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as writerQueue from "../shared/store-writer-queue.js";
-import type { AgentDatabaseExecutionScope } from "../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../state/openclaw-agent-execution.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
 
@@ -22,7 +22,6 @@ export function holdMetadataThroughSubagentStop(target: {
   const markerScope = new AsyncLocalStorage<boolean>();
   const nativeResultHeld = createDeferredCore();
   const releaseResult = createDeferredCore();
-  const restores: Array<() => void> = [];
   const label = `concurrent metadata ${target.sessionId}`;
   let intercepted = false;
   let resultHeld = false;
@@ -30,17 +29,33 @@ export function holdMetadataThroughSubagentStop(target: {
   let markerEnqueued = false;
   let producerPath: string | undefined;
   let releaseReason: "marker-enqueued" | "bookkeeping-error" | "cleanup" | "test-abort" | undefined;
-  let producer: Promise<void> | undefined;
   let producerOutcome: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
   let disposal: Promise<void> | undefined;
   const release = (reason: NonNullable<typeof releaseReason>) => {
-    if (releaseReason === undefined) {
-      releaseReason = reason;
-      releaseResult.resolve();
-    }
+    releaseReason ??= reason;
+    releaseResult.resolve();
   };
   const onAbort = () => release("test-abort");
   target.signal.addEventListener("abort", onAbort, { once: true });
+  const writeMetadata = () =>
+    applySessionEntryExactReplacements({
+      agentId: "main",
+      storePath: target.storePath,
+      sessionKeys: [target.sessionKey],
+      activeSessionKey: target.sessionKey,
+      skipMaintenance: true,
+      requireWriteSuccess: true,
+      update(entries) {
+        const row = entries.find((entry) => entry.sessionKey === target.sessionKey);
+        if (!row || row.entry.sessionId !== target.sessionId || row.entry.label === label) {
+          throw new Error("Concurrent metadata writer lost its original child");
+        }
+        return {
+          result: undefined,
+          replacements: [{ sessionKey: row.sessionKey, entry: { ...row.entry, label } }],
+        };
+      },
+    });
 
   const runQueued = writerQueue.runQueuedStoreWrite;
   const queueSpy = vi.spyOn(writerQueue, "runQueuedStoreWrite").mockImplementation((params) => {
@@ -70,7 +85,6 @@ export function holdMetadataThroughSubagentStop(target: {
     }
     return pending;
   });
-  restores.push(() => queueSpy.mockRestore());
 
   const captureExecution = executionOwner.captureOpenClawAgentDatabaseExecution;
   const executionSpy = vi
@@ -80,11 +94,13 @@ export function holdMetadataThroughSubagentStop(target: {
       if (producerScope.getStore() !== true) {
         return execution;
       }
-      const runExisting: typeof execution.runExisting = (source, operation, options) =>
-        execution.runExisting(
+      // Captures return fresh borrowers, so only this producer's handle is wrapped.
+      const runExisting = execution.runExisting.bind(execution);
+      execution.runExisting = (source, operation, options) =>
+        runExisting(
           source,
-          (scope) => {
-            const wrapped: AgentDatabaseExecutionScope = {
+          (scope) =>
+            operation({
               execute(command, commandOptions) {
                 const pending = scope.execute(command, commandOptions);
                 if (command.type !== "session.entries.replace" || resultHeld) {
@@ -97,33 +113,22 @@ export function holdMetadataThroughSubagentStop(target: {
                   return value;
                 });
               },
-            };
-            return operation(wrapped);
-          },
+            }),
           options,
         );
-      return new Proxy(execution, {
-        get(original, key, receiver) {
-          return key === "runExisting" ? runExisting : Reflect.get(original, key, receiver);
-        },
-      });
+      return execution;
     });
-  restores.push(() => executionSpy.mockRestore());
 
   const persistMarker = killSession.persistSubagentAbortedLastRun;
   const markerSpy = vi
     .spyOn(killSession, "persistSubagentAbortedLastRun")
     .mockImplementation((params) => {
-      if (
-        params.childSessionKey !== target.sessionKey ||
-        !params.abortedLastRun ||
-        !bookkeepingReturned
-      ) {
-        return persistMarker(params);
-      }
-      return markerScope.run(true, () => persistMarker(params));
+      return params.childSessionKey === target.sessionKey &&
+        params.abortedLastRun &&
+        bookkeepingReturned
+        ? markerScope.run(true, () => persistMarker(params))
+        : persistMarker(params);
     });
-  restores.push(() => markerSpy.mockRestore());
 
   const completeBookkeeping = bookkeeping.completeCleanupBookkeeping;
   const bookkeepingSpy = vi
@@ -140,33 +145,9 @@ export function holdMetadataThroughSubagentStop(target: {
       target.beforeMetadata?.();
       // A new root alone retains the RPC's AsyncWorkScope. This producer must not block
       // that scope while waiting for the mandatory marker which the RPC has yet to enqueue.
-      producer = runOutsideAsyncWorkScope(() =>
+      const producer = runOutsideAsyncWorkScope(() =>
         runWithGatewayIndependentRootWorkAdmission(
-          () =>
-            producerScope.run(true, () =>
-              applySessionEntryExactReplacements({
-                agentId: "main",
-                storePath: target.storePath,
-                sessionKeys: [target.sessionKey],
-                activeSessionKey: target.sessionKey,
-                skipMaintenance: true,
-                requireWriteSuccess: true,
-                update(entries) {
-                  const row = entries.find((entry) => entry.sessionKey === target.sessionKey);
-                  if (
-                    !row ||
-                    row.entry.sessionId !== target.sessionId ||
-                    row.entry.label === label
-                  ) {
-                    throw new Error("Concurrent metadata writer lost its original child");
-                  }
-                  return {
-                    result: undefined,
-                    replacements: [{ sessionKey: row.sessionKey, entry: { ...row.entry, label } }],
-                  };
-                },
-              }),
-            ),
+          () => producerScope.run(true, writeMetadata),
           "test:private-completion-metadata",
           target.signal,
         ),
@@ -176,12 +157,11 @@ export function holdMetadataThroughSubagentStop(target: {
         (error: unknown) => ({ ok: false as const, error }),
       );
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           nativeResultHeld.promise,
-          producer.then(() => {
-            throw new Error("Metadata writer finished without its native-result barrier");
-          }),
-        ]);
+          producer,
+          "Metadata writer finished without its native-result barrier",
+        );
         target.signal.throwIfAborted();
         await completeBookkeeping(context, params);
         bookkeepingReturned = true;
@@ -192,21 +172,16 @@ export function holdMetadataThroughSubagentStop(target: {
         throw error;
       }
     });
-  restores.push(() => bookkeepingSpy.mockRestore());
 
   return {
     label,
     async assertCompleted() {
-      expect(intercepted).toBe(true);
-      expect(resultHeld).toBe(true);
-      expect(bookkeepingReturned).toBe(true);
-      expect(markerEnqueued).toBe(true);
+      const progress = [intercepted, resultHeld, bookkeepingReturned, markerEnqueued];
+      expect(progress).toEqual([true, true, true, true]);
       expect(releaseReason).toBe("marker-enqueued");
       expect(await producerOutcome).toEqual({ ok: true });
     },
-    releaseForCleanup() {
-      release("cleanup");
-    },
+    releaseForCleanup: () => release("cleanup"),
     dispose(): Promise<void> {
       disposal ??= (async () => {
         release("cleanup");
@@ -217,8 +192,8 @@ export function holdMetadataThroughSubagentStop(target: {
             throw outcome.error;
           }
         } finally {
-          for (const restore of restores.toReversed()) {
-            restore();
+          for (const spy of [bookkeepingSpy, markerSpy, executionSpy, queueSpy]) {
+            spy.mockRestore();
           }
           producerScope.disable();
           markerScope.disable();

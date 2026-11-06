@@ -1,16 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { EmbeddingProviderRuntime } from "./embedding-provider-types.js";
-import {
-  clearEmbeddingProviders,
-  registerEmbeddingProvider,
-  type EmbeddingProviderAdapter,
-} from "./embedding-providers.js";
+import type { EmbeddingProviderRuntime } from "./embedding-provider-runtime-types.js";
+import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
+import { clearEmbeddingProviders, registerEmbeddingProvider } from "./embedding-providers.js";
 import {
   getMemoryEmbeddingProvider as getProvider,
   listMemoryEmbeddingProviders as listProviders,
 } from "./memory-embedding-provider-runtime.js";
-import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "./registry-contribution-types.js";
 
 const mocks = vi.hoisted(() => ({
   resolvePluginCapabilityProviders: vi.fn<
@@ -47,16 +44,6 @@ beforeEach(() => {
 });
 
 afterEach(clearEmbeddingProviders);
-
-it("falls back to declared capability adapters when the registry is cold", () => {
-  mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("ollama")]);
-  mocks.resolvePluginCapabilityProvider.mockReturnValue(createCapabilityAdapter("ollama"));
-
-  expect(listProviders().map(({ id }) => id)).toEqual(["openai-compatible", "ollama"]);
-  expect(getProvider("ollama")?.id).toBe("ollama");
-  expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
-  expectCapabilityLookup("ollama");
-});
 
 it.each([false, true])("resolves a configured API with registered adapter=%s", (registered) => {
   const ollamaAdapter = createCapabilityAdapter("ollama");

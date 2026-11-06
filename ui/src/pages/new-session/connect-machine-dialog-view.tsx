@@ -1,12 +1,30 @@
-import { Show } from "solid-js";
+import { action, createOptimistic, onSettled, Show } from "solid-js";
 import { ConnectCommand } from "../../components/solid/connect-command.tsx";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { formatTimeMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
+import type { ConnectMachineRequest, ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 
 export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState["view"]>) {
+  const [saving, setSaving] = createOptimistic(false);
+  const presentRequest = action(function* (request: ConnectMachineRequest) {
+    if (request.isCurrent()) {
+      setSaving(true);
+    }
+    yield Promise.race([request.completion, request.retired]);
+  });
+  // The ordered receipt covers minting from either host as well as dialog refresh.
+  onSettled(() =>
+    props.subscribeRequests((request) => {
+      // The native modal must finish opening before its operation joins an action.
+      onSettled(() => {
+        void presentRequest(request).catch(request.reportError);
+      });
+    }),
+  );
+  const busy = () => saving() || props.loading;
   const expiresAt = () =>
     props.setup?.expiresAtMs
       ? formatTimeMs(props.setup.expiresAtMs, { hour: "numeric", minute: "2-digit" }, "")
@@ -19,31 +37,23 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
         description={t("newSession.connectMachineDescription")}
         onModal-cancel={() => props.onClose()}
       >
-        <section class="exec-approval-card connect-machine-dialog__card">
-          <header class="exec-approval-header">
-            <div>
-              <h2 class="exec-approval-title">{t("newSession.connectMachineTitle")}</h2>
-              <p class="exec-approval-sub">{t("newSession.connectMachineDescription")}</p>
-            </div>
-            <button
-              class="btn btn--icon btn--ghost"
-              type="button"
-              aria-label={t("common.dismiss")}
-              onClick={() => props.onClose()}
-            >
-              <Icon name="x" />
-            </button>
-          </header>
-          <div class="connect-machine-dialog__body">
-            {props.loading && !props.setup?.command ? (
+        <section class="oc-dialog">
+          <DialogHeader
+            title={t("newSession.connectMachineTitle")}
+            description={<p>{t("newSession.connectMachineDescription")}</p>}
+            onClose={() => props.onClose()}
+          />
+          <div class="oc-dialog__body connect-machine-dialog__body">
+            {busy() && !props.setup?.command ? (
               <p class="connect-machine-dialog__status" role="status">
                 {t("newSession.connectMachineGenerating")}
               </p>
             ) : undefined}
             {props.error ? (
-              <p class="exec-approval-error" role="alert">
-                {t("newSession.connectMachineFailed")} {props.error}
-              </p>
+              <div class="callout danger" role="alert">
+                <p>{t("newSession.connectMachineFailed")}</p>
+                <p>{props.error}</p>
+              </div>
             ) : undefined}
             <Show when={props.setup}>
               {(setup) => (
@@ -74,16 +84,11 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
               )}
             </Show>
           </div>
-          <openclaw-modal-actions class="exec-approval-actions connect-machine-dialog__actions">
+          <openclaw-modal-actions class="oc-dialog__footer connect-machine-dialog__actions">
             {props.setup?.command || props.error ? (
-              <button
-                class="btn"
-                type="button"
-                disabled={props.loading}
-                onClick={() => props.onRefresh()}
-              >
+              <button class="btn" type="button" disabled={busy()} onClick={() => props.onRefresh()}>
                 <Icon name="refresh" />
-                {props.loading
+                {busy()
                   ? t("newSession.connectMachineRefreshing")
                   : t("newSession.connectMachineFreshCode")}
               </button>

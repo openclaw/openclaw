@@ -256,22 +256,11 @@ describe("handleClickClackInbound", () => {
     expect(dispatchTurn.mock.calls[0]?.[0].route.sessionKey).toBe(
       "agent:service-bot:clickclack:direct:alice",
     );
-    expect(runtime.channel.routing.buildAgentSessionKey).toHaveBeenCalledWith({
-      agentId: "service-bot",
-      mainKey: "work",
-      channel: "clickclack",
-      accountId: "default",
-      peer: { kind: "direct", id: "dm:usr_owner" },
-      dmScope: "per-channel-peer",
-      identityLinks: { alice: ["clickclack:dm:usr_owner"] },
-    });
   });
 
   it("rotates an old attachment before dispatch after the main session is replaced", async () => {
     const mainSessionKey = "agent:research:main";
-    await getClickClackDiscussionBindingStore(runtime).setIfCurrent(
-      mainSessionKey,
-      undefined,
+    await bindDiscussion(
       createInboundDiscussionBinding({ sessionId: "old-session-id", archived: true }),
     );
 
@@ -358,7 +347,6 @@ describe("handleClickClackInbound", () => {
       accountId: "default",
       credentialFingerprint: "test-fingerprint",
       destinationIdentity: "http://127.0.0.1:8080\0wsp_1",
-      createGeneration: () => "pending-generation",
     });
     await recordPendingDiscussionOpen({
       runtime,

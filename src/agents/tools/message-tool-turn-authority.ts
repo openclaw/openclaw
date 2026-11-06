@@ -36,19 +36,6 @@ export function createMessageToolTurnAuthority(params: {
   const lookup =
     agentId && sessionKey ? { token, agentId, runId, sessionKey, sessionId } : undefined;
   const resolve = () => lookup && resolveMessageActionTurnAuthorization(lookup);
-  const scheduled = resolve()?.scheduled;
-  const policy = scheduled?.policy;
-  const origin = policy?.mode === "account" ? policy.ownerOrigin : undefined;
-  const channels = origin?.kind === "external" ? [origin.channel] : [];
-  const requester = scheduled?.channelRequester;
-  if (
-    policy?.mode === "account" &&
-    requester?.channel === "discord" &&
-    requester.accountId === policy.ownerAccountId &&
-    !channels.includes(requester.channel)
-  ) {
-    channels.push(requester.channel);
-  }
   return {
     captureCaller: (
       signal: AbortSignal | undefined,
@@ -96,14 +83,6 @@ export function createMessageToolTurnAuthority(params: {
         assertDashboardReadCurrent: isRead ? dashboardRead : undefined,
       };
     },
-    isScheduledRun: Boolean(scheduled),
-    scheduledAccountScope:
-      policy?.mode === "account" && (origin?.kind === "local" || channels.length > 0)
-        ? {
-            accountId: policy.ownerAccountId,
-            ...(origin?.kind === "local" ? {} : { channels }),
-          }
-        : undefined,
     assertCurrent: () => {
       if (token?.trim() && (!lookup || !resolveMessageActionTurnCapability(lookup))) {
         throw new Error("message action turn capability is no longer active");

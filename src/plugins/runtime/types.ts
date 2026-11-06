@@ -5,7 +5,9 @@ import type { NodePluginToolDescriptor } from "../../../packages/gateway-protoco
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
-import type { LlmCompleteUsage, PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type { LlmCompleteUsage } from "./runtime-llm.types.js";
+import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type { NativeSubagentRuntime } from "./types-native-subagent.js";
 import type {
   RuntimeSessionFactsResult,
   RuntimeSessionFactsSelection,
@@ -47,6 +49,56 @@ type SubagentCompleteParams = {
   timeoutMs?: number;
   signal?: AbortSignal;
 };
+
+/** The stored session generation a forked turn read, for follow-up writes to that same generation. */
+export type SubagentForkedTurnSource = {
+  sessionId: string;
+  lifecycleRevision: string | null;
+};
+
+/**
+ * `cancelled` marks an expected stop (the caller's signal, a Gateway restart drain, yielding to
+ * foreground work, or the source session changing); any other failure is a real error.
+ */
+type SubagentForkedTurnOutcome = {
+  runId: string;
+  /** Absent when the fork stopped before it admitted the source session. */
+  source?: SubagentForkedTurnSource;
+} & ({ ok: true; text?: string } | { ok: false; error: unknown; cancelled: boolean });
+
+export type SubagentForkedTurnParams<T> = {
+  sessionKey: string;
+  /**
+   * The completed transcript entry the fork reads through. Refused when the session was
+   * replaced (`sessionId` no longer current) or the entry is no longer on its active transcript.
+   * A reset that keeps the session id is reported through `outcome.source.lifecycleRevision`.
+   */
+  through: { sessionId: string; entryId: string };
+  prompt: string;
+  /**
+   * Tools the calling plugin registered. Core tools and tools another plugin registered are
+   * refused; the session's tool policy must also allow each one, or the run is not admitted.
+   */
+  tools: readonly string[];
+  /** Full provider/model override; requires the same trust as `subagent.run` overrides. */
+  provider?: string;
+  model?: string;
+  /** Caller-chosen id so tools' records can be found even when the run fails; unique per run. */
+  runId?: string;
+  /** Defaults to 120 seconds; a larger value runs longer (the agent timeout, for example). */
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  /**
+   * Runs after the fork stops, inside the same Gateway work admission, so a graceful restart
+   * waits for it. Its return value is the call's `value`.
+   */
+  onSettled: (outcome: SubagentForkedTurnOutcome) => Promise<T> | T;
+};
+
+export type SubagentForkedTurnResult<T> =
+  | { status: "settled"; runId: string; value: T }
+  /** The session's tool policy does not allow every requested tool; nothing ran. */
+  | { status: "refused"; reason: "tool_policy" };
 
 type PluginManagedWorktree = {
   id: string;
@@ -117,6 +169,8 @@ type RuntimeNodeInvokeParams = {
   sessionKey?: string;
   /** Cancel the invocation and any work already dispatched to a first-party node. */
   signal?: AbortSignal;
+  /** Caller-owned authority remains current through dispatch and duplex delivery. */
+  assertCurrent?: () => void;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];
 };
@@ -142,6 +196,20 @@ export type RuntimeGatewayRequestOptions = {
     lifecycleRevision?: string;
   };
 };
+
+/** One plugin-written agent message; see `api.runtime.gateway.appendAgentMessage`. */
+export type RuntimeAgentMessage = {
+  sessionKey: string;
+  agentId?: string;
+  /** Displayed Markdown, normalized like typed chat input; mention spans are UTF-16 offsets into it. */
+  text: string;
+  /** Spans selecting `@label` text for people to notify; the caller cannot mention themselves. */
+  mentions?: ReadonlyArray<{ profileId: string; start: number; end: number }>;
+  /** Stable per message; a retry replays the same transcript row and Inbox entry. */
+  idempotencyKey: string;
+};
+
+export type RuntimeAgentMessageResult = { messageId: string; replayed: boolean };
 
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
@@ -169,6 +237,11 @@ export type PluginRuntime = PluginRuntimeCore & {
       select: RuntimeSessionFactsSelection,
       run: (snapshot: RuntimeSessionFactsSelectionResult) => Promise<T>,
     ) => Promise<T>;
+    /**
+     * Inside an authenticated RPC handler, add one agent-authored message to a session the
+     * caller may write, without a model run. The caller is named as the Inbox sender.
+     */
+    appendAgentMessage: (params: RuntimeAgentMessage) => Promise<RuntimeAgentMessageResult>;
     /** Keyed fact invalidations; callers own unsubscribe. Broad store changes are excluded. */
     subscribeSessionChanges: (
       listener: (event: { agentId: string; sessionKey: string; factsInvalidated?: string }) => void,
@@ -195,6 +268,8 @@ export type PluginRuntime = PluginRuntimeCore & {
     >;
   };
   subagent: {
+    /** Native collector children; only callable during requester-bound reply_dispatch. */
+    native?: NativeSubagentRuntime;
     /** Fresh, tool-free background inference under the existing subagent model policy. */
     complete: (params: SubagentCompleteParams) => Promise<{ text: string }>;
     /** Ephemeral session-context inference on the session's model, with tool execution denied. */
@@ -204,6 +279,11 @@ export type PluginRuntime = PluginRuntimeCore & {
       signal?: AbortSignal;
       timeoutMs?: number;
     }) => Promise<{ text: string; usage?: LlmCompleteUsage }>;
+    /**
+     * Hidden background turn over a bounded copy of a stored session, through one completed
+     * entry, with only the caller's own tools. Never writes the source transcript.
+     */
+    runForkedTurn: <T>(params: SubagentForkedTurnParams<T>) => Promise<SubagentForkedTurnResult<T>>;
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<AgentWaitResult>;
     getSessionMessages: (
@@ -260,6 +340,27 @@ export type PluginRuntime = PluginRuntimeCore & {
       ownerKind: "workboard";
       ownerId: string;
     }) => Promise<boolean>;
+  };
+  /** Core-owned per-skill usage, keyed by SKILL.md path; written for every demonstrated skill use. */
+  skills: {
+    /**
+     * Usage for the given SKILL.md paths, keyed by the paths as given. Files without recorded
+     * use are absent. When `tracked` is false this process does not persist skill use, so an
+     * absent entry is not evidence that the skill went unused.
+     */
+    readUsage: (params: { skillFiles: readonly string[] }) => Promise<{
+      tracked: boolean;
+      usage: ReadonlyMap<string, { useCount: number; lastUsedAtMs: number }>;
+    }>;
+    /**
+     * Records one read of an absolute SKILL.md path by the executing tool call. Run, session,
+     * and agent attribution come from that call. Returns false outside a live tool execution.
+     */
+    recordUsed: (params: {
+      skillFile: string;
+      skillName: string;
+      skillSource?: "bundled" | "workspace";
+    }) => boolean;
   };
   channel: PluginRuntimeChannel;
 };

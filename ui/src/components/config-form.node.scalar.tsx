@@ -1,9 +1,11 @@
 import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, createEffect, createMemo } from "solid-js";
+import { createMemo } from "solid-js";
 import { i18n } from "../i18n/index.ts";
+import { isEnvPlaceholder, REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
+import { createNativeDraft } from "../lib/reactive/native-draft.ts";
 import {
   configValuesEqual,
   isSupportedConfigValueValid,
@@ -17,7 +19,7 @@ import {
   isSecretRefObject,
   jsonValue,
   FieldRow,
-  renderSchemaDefaultDescription,
+  schemaDefaultValueText,
   SensitiveToggleButton,
   resolveConfigFieldPresentation,
   type ConfigNodeRenderParams,
@@ -29,26 +31,31 @@ import {
 } from "./config-form.numeric.ts";
 import {
   beginScalarEdit,
-  bindControlError,
   finishScalarEdit,
   scalarEditHintForInput,
   scalarValueBranch,
-  syncScalarInputIdentity,
-  setControlValidity,
+  syncScalarEditIdentity,
   type ScalarEditHint,
 } from "./config-form.scalar-edit.ts";
+import {
+  createSecretFieldHold,
+  handleHeldSecretKey,
+  SecretFieldFrame,
+  secretInputProps,
+  storedSecretState,
+} from "./config-form.secret-field.tsx";
 import { configFieldId, hintForPath, schemaType } from "./config-form.shared.ts";
+import { SettingsSelect } from "./solid/settings-select.tsx";
 
 function coerceTextInputValue(
   value: string,
   schema: ConfigNodeRenderParams["schema"],
-  currentValue?: unknown,
-  editHint?: ScalarEditHint,
+  editHint: ScalarEditHint,
 ): string | number | boolean | undefined {
   const trimmed = value.trim();
   const variants = schema.anyOf ?? schema.oneOf ?? [];
   const stringCandidateValid = isSupportedConfigValueValid(schema, value);
-  const currentBranch = editHint ? editHint.branch : scalarValueBranch(currentValue);
+  const currentBranch = editHint.branch;
   const booleanCandidate = trimmed === "true" ? true : trimmed === "false" ? false : undefined;
   if (booleanCandidate !== undefined && isSupportedConfigValueValid(schema, booleanCandidate)) {
     let booleanBranchValid = false;
@@ -99,10 +106,6 @@ function coerceTextInputValue(
   return numberCandidate ?? value;
 }
 
-function numericConstraintMessage(value: number, schema: ConfigNodeRenderParams["schema"]): string {
-  return isSupportedConfigValueValid(schema, value) ? "" : t("configForm.invalidNumber");
-}
-
 type NumericInputState = { parsed?: number; message: string };
 
 // Partial numeric text ("3.", "-", "1e") reports value === "" with
@@ -140,9 +143,15 @@ function ScalarInput(props: {
   inputType: "text" | "number";
   stepped: boolean;
 }): JSX.Element {
-  let input!: HTMLInputElement | HTMLTextAreaElement;
-  let error: HTMLSpanElement | undefined;
-  let initialized = false;
+  const hold = createSecretFieldHold(() => ({
+    path: props.params.path,
+    hints: props.params.hints,
+    secretFields: props.stepped ? undefined : props.params.secretFields,
+    stored: () => props.params.value === REDACTED_SENTINEL,
+    reference: () => isSecretRefObject(props.params.value),
+    label: () => resolveConfigFieldPresentation(props.params).label,
+  }));
+  let input: HTMLInputElement | HTMLTextAreaElement | undefined;
   const state = createMemo(() => {
     const params = props.params;
     const { schema, value, path, hints, isRequired } = params;
@@ -153,36 +162,60 @@ function ScalarInput(props: {
     const isStructuredSecretRef = !props.stepped && isSecretRefObject(value);
     const rawAvailable = params.rawAvailable ?? true;
     const masked = sensitiveState?.isMasked;
-    const effectiveRedacted =
+    const heldText = hold.text();
+    const storedRedacted =
       (sensitiveState?.isRedacted && !masked) ||
       sensitiveState?.sentinelRedacted ||
       isStructuredSecretRef;
-    const placeholder = effectiveRedacted
-      ? isStructuredSecretRef
-        ? rawAvailable
-          ? t("configForm.structuredSecretRaw")
-          : t("configForm.structuredSecretFile")
-        : masked
-          ? "••••••••"
-          : t("configForm.redactedPlaceholder")
-      : (hint?.placeholder ??
-        (!masked && schema.default !== undefined
-          ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-          : props.stepped
-            ? undefined
-            : ""));
-    const displayValue = effectiveRedacted
+    // An explicit Save writes whatever replaces a stored secret, and an empty field keeps it. Only
+    // plain text in the file can be replaced; a reference, or anything unproven, stays read-only,
+    // since typing would swap it for plaintext in the config file.
+    const { envVar, replaceable } = storedSecretState(hold, {
+      stored: Boolean(sensitiveState?.sentinelRedacted),
+      path,
+      secretFields: params.secretFields,
+      replaceStoredSecrets: params.replaceStoredSecrets,
+    });
+    const effectiveRedacted = storedRedacted && heldText === undefined && !replaceable;
+    const placeholder = replaceable
+      ? "••••••••"
+      : effectiveRedacted
+        ? envVar
+          ? t("configForm.environmentSecret", { name: envVar })
+          : isStructuredSecretRef
+            ? rawAvailable
+              ? t("configForm.structuredSecretRaw")
+              : t("configForm.structuredSecretFile")
+            : !masked && sensitiveState?.canReveal && params.onToggleSensitivePath
+              ? t("configForm.redactedPlaceholder")
+              : "••••••••"
+        : (hint?.placeholder ??
+          (!masked && schema.default !== undefined
+            ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
+            : props.stepped
+              ? undefined
+              : ""));
+    const displayValue = storedRedacted
       ? ""
       : !props.stepped && isRecord(value)
         ? jsonValue(value)
         : (value ?? (params.compact ? schema.default : undefined) ?? "");
     const effectiveValue = value !== undefined ? value : schema.default;
     const initialBranch = scalarValueBranch(effectiveValue);
-    const effectiveInputType = masked
-      ? "password"
-      : sensitiveState?.isSensitive && !effectiveRedacted
-        ? "text"
-        : props.inputType;
+    const shownText = heldText ?? (typeof value === "string" ? value : "");
+    // An env placeholder names a variable; it is not a secret to hide.
+    const hidesText =
+      hold.active() &&
+      !params.revealSensitive &&
+      !sensitiveState?.isRevealed &&
+      !isEnvPlaceholder(shownText);
+    const effectiveInputType = hold.revealed()
+      ? "text"
+      : masked || replaceable || hidesText
+        ? "password"
+        : sensitiveState?.isSensitive && !effectiveRedacted
+          ? "text"
+          : props.inputType;
     const multiline =
       hint?.multiline === true &&
       props.inputType === "text" &&
@@ -195,11 +228,12 @@ function ScalarInput(props: {
         : undefined;
     const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
     const sourceIdentity = params.sourceIdentity ?? value;
-    const controlPathKey = configFieldId(
+    const pathKey = configFieldId(
       path.filter((segment) => typeof segment === "string"),
       "scalar-identity",
     );
-    const renderedValue = formatConfigValueText(displayValue);
+    const storedText = formatConfigValueText(displayValue);
+    const renderedValue = heldText ?? storedText;
     const presentationIdentity = props.stepped
       ? "number"
       : [
@@ -213,8 +247,13 @@ function ScalarInput(props: {
     const inputType = props.inputType;
     const invalidString = t("configForm.invalidString");
     const invalidNumber = t("configForm.invalidNumber");
+    const holdsEdit = hold.active();
     const textInputState = (raw: string, editHint: ScalarEditHint) => {
-      const candidate = coerceTextInputValue(raw, schema, effectiveValue, editHint);
+      // The sentinel only stands in for a stored secret; it is never a value to save.
+      if (holdsEdit && raw.includes(REDACTED_SENTINEL)) {
+        return { candidate: undefined, message: invalidString };
+      }
+      const candidate = coerceTextInputValue(raw, schema, editHint);
       const valid = isSupportedConfigValueValid(schema, candidate);
       const clearOptional = raw === "" && !isRequired && !valid;
       return {
@@ -228,6 +267,8 @@ function ScalarInput(props: {
       sensitiveState,
       isStructuredSecretRef,
       masked,
+      replaceable,
+      hidesText,
       effectiveRedacted,
       placeholder,
       effectiveValue,
@@ -238,16 +279,17 @@ function ScalarInput(props: {
       phonePresentation,
       controlIdentity,
       sourceIdentity,
-      controlPathKey,
+      pathKey,
+      storedText,
       renderedValue,
       presentationIdentity,
       constraints,
       numericStep,
       textInputState,
-      revalidate(this: void, target: HTMLInputElement | HTMLTextAreaElement) {
-        setControlValidity(
+      revalidate(this: void, target: HTMLInputElement | HTMLTextAreaElement): void {
+        draft.setValidity(
           target,
-          effectiveRedacted
+          effectiveRedacted || (replaceable && target.value === "")
             ? ""
             : inputType === "number" && target instanceof HTMLInputElement
               ? resolveNumericInputState(target, { schema, isRequired }, invalidNumber).message
@@ -256,22 +298,14 @@ function ScalarInput(props: {
       },
     };
   });
-  createEffect(state, (current) => {
-    // The first value is set only once; subsequent updates are owned by the
-    // existing draft-preserving scalar identity contract.
-    if (!initialized) {
-      input.value = current.renderedValue;
-      initialized = true;
-    }
-    syncScalarInputIdentity(
-      input,
-      current.controlIdentity,
-      current.sourceIdentity,
-      current.controlPathKey,
-      current.presentationIdentity,
-      current.renderedValue,
-      current.revalidate,
-    );
+  const draft = createNativeDraft(state, {
+    preserveFocusedDraft: true,
+    onReconciled: (target, current) => {
+      syncScalarEditIdentity(target, current.pathKey, current.presentationIdentity);
+      if (hold.error()) {
+        draft.setValidity(target, hold.error());
+      }
+    },
   });
   let patchSource: unknown;
   let patchedValue: unknown;
@@ -295,8 +329,32 @@ function ScalarInput(props: {
     state().revalidate(target);
     return false;
   };
+  const saveHeld = async () => {
+    const target = input;
+    if (!target) {
+      return;
+    }
+    const next = state().textInputState(
+      target.value,
+      beginScalarEdit(target, state().initialBranch),
+    );
+    finishScalarEdit(target);
+    if (!draft.setValidity(target, next.message)) {
+      return;
+    }
+    if (await hold.save(next.candidate)) {
+      target.focus();
+    } else {
+      draft.setValidity(target, hold.error());
+    }
+  };
+  const onSave = () => void saveHeld();
+  const cancelHeld = () => {
+    hold.cancel();
+    input?.focus();
+  };
   const commitChange = (target: HTMLInputElement | HTMLTextAreaElement, allowClear = true) => {
-    if (state().effectiveRedacted) {
+    if (state().effectiveRedacted || hold.active()) {
       return;
     }
     const commit = (candidate: unknown) => commitScalarValue(target, candidate, true);
@@ -304,10 +362,12 @@ function ScalarInput(props: {
       const next = resolveNumericInputState(target, props.params);
       if (props.stepped && next.parsed !== undefined) {
         next.parsed = normalizeNumericValue(next.parsed, props.params.schema);
-        next.message = numericConstraintMessage(next.parsed, props.params.schema);
+        next.message = isSupportedConfigValueValid(props.params.schema, next.parsed)
+          ? ""
+          : t("configForm.invalidNumber");
         target.value = formatConfigValueText(next.parsed);
       }
-      if (setControlValidity(target, next.message) && (allowClear || next.parsed !== undefined)) {
+      if (draft.setValidity(target, next.message) && (allowClear || next.parsed !== undefined)) {
         commit(next.parsed);
       }
       return;
@@ -323,7 +383,7 @@ function ScalarInput(props: {
         target.value = normalized;
       }
     }
-    setControlValidity(target, nextState.message ? rawState.message : "");
+    draft.setValidity(target, nextState.message ? rawState.message : "");
     if (!nextState.message) {
       commit(nextState.candidate);
     }
@@ -348,7 +408,7 @@ function ScalarInput(props: {
       {!props.params.compact && (
         <button
           type="button"
-          class="btn btn--sm btn--icon"
+          class="cfg-stepper__button"
           aria-label={`${state().field.label}: ${direction < 0 ? "-" : "+"}${state().numericStep}`}
           disabled={props.params.disabled}
           onClick={() => step(direction)}
@@ -361,15 +421,16 @@ function ScalarInput(props: {
   const controlProps = {
     ref: (element: HTMLInputElement | HTMLTextAreaElement) => {
       input = element;
-      if (error) {
-        bindControlError(element, error);
-      }
+      draft.ref(element);
     },
     get class() {
       return ["settings-input", { "cfg-redacted": state().effectiveRedacted }];
     },
     get "aria-label"() {
       return state().field.label;
+    },
+    get "aria-required"() {
+      return state().field.required ? ("true" as const) : undefined;
     },
     get "aria-describedby"() {
       return [state().field.helpId, state().errorId].filter(Boolean).join(" ");
@@ -384,17 +445,34 @@ function ScalarInput(props: {
     get readonly() {
       return state().effectiveRedacted;
     },
+    // A narrow field clips this copy, and the variable's name is what matters.
+    get title() {
+      return state().effectiveRedacted ? state().placeholder : undefined;
+    },
     onClick: () => {
-      if (!state().masked && state().sensitiveState?.isRedacted && !state().isStructuredSecretRef) {
+      if (
+        !state().masked &&
+        !state().replaceable &&
+        state().sensitiveState?.canReveal &&
+        state().sensitiveState?.isRedacted &&
+        !state().isStructuredSecretRef
+      ) {
         props.params.onToggleSensitivePath?.(props.params.path);
       }
     },
     onKeyDown: (event: KeyboardEvent) => {
+      const multiline = state().multiline;
+      if (handleHeldSecretKey(event, hold, { multiline, onSave, onCancel: cancelHeld })) {
+        return;
+      }
       if (
         props.stepped &&
         !props.params.compact &&
         props.params.value === undefined &&
         state().effectiveValue !== undefined &&
+        event.currentTarget instanceof HTMLInputElement &&
+        event.currentTarget.value === "" &&
+        !event.currentTarget.validity.badInput &&
         (event.key === "ArrowUp" || event.key === "ArrowDown")
       ) {
         event.preventDefault();
@@ -406,6 +484,11 @@ function ScalarInput(props: {
         return;
       }
       const target = event.currentTarget;
+      if (hold.active()) {
+        hold.edit(target.value, state().storedText);
+        state().revalidate(target);
+        return;
+      }
       if (props.params.commitOnBlur) {
         if (!props.stepped) {
           beginScalarEdit(target, state().initialBranch);
@@ -415,14 +498,14 @@ function ScalarInput(props: {
       }
       if (props.inputType === "number" && target instanceof HTMLInputElement) {
         const next = resolveNumericInputState(target, props.params);
-        if (setControlValidity(target, next.message)) {
+        if (draft.setValidity(target, next.message)) {
           commitScalarValue(target, next.parsed);
         }
         return;
       }
       const { textInputState, initialBranch } = state();
       const next = textInputState(target.value, beginScalarEdit(target, initialBranch));
-      if (setControlValidity(target, next.message)) {
+      if (draft.setValidity(target, next.message)) {
         commitScalarValue(target, next.candidate);
       }
     },
@@ -441,13 +524,26 @@ function ScalarInput(props: {
       }
     },
   };
+  // Secrets stay out of autofill, saved form state, spellcheck services and password managers.
+  const secretProps = secretInputProps(
+    () =>
+      !props.stepped &&
+      (hold.active() ||
+        Boolean(state().sensitiveState?.isSensitiveField || state().sensitiveState?.isSensitive)),
+  );
   const control = (
     <>
       {state().multiline ? (
-        <textarea {...controlProps} rows={6} style={{ "min-height": "8rem", resize: "vertical" }} />
+        <textarea
+          {...controlProps}
+          {...secretProps}
+          rows={6}
+          style={{ "min-height": "8rem", resize: "vertical" }}
+        />
       ) : (
         <input
           {...controlProps}
+          {...secretProps}
           type={state().effectiveInputType}
           min={state().constraints?.min}
           max={state().constraints?.max}
@@ -460,17 +556,26 @@ function ScalarInput(props: {
     <>
       {!props.stepped &&
       !state().isStructuredSecretRef &&
-      (state().sensitiveState?.isSensitiveField || state().sensitiveState?.isSensitive) &&
-      props.params.onToggleSensitivePath ? (
-        <span class="settings-secret">
-          {control}
-          <SensitiveToggleButton
-            path={props.params.path}
-            state={state().sensitiveState!}
-            disabled={props.params.disabled}
-            onToggleSensitivePath={props.params.onToggleSensitivePath}
-          />
-        </span>
+      (hold.active() ||
+        ((state().sensitiveState?.isSensitiveField || state().sensitiveState?.isSensitive) &&
+          props.params.onToggleSensitivePath)) ? (
+        <SecretFieldFrame
+          hold={hold}
+          control={control}
+          eye={() => (
+            <SensitiveToggleButton
+              path={props.params.path}
+              state={state().sensitiveState!}
+              disabled={props.params.disabled}
+              onToggleSensitivePath={props.params.onToggleSensitivePath}
+            />
+          )}
+          hidesText={state().hidesText}
+          label={state().field.label}
+          disabled={props.params.disabled}
+          onSave={onSave}
+          onCancel={cancelHeld}
+        />
       ) : (
         control
       )}
@@ -493,25 +598,22 @@ function ScalarInput(props: {
   return (
     <FieldRow
       {...state().field}
+      stacked={state().multiline}
+      placement={props.stepped ? undefined : state().field.placement}
       errorId={state().errorId}
-      errorRef={(element) => {
-        error = element;
-        if (input) {
-          bindControlError(input, element);
-        }
-      }}
-      defaultDescription={
+      errorRef={draft.errorRef}
+      defaultValue={
         state().effectiveRedacted || state().masked
           ? undefined
-          : renderSchemaDefaultDescription(props.params.schema, props.params.value)
+          : schemaDefaultValueText(props.params.schema)
       }
       control={
         props.stepped ? (
-          <>
+          <span class="cfg-stepper">
             {stepButton(-1)}
             {control}
             {stepButton(1)}
-          </>
+          </span>
         ) : (
           presentedInput
         )
@@ -547,17 +649,40 @@ export function SelectInput(props: {
           ? String(currentIndex)
           : unset;
   });
+  const selectOptions = createMemo(() => {
+    getLocale();
+    const { schema, options, isRequired, path, hints } = props.params;
+    return [
+      {
+        value: unset,
+        disabled: isRequired && schema.default === undefined,
+        label:
+          schema.default !== undefined
+            ? // A required field stores its default, so it can't promise to unset.
+              t(isRequired ? "configForm.defaultOption" : "configForm.useDefaultValue", {
+                value: configEnumOptionLabel(schema.default, options),
+              })
+            : (hintForPath(path, hints)?.placeholder ?? t("configForm.select")),
+      },
+      ...(canSelectNull() ? [{ value: nullValue, label: t("configForm.nullValue") }] : []),
+      ...options.map((option, index) => ({
+        value: String(index),
+        label: configEnumOptionLabel(option, options),
+      })),
+    ];
+  });
   return (
     <FieldRow
       {...field()}
-      defaultDescription={renderSchemaDefaultDescription(props.params.schema, props.params.value)}
+      defaultValue={schemaDefaultValueText(props.params.schema)}
       control={
-        <select
-          class="settings-select"
+        <SettingsSelect
           aria-label={field().label}
+          aria-required={field().required ? "true" : undefined}
           aria-describedby={field().helpId}
           disabled={props.params.disabled}
           value={selectedValue()}
+          options={selectOptions()}
           onChange={(event) => {
             const params = props.params;
             const target = event.currentTarget;
@@ -585,27 +710,7 @@ export function SelectInput(props: {
               target.value = selectedValue();
             }
           }}
-        >
-          <option
-            value={unset}
-            disabled={props.params.isRequired && props.params.schema.default === undefined}
-          >
-            {props.params.schema.default !== undefined
-              ? t("configForm.defaultValue", {
-                  value: formatConfigValueText(props.params.schema.default),
-                })
-              : (hintForPath(props.params.path, props.params.hints)?.placeholder ??
-                t("configForm.select"))}
-          </option>
-          {canSelectNull() && <option value={nullValue}>{t("configForm.nullValue")}</option>}
-          <For each={props.params.options}>
-            {(option, index) => (
-              <option value={String(index())}>
-                {configEnumOptionLabel(option, props.params.options)}
-              </option>
-            )}
-          </For>
-        </select>
+        />
       }
     />
   );

@@ -7,7 +7,7 @@ const SERVICE_INSPECTION_MESSAGES = {
   "service-membership-unverified": UPDATE_PREFLIGHT_DETAILS["service-membership-unverified"],
   "service-ancestry-unverified": UPDATE_PREFLIGHT_DETAILS["service-ancestry-unverified"],
   "service-manager-unavailable":
-    "No supported service manager detected. Restart the Gateway you launched manually after the update.",
+    "No supported service manager detected. Manage the Gateway through the supervisor or terminal that started it.",
   "systemd-user-bus-unavailable":
     "The systemd user session bus is unavailable. Check XDG_RUNTIME_DIR for the service account. Log in once or enable the user manager with sudo loginctl enable-linger <user>, then verify systemctl --user status. On Debian/Ubuntu, install dbus-user-session and run systemctl --user start dbus.socket if the runtime bus is missing. Verify busctl --user list with DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus, then retry.",
   "systemd-inspection-deadline-exceeded":
@@ -19,7 +19,7 @@ const SERVICE_INSPECTION_MESSAGES = {
   "windows-task-inspection-failed":
     "Effective Scheduled Task service command could not be inspected. Verify that Windows Task Scheduler is available and that this account can query the task, then run openclaw gateway status --deep before retrying.",
   "launchd-gui-domain-unavailable":
-    "The launchd GUI domain is unavailable for this account. Manage its LaunchAgent from the target user's logged-in macOS desktop session.",
+    "Could not inspect the macOS launchd GUI domain for this account; it may be missing or inaccessible. From the Gateway owner's account, check launchctl print gui/$(id -u). If the domain is missing, log in to the macOS desktop as that user, then retry over SSH. SSH alone does not create a GUI session.",
   "launchd-system-domain-unavailable":
     "The launchd system domain cannot be queried by this account. Ask root to inspect it with sudo launchctl print system/<label>. OpenClaw manages user LaunchAgents, not custom system LaunchDaemons.",
   "launchd-system-owned":
@@ -96,6 +96,13 @@ export class ServiceInspectionError extends Error {
       diagnostic ? { cause: diagnostic } : undefined,
     );
     this.name = "ServiceInspectionError";
+  }
+}
+
+export class SystemdInspectionTimeout extends ServiceInspectionError {
+  constructor(check: string, detail = "") {
+    super("systemd-inspection-deadline-exceeded");
+    this.message = `${detail ? `${detail}\n` : ""}Stalled check: ${check}. ${this.message}`;
   }
 }
 

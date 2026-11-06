@@ -4,8 +4,9 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush, untrack } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
-import { ModalDialog, OpenClawModalDialog, type ModalDialogProperties } from "../modal-dialog.ts";
+import { ModalDialog, OpenClawModalDialog, type ModalDialogProperties } from "../modal-dialog.tsx";
 
 function modalDialog(host: OpenClawModalDialog): HTMLDialogElement {
   const dialog = host.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog");
@@ -16,15 +17,10 @@ function modalDialog(host: OpenClawModalDialog): HTMLDialogElement {
 }
 
 let restoreDialog: () => void;
-let frames: Map<number, FrameRequestCallback>;
-let nextFrame: number;
+let frameClock: ReturnType<typeof createFrameClock>;
 
 async function completeFrames() {
-  const pending = [...frames.values()];
-  frames.clear();
-  for (const frame of pending) {
-    frame(0);
-  }
+  frameClock.flush(0);
   await Promise.resolve();
   await Promise.resolve();
 }
@@ -34,6 +30,7 @@ function mount(
   container?: HTMLElement,
 ) {
   let handle!: OpenClawModalDialog;
+  let confirm!: HTMLButtonElement;
   const view = render(
     () => (
       <ModalDialog
@@ -42,6 +39,7 @@ function mount(
         label={props.label}
         description={props.description}
         onOpenChange={props.onOpenChange}
+        initialFocus={() => confirm}
         ref={(value) => {
           handle = value;
           if (props.onCancel) {
@@ -49,7 +47,9 @@ function mount(
           }
         }}
       >
-        <button autofocus>Confirm</button>
+        <button autofocus ref={(element) => (confirm = element)}>
+          Confirm
+        </button>
         <textarea aria-label="Notes" />
       </ModalDialog>
     ),
@@ -66,13 +66,11 @@ function mount(
 
 beforeEach(() => {
   restoreDialog = installDialogPolyfill();
-  frames = new Map();
-  nextFrame = 0;
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    frames.set(++nextFrame, callback);
-    return nextFrame;
-  });
-  vi.stubGlobal("cancelAnimationFrame", (frame: number) => frames.delete(frame));
+  frameClock = createFrameClock();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+    frameClock.request(callback),
+  );
+  vi.stubGlobal("cancelAnimationFrame", (frame: number) => frameClock.cancel(frame));
   vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } });
 });
 
@@ -88,16 +86,18 @@ describe("Solid native modal policy", () => {
     const [description, setDescription] = createSignal("Review the operation");
     const [open, setOpen] = createSignal(true);
     let handle!: OpenClawModalDialog;
+    let draftInput!: HTMLTextAreaElement;
     render(() => (
       <ModalDialog
         label="Confirm action"
         description={description()}
         open={open()}
+        initialFocus={() => draftInput}
         ref={(value) => {
           handle = value;
         }}
       >
-        <textarea aria-label="Draft" autofocus />
+        <textarea aria-label="Draft" autofocus ref={(element) => (draftInput = element)} />
       </ModalDialog>
     ));
     flush();
@@ -162,15 +162,19 @@ describe("Solid native modal policy", () => {
       const [open, setOpen] = createSignal(initial);
       const changes = vi.fn((next: boolean) => setOpen(next));
       let host!: OpenClawModalDialog;
+      let confirm!: HTMLButtonElement;
       render(() => (
         <ModalDialog
           open={open()}
           onOpenChange={changes}
+          initialFocus={() => confirm}
           ref={(element) => {
             host = element;
           }}
         >
-          <button autofocus>Confirm</button>
+          <button autofocus ref={(element) => (confirm = element)}>
+            Confirm
+          </button>
         </ModalDialog>
       ));
       flush();
@@ -198,6 +202,7 @@ describe("Solid native modal policy", () => {
   it("keeps only current publications when the controlled owner closes during opening", () => {
     const [open, setOpen] = createSignal(false);
     let host!: OpenClawModalDialog;
+    let confirm!: HTMLButtonElement;
     const changes = vi.fn((next: boolean) => {
       setOpen(next);
       if (next) {
@@ -208,11 +213,14 @@ describe("Solid native modal policy", () => {
       <ModalDialog
         open={open()}
         onOpenChange={changes}
+        initialFocus={() => confirm}
         ref={(element) => {
           host = element;
         }}
       >
-        <button autofocus>Confirm</button>
+        <button autofocus ref={(element) => (confirm = element)}>
+          Confirm
+        </button>
       </ModalDialog>
     ));
     flush();

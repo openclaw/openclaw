@@ -28,6 +28,7 @@ import {
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { buildStatusMessageParts, statusModelRefs } from "../status/status-message.test-support.js";
 import {
   estimateAggregateUsageCost,
@@ -222,6 +223,22 @@ describe("hosted model pricing", () => {
     await settled;
     expect(readStoredCatalog).not.toHaveBeenCalled();
     expect(costFor(config, "gpt-external")).toBeUndefined();
+  });
+
+  it("rejects native metadata admission refusal without caching fallback absence", async () => {
+    readStoredCatalog.mockClear();
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-refused-pricing-"));
+    const config = configFor(hostedUrl);
+    const refusal = new StateDatabaseReadAdmissionInvalidatedError("Metadata scope closed");
+    const metadata = vi
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
+      .mockRejectedValueOnce(refusal)
+      .mockResolvedValue(createPluginMetadataSnapshotFixture());
+
+    await expect(prepareModelPricingContext(config)).rejects.toBe(refusal);
+    expect(readStoredCatalog).not.toHaveBeenCalled();
+    await prepareModelPricingContext(config);
+    expect(metadata).toHaveBeenCalledTimes(2);
   });
 
   it("accepts exact free pricing from an authoritative native source", async () => {

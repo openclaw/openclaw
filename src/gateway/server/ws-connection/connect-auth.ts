@@ -1,12 +1,17 @@
 import {
   ConnectErrorDetailCodes,
   resolveAuthConnectErrorDetailCode,
+  resolveDeviceAuthConnectErrorDetailCode,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   getBoundDeviceBootstrapContext,
   verifyDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
+import {
+  deriveDeviceIdFromPublicKey,
+  normalizeDevicePublicKeyBase64Url,
+} from "../../../infra/device-identity.js";
 import { verifyDeviceToken } from "../../../infra/device-pairing-tokens.js";
 import {
   CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -18,8 +23,12 @@ import { captureGatewayAuthPolicy } from "../../auth-policy.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
+import {
+  checkDeviceTokenPeer,
+  openclawIdPeerKeyOf,
+} from "../../openclaw-id/device-token-binding.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
-import { formatForLog } from "../../ws-log.js";
+import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
@@ -32,7 +41,6 @@ import {
 } from "./connect-admission.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
 import { isControlUiOperatorBootstrapProfile } from "./connect-device-metadata.js";
-import { verifyGatewayConnectDeviceProof } from "./connect-device-proof.js";
 import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
@@ -42,6 +50,7 @@ import {
 import { resolveControlUiBuildMismatch } from "./control-ui-build-admission.js";
 import {
   resolvePairingLocality,
+  resolveDeviceSignaturePayloadVersion,
   resolveUnauthorizedHandshakeContext,
   shouldPreserveLocalCliSharedAuthScopes,
   shouldSkipLocalBackendSelfPairing,
@@ -53,6 +62,7 @@ import type {
 } from "./message-handler-types.js";
 
 const unauthorizedHandshakeLogLimiter = new HandshakeAuthLogLimiter();
+const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 
 export async function authenticateGatewayConnect(
   context: GatewayConnectPhaseContext,
@@ -201,7 +211,7 @@ async function authenticateGatewayConnectCore(
     });
     if (suppressedText !== undefined) {
       logWsControl.warn(
-        `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatForLog(connectParams.client.platform)} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"} guidance=${formatForLog(authMessage)}${suppressedText}`,
+        `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatPeerTextForLog(clientLabel)} ${connectParams.client.mode} v${formatPeerTextForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatPeerTextForLog(connectParams.client.platform)} instance=${formatPeerTextForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"} guidance=${formatForLog(authMessage)}${suppressedText}`,
       );
     }
     sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, authMessage, {
@@ -326,16 +336,69 @@ async function authenticateGatewayConnectCore(
     await settleRejectedSharedAuthFailure();
     return undefined;
   }
-  const deviceProof = verifyGatewayConnectDeviceProof(context, {
-    device,
-    resolvedAuth,
-    authMethod,
-    role,
-    scopes,
-  });
-  if (!deviceProof.ok) {
-    await settleRejectedSharedAuthFailure();
-    return undefined;
+  let devicePublicKey: string | null = null;
+  let deviceAuthPayloadVersion: "v2" | "v3" | null = null;
+  if (device) {
+    const rejectDeviceAuthInvalid = async (reason: string, message: string): Promise<undefined> => {
+      emitGatewayAuthSecurityEvent({
+        action: "gateway.auth.failed",
+        outcome: "denied",
+        severity: "medium",
+        authMode: resolvedAuth.mode,
+        authMethod,
+        authProvided: "device-signature",
+        role,
+        scopes,
+        clientMode: connectParams.client.mode,
+        deviceId: device.id,
+        reason,
+      });
+      context.handler.setHandshakeState("failed");
+      setCloseCause("device-auth-invalid", {
+        reason,
+        client: connectParams.client.id,
+        deviceId: device.id,
+      });
+      sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message, {
+        details: { code: resolveDeviceAuthConnectErrorDetailCode(reason), reason },
+      });
+      close(1008, message);
+      await settleRejectedSharedAuthFailure();
+      return undefined;
+    };
+    const derivedId = deriveDeviceIdFromPublicKey(device.publicKey);
+    if (!derivedId || derivedId !== device.id) {
+      return await rejectDeviceAuthInvalid("device-id-mismatch", "device identity mismatch");
+    }
+    const signedAt = device.signedAt;
+    if (
+      typeof signedAt !== "number" ||
+      Math.abs(Date.now() - signedAt) > DEVICE_SIGNATURE_SKEW_MS
+    ) {
+      return await rejectDeviceAuthInvalid("device-signature-stale", "device signature expired");
+    }
+    const providedNonce = typeof device.nonce === "string" ? device.nonce.trim() : "";
+    if (!providedNonce) {
+      return await rejectDeviceAuthInvalid("device-nonce-missing", "device nonce required");
+    }
+    if (providedNonce !== context.handler.connectNonce) {
+      return await rejectDeviceAuthInvalid("device-nonce-mismatch", "device nonce mismatch");
+    }
+    deviceAuthPayloadVersion = resolveDeviceSignaturePayloadVersion({
+      device,
+      connectParams,
+      role,
+      scopes,
+      signedAtMs: signedAt,
+      nonce: providedNonce,
+    });
+    if (!deviceAuthPayloadVersion) {
+      return await rejectDeviceAuthInvalid("device-signature", "device signature invalid");
+    }
+    devicePublicKey = normalizeDevicePublicKeyBase64Url(device.publicKey);
+    if (!devicePublicKey) {
+      return await rejectDeviceAuthInvalid("device-public-key", "device public key invalid");
+    }
   }
 
   // Admission already requires a live grant, operator role, and no shared or
@@ -359,10 +422,20 @@ async function authenticateGatewayConnectCore(
         clientIp: browserRateLimitClientIp,
         verifyBootstrapToken: verifyDeviceBootstrapToken,
         async verifyDeviceToken(paramsLocal) {
-          return await verifyDeviceToken({
+          const verified = await verifyDeviceToken({
             ...paramsLocal,
             requiredSharedGatewaySessionGeneration: getRequiredSharedGatewaySessionGeneration?.(),
           });
+          if (!verified.ok) {
+            return verified;
+          }
+          // OpenClaw ID binds tunnel-issued tokens to the device key that obtained them.
+          const peer = await checkDeviceTokenPeer({
+            deviceId: paramsLocal.deviceId,
+            role: paramsLocal.role,
+            peerKey: openclawIdPeerKeyOf(context.handler.ingressAttribution),
+          });
+          return peer.ok ? verified : { ok: false, reason: peer.reason };
         },
       });
   ({ authResult, authOk, authMethod } = authDecision);
@@ -489,7 +562,7 @@ async function authenticateGatewayConnectCore(
       },
     });
     logWsControl.warn(
-      `control ui build rejected conn=${connId} clientBuild=${formatForLog(controlUiBuildMismatch.clientBuildId ?? "legacy")} gatewayBuild=${formatForLog(controlUiBuildMismatch.gatewayBuildId)}; reload required`,
+      `control ui build rejected conn=${connId} clientBuild=${formatPeerTextForLog(controlUiBuildMismatch.clientBuildId ?? "legacy")} gatewayBuild=${formatForLog(controlUiBuildMismatch.gatewayBuildId)}; reload required`,
     );
     close(1008, truncateCloseReason(message));
     return undefined;
@@ -502,7 +575,7 @@ async function authenticateGatewayConnectCore(
     authMethod,
   });
   if (trustedProxyAuthOk) {
-    scopes = applyConnectionScopeCap({ scopes, upgradeReq });
+    scopes = applyConnectionScopeCap({ role, scopes, upgradeReq });
     connectParams.scopes = scopes;
   }
   const controlUiPairingKind = shouldSkipControlUiPairing({
@@ -527,8 +600,8 @@ async function authenticateGatewayConnectCore(
     scopes,
     hasRequestedScopes,
     device,
-    devicePublicKey: deviceProof.devicePublicKey,
-    deviceAuthPayloadVersion: deviceProof.deviceAuthPayloadVersion,
+    devicePublicKey,
+    deviceAuthPayloadVersion,
     hasTokenAuth,
     hasPasswordAuth,
     bootstrapTokenCandidate,

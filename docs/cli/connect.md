@@ -1,5 +1,5 @@
 ---
-summary: "Connect a machine to an OpenClaw Gateway with one pasted command"
+summary: "Connect a device to an OpenClaw Gateway with one pasted command"
 read_when:
   - Pairing a new headless node with a Gateway
   - Installing a node host from a join URL or setup code
@@ -15,7 +15,7 @@ in the existing node-host state, and runs the same runtime as
 
 ## Create a join command
 
-On the Gateway host, use admin credentials to mint a single-use join URL:
+On the Gateway’s computer, use an admin account to mint a single-use join URL:
 
 ```bash
 openclaw devices join-code
@@ -131,6 +131,13 @@ npx openclaw connect <setup-code> --ephemeral
 
 This process hosts worker sessions even when the machine's durable node config has worker hosting disabled. It does not install a service and cannot be combined with `--service` or `--session-host`. The Gateway owns the setup identity and paired-node lifetime: provider replay resumes the persisted device token after the one-shot setup credential is consumed, and environment teardown removes the node role after releasing the cloud lease.
 
+A replayed setup code may already have expired. With `--ephemeral`, it can still
+reconnect using the saved node device token when all setup endpoints match the
+saved Gateway origin and path. The expired bootstrap credential is never sent.
+Without that saved pairing, or when the target Gateway differs, the node rejects
+the expired code even if shared Gateway credentials are available. Join URLs and
+operator-run nodes still require an unexpired setup credential.
+
 `--ephemeral` is intended for provider-managed state directories on throwaway machines, not as a shortcut for enrolling a personal device.
 
 ## Install as a service
@@ -214,6 +221,10 @@ such as `http://127.0.0.1/j/<shortcode>`. Direct setup codes can carry the
 Gateway TLS certificate fingerprint, which lets the node host pin a self-signed
 Gateway certificate after decoding the payload.
 
+Ctrl-C or SIGTERM stops an in-progress join HTTP lookup before entering the node
+runtime. A join code already redeemed by the Gateway remains single-use; mint a
+new code before retrying if it was consumed.
+
 The payload determines the saved host, port, TLS mode, WebSocket context path,
 and ordered fallback endpoints. Normal and foreground connections do not add
 `openclaw.json` keys; `--service --session-host` explicitly persists the worker
@@ -230,6 +241,9 @@ A join code and a paired device have separate lifecycles:
 - Environment-managed `--ephemeral` nodes are removed automatically when their owning cloud environment is destroyed.
 
 ## Troubleshooting
+
+Startup failures show the redacted top-level reason. Use `--debug` when you need
+stack traces and nested error details.
 
 If the join URL reports that it is missing or expired, mint a new one with
 `openclaw devices join-code`. A used code intentionally returns the same result

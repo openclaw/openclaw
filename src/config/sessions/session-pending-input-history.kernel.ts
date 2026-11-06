@@ -1,5 +1,5 @@
+import { expressionBuilder } from "kysely";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
-import { jsonPathValue } from "../../infra/database-engine/json-values.js";
 import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
@@ -7,6 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   hasPendingInputConsumptionColumn,
@@ -18,6 +19,22 @@ import type {
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
 import { resolvePendingInputHistoryLimit } from "./session-pending-input-value.js";
+
+function pendingInputHistoryEligibility(query: PendingInputHistoryQuery) {
+  const eb = expressionBuilder<Pick<DB, "session_pending_inputs">, "session_pending_inputs">();
+  return query.queuedInputIds
+    ? eb.and([
+        eb("state", "=", "queued"),
+        eb("input_id", "in", [...query.queuedInputIds]),
+        ...(query.liveInputIds?.length ? [eb("input_id", "not in", [...query.liveInputIds])] : []),
+      ])
+    : eb.or([
+        eb("state", "=", "cancelled"),
+        ...(query.liveInputIds?.length
+          ? [eb.and([eb("state", "=", "queued"), eb("input_id", "in", [...query.liveInputIds])])]
+          : []),
+      ]);
+}
 
 /** The admitted reader owns the snapshot; process-held incognito uses the same kernel. */
 export function readPendingInputHistoryInDatabase(
@@ -31,8 +48,11 @@ export function readPendingInputHistoryInDatabase(
   if (!hasSessionPendingInputsSchema(database.db)) {
     return { rows: [], total: 0 };
   }
+  if (query.queuedInputIds?.length === 0) {
+    return { rows: [], total: 0 };
+  }
   const hasConsumption = hasPendingInputConsumptionColumn(database.db);
-  if (query.includeTotal === false) {
+  if (query.includeTotal === false || query.id !== undefined) {
     return readPendingInputPageInDatabase(database, query, hasConsumption);
   }
   return runSqliteReadSnapshotSync(database.db, () => {
@@ -40,17 +60,16 @@ export function readPendingInputHistoryInDatabase(
     let base = db
       .selectFrom("session_pending_inputs")
       .where("session_key", "=", query.sessionKey)
-      .where("session_id", "=", query.sessionId);
+      .where("session_id", "=", query.sessionId)
+      .where(pendingInputHistoryEligibility(query));
     if (hasConsumption) {
       base = base.where("consumed_event_id", "is", null);
     }
     const total =
-      query.id === undefined
-        ? (executeSqliteQueryTakeFirstSync(
-            database.db,
-            base.select(db.fn.count<number>("input_id").as("total")),
-          )?.total ?? 0)
-        : undefined;
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        base.select(db.fn.count<number>("input_id").as("total")),
+      )?.total ?? 0;
     if (total === 0) {
       return { rows: [], total };
     }
@@ -77,21 +96,7 @@ function readPendingInputPageInDatabase(
           .where("session_key", "=", query.sessionKey)
           .where("session_id", "=", query.sessionId)
           .$if(hasConsumption, (selection) => selection.where("consumed_event_id", "is", null))
-          .$if(query.sessionSendRecovery === true, (selection) =>
-            selection
-              .where("state", "in", ["queued", "interrupted"])
-              .where((eb) =>
-                eb(
-                  jsonPathValue(
-                    database.db,
-                    eb.ref("message_json"),
-                    eb.val("$.__openclaw.sessionSendDelivery"),
-                  ),
-                  "is not",
-                  null,
-                ),
-              ),
-          )
+          .where(pendingInputHistoryEligibility(query))
           .$if(query.before !== undefined, (selection) =>
             selection.where("seq", "<", query.before!),
           )

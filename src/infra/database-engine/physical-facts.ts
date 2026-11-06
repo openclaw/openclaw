@@ -1,92 +1,33 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import type { EngineConnection, PostgresSqlConnection } from "../sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   getOrLoadSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
-  type SqliteDatabaseAdmissionKey,
 } from "../sqlite-database-admission.js";
 import type { StoreSchema } from "./contract.js";
 import {
-  assertPostgresCatalog,
-  readPostgresCatalog,
-  type PostgresCatalogFact,
-} from "./postgres-catalog.js";
+  postgresPhysicalFactsKey as admissionKey,
+  type PostgresPhysicalFacts,
+} from "./physical-facts-contract.js";
+import type { PostgresCatalogFact } from "./postgres-catalog.js";
 import {
   admitPostgresCapabilities,
+  getAdmittedPostgresSchema,
+  postgresSchemaHash,
   readPostgresSchema,
   recordPostgresSchema,
   verifyPostgresSchema,
   withPostgresSearchExtensions,
   retainPostgresSchema,
-  type PostgresCapabilities,
 } from "./postgres-schema.js";
 
-export type PostgresPhysicalFacts = {
-  engine: "postgres";
-  admissionId: string;
-  store: string;
-  namespace: string;
-  storeId: string;
-  version: number;
-  capabilities: PostgresCapabilities;
-  catalog: readonly PostgresCatalogFact[];
-};
+export type { PostgresPhysicalFacts } from "./physical-facts-contract.js";
 const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
-const admissionKey: SqliteDatabaseAdmissionKey<PostgresPhysicalFacts> = {
-  name: "database.engine.schema",
-  schemaDependent: true,
-  read(value) {
-    if (
-      value &&
-      typeof value === "object" &&
-      "engine" in value &&
-      value.engine === "postgres" &&
-      "admissionId" in value &&
-      typeof value.admissionId === "string" &&
-      "store" in value &&
-      typeof value.store === "string" &&
-      "namespace" in value &&
-      typeof value.namespace === "string" &&
-      "storeId" in value &&
-      typeof value.storeId === "string" &&
-      "version" in value &&
-      typeof value.version === "number" &&
-      "capabilities" in value &&
-      value.capabilities !== null &&
-      typeof value.capabilities === "object" &&
-      "serverMajor" in value.capabilities &&
-      typeof value.capabilities.serverMajor === "number" &&
-      value.capabilities.serverMajor >= 16 &&
-      "serverEncoding" in value.capabilities &&
-      value.capabilities.serverEncoding === "UTF8" &&
-      "clientEncoding" in value.capabilities &&
-      value.capabilities.clientEncoding === "UTF8" &&
-      "catalog" in value
-    ) {
-      return {
-        engine: "postgres",
-        admissionId: value.admissionId,
-        store: value.store,
-        namespace: value.namespace,
-        storeId: value.storeId,
-        version: value.version,
-        capabilities: {
-          serverMajor: value.capabilities.serverMajor,
-          serverEncoding: "UTF8",
-          clientEncoding: "UTF8",
-        },
-        catalog: readPostgresCatalog(value.catalog),
-      };
-    }
-    return undefined;
-  },
-};
 
-export function getPostgresPhysicalFacts(db: EngineConnection) {
-  return getSqliteDatabaseAdmission(db, admissionKey);
+export function getPostgresPhysicalFacts(db: EngineConnection, options?: { refresh?: boolean }) {
+  return getSqliteDatabaseAdmission(db, admissionKey, options);
 }
 
 /** Operator projections consume admission evidence without opening or probing a store. */
@@ -94,20 +35,46 @@ export function getPostgresPhysicalFactsForPath(path: string) {
   return getOrLoadSqliteDatabaseAdmissionForPath(path, admissionKey, () => undefined);
 }
 
-/** The anchor carries PG admission facts without treating its native catalog as application data. */
+/** Retain PostgreSQL admission facts on its admitted connection. */
 export function admitPostgresPhysicalFacts(params: {
-  anchor: DatabaseSync;
   db: PostgresSqlConnection;
   namespace: string;
   storeId: string;
   store: string;
   version: number;
-  expected?: readonly PostgresCatalogFact[];
   schema?: StoreSchema;
   recordSchema?: boolean;
+  preserveSchemaSeal?: boolean;
+  requireSealedSchema?: boolean;
 }): PostgresPhysicalFacts {
   const retained = getPostgresPhysicalFacts(params.db);
   if (retained) {
+    if (
+      retained.version !== params.version ||
+      retained.storeId !== params.storeId ||
+      retained.namespace !== params.namespace ||
+      retained.store !== params.store
+    ) {
+      throw new Error(`PostgreSQL metadata identity or version mismatch. ${recovery}`);
+    }
+    if (params.requireSealedSchema) {
+      const schema = params.schema;
+      const admitted = getAdmittedPostgresSchema(params.db);
+      // Dynamic extensions belong to the installed schema, not the caller's base definition.
+      if (
+        !schema ||
+        !retained.schemaHash ||
+        retained.schemaHash !==
+          postgresSchemaHash(
+            { ...schema, searchExtensions: admitted?.searchExtensions },
+            retained.catalog,
+          )
+      ) {
+        throw new Error(
+          `Read-only PostgreSQL admission requires a matching schema seal. ${recovery}`,
+        );
+      }
+    }
     return retained;
   }
   const capabilities = admitPostgresCapabilities(params.db);
@@ -121,22 +88,22 @@ export function admitPostgresPhysicalFacts(params: {
   if (row.version !== params.version || row.store_id !== params.storeId) {
     throw new Error(`PostgreSQL metadata identity or version mismatch. ${recovery}`);
   }
+  let schemaHash: string | undefined;
   if (params.schema) {
     const schema = withPostgresSearchExtensions(params.schema, snapshot);
     if (params.recordSchema) {
-      recordPostgresSchema(params.db, params.namespace, schema, snapshot);
+      schemaHash = recordPostgresSchema(params.db, params.namespace, schema, snapshot);
     } else {
-      verifyPostgresSchema(params.db, params.namespace, schema, snapshot);
+      schemaHash = verifyPostgresSchema(
+        params.db,
+        params.namespace,
+        schema,
+        snapshot,
+        params.preserveSchemaSeal,
+        params.requireSealedSchema,
+      );
     }
     retainPostgresSchema(params.db, schema);
-  }
-  if (params.expected) {
-    assertPostgresCatalog(
-      catalog.filter(
-        (fact) => !fact.kind.endsWith("Definition") && fact.table !== "openclaw_schema_meta",
-      ),
-      params.expected,
-    );
   }
   const facts: PostgresPhysicalFacts = {
     engine: "postgres",
@@ -145,6 +112,7 @@ export function admitPostgresPhysicalFacts(params: {
     namespace: params.namespace,
     storeId: row.store_id,
     version: row.version,
+    schemaHash,
     capabilities,
     catalog,
   };
@@ -156,11 +124,13 @@ export function publishPostgresSearchExtensionFacts(
   db: PostgresSqlConnection,
   facts: PostgresPhysicalFacts,
   catalog: readonly PostgresCatalogFact[],
+  schema: StoreSchema,
 ): void {
   publishSqliteDatabaseAdmission(db, admissionKey, {
     ...facts,
     admissionId: randomUUID(),
     catalog,
+    schemaHash: postgresSchemaHash(schema, catalog),
   });
 }
 

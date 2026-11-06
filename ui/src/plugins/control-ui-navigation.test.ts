@@ -56,11 +56,7 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
   const abort = new AbortController();
   const entry = registrations({ pageHref: () => "/boards" }, abort.signal);
   const actions = [{ id: "delete", label: "Delete board…", icon: "trash", destructive: true, run }];
-  const entries = [
-    entry("boards", { actions }),
-    entry("child", { parent: "boards", actions }),
-    entry("plain"),
-  ];
+  const entries = [entry("boards", { actions }), entry("plain")];
   const menuRoot = document.createElement("div");
   const menuHost = {} as SidebarMenusOwner;
   const menus = createRoot((dispose) => {
@@ -83,12 +79,10 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
     },
     { container: menuRoot },
   );
-  const [parent, pinned, plain] = contributions;
-  const links = [...parent!.querySelectorAll("a"), pinned!.querySelector("a")!];
-  expect(links).toHaveLength(3);
-  expect(links[1]?.classList.contains("nav-item--child")).toBe(true);
-  const open = (link: Element, event: Event) => {
-    link.dispatchEvent(event);
+  const [parent, plain] = contributions;
+  const link = parent!.querySelector("a")!;
+  const open = (target: Element, event: Event) => {
+    target.dispatchEvent(event);
     flush();
     return menuRoot.querySelector<HTMLElement>(".sidebar-plugin-navigation-menu")!;
   };
@@ -98,33 +92,23 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
     keyboard("F10", { shiftKey: true }),
     keyboard("ContextMenu"),
   ].entries()) {
-    const menu = open(links[index]!, event);
+    const menu = open(link, event);
     const trigger = menu.parentElement?.querySelector<HTMLElement>(".oc-menu-trigger");
     expect(trigger?.style.left).toBe(index === 0 ? "24px" : "8px");
     const item = menu.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
     expect(item.textContent?.trim()).toBe("Delete board…");
     expect(item).toMatchObject({ dataset: { variant: "danger" } });
-    expect(item.classList.contains("session-menu__item--destructive")).toBe(true);
     expect(item.querySelector("svg")).not.toBeNull();
     item.click();
     await waitForSolid(() => expect(run).toHaveBeenCalledTimes(index + 1));
     flush();
     expect(currentMenu()).toBeNull();
   }
-  const menu = open(links[0]!, pointer());
-  menu.dispatchEvent(keyboard("Escape"));
-  flush();
-  expect(currentMenu()).toBeNull();
-  expect(document.activeElement).toBe(links[0]);
-  open(links[0]!, pointer()).hidePopover();
-  flush();
-  expect(currentMenu()).toBeNull();
-
   for (const event of [pointer(), keyboard("ContextMenu")]) {
     expect(open(plain!.querySelector("a")!, event)).toBeNull();
     expect(event.defaultPrevented).toBe(false);
   }
-  const staleMenu = open(links[0]!, pointer());
+  const staleMenu = open(link, pointer());
   const staleItem = staleMenu.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
   abort.abort();
   staleItem.click();

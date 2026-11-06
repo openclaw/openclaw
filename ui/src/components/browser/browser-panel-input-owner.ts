@@ -1,10 +1,7 @@
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
-import type {
-  BrowserRequestClient,
-  BrowserInspectedNode,
-  BrowserPanelTab,
-} from "./browser-client.ts";
+import type { BrowserRequestClient, BrowserInspectedNode } from "./browser-client.ts";
 import {
   clickBrowserCoords,
   inspectBrowserElementAt,
@@ -15,6 +12,7 @@ import {
 } from "./browser-client.ts";
 import type { BrowserPanelOperations } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
+import type { BrowserPanelStateWriter } from "./browser-panel-state.ts";
 import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import {
   browserPanelInspectHighlightRegion,
@@ -23,27 +21,26 @@ import {
   browserPanelShouldForwardKey,
   dispatchCompositedBrowserAnnotation,
   paintBrowserPanelOverlay,
-  type BrowserPanelView,
 } from "./browser-panel-surface.ts";
+
+registerBrowserEnglish();
 
 const INSPECT_THROTTLE_MS = 120;
 const STREAM_WHEEL_INTERVAL_MS = 50;
 const SNAPSHOT_WHEEL_INTERVAL_MS = 150;
 
-type BrowserPanelInputState = {
-  mode: "interact" | "annotate" | "inspect";
-  strokes: AnnotationStroke[];
-  view: BrowserPanelView | null;
-  tabs: BrowserPanelTab[];
-  activeTargetId: string | null;
-  inspected: BrowserInspectedNode | null;
-  inspectPointer: { x: number; y: number } | null;
-  evaluateUnavailable: boolean;
-  errorText: string | null;
-  noticeText: string | null;
-};
-
-interface BrowserPanelInputHost extends BrowserPanelInputState {
+interface BrowserPanelInputHost extends BrowserPanelStateWriter<
+  | "mode"
+  | "strokes"
+  | "view"
+  | "tabs"
+  | "activeTargetId"
+  | "inspected"
+  | "inspectPointer"
+  | "evaluateUnavailable"
+  | "errorText"
+  | "noticeText"
+> {
   readonly stream: Pick<BrowserPanelStream, "ownsView">;
   readonly operations: Pick<
     BrowserPanelOperations,
@@ -53,10 +50,6 @@ interface BrowserPanelInputHost extends BrowserPanelInputState {
     BrowserPanelPendingInput,
     "clearInput" | "queueInspection" | "queueWheel"
   >;
-  setState<Key extends keyof BrowserPanelInputState>(
-    key: Key,
-    value: BrowserPanelInputState[Key],
-  ): void;
   runAction(
     action: (client: BrowserRequestClient) => Promise<void>,
     refreshView?: boolean,
@@ -469,7 +462,49 @@ export class BrowserPanelInputOwner {
       return;
     }
     if (this.host.mode === "inspect") {
-      this.queueInspect(event);
+      const client = this.host.operations.captureClient();
+      const point = this.remotePoint(event);
+      const stagePoint = browserPanelNormalizedPoint(this.elements.stage ?? null, event);
+      const targetId = this.host.activeTargetId;
+      if (!client || !point || !stagePoint || !targetId || this.host.evaluateUnavailable) {
+        return;
+      }
+      const current = this.host.operations.beginInspection(
+        client,
+        () =>
+          this.host.activeTargetId === targetId &&
+          this.host.view?.targetId === targetId &&
+          this.host.mode === "inspect",
+      );
+      this.host.setState("inspected", null);
+      this.host.setState("inspectPointer", stagePoint);
+      this.paintOverlay();
+      this.host.pendingInput.queueInspection(INSPECT_THROTTLE_MS, current, () => {
+        void inspectBrowserElementAt(client, { targetId, x: point.x, y: point.y })
+          .then((node) => {
+            if (current()) {
+              if (this.inspectionError !== null && this.host.errorText === this.inspectionError) {
+                this.host.setState("errorText", null);
+              }
+              this.inspectionError = null;
+              this.host.setState("inspected", node);
+              this.paintOverlay();
+            }
+          })
+          .catch((error: unknown) => {
+            if (!current()) {
+              return;
+            }
+            if (isBrowserEvaluateDisabledError(error)) {
+              this.host.setState("evaluateUnavailable", true);
+              this.host.setState("errorText", t("browser.inspectUnavailable"));
+              this.host.setState("mode", "interact");
+              return;
+            }
+            this.host.reportError(error);
+            this.inspectionError = this.host.errorText;
+          });
+      });
     }
   }
 
@@ -492,52 +527,6 @@ export class BrowserPanelInputOwner {
     } catch {
       // Capture may already be gone because its canvas was detached.
     }
-  }
-
-  private queueInspect(event: PointerEvent): void {
-    const client = this.host.operations.captureClient();
-    const point = this.remotePoint(event);
-    const stagePoint = browserPanelNormalizedPoint(this.elements.stage ?? null, event);
-    const targetId = this.host.activeTargetId;
-    if (!client || !point || !stagePoint || !targetId || this.host.evaluateUnavailable) {
-      return;
-    }
-    const current = this.host.operations.beginInspection(
-      client,
-      () =>
-        this.host.activeTargetId === targetId &&
-        this.host.view?.targetId === targetId &&
-        this.host.mode === "inspect",
-    );
-    this.host.setState("inspected", null);
-    this.host.setState("inspectPointer", stagePoint);
-    this.paintOverlay();
-    this.host.pendingInput.queueInspection(INSPECT_THROTTLE_MS, current, () => {
-      void inspectBrowserElementAt(client, { targetId, x: point.x, y: point.y })
-        .then((node) => {
-          if (current()) {
-            if (this.inspectionError !== null && this.host.errorText === this.inspectionError) {
-              this.host.setState("errorText", null);
-            }
-            this.inspectionError = null;
-            this.host.setState("inspected", node);
-            this.paintOverlay();
-          }
-        })
-        .catch((error: unknown) => {
-          if (!current()) {
-            return;
-          }
-          if (isBrowserEvaluateDisabledError(error)) {
-            this.host.setState("evaluateUnavailable", true);
-            this.host.setState("errorText", t("browser.inspectUnavailable"));
-            this.host.setState("mode", "interact");
-            return;
-          }
-          this.host.reportError(error);
-          this.inspectionError = this.host.errorText;
-        });
-    });
   }
 
   undoStroke(): void {

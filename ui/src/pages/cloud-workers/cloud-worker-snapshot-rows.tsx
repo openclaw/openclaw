@@ -29,7 +29,7 @@ type SnapshotActions = {
 };
 
 function SnapshotMenu(props: SnapshotActions & { image: SnapshotImage }) {
-  const menu = createMemo<MenuItem[]>(() => {
+  const menu = (): MenuItem[] => {
     const current = props.image;
     const blocked = props.busy || Boolean(current.capture || current.retirement);
     const items: MenuItem[] = [];
@@ -68,7 +68,7 @@ function SnapshotMenu(props: SnapshotActions & { image: SnapshotImage }) {
       });
     }
     return items;
-  });
+  };
   return (
     <Show when={menu().length}>
       <Menu
@@ -235,11 +235,28 @@ export function CloudWorkerEnvironmentSheet(
   );
   const phases = createMemo(() => {
     const durations = setup()?.phaseDurationsMs;
-    return (["onCreate", "updateContent", "detectedInstall"] as const).flatMap((name) =>
+    return (
+      [
+        "retainedGit",
+        "retainedManifest",
+        "inspection",
+        "seedPreparation",
+        "seedTransfer",
+        "seedVerification",
+        "seedCheckout",
+        "seedManifest",
+        "gitUpdate",
+        "toolchainPreparation",
+        "onCreate",
+        "updateContent",
+        "detectedInstall",
+        "preparedManifest",
+      ] as const
+    ).flatMap((name) =>
       durations?.[name] !== undefined ? [{ name, durationMs: durations[name] }] : [],
     );
   });
-  const longest = createMemo(() => Math.max(...phases().map((phase) => phase.durationMs)));
+  const longest = () => Math.max(...phases().map((phase) => phase.durationMs));
   return (
     <section class="cloud-environments__sheet" aria-label={props.environment.label}>
       <header class="cloud-environments__header">

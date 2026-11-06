@@ -1,9 +1,10 @@
 /** Typed CLI transport shared by command inspection and native-off inventory. */
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
   getServiceInspectionClock,
   runServiceInspectionGuard,
 } from "./service-inspection-budget.js";
-import { ServiceInspectionError } from "./service-inspection-error.js";
+import { ServiceInspectionError, SystemdInspectionTimeout } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import { decodeSystemdBusProperties, type SystemdBusQuery } from "./systemd-bus-query.js";
 import { decodeLegacyBusctlOutput } from "./systemd-busctl-legacy.js";
@@ -27,8 +28,9 @@ export function createSystemdBusctlQuery(options: {
   let legacyOutput = false;
   return async (args, signatures) => {
     const assertCurrent = options.assertCurrent?.(args);
+    const check = `busctl ${args.slice(0, 5).join(" ")}`;
     if (now() >= deadline) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+      throw new SystemdInspectionTimeout(check);
     }
     if (options.boundCalls && remainingCalls <= 0) {
       throw unavailable();
@@ -61,7 +63,9 @@ export function createSystemdBusctlQuery(options: {
       // Option parsing failed before a manager call. Keep the original deadline.
       const remaining = Math.floor(callDeadline - now());
       if (remaining <= 0) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+        throw new SystemdInspectionTimeout(
+          `busctl legacy-output negotiation for ${args.slice(0, 5).join(" ")}`,
+        );
       }
       legacyOutput = true;
       result = await exec(
@@ -83,14 +87,15 @@ export function createSystemdBusctlQuery(options: {
       throw new ServiceInspectionError(reason);
     }
     if (now() >= (legacyOutput ? callDeadline : deadline)) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+      throw new SystemdInspectionTimeout(check);
     }
     if ((legacyOutput || options.boundCalls) && result.termination !== "exit") {
       throw systemdInspectionError(result, unavailable().message, scope);
     }
     if (result.code !== 0) {
       const unitName = options.unitName ?? args[6];
-      const detail = result.stderr.trim();
+      // systemd 245 busctl colors this line even when stderr is not a terminal.
+      const detail = stripAnsi(result.stderr).trim();
       if (
         result.termination === "exit" &&
         ((args.includes("LoadUnit") && detail === `Call failed: Unit ${unitName} not found.`) ||

@@ -8,7 +8,7 @@ import {
 } from "@openclaw/fs-safe/atomic";
 import { GUEST_FILESYSTEM_PYTHON } from "@openclaw/fs-safe/guest";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type {
   CreateSandboxBackendParams,
@@ -68,7 +68,7 @@ type OpenShellWorkspaceLease = {
 };
 
 // Mirror commands own their snapshot until publication; remote runtimes only serialize initialization.
-const openShellWorkspaceOperations = new KeyedAsyncQueue();
+const openShellWorkspaceOperations = new Map<string, Promise<void>>();
 let openShellDetachedCreateSupport: { key: string; promise: Promise<boolean> } | undefined;
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
 // Prints "0" when every managed root is missing or empty, "1" otherwise. Any
@@ -326,20 +326,13 @@ class OpenShellSandboxBackendImpl {
         sandboxName,
       ])}`,
     ].toSorted();
-    const releases: Array<() => void> = [];
-    for (const key of keys) {
-      const acquired = createDeferred<() => void>();
-      void openShellWorkspaceOperations.enqueue(key, () => new Promise<void>(acquired.resolve));
-      releases.push(await acquired.promise);
-    }
-    return {
-      release: () => {
-        for (const release of releases.toReversed()) {
-          // Deferred resolution is idempotent, including repeated finalization cleanup.
-          release();
-        }
-      },
-    };
+    const acquired = createDeferred<() => void>();
+    void enqueueKeyedTask({
+      tails: openShellWorkspaceOperations,
+      keys,
+      task: () => new Promise<void>(acquired.resolve),
+    });
+    return { release: await acquired.promise };
   }
 
   async prepareExec(params: {
@@ -704,10 +697,16 @@ class OpenShellSandboxBackendImpl {
   }
 
   private async ensureSandboxExistsInner(): Promise<void> {
-    const getResult = await this.runCli(["sandbox", "get", this.params.execContext.sandboxName]);
+    const getResult = await this.runCli([
+      "sandbox",
+      "get",
+      this.params.execContext.sandboxName,
+      "--output",
+      "json",
+    ]);
     if (getResult.code === 0) {
       if (this.params.legacyRuntimeAdopted) {
-        const phase = await this.resolveLegacyRuntimePhase();
+        const phase = parseOpenShellSandboxPhase(getResult.stdout);
         if (!phase) {
           throw this.buildLegacyRuntimeUnavailableError(
             "OpenShell did not report a lifecycle phase for this sandbox.",
@@ -792,40 +791,6 @@ class OpenShellSandboxBackendImpl {
         openShellDetachedCreateSupport = undefined;
       }
       throw error;
-    }
-  }
-
-  private async resolveLegacyRuntimePhase(): Promise<string | undefined> {
-    const pageSize = 100;
-    for (let offset = 0; ; offset += pageSize) {
-      const listResult = await this.runCli([
-        "sandbox",
-        "list",
-        "--limit",
-        String(pageSize),
-        "--offset",
-        String(offset),
-        "--output",
-        "json",
-      ]);
-      if (listResult.code !== 0) {
-        throw this.buildLegacyRuntimeUnavailableError(listResult.stderr.trim());
-      }
-      const page = parseOpenShellSandboxPhasePage(
-        listResult.stdout,
-        this.params.execContext.sandboxName,
-      );
-      if (!page) {
-        throw this.buildLegacyRuntimeUnavailableError(
-          "OpenShell returned malformed sandbox lifecycle data.",
-        );
-      }
-      if (page.phase) {
-        return page.phase;
-      }
-      if (page.count < pageSize) {
-        return undefined;
-      }
     }
   }
 
@@ -1111,23 +1076,6 @@ function resolveOpenShellSandboxName(params: {
     return { sandboxName: legacySandboxName, legacyRuntimeAdopted: true };
   }
   return { sandboxName, legacyRuntimeAdopted: false };
-}
-
-function parseOpenShellSandboxPhasePage(
-  stdout: string,
-  sandboxName: string,
-): { count: number; phase?: string } | undefined {
-  const parsed = safeParseJson<unknown>(stdout);
-  if (!Array.isArray(parsed)) {
-    return undefined;
-  }
-  for (const entry of parsed) {
-    const record = asOptionalRecord(entry);
-    if (record?.name === sandboxName && typeof record.phase === "string") {
-      return { count: parsed.length, phase: record.phase };
-    }
-  }
-  return { count: parsed.length };
 }
 
 function parseOpenShellSandboxPhase(stdout: string): string | undefined {

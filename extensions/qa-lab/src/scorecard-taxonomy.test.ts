@@ -95,7 +95,7 @@ describe("QA maturity taxonomy", () => {
       category.lts.decision = decision(true);
       taxonomy.surfaces[0]!.level_decision = decision("stable");
       const result = read();
-      expect(result).toEqual({ scores, taxonomy, warnings: [] });
+      expect(result).toEqual({ scores, taxonomy });
       expect(qaMaturityTaxonomyIdentity(result.taxonomy)).toEqual(identity);
       expect(result.scores.rollups.surface_average).toEqual({
         quality: { score: 70, label: "Beta" },
@@ -175,5 +175,61 @@ describe("QA maturity taxonomy", () => {
 
     category.features.push({ name: "New capability", coverageIds: ["tools.new-capability"] });
     expect(qaMaturityTaxonomyIdentity(taxonomy)).not.toEqual(before);
+  });
+});
+
+describe("regional channel declarations", () => {
+  const repoRoot = path.resolve(import.meta.dirname, "../../..");
+
+  it("separates account and protocol claims without revising setup IDs or reviewed scores", () => {
+    const { taxonomy, scores } = readValidatedQaMaturityScoreSources({
+      taxonomyPath: path.join(repoRoot, "taxonomy.yaml"),
+      scoresPath: path.join(repoRoot, "qa/maturity-scores.yaml"),
+    });
+    const regional = taxonomy.surfaces.find((surface) => surface.id === "regional-channels")!;
+    expect(regional.categories.map((category) => [category.id, category.features.length])).toEqual([
+      ["channel-setup-and-operations", 6],
+      ["access-and-identity", 10],
+      ["conversation-routing-and-delivery", 10],
+      ["media-and-rich-content", 6],
+    ]);
+    expect(regional.categories[0]!.features.flatMap((feature) => feature.coverageIds)).toEqual([
+      "regional-channels.docs-channel-index",
+      "regional-channels.official-external-channel-catalog-entries",
+      "regional-channels.core-channel-plugin-catalog",
+      "regional-channels.channel-setup-wizard",
+      "regional-channels.missing-plugin",
+      "regional-channels.cross-channel-ingress",
+    ]);
+    const claims = regional.categories.flatMap((category) =>
+      category.features.flatMap((feature) => feature.coverageIds),
+    );
+    expect(new Set(claims).size).toBe(32);
+    for (const id of [
+      "regional-channels.access-and-identity",
+      "regional-channels.conversation-routing-and-delivery",
+      "regional-channels.media-and-rich-content",
+    ]) {
+      expect(claims).not.toContain(id);
+    }
+    expect(regional.level_code).toBe("M2");
+    expect(scores.surfaces.find((surface) => surface.id === "regional-channels")).toMatchObject({
+      level: { id: "alpha", code: "M2" },
+      scores: { quality: { score: 55 }, completeness: { score: 58 } },
+      lts: { status: "none", supported_categories: 0, total_categories: 4 },
+    });
+  });
+
+  it("invalidates captured semantic identity when a regional proof contract changes", () => {
+    const taxonomy = readQaMaturityTaxonomySource(path.join(repoRoot, "taxonomy.yaml"));
+    const before = qaMaturityTaxonomyIdentity(taxonomy);
+    const profiles = structuredClone(taxonomy.profiles);
+    const feature = taxonomy.surfaces
+      .find((surface) => surface.id === "regional-channels")!
+      .categories.flatMap((category) => category.features)
+      .find((entry) => entry.coverageIds.includes("regional-channels.feishu-bot-websocket"))!;
+    feature.description = "Synthetic contract for a different realm and account.";
+    expect(qaMaturityTaxonomyIdentity(taxonomy)).not.toEqual(before);
+    expect(taxonomy.profiles).toEqual(profiles);
   });
 });

@@ -1,118 +1,90 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
-import { observe } from "./session-catalog-list-operation.test-support.js";
+import { beforeAll, expect, it, vi } from "vitest";
 import { catalogFactory, catalogProvider } from "./session-catalog-resident.test-support.js";
 import { commandRpcMocks, config, idleThread } from "./session-catalog.test-helpers.js";
 
 beforeAll(async () => {
-  // Keep paired-node module loading outside the local-page fake-timer measurement.
+  // Keep module loading outside the local-page fake-timer measurement.
   await import("./session-catalog-node-continue.js");
 });
 
-afterEach(() => vi.useRealTimers());
-
-function fixture() {
-  const control = catalogFactory({
-    getRuntimeConfig: () => config,
-  });
-  const provider = catalogProvider(control);
-  const started = createDeferred<void>();
-  const response = createDeferred<unknown>();
-  commandRpcMocks.codexControlRequest.mockImplementation(() => {
-    started.resolve();
-    return response.promise;
-  });
-  const onHost = vi.fn();
-  const controller = new AbortController();
-  const publications: Promise<void>[] = [];
-  const list = (allowPartialResults = true) =>
-    provider.list({
-      agentId: "main",
-      limitPerHost: 1,
-      allowPartialResults,
-      signal: controller.signal,
-      onHost,
-      waitUntil: (completion) => publications.push(completion),
+it.each([
+  [true, "success"],
+  [false, "success"],
+  [true, "error"],
+  [true, "abort"],
+] as const)(
+  "publishes cold local progress (partial: %s, outcome: %s)",
+  async (partial, outcome) => {
+    const provider = catalogProvider(catalogFactory({ getRuntimeConfig: () => config }));
+    const started = createDeferred<void>();
+    const response = createDeferred<unknown>();
+    commandRpcMocks.codexControlRequest.mockImplementation(() => {
+      started.resolve();
+      return response.promise;
     });
-  const reply = () =>
-    response.resolve({
-      data: [idleThread({ id: "cold-row", source: "cli", originator: "codex_cli_rs" })],
-      nextCursor: null,
-    });
-  return { started, response, reply, list, onHost, publications, controller };
-}
-
-it.each([true, false])(
-  "bounds cold local progress and reuses resident rows (partial: %s)",
-  async (partial) => {
-    const f = fixture();
+    const onHost = vi.fn();
+    const controller = new AbortController();
+    const publications: Promise<void>[] = [];
+    const list = (allowPartialResults = true) =>
+      provider.list({
+        agentId: "main",
+        limitPerHost: 1,
+        allowPartialResults,
+        signal: controller.signal,
+        onHost,
+        waitUntil: (completion) => publications.push(completion),
+      });
+    const reply = () =>
+      response.resolve({
+        data: [idleThread({ id: "cold-row", source: "cli", originator: "codex_cli_rs" })],
+        nextCursor: null,
+      });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const result = observe(f.list(partial));
+    const settled = vi.fn();
+    const result = list(partial);
+    void result.then(settled, settled);
     try {
-      await f.started.promise;
+      await started.promise;
       await vi.advanceTimersByTimeAsync(250);
-      expect.soft(result.state.settled).toBe(partial);
-      expect(f.onHost).not.toHaveBeenCalled();
-      if (result.state.settled) {
-        await expect(result.done).resolves.toMatchObject({
-          status: "fulfilled",
-          value: [{ hostId: "gateway:local", connected: true, pending: true, sessions: [] }],
-        });
-      }
-      await vi.advanceTimersByTimeAsync(1_750);
-      f.reply();
-      await result.done;
-      await Promise.all(f.publications);
-      expect(f.onHost).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ sessions: [expect.objectContaining({ threadId: "cold-row" })] }),
+      (outcome === "success" ? expect.soft(settled) : expect(settled)).toHaveBeenCalledTimes(
+        Number(partial),
       );
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
-      commandRpcMocks.codexControlRequest.mockClear();
-      await expect(f.list()).resolves.toMatchObject([
-        { sessions: [{ threadId: "cold-row" }], connected: true },
-      ]);
-      expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+      expect(onHost).not.toHaveBeenCalled();
+      if (settled.mock.calls.length) {
+        await expect(result).resolves.toMatchObject([
+          { hostId: "gateway:local", connected: true, pending: true, sessions: [] },
+        ]);
+      }
+      const error = new Error("catalog interrupted");
+      if (outcome === "success") {
+        await vi.advanceTimersByTimeAsync(1_750);
+        reply();
+      } else if (outcome === "abort") {
+        controller.abort(error);
+        reply();
+      } else {
+        response.reject(error);
+      }
+      await result;
+      await Promise.all(publications);
+      const expectedHost =
+        outcome === "success"
+          ? { sessions: [{ threadId: "cold-row" }] }
+          : { connected: false, sessions: [], error: { code: "APP_SERVER_UNAVAILABLE" } };
+      expect(onHost.mock.calls).toMatchObject([[expectedHost]]);
+      if (outcome === "success") {
+        commandRpcMocks.codexControlRequest.mockClear();
+        await expect(list()).resolves.toMatchObject([
+          { sessions: [{ threadId: "cold-row" }], connected: true },
+        ]);
+        expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+      }
     } finally {
-      f.reply();
-      await result.done;
-      await Promise.allSettled(f.publications);
+      reply();
+      await result.catch(() => undefined);
+      await Promise.allSettled(publications);
+      vi.useRealTimers();
     }
   },
 );
-
-it.each(["error", "abort"])("settles a pending local publication after %s", async (outcome) => {
-  const f = fixture();
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-  const result = observe(f.list());
-  try {
-    await f.started.promise;
-    await vi.advanceTimersByTimeAsync(250);
-    expect(result.state.settled).toBe(true);
-    await expect(result.done).resolves.toMatchObject({
-      status: "fulfilled",
-      value: [{ pending: true }],
-    });
-    const error = new Error("catalog interrupted");
-    if (outcome === "abort") {
-      f.controller.abort(error);
-      f.reply();
-    } else {
-      f.response.reject(error);
-    }
-    await Promise.all(f.publications);
-    expect(f.onHost).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        connected: false,
-        sessions: [],
-        error: {
-          code: "APP_SERVER_UNAVAILABLE",
-          message: "Codex app-server is unavailable on this host",
-        },
-      }),
-    );
-  } finally {
-    f.reply();
-    await result.done;
-    await Promise.allSettled(f.publications);
-  }
-});

@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import type { WorkerProfile, WorkerProvider } from "../../plugins/types.js";
+import type { WorkerProvider } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -13,7 +14,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
+import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
+import type { createWorkerProviderIntent } from "./provider-intent.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -23,6 +27,28 @@ export const PROJECT_KEY = "a".repeat(64);
 export const PREPARATION_KEY = "b".repeat(64);
 const BUNDLE_HASH = "c".repeat(64);
 export const IDLE_TIMEOUT_MS = 1_000;
+export const PRESENCE_REPOSITORY: RepositoryWorkerProjectSnapshot = {
+  key: PROJECT_KEY,
+  baseCommit: "d".repeat(40),
+  source: {
+    kind: "repository",
+    url: "https://github.com/acme/private-repo.git",
+    repositoryId: "R_acme_private_repo",
+    owner: {
+      agent: { agentId: "main", provenance: null },
+      identity: { source: "anonymous" },
+    },
+  },
+};
+export const presenceDemand = (): PreparedPoolPresenceDemand => ({
+  revision: 1,
+  profileId: "development",
+  requestedRef: "main",
+  preparationKey: PREPARATION_KEY,
+  project: PRESENCE_REPOSITORY,
+  lastPresentAtMs: 1_000,
+  retireAtMs: null,
+});
 export const RECEIPT = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: "2026.8.1",
@@ -104,35 +130,65 @@ class PreparedPoolFixture {
     await this.openStore();
   };
 
+  gate = () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    this.releases.push(() => release.resolve());
+    return { entered, release };
+  };
+
+  intentOwnerOptions = (
+    projectNamespace: string,
+  ): Parameters<typeof createWorkerProviderIntent>[0] => {
+    Object.assign(this.provider, {
+      requiresNodeEnrollment: true,
+      supportsProjectPreparation: () => true,
+      resolvePreparationTarget: () => PREPARATION_TARGET,
+    });
+    return {
+      store: this.store,
+      getConfig: () => this.config,
+      projectNamespace,
+      providerFor: () => this.provider,
+      prepareNodeArtifacts: async () => ({
+        artifacts: createPreparationArtifacts(),
+        assertCurrent: () => {},
+      }),
+      resumeProvision: async (record) => await this.ready(record),
+      isStopping: () => false,
+      withLock: async (_environmentId, task) => task(),
+    };
+  };
+
   profile = (
     projectKey = PROJECT_KEY,
     preparationKey = PREPARATION_KEY,
     runSetupScript?: boolean,
     repository?: RepositoryWorkerProjectSnapshot,
-  ): WorkerProfile => ({
-    settings: {},
-    executionMode: "worker-turn",
-    project: {
-      ...(repository ?? {
-        key: projectKey,
-        root: path.join(this.root, projectKey),
-        baseCommit: "d".repeat(40),
-      }),
-      preparation: {
-        key: preparationKey,
-        cacheKey: "9".repeat(64),
-        contractVersion: 1,
-        ...(runSetupScript === false ? { runSetupScript: false } : {}),
-        target: { ...PREPARATION_TARGET },
-        artifacts: createPreparationArtifacts(),
+  ) =>
+    ({
+      settings: {},
+      executionMode: "worker-turn",
+      project: {
+        ...(repository ?? {
+          key: projectKey,
+          root: path.join(this.root, projectKey),
+          baseCommit: "d".repeat(40),
+        }),
+        preparation: {
+          key: preparationKey,
+          cacheKey: "9".repeat(64),
+          contractVersion: 1,
+          ...(runSetupScript === false ? { runSetupScript: false } : {}),
+          target: { ...PREPARATION_TARGET },
+          artifacts: createPreparationArtifacts(),
+        },
       },
-    },
-  });
+    }) satisfies WorkerProviderPreparedIntent["profileSnapshot"];
 
   intent = (projectKey = PROJECT_KEY) => ({
     providerId: this.provider.id,
     profileSnapshot: this.profile(projectKey),
-    preparationKey: PREPARATION_KEY,
   });
 
   seed = (

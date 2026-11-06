@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -10,6 +11,7 @@ import type {
   NodeWorkerSupervisorTransport,
 } from "../../src/gateway/node-registry-private.js";
 import type { WorkerSessionTurnClaim } from "../../src/gateway/worker-environments/placement-record.js";
+import type { PairedDevice } from "../../src/infra/device-pairing.types.js";
 import type { WorkerProvider } from "../../src/plugins/types.js";
 import type { NodeWorkerLaunchInput } from "../../src/worker/node-supervisor-protocol.js";
 
@@ -20,7 +22,12 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     "start-at": { type: "string" },
     "idle-owner-read": { type: "boolean", default: false },
+    "blocked-shutdown-tail": { type: "boolean", default: false },
     "open-existing": { type: "boolean", default: false },
+    "device-inspection": { type: "string" },
+    "slow-provider-inspection": { type: "boolean", default: false },
+    "suspend-before-stop": { type: "boolean", default: false },
+    port: { type: "string" },
   },
 });
 assert(
@@ -28,7 +35,19 @@ assert(
   "Usage: --state-dir <directory> [--start-at <unix-ms>] [--idle-owner-read | --open-existing]",
 );
 assert(!(values["idle-owner-read"] && values["open-existing"]));
+assert(
+  !values["blocked-shutdown-tail"] || (!values["idle-owner-read"] && !values["open-existing"]),
+);
 const idleOwnerRead = values["idle-owner-read"];
+const deviceInspection = values["device-inspection"];
+const slowProviderInspection = values["slow-provider-inspection"];
+const remoteInspection = Boolean(deviceInspection) || slowProviderInspection;
+assert(deviceInspection === undefined || ["pairing", "presence"].includes(deviceInspection));
+assert(!remoteInspection || (!idleOwnerRead && !values["open-existing"]));
+assert(!(deviceInspection && slowProviderInspection));
+const idlePlacements = idleOwnerRead || remoteInspection;
+const blockedShutdownTail = values["blocked-shutdown-tail"];
+const placementCount = blockedShutdownTail ? 3 : 2;
 const stateDir = path.resolve(values["state-dir"]);
 if (!values["open-existing"]) {
   await fs.mkdir(stateDir, { mode: 0o700 });
@@ -39,7 +58,14 @@ process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
 const logPath = path.join(stateDir, "gateway.log");
 const config: OpenClawConfig = {
   agents: { entries: { main: { workspace: path.join(stateDir, "workspace") } } },
-  cloudWorkers: { profiles: { synthetic: { provider: "synthetic", settings: {} } } },
+  cloudWorkers: {
+    profiles: {
+      synthetic: {
+        provider: deviceInspection ? "device" : "synthetic",
+        settings: deviceInspection ? { device: "synthetic-node" } : {},
+      },
+    },
+  },
   logging: { level: "info", file: logPath, consoleLevel: "error" },
 };
 if (!values["open-existing"]) {
@@ -58,6 +84,7 @@ const [
   { createWorkerSessionPlacementStore },
   { createWorkerSessionPlacementGate },
   { createWorkerEnvironmentService },
+  { createDeviceWorkerRuntime },
   { createGatewayWorkerPlacementRuntime },
   { createNodeWorkerLaunchAdapter },
   { createNodeWorkerTunnelManager },
@@ -65,7 +92,7 @@ const [
   { nodeWorkerPlanHash },
   { startGatewayRestartTrace },
   { runWithProcessCleanupBudget },
-  { markGatewayRestartDraining },
+  { markGatewayRestartDraining, tryBeginGatewaySuspendAdmission },
 ] = await Promise.all([
   import("../../packages/gateway-protocol/src/schema/worker-admission.js"),
   import("../../packages/gateway-protocol/src/client-info.js"),
@@ -79,6 +106,7 @@ const [
   import("../../src/gateway/worker-environments/placement-store.js"),
   import("../../src/gateway/worker-environments/placement-worker-gate.js"),
   import("../../src/gateway/worker-environments/service.js"),
+  import("../../src/gateway/worker-environments/device-provider.js"),
   import("../../src/gateway/server-worker-placement-startup.js"),
   import("../../src/gateway/worker-environments/node-launch-adapter.js"),
   import("../../src/gateway/worker-environments/node-worker-tunnel.js"),
@@ -199,8 +227,46 @@ const cancelled = new Set<string>();
 const launchesReady = Promise.withResolvers<void>();
 const cancellationsReady = Promise.withResolvers<void>();
 const fixtureStarted = performance.now();
+let holdDeviceRead = false;
+let deviceReadCompleted = false;
+const deviceReadEntered = Promise.withResolvers<void>();
+const deviceReadCleanup = new AbortController();
+const inspectionPort = Number(values.port ?? 40978);
+assert(
+  Number.isSafeInteger(inspectionPort) && inspectionPort >= 40_000 && inspectionPort <= 65_535,
+);
+const inspectionServer = remoteInspection
+  ? createServer((_request, response) => {
+      deviceReadEntered.resolve();
+      const timer = setTimeout(() => {
+        deviceReadCompleted = true;
+        response.end("{}");
+      }, 85_000);
+      response.once("close", () => clearTimeout(timer));
+    })
+  : undefined;
+if (inspectionServer) {
+  await new Promise<void>((resolve, reject) => {
+    inspectionServer.once("error", reject);
+    inspectionServer.listen(inspectionPort, "127.0.0.1", resolve);
+  });
+}
+const readDevice = async (phase: string) => {
+  if (
+    holdDeviceRead &&
+    (deviceInspection === phase || (slowProviderInspection && phase === "provider"))
+  ) {
+    // The real device provider must stop awaiting a read whose API has no signal.
+    await fetch(`http://127.0.0.1:${inspectionPort}/device`, {
+      signal: deviceReadCleanup.signal,
+    }).then((response) => response.text());
+  }
+};
 const transport: NodeWorkerSupervisorTransport = {
-  getCurrentNode: async () => node,
+  getCurrentNode: async () => {
+    await readDevice("presence");
+    return node;
+  },
   listCurrentNodes: async () => [node],
   hasCurrentRunner: () => true,
   isCurrent: () => true,
@@ -211,7 +277,7 @@ const transport: NodeWorkerSupervisorTransport = {
       timeoutMs: request.timeoutMs,
       elapsedMs: performance.now() - fixtureStarted,
     });
-    if (idleOwnerRead) {
+    if (idlePlacements) {
       assert(
         request.command === "worker.environment.stop.v1" ||
           request.command === "worker.workspace.exec.v1",
@@ -234,7 +300,7 @@ const transport: NodeWorkerSupervisorTransport = {
       const input = request.params as NodeWorkerLaunchInput;
       request.onDispatchReady?.(`synthetic-${input.launchId}`);
       launched.add(input.launchId);
-      if (launched.size === 2) {
+      if (launched.size === placementCount) {
         launchesReady.resolve();
       }
       return {
@@ -254,7 +320,7 @@ const transport: NodeWorkerSupervisorTransport = {
     if (request.command === "worker.cancel.v1") {
       const identity = request.params as { launchId: string };
       cancelled.add(identity.launchId);
-      if (cancelled.size === 2) {
+      if (cancelled.size === placementCount) {
         cancellationsReady.resolve();
       }
     }
@@ -277,7 +343,7 @@ const manager = createNodeWorkerTunnelManager({
 });
 let sharedHost = true;
 let providerInspections = 0;
-const provider: WorkerProvider = {
+const syntheticProvider: WorkerProvider = {
   id: "synthetic",
   supportedExecutionModes: ["worker-turn"],
   resolveAllocation: async () => {
@@ -288,12 +354,31 @@ const provider: WorkerProvider = {
   },
   inspect: async () => {
     providerInspections++;
+    await readDevice("provider");
     return { status: "active", sharedHost };
   },
   destroy: async () => {
     throw new Error("Fixture must preserve remote recovery ownership");
   },
 };
+const deviceRuntime = createDeviceWorkerRuntime({
+  getPairedDevice: async (deviceId): Promise<PairedDevice> => {
+    await readDevice("pairing");
+    return {
+      deviceId,
+      publicKey: "synthetic-public-key",
+      role: "node",
+      roles: ["node"],
+      tokens: {
+        node: { token: "synthetic-unused-token", role: "node", scopes: [], createdAtMs: 1 },
+      },
+      createdAtMs: 1,
+      approvedAtMs: 1,
+    };
+  },
+});
+deviceRuntime.bindNodeTransport(transport);
+const provider = deviceInspection ? deviceRuntime.provider : syntheticProvider;
 const warnings: string[] = [];
 const environments = createWorkerEnvironmentService({
   store,
@@ -346,7 +431,7 @@ runtime.dispatchService.reconcileActive = (...args) => {
 };
 const claims: WorkerSessionTurnClaim[] = [];
 const turns: Array<Promise<string>> = [];
-for (let index = 0; index < 2; index++) {
+for (let index = 0; index < placementCount; index++) {
   const sessionId = `synthetic-session-${index}`;
   const sessionKey = `agent:main:${sessionId}`;
   const environmentId = `synthetic-environment-${index}`;
@@ -364,7 +449,10 @@ for (let index = 0; index < 2; index++) {
     environmentId,
     providerId: provider.id,
     profileId: "synthetic",
-    profileSnapshot: { settings: {}, executionMode: "worker-turn" },
+    profileSnapshot: {
+      settings: deviceInspection ? { device: node.nodeId } : {},
+      executionMode: "worker-turn",
+    },
     provisionOperationId: `synthetic-provision-${index}`,
   });
   await store.transition({ environmentId, from: "requested", to: "provisioning" });
@@ -422,7 +510,7 @@ for (let index = 0; index < 2; index++) {
       patch,
     });
   }
-  if (idleOwnerRead) {
+  if (idlePlacements) {
     continue;
   }
   const claim = await placements.claimTurn({
@@ -484,7 +572,7 @@ for (let index = 0; index < 2; index++) {
       ),
   );
 }
-if (!idleOwnerRead) {
+if (!idlePlacements) {
   await launchesReady.promise;
 }
 const startAt = values["start-at"] === undefined ? Date.now() : Number(values["start-at"]);
@@ -499,7 +587,11 @@ startGatewayRestartTrace("synthetic-reconcile-shutdown");
 let ownerReads = 0;
 let sweep: Promise<unknown>;
 let ready: Promise<unknown>;
-if (idleOwnerRead) {
+if (remoteInspection) {
+  holdDeviceRead = true;
+  sweep = environments.reconcileOnce();
+  ready = deviceReadEntered.promise;
+} else if (idleOwnerRead) {
   const readsEntered = Promise.withResolvers<void>();
   const readEnvironmentOwner = placements.readEnvironmentOwner.bind(placements);
   placements.readEnvironmentOwner = async (environmentId: string, signal?: AbortSignal) => {
@@ -542,19 +634,66 @@ await Promise.race([
     throw new Error("Synthetic reconciliation fixture did not enter its expected wait");
   }),
 ]).finally(() => setupDeadline.abort());
+let reconcileSettledAt: number | undefined;
+const observeReconcile = sweep.then(
+  () => {
+    reconcileSettledAt = performance.now();
+  },
+  () => {
+    reconcileSettledAt = performance.now();
+  },
+);
+let suspendAbortMs: number | null = null;
+if (values["suspend-before-stop"]) {
+  const suspendStarted = performance.now();
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  assert(suspension, "Synthetic Gateway must accept suspension");
+  assert(suspension.drain());
+  await Promise.race([observeReconcile, sleep(1_000)]);
+  suspendAbortMs = reconcileSettledAt === undefined ? null : reconcileSettledAt - suspendStarted;
+}
+const reconcileInFlightAtShutdown = reconcileSettledAt === undefined;
 const shutdownStartedAtMs = Date.now();
 const shutdownStarted = performance.now();
+const postShutdownStoreOperations: string[] = [];
+if (blockedShutdownTail) {
+  // Model a busy shared-store queue without copying production data. This holds
+  // only newly submitted work, never an already accepted write's settlement.
+  const waitForStore = async (operation: string) => {
+    postShutdownStoreOperations.push(operation);
+    await sleep(Math.max(0, shutdownStartedAtMs + 35_000 - Date.now()));
+  };
+  const prune = store.pruneTerminalEnvironments.bind(store);
+  store.pruneTerminalEnvironments = async (input) => {
+    await waitForStore("retention");
+    return prune(input);
+  };
+  const readCandidates = placements.readRecoveryCandidates.bind(placements);
+  placements.readRecoveryCandidates = async () => {
+    await waitForStore("candidates");
+    return readCandidates();
+  };
+}
 markGatewayRestartDraining();
 await runWithProcessCleanupBudget(
   { deadline: shutdownStarted + 85_000, warn: (message) => warnings.push(message) },
   () => sidecar.stop(),
 );
 const shutdownMs = performance.now() - shutdownStarted;
+const deviceReadCompletedBeforeStop = deviceReadCompleted;
+holdDeviceRead = false;
+deviceReadCleanup.abort();
+inspectionServer?.closeAllConnections();
+if (inspectionServer) {
+  await new Promise<void>((resolve) => {
+    inspectionServer.close(() => resolve());
+  });
+}
 await sweep;
 const turnResults = await Promise.all(turns);
 const retained = await placements.listAsync();
-assert.equal(retained.length, 2);
-if (idleOwnerRead) {
+assert.equal(retained.length, placementCount);
+if (idlePlacements) {
   assert(retained.every((placement) => placement.turnClaim === null));
 }
 for (const claim of claims) {
@@ -569,7 +708,7 @@ for (const claim of claims) {
 await (await import("../../src/logging/logger.js")).flushLogger();
 const log = await fs.readFile(logPath, "utf8");
 const reconcileMatch = log.match(/shutdown\.worker-placement\.reconcile\.active ([\d.]+)ms/u);
-if (!idleOwnerRead) {
+if (!idlePlacements) {
   assert(reconcileMatch, "Shutdown must have joined the real active reconciliation phase");
 }
 const guardMatch = log.match(/shutdown\.worker-environments\.reconcile-guard ([\d.]+)ms/u);
@@ -580,11 +719,30 @@ const result = {
   scriptSha256: createHash("sha256")
     .update(await fs.readFile(new URL(import.meta.url)))
     .digest("hex"),
-  scope: idleOwnerRead
-    ? "real placement sidecar, SQLite and environment service; controlled stalled owner lookup, synthetic provider/node acknowledgements; exact production blocked await unknown"
-    : "real placement sidecar, SQLite, environment service, node tunnel and launch adapter; synthetic provider and non-acknowledging node transport",
-  scenario: idleOwnerRead ? "controlled-stalled-owner-read" : "active-worker-cancellation",
+  scope: slowProviderInspection
+    ? "real placement sidecar, SQLite and environment service; actual slow loopback HTTP-backed provider inspection ignoring cancellation; synthetic node acknowledgements"
+    : deviceInspection
+      ? "real placement sidecar, SQLite, environment service and device provider; actual slow loopback HTTP-backed pairing/presence read; synthetic node acknowledgements"
+      : idleOwnerRead
+        ? "real placement sidecar, SQLite and environment service; controlled stalled owner lookup, synthetic provider/node acknowledgements; exact production blocked await unknown"
+        : "real placement sidecar, SQLite, environment service, node tunnel and launch adapter; synthetic provider and non-acknowledging node transport",
+  scenario: slowProviderInspection
+    ? "slow-provider-inspection"
+    : deviceInspection
+      ? `device-inspection-${deviceInspection}`
+      : blockedShutdownTail
+        ? "active-worker-cancellation-with-blocked-store-tail"
+        : idleOwnerRead
+          ? "controlled-stalled-owner-read"
+          : "active-worker-cancellation",
+  controlledStoreBusyMs: blockedShutdownTail ? 35_000 : null,
+  postShutdownStoreOperations,
   controlledOwnerReadDelayMs: idleOwnerRead ? 85_000 : null,
+  controlledDeviceReadDelayMs: remoteInspection ? 85_000 : null,
+  deviceReadCompletedBeforeStop: remoteInspection ? deviceReadCompletedBeforeStop : null,
+  suspendBeforeStop: values["suspend-before-stop"],
+  suspendAbortMs,
+  reconcileInFlightAtShutdown,
   wholeGatewayRestart: false,
   realModelTurns: false,
   realRemoteWorkerProcesses: false,

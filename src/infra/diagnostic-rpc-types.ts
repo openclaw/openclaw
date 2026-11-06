@@ -1,21 +1,6 @@
 import type { GatewayClientId } from "../../packages/gateway-protocol/src/client-info.js";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 
-/** Process totals for retained session-list views and their estimated memory. */
-type DiagnosticSessionsListRetentionFields = {
-  type: "sessions.list.retention";
-  views: number;
-  refs: number;
-  estimatedBytes: number;
-};
-
-/** Process totals for per-connection session-event field-hash vectors. */
-type DiagnosticSessionEventRetentionFields = {
-  type: "sessions.event.retention";
-  entries: number;
-  estimatedBytes: number;
-};
-
 export type SessionEventRowsResetCause =
   | "close"
   | "delivery-lost"
@@ -23,25 +8,7 @@ export type SessionEventRowsResetCause =
   | "evicted"
   | "projection";
 
-/** Number of retained wire baselines retired by one bounded lifecycle cause. */
-type DiagnosticSessionEventRowsResetFields = {
-  type: "sessions.event.rows.reset";
-  cause: SessionEventRowsResetCause;
-  count: number;
-};
-
 export type SessionsListBaseMissReason = "unknown-base" | "all-rows-changed";
-
-type DiagnosticSessionsListBaselineRetiredFields = {
-  type: "sessions.list.baseline.retired";
-  cause:
-    | "projection-revision"
-    | "config"
-    | "identity"
-    | "selection-reset"
-    | "view-evicted"
-    | "history-evicted";
-};
 
 type SessionsListAttribution = {
   clientKind: GatewayClientId;
@@ -59,6 +26,8 @@ type DiagnosticGatewayRpcFields = {
 } & (
   | {
       phase: "received";
+      /** Coarse handshake identity; never a device id, platform, or display name. */
+      clientKind?: "control-ui" | "macos" | "ios" | "android" | "cli" | "node" | "plugin" | "other";
       cronList?: {
         clientKind: GatewayClientId;
         source: "wire" | "internal";
@@ -138,7 +107,32 @@ type DiagnosticGatewayWsFields =
 export type DiagnosticGatewayFields =
   | DiagnosticGatewayRpcFields
   | DiagnosticGatewayWsFields
-  | DiagnosticSessionsListBaselineRetiredFields
-  | DiagnosticSessionsListRetentionFields
-  | DiagnosticSessionEventRetentionFields
-  | DiagnosticSessionEventRowsResetFields;
+  | {
+      type: "sessions.list.baseline.retired";
+      cause:
+        | "projection-revision"
+        | "config"
+        | "identity"
+        | "selection-reset"
+        | "view-evicted"
+        | "history-evicted";
+    }
+  | {
+      /** Process totals for retained session-list views and their estimated memory. */
+      type: "sessions.list.retention";
+      views: number;
+      refs: number;
+      estimatedBytes: number;
+    }
+  | {
+      /** Process totals for per-connection session-event field-hash vectors. */
+      type: "sessions.event.retention";
+      entries: number;
+      estimatedBytes: number;
+    }
+  | {
+      /** Number of retained wire baselines retired by one bounded lifecycle cause. */
+      type: "sessions.event.rows.reset";
+      cause: SessionEventRowsResetCause;
+      count: number;
+    };

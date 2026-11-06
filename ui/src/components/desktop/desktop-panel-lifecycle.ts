@@ -1,23 +1,9 @@
-import { i18n } from "../../i18n/lib/translate.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { createDockLayout } from "../dock-layout.ts";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import type { DesktopPanelInputs } from "./desktop-panel-inputs.ts";
 
-export type DesktopPanelInputSnapshot = Pick<
-  DesktopPanelInputs,
-  | "client"
-  | "sessions"
-  | "available"
-  | "suppressed"
-  | "documentMode"
-  | "requestedSource"
-  | "sessionKey"
-  | "documentControl"
-  | "suppliedEnvironments"
-  | "embedded"
-  | "presented"
->;
+export type DesktopPanelInputSnapshot = ReturnType<typeof readInputs>;
 
 type DesktopPanelLifecycleOptions = {
   dockLayout: Pick<ReturnType<typeof createDockLayout>, "open" | "connect" | "setOpen">;
@@ -30,15 +16,31 @@ type DesktopPanelLifecycleOptions = {
   detach: () => void;
 };
 
+function readInputs(host: DesktopPanelInputs) {
+  return {
+    client: host.client,
+    sessions: host.sessions,
+    available: host.available,
+    suppressed: host.suppressed,
+    documentMode: host.documentMode,
+    requestedSource: host.requestedSource,
+    sessionKey: host.sessionKey,
+    documentControl: host.documentControl,
+    suppliedEnvironments: host.suppliedEnvironments,
+    embedded: host.embedded,
+    presented: host.presented,
+  };
+}
+
 /** Mount and publication coordination; the panel owner decides connection changes. */
 export function createDesktopPanelLifecycle(
   host: DesktopPanelInputs,
   scheduleAfterRender: (callback: () => void | (() => void)) => void,
   options: DesktopPanelLifecycleOptions,
 ) {
-  const listeners = new Set<() => void>();
+  let publish: (() => void) | undefined;
   const notify = () => {
-    listeners.forEach((listener) => listener());
+    publish?.();
     scheduleReconciliation();
   };
   let mounted = false;
@@ -58,22 +60,6 @@ export function createDesktopPanelLifecycle(
     }
   };
 
-  function readInputs(): DesktopPanelInputSnapshot {
-    return {
-      client: host.client,
-      sessions: host.sessions,
-      available: host.available,
-      suppressed: host.suppressed,
-      documentMode: host.documentMode,
-      requestedSource: host.requestedSource,
-      sessionKey: host.sessionKey,
-      documentControl: host.documentControl,
-      suppliedEnvironments: host.suppliedEnvironments,
-      embedded: host.embedded,
-      presented: host.presented,
-    };
-  }
-
   function scheduleReconciliation(): void {
     if (!mounted || pendingReconciliation) {
       return;
@@ -83,7 +69,7 @@ export function createDesktopPanelLifecycle(
         return;
       }
       pendingReconciliation = undefined;
-      const next = readInputs();
+      const next = readInputs(host);
       const previous = previousInputs;
       previousInputs = next;
       options.reconcile(next, previous);
@@ -113,9 +99,9 @@ export function createDesktopPanelLifecycle(
   return {
     notify,
     subscribe(this: void, listener: () => void) {
-      listeners.add(listener);
+      publish = listener;
       return () => {
-        listeners.delete(listener);
+        publish = undefined;
       };
     },
     surface: () => surface,
@@ -137,7 +123,6 @@ export function createDesktopPanelLifecycle(
         }
         mounted = true;
         stops = [
-          i18n.subscribe(notify),
           listen(window, DESKTOP_PANEL_TOGGLE_EVENT, (event) => {
             if (!host.embedded) {
               options.handleToggleRequest(event);

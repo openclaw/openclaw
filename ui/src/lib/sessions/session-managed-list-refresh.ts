@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
@@ -9,24 +10,19 @@ import {
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { appendSessionResults } from "./reconcile.ts";
 import type {
-  SessionConnectionOwner,
-  SessionGateway,
-  SessionListScope,
-  SessionListSnapshot,
-  SessionState,
-} from "./session-capability.ts";
-import type {
   ManagedSessionList,
   ManagedSessionListRefresh,
   ObservedSessionList,
 } from "./session-list-query.ts";
 import { sessionListReadNeedsEventRefresh } from "./session-list-query.ts";
+import type { SessionListRefreshHost } from "./session-refresh-types.ts";
 import {
   normalizeManagedSessionListQuery,
   requestSessionListParams,
   sessionListQueryKey,
 } from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
+import type { SessionListScope, SessionListSnapshot } from "./session-types.ts";
 
 export function getManagedSessionList(
   lists: Map<string, ManagedSessionList>,
@@ -46,6 +42,7 @@ export function getManagedSessionList(
     retainedLimit: query.limit,
     receivedKeys: new Set(),
     startupRetryAttempt: 0,
+    deniedConnectionEpoch: null,
     readGeneration: 0,
     readRevision: 0,
     connectionEpoch: null,
@@ -76,22 +73,6 @@ export function publishManagedList(
   }
 }
 
-export type SessionListRefreshHost = {
-  background: (key: string | object, task: () => Promise<unknown>) => Promise<void>;
-  connection: SessionConnectionOwner;
-  snapshot: () => SessionGateway["snapshot"];
-  readState: () => SessionState;
-  decorate: (
-    result: SessionsListResult | null,
-    owner: { scope: SessionListScope },
-  ) => SessionsListResult | null;
-  reconcileList: (
-    result: SessionsListResult | null,
-    issuedRevision: number,
-    agentId?: string,
-  ) => SessionsListResult | null;
-};
-
 /** Owns each managed window's pending request and queued replacement drain. */
 export function createSessionManagedListRefresh(
   host: SessionListRefreshHost,
@@ -118,6 +99,11 @@ export function createSessionManagedListRefresh(
   ): Promise<void> => {
     const scope = host.connection.capture();
     if (!scope) {
+      return Promise.resolve();
+    }
+    // Session events cannot repair a denied query. Explicit reads and a new
+    // connection may retry against current authority without changing selection.
+    if (refresh.background && entry.deniedConnectionEpoch === scope.epoch) {
       return Promise.resolve();
     }
     if (entry.pending) {
@@ -164,6 +150,7 @@ export function createSessionManagedListRefresh(
         };
         const issuedRevision = nextRevision();
         entry.readRevision = issuedRevision;
+        entry.deniedConnectionEpoch = null;
         publishManagedList(entry, { ...entry.snapshot, loading: true, error: null }, isCurrent);
         try {
           const generation = entry.readGeneration;
@@ -286,6 +273,9 @@ export function createSessionManagedListRefresh(
         } catch (error) {
           if (!isCurrent()) {
             return;
+          }
+          if (error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN") {
+            entry.deniedConnectionEpoch = scope.epoch;
           }
           const awaitingGateway = isAwaitingGatewayFailure(error, host.snapshot());
           const startupPending = isAgentDatabaseInspectionPendingError(error);

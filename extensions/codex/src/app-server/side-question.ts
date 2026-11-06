@@ -22,7 +22,7 @@ import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { retireUnsafeCodexTurnClientBestEffort } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import {
-  requireCodexSupervisionModelSelection,
+  assertCodexSessionRuntimeOwnership,
   resolveCodexBindingAppServerConnection,
 } from "./binding-connection.js";
 import {
@@ -118,6 +118,7 @@ import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-question-instructions.js";
 import {
   applySideQuestionModelSelection,
   buildSideRunAttemptParams,
+  resolveSideQuestionNativeModelSelection,
 } from "./side-question-run-params.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
@@ -154,7 +155,6 @@ export async function runCodexAppServerSideQuestion(
     agentId: params.agentId,
     config: params.cfg,
   });
-  const hostCapabilities = params.hostCapabilities;
   const denyToolCalls = params.toolCalls === "deny";
   if (denyToolCalls && (!options.nativeHookRelay || options.nativeHookRelay.enabled === false)) {
     throw new Error("Session fork tool denial requires the Codex native hook relay to be enabled.");
@@ -164,8 +164,12 @@ export async function runCodexAppServerSideQuestion(
     identity: bindingIdentity,
     config: params.cfg,
     storePath: params.storePath,
-    assertCurrent: hostCapabilities.assertActive,
+    assertCurrent: params.hostCapabilities.assertActive,
     signal: params.opts?.abortSignal,
+    assertBinding: params.expectedSessionRuntimeOwnership
+      ? (currentBinding) =>
+          assertCodexSessionRuntimeOwnership(currentBinding, params.expectedSessionRuntimeOwnership)
+      : undefined,
   });
   using _ = { [Symbol.dispose]: release };
   const assertCurrent = authority.assertCurrent;
@@ -200,9 +204,7 @@ export async function runCodexAppServerSideQuestion(
     agentId: sessionAgentId,
   });
   const usesSupervisionConnection = binding.connectionScope === "supervision";
-  const supervisionModelSelection = usesSupervisionConnection
-    ? requireCodexSupervisionModelSelection(binding)
-    : undefined;
+  const nativeModelSelection = resolveSideQuestionNativeModelSelection(binding);
   const preparedRuntimeAuth = params.preparedRuntimeAuth;
   const authHandoff = usesSupervisionConnection
     ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
@@ -224,31 +226,29 @@ export async function runCodexAppServerSideQuestion(
     nativeAuthProfile: preparedNativeAuthProfile,
     preparedAuth: startupPreparedAuth,
   } = authHandoff;
-  const reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
-    provider: usesSupervisionConnection ? "codex" : params.provider,
-    model: supervisionModelSelection?.model ?? params.model,
-    bindingModelProvider: binding.modelProvider,
-    bindingModel: binding.model,
-    nativeAuthProfile: usesSupervisionConnection || preparedNativeAuthProfile,
-  });
+  const reviewerContext = {
+    ...resolveCodexModelBackedReviewerPolicyContext({
+      provider: nativeModelSelection ? "codex" : params.provider,
+      model: nativeModelSelection?.model ?? params.model,
+      bindingModelProvider: binding.modelProvider,
+      bindingModel: binding.model,
+      nativeAuthProfile: usesSupervisionConnection || preparedNativeAuthProfile,
+    }),
+    config: params.cfg,
+    env: process.env,
+    agentDir: params.agentDir,
+  };
   const connection = await resolveCodexBindingAppServerConnection({
     binding,
     authProfileId,
     pluginConfig,
     execPolicy,
     assertCurrent,
-    modelProvider: reviewerPolicyContext.modelProvider,
-    model: reviewerPolicyContext.model,
+    modelProvider: reviewerContext.modelProvider,
+    model: reviewerContext.model,
     config: params.cfg,
     agentDir: params.agentDir,
   });
-  const reviewerContext = {
-    modelProvider: reviewerPolicyContext.modelProvider,
-    model: reviewerPolicyContext.model,
-    config: params.cfg,
-    env: process.env,
-    agentDir: params.agentDir,
-  };
   const appServer = resolveCodexAppServerForModelProvider({
     appServer: applyCodexSessionPermissionPolicy({
       appServer: connection.appServer,
@@ -265,7 +265,7 @@ export async function runCodexAppServerSideQuestion(
     provider: reviewerContext.modelProvider,
   });
   const modelSelection =
-    supervisionModelSelection ??
+    nativeModelSelection ??
     (await resolveCodexAppServerThreadModelSelection({
       homeScope: appServer.start.homeScope,
       provider: params.provider,
@@ -293,7 +293,7 @@ export async function runCodexAppServerSideQuestion(
     fallbackCwd: agentWorkspaceDir,
   });
   const runId = params.opts?.runId ?? randomUUID();
-  const effectiveParams = applySideQuestionModelSelection(params, supervisionModelSelection);
+  const effectiveParams = applySideQuestionModelSelection(params, nativeModelSelection);
   const sideRunParams = buildSideRunAttemptParams(effectiveParams, {
     cwd,
     authProfileId,
@@ -826,12 +826,12 @@ export async function runCodexAppServerSideQuestion(
               try {
                 assertCurrentBinding();
                 if (
-                  supervisionModelSelection &&
-                  (response.model !== supervisionModelSelection.model ||
-                    response.modelProvider !== supervisionModelSelection.modelProvider)
+                  nativeModelSelection &&
+                  (response.model !== nativeModelSelection.model ||
+                    response.modelProvider !== nativeModelSelection.modelProvider)
                 ) {
                   throw new Error(
-                    "Codex supervised side thread did not preserve its native model and provider",
+                    "Codex side thread did not preserve its native model and provider",
                   );
                 }
                 if (!denyToolCalls) {
@@ -862,7 +862,7 @@ export async function runCodexAppServerSideQuestion(
             thinkLevel: params.resolvedThinkLevel ?? "off",
             modelId: modelSelection.model,
             supportedReasoningEfforts: readCodexSupportedReasoningEfforts(
-              params.runtimeModel?.compat,
+              effectiveParams.runtimeModel?.compat,
             ),
           });
       const turnResponse = assertCodexTurnStartResponse(

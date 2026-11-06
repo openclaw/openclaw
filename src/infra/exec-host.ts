@@ -7,6 +7,9 @@ import { requestJsonlSocket } from "./jsonl-socket.js";
 
 // Allow the companion's 15 s approval prompt before execution, then 5 s for its reply.
 const EXEC_HOST_RESPONSE_GRACE_MS = 20_000;
+// Keep aligned with ExecApprovalsSocketServer's request-line limit. Older apps
+// retain their smaller limit and may close without a reply for larger requests.
+const EXEC_HOST_MAX_REQUEST_BYTES = 1024 * 1024;
 
 // Exec host requests cross the local JSONL socket boundary into a privileged
 // runner, so payloads stay explicit and HMAC-protected.
@@ -56,10 +59,10 @@ export async function requestExecHostViaSocket(params: {
   if (!socketPath || !token) {
     return null;
   }
-  // Zero disables both command and response deadlines.
+  // Zero and null (Gateway no expiry) disable deadlines; undefined keeps the default.
   const timeoutMs =
     params.timeoutMs ??
-    (request.timeoutMs === 0
+    (request.timeoutMs !== undefined && (request.timeoutMs ?? 0) === 0
       ? 0
       : addTimerTimeoutGraceMs(request.timeoutMs, EXEC_HOST_RESPONSE_GRACE_MS)) ??
     20_000;
@@ -80,6 +83,17 @@ export async function requestExecHostViaSocket(params: {
     hmac,
     requestJson,
   });
+  const payloadBytes = Buffer.byteLength(payload);
+  if (payloadBytes > EXEC_HOST_MAX_REQUEST_BYTES) {
+    return {
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        reason: "too-large",
+        message: `INVALID_REQUEST: macOS app exec host request is ${payloadBytes} bytes (limit ${EXEC_HOST_MAX_REQUEST_BYTES}); write long scripts or data to a file and run that instead`,
+      },
+    };
+  }
 
   return await requestJsonlSocket<ExecHostResponse>({
     socketPath,

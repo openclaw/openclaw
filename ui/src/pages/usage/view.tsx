@@ -1,129 +1,116 @@
-import { For, Show, createMemo } from "solid-js";
-import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import { For, Show, createMemo, onSettled } from "solid-js";
+import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
-import { renderProviderUsageDetails } from "../../components/solid/provider-usage.tsx";
-import {
-  SettingsSection,
-  SettingsPage,
-  SettingsSegmented,
-} from "../../components/solid/settings-ui.tsx";
+import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../components/tooltip.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/usage.css";
-import { resolveUsageOverviewState } from "./cache-status.ts";
-import type { ProviderUsageSummary } from "./data-types.ts";
-import { formatIsoDate } from "./helpers.ts";
+import { isUsageCacheIncomplete } from "./cache-status.ts";
 import { UsageMosaic } from "./metrics-view.tsx";
 import { buildPeakErrorHours, formatUsageCost, formatUsageTokens } from "./metrics.ts";
-import { renderUsageEmptyState, renderUsageLoadingStatus } from "./page-shell.tsx";
-import { buildQuerySuggestions } from "./query.ts";
-import type { UsageProps } from "./types.ts";
+import { renderUsageEmptyState } from "./page-shell.tsx";
+import { createUsagePhoneLayout } from "./phone-layout.ts";
+import { buildProviderSeries } from "./provider-series.ts";
+import { createUsageRead, UsagePending, UsageReadStatus, type UsageRead } from "./read-status.tsx";
+import { createSessionDetailReveal } from "./session-detail-reveal.ts";
+import { selectUsageExport, usageDisplaySessionCount, usageExportItems } from "./view-actions.tsx";
 import { DailyChartCompact, CostBreakdownCompact } from "./view-chart.tsx";
-import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
-import { SessionDetailPanel } from "./view-details.tsx";
-import { renderUsageHeatmap } from "./view-heatmap.tsx";
-import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
-import { UsageQuerySection } from "./view-query-section.tsx";
-import { SessionsCard } from "./view-sessions-card.tsx";
+import { createUsageControls, type UsageControlsProps } from "./view-controls.tsx";
+import { UsageCreators } from "./view-creators.tsx";
+import { UsageHeatmap } from "./view-heatmap.tsx";
+import {
+  CostWindowComparison,
+  renderFilterChips,
+  renderProviderUsage,
+  UsageInsights,
+  usageOverview,
+} from "./view-overview.tsx";
+import { UsageSessionsGrid } from "./view-sessions-grid.tsx";
 
 registerEnglishCatalog(registerUsageEnglish);
 
-type ProviderUsageSnapshot = ProviderUsageSummary["providers"][number];
-
-function DateInput(props: { value: string; label: string; onChange: (value: string) => void }) {
+export function renderUsage(props: UsageControlsProps) {
+  const read = createUsageRead(
+    () => props.data.read,
+    () => props.data.error,
+  );
   return (
-    <input
-      class="usage-date-input"
-      type="date"
-      value={props.value}
-      title={props.label}
-      aria-label={props.label}
-      onChange={(event) => props.onChange(event.currentTarget.value)}
-    />
+    <UsagePending read={read}>
+      {(loading) => <UsageView {...props} loading={loading()} read={read} />}
+    </UsagePending>
   );
 }
 
-function renderProviderUsage(
-  providers: ProviderUsageSnapshot[],
-  unavailable: boolean,
-  stalled: boolean,
-) {
-  const notice =
-    stalled || unavailable ? (
-      <div class="callout warning usage-callout">
-        {t(stalled ? "usage.providerUsage.stalled" : "usage.providerUsage.unavailable")}
-      </div>
-    ) : undefined;
-  if (providers.length === 0) {
-    return notice;
-  }
-  return (
-    <SettingsSection
-      title={t("usage.providerUsage.title")}
-      count={providers.length}
-      description={t("usage.providerUsage.subtitle")}
-    >
-      {notice}
-      <div class="usage-panel provider-usage-section">
-        <div class="provider-usage-grid">
-          <For each={providers}>
-            {(provider) => (
-              <article class="provider-usage-card">
-                <div class="provider-usage-card__header">
-                  <div>
-                    <div class="provider-usage-card__name">{provider.displayName}</div>
-                    <div class="provider-usage-card__id">{provider.provider}</div>
-                  </div>
-                  {provider.plan ? (
-                    <>
-                      {" "}
-                      <span class="provider-usage-plan">{provider.plan}</span>{" "}
-                    </>
-                  ) : undefined}
-                </div>
-                {renderProviderUsageDetails(provider)}
-              </article>
-            )}
-          </For>
-        </div>
-      </div>
-    </SettingsSection>
+function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRead }) {
+  // The report can replace its grid while a row selection is still being revealed.
+  const reveal = createSessionDetailReveal();
+  onSettled(() => reveal.dispose);
+  const loading = () => props.loading;
+  const phone = createUsagePhoneLayout();
+  // Status reads would enlist retained chart eligibility in the request's retry lifecycle.
+  const overview = createMemo(() =>
+    usageOverview(props.data, props.data.cacheRefresh === "complete"),
   );
-}
-
-export function renderUsage(props: UsageProps) {
-  const overview = createMemo(() => resolveUsageOverviewState(props.data));
-  const displayTotals = createMemo(() => (overview().hasOverviewData ? props.data.totals : null));
-  const filterOptions = createMemo(
-    () =>
-      props.data.overview?.filterOptions ?? {
-        agent: [],
-        channel: [],
-        provider: [],
-        model: [],
-        tool: [],
+  const loadingOverview = () =>
+    loading() || (overview().awaitingUsage && props.data.cacheRefresh === "retrying");
+  // A text query hides the old charts, but keeps their date-keyed DOM alive.
+  // The owner's calendar policy separately keeps day-selection controls live.
+  const retainedChartSnapshot = createMemo(() => props.data.readChartSnapshot("filterOptions"));
+  // Retain presentation only within the owner's strict scope while its text query changes.
+  const analyticsData = createMemo(() => retainedChartSnapshot() ?? props.data);
+  const analyticsTotals = () => analyticsData().totals;
+  const analyticsSessionCount = () =>
+    analyticsData().overview?.selectedSessionCount ??
+    analyticsData().overview?.total ??
+    analyticsData().aggregates?.sessionCount ??
+    analyticsData().sessions.length;
+  const analyticsTotalSessions = () =>
+    analyticsData().overview?.unfilteredSessionCount ??
+    analyticsData().aggregates?.sessionCount ??
+    analyticsData().sessions.length;
+  const calendarSnapshot = createMemo(() => props.data.readChartSnapshot("calendar"));
+  const chartSnapshot = createMemo(() => calendarSnapshot() ?? retainedChartSnapshot());
+  const retainedCharts = createMemo(() => {
+    const report = chartSnapshot();
+    if (!report) {
+      return false;
+    }
+    const state = usageOverview(
+      {
+        totals: report.totals,
+        sessions: report.sessions,
+        costDaily: report.aggregates.costDaily ?? [],
+        overview: report.overview,
       },
+      !isUsageCacheIncomplete(report.cacheStatus, undefined),
+    );
+    return state.hasOverviewData && !state.isEmpty;
+  });
+  const chartDaily = createMemo(
+    () => chartSnapshot()?.aggregates.costDaily ?? props.data.costDaily,
   );
-  const queryTerms = createMemo(() => extractQueryTerms(props.filters.queryDraft));
-  const querySuggestions = createMemo(() =>
-    buildQuerySuggestions(props.filters.queryDraft, queryTerms(), filterOptions()),
+  const chartComplete = () => {
+    const report = chartSnapshot();
+    return report
+      ? !isUsageCacheIncomplete(report.cacheStatus, undefined)
+      : props.data.cacheRefresh === "complete";
+  };
+  const providerSeries = createMemo(() =>
+    buildProviderSeries(
+      (retainedChartSnapshot()?.aggregates ?? props.data.aggregates)?.modelDaily ?? [],
+    ),
   );
+  const displayTotals = createMemo(() => (overview().hasOverviewData ? props.data.totals : null));
   const primarySelectedEntry = createMemo(() =>
     props.filters.selectedSessions.length === 1 && props.data.overview?.selectedRowCount !== 0
       ? (props.data.selectedSession ??
         props.data.sessions.find((session) => session.key === props.filters.selectedSessions[0]))
       : null,
   );
-  const totalSessions = createMemo(
-    () =>
-      props.data.overview?.unfilteredSessionCount ??
-      props.data.aggregates?.sessionCount ??
-      props.data.sessions.length,
-  );
   const activeAggregates = createMemo(
     () =>
-      props.data.aggregates ?? {
+      analyticsData().aggregates ?? {
         messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
         tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
         byModel: [],
@@ -133,39 +120,21 @@ export function renderUsage(props: UsageProps) {
         daily: [],
       },
   );
-  const displaySessionCount = createMemo(
-    () =>
-      props.data.overview?.selectedSessionCount ??
-      props.data.overview?.total ??
-      props.data.aggregates?.sessionCount ??
-      props.data.sessions.length,
-  );
+  const displaySessionCount = createMemo(() => usageDisplaySessionCount(props.data));
   const metricBadges = createMemo(() => {
     const totals = displayTotals();
     const empty = t("usage.common.emptyValue");
     const sessions = displaySessionCount();
     return [
-      [
-        totals ? formatUsageTokens(totals.totalTokens, totals.usageReport) : empty,
-        t("usage.metrics.tokens"),
-      ],
-      [
-        totals ? formatUsageCost(totals.totalCost, 2, totals.usageReport) : empty,
-        t("usage.metrics.cost"),
-      ],
-      [
-        totals ? String(sessions) : empty,
-        t(sessions === 1 ? "usage.metrics.session" : "usage.metrics.sessions"),
-      ],
+      [totals ? formatUsageTokens(totals.totalTokens) : empty, t("usage.metrics.tokens")],
+      [totals ? formatUsageCost(totals.totalCost) : empty, t("usage.metrics.cost")],
+      [totals ? sessions.toLocaleString() : empty, t("usage.overview.sessions")],
     ];
   });
-  const exportSessionCount = createMemo(
-    () => props.data.overview?.selectedRowCount ?? displaySessionCount(),
-  );
   const insightStats = createMemo(() => {
-    const durationMs = props.data.overview?.durationMs ?? 0;
-    const durationCount = props.data.overview?.durationCount ?? 0;
-    const totals = displayTotals();
+    const durationMs = analyticsData().overview?.durationMs ?? 0;
+    const durationCount = analyticsData().overview?.durationCount ?? 0;
+    const totals = analyticsTotals();
     const messages = activeAggregates().messages;
     return {
       durationCount,
@@ -178,192 +147,60 @@ export function renderUsage(props: UsageProps) {
     };
   });
   // Zero totals are normal while idle; an error must keep its own explanation.
-  const isEmpty = createMemo(
-    () =>
-      props.data.cacheRefresh === "complete" &&
-      props.data.totals !== null &&
-      !props.data.loading &&
-      !props.data.error &&
-      props.data.sessions.length === 0 &&
-      (props.data.overview?.unfilteredSessionCount ?? 0) === 0 &&
-      (props.data.totals?.totalTokens ?? 0) === 0,
-  );
-  const datePresets = [
-    { labelKey: "usage.presets.today", days: 1 },
-    { labelKey: "usage.presets.last7d", days: 7 },
-    { labelKey: "usage.presets.last30d", days: 30 },
-    { labelKey: "usage.presets.last90d", days: 90 },
-    { labelKey: "usage.presets.last1y", days: 365 },
-  ];
-  const presetRange = (days: number) => {
-    const end = new Date();
-    const start = new Date(end);
-    if (props.filters.timeZone === "utc") {
-      start.setUTCDate(start.getUTCDate() - (days - 1));
-    } else {
-      start.setDate(start.getDate() - (days - 1));
-    }
-    return {
-      start: formatIsoDate(start, props.filters.timeZone),
-      end: formatIsoDate(end, props.filters.timeZone),
-    };
-  };
-  const isPresetSelected = (days: number) => {
-    const range = presetRange(days);
-    return props.filters.startDate === range.start && props.filters.endDate === range.end;
-  };
-  const applyPreset = (days: number) => {
-    const range = presetRange(days);
-    props.callbacks.filters.onDatesChange({ startDate: range.start });
-    props.callbacks.filters.onDatesChange({ endDate: range.end });
-  };
-  const applyAllRange = () => {
-    props.callbacks.filters.onDatesChange({ startDate: "1970-01-01" });
-    props.callbacks.filters.onDatesChange({
-      endDate: formatIsoDate(new Date(), props.filters.timeZone),
-    });
-  };
+  const isEmpty = () => overview().isEmpty && !loading() && !props.data.error;
+  const showAnalytics = () => overview().hasOverviewData && !isEmpty();
+  const keepAnalytics = () =>
+    showAnalytics() || (retainedCharts() && Boolean(retainedChartSnapshot()));
+  const controls = createUsageControls(props, {
+    loading,
+    phone,
+    hasOverviewData: () => overview().hasOverviewData,
+    displaySessionCount,
+    selectionChips: () =>
+      renderFilterChips(props.data.overview?.selectedRows ?? props.data.sessions, props),
+  });
   return (
     <SettingsPage wide>
       <div class="usage-page">
-        <section class="settings-section">
-          <div class="settings-section__header">
-            <h2 class="settings-section__heading">{t("usage.filters.rangeTitle")}</h2>
-            <div class="settings-section__actions">
-              {overview().loadingOverview
-                ? renderUsageLoadingStatus(t("usage.loading.badge"))
-                : undefined}
-              {isEmpty() ? (
-                <>
-                  {" "}
-                  <span class="usage-query-hint">{t("usage.empty.hint")}</span>{" "}
-                </>
-              ) : undefined}
-            </div>
-          </div>
-          <div
-            class={[
-              "settings-group usage-panel usage-header",
-              { pinned: props.display.headerPinned },
-            ]}
-          >
-            <div class="usage-header-row">
-              <div class="usage-controls">
-                {renderFilterChips(props.data.overview?.selectedRows ?? props.data.sessions, props)}
-                <div class="usage-presets">
-                  <For each={datePresets}>
-                    {(preset) => (
-                      <button
-                        class={["btn btn--sm", { active: isPresetSelected(preset.days) }]}
-                        aria-pressed={isPresetSelected(preset.days) ? "true" : "false"}
-                        onClick={() => applyPreset(preset.days)}
-                      >
-                        {t(preset.labelKey)}
-                      </button>
-                    )}
-                  </For>
-                  <button
-                    class={["btn btn--sm", { active: props.filters.startDate === "1970-01-01" }]}
-                    aria-pressed={props.filters.startDate === "1970-01-01" ? "true" : "false"}
-                    onClick={() => applyAllRange()}
-                  >
-                    {t("usage.presets.all")}
-                  </button>
-                </div>
-                <div class="usage-date-range">
-                  <DateInput
-                    value={props.filters.startDate}
-                    label={t("usage.filters.startDate")}
-                    onChange={(startDate) => props.callbacks.filters.onDatesChange({ startDate })}
-                  />
-                  <span class="usage-separator">{t("usage.filters.to")}</span>
-                  <DateInput
-                    value={props.filters.endDate}
-                    label={t("usage.filters.endDate")}
-                    onChange={(endDate) => props.callbacks.filters.onDatesChange({ endDate })}
-                  />
-                </div>
-                <select
-                  class="usage-select"
-                  title={t("usage.filters.timeZone")}
-                  aria-label={t("usage.filters.timeZone")}
-                  value={props.filters.timeZone}
-                  onChange={(event) => {
-                    const timeZone = event.currentTarget.value;
-                    if (timeZone === "local" || timeZone === "utc") {
-                      props.callbacks.filters.onScopeChange({ timeZone });
-                    }
-                  }}
-                >
-                  <option value="local">{t("usage.filters.timeZoneLocal")}</option>
-                  <option value="utc">{t("usage.filters.timeZoneUtc")}</option>
-                </select>
-              </div>
-              <div class="usage-view-options">
-                <UsageCreatorFilter
-                  options={props.data.creatorOptions}
-                  selectedKey={props.filters.creatorKey}
-                  onSelect={(creatorKey) => props.callbacks.filters.onScopeChange({ creatorKey })}
-                />
-                <SettingsSegmented
-                  mode="buttons"
-                  variant="accent"
-                  value={props.filters.scope}
-                  onChange={(scope) => props.callbacks.filters.onScopeChange({ scope })}
-                  onReselect={(scope) => props.callbacks.filters.onScopeChange({ scope })}
-                  options={[
-                    {
-                      value: "instance",
-                      label: t("usage.scope.instance"),
-                      title: t("usage.scope.instanceHint"),
-                    },
-                    {
-                      value: "family",
-                      label: t("usage.scope.family"),
-                      title: t("usage.scope.familyHint"),
-                    },
-                  ]}
-                />
-                <SettingsSegmented
-                  mode="buttons"
-                  variant="accent"
-                  value={props.display.chartMode === "tokens" ? "tokens" : "cost"}
-                  onChange={(chartMode) => props.callbacks.display.onChange({ chartMode })}
-                  onReselect={(chartMode) => props.callbacks.display.onChange({ chartMode })}
-                  options={[
-                    { value: "tokens", label: t("usage.metrics.tokens") },
-                    { value: "cost", label: t("usage.metrics.cost") },
-                  ]}
-                />
-                <button
-                  class="btn btn--sm primary"
-                  onClick={() => void props.callbacks.filters.onRefresh()}
-                  disabled={props.data.loading}
-                >
-                  {t("common.refresh")}
-                </button>
-              </div>
-            </div>
+        <section class="usage-header-section">
+          <div class={["usage-header", { pinned: props.display.headerPinned && !phone() }]}>
+            {controls.toolbar()}
 
-            <div class="usage-header-row">
-              <div class="usage-header-metrics">
-                {/* Badges render before totals arrive so the row keeps its height. */}
-                <For each={metricBadges()}>
-                  {([value, label]) => (
-                    <span class="usage-metric-badge">
-                      <strong>{value}</strong> {label}
-                    </span>
-                  )}
-                </For>
-                {/* One actions group, so the badge row's wrapping never moves Pin or Export. */}
-                <div class="usage-header-actions">
+            {/* Carapace summary strip: fixed cells, so placeholders and loaded totals share one layout. */}
+            <div class="usage-summary-strip">
+              <For each={metricBadges()}>
+                {([value, label]) => (
+                  <div class="usage-metric-badge">
+                    <strong>{value}</strong> <small>{label}</small>
+                  </div>
+                )}
+              </For>
+              {phone() ? (
+                <Show when={controls.partialNotice()}>
+                  <div class="usage-summary-strip__actions">{controls.partialStatus()}</div>
+                </Show>
+              ) : (
+                <div class="usage-summary-strip__actions">
+                  {controls.partialStatus()}
                   <button
-                    class={["btn btn--sm usage-pin-btn", { active: props.display.headerPinned }]}
+                    class={[
+                      "btn btn--sm btn--icon usage-pin-btn",
+                      { active: props.display.headerPinned },
+                    ]}
+                    aria-label={
+                      props.display.headerPinned
+                        ? t("usage.filters.pinned")
+                        : t("usage.filters.pin")
+                    }
+                    aria-pressed={props.display.headerPinned ? "true" : "false"}
+                    title={
+                      props.display.headerPinned
+                        ? t("usage.filters.pinned")
+                        : t("usage.filters.pin")
+                    }
                     onClick={() => props.callbacks.filters.onToggleHeaderPinned()}
                   >
-                    {props.display.headerPinned
-                      ? t("usage.filters.pinned")
-                      : t("usage.filters.pin")}
+                    <Icon name={props.display.headerPinned ? "pinOff" : "pin"} />
                   </button>
                   <Menu
                     id="usage-export"
@@ -375,85 +212,39 @@ export function renderUsage(props: UsageProps) {
                     trigger={
                       <>{props.data.exporting ? t("common.loading") : t("usage.export.label")} ▾</>
                     }
-                    items={[
-                      {
-                        id: "sessions-csv",
-                        label: t("usage.export.sessionsCsv"),
-                        disabled: props.data.exporting || exportSessionCount() === 0,
-                      },
-                      {
-                        id: "daily-csv",
-                        label: t("usage.export.dailyCsv"),
-                        disabled: props.data.exporting || props.data.costDaily.length === 0,
-                      },
-                      {
-                        id: "json",
-                        label: t("usage.export.json"),
-                        disabled:
-                          props.data.exporting ||
-                          props.data.loading ||
-                          (exportSessionCount() === 0 && props.data.costDaily.length === 0),
-                      },
-                    ]}
-                    onSelect={(item) => {
-                      switch (item.id) {
-                        case "sessions-csv":
-                        case "daily-csv":
-                          props.callbacks.display.onExportCsv(item.id);
-                          break;
-                        case "json":
-                          props.callbacks.display.onExportJson();
-                          break;
-                      }
-                    }}
+                    items={usageExportItems(props, loading())}
+                    onSelect={(item) => selectUsageExport(props, item.id)}
                   />
                 </div>
-              </div>
+              )}
             </div>
+            {phone()
+              ? undefined
+              : renderFilterChips(props.data.overview?.selectedRows ?? props.data.sessions, props)}
 
-            <UsageQuerySection
-              filters={props.filters}
-              actions={props.callbacks.filters}
-              loading={props.data.loading}
-              hasDraftQuery={props.filters.queryDraft.trim().length > 0}
-              hasQuery={props.filters.query.trim().length > 0}
-              hasOverviewData={overview().hasOverviewData}
-              matchingSessions={
-                props.data.sessionPage?.total ??
-                props.data.overview?.total ??
-                props.data.sessions.length
+            {controls.querySection()}
+
+            <UsageReadStatus read={props.read}>
+              {() =>
+                props.data.error ? (
+                  <div class="callout danger usage-callout">{props.data.error}</div>
+                ) : undefined
               }
-              totalSessions={totalSessions()}
-              filterOptions={filterOptions()}
-              queryTerms={queryTerms()}
-              querySuggestions={querySuggestions()}
-              queryWarnings={props.data.overview?.queryWarnings ?? []}
-            />
-
-            {props.data.error ? (
-              <div class="callout danger usage-callout">{props.data.error}</div>
-            ) : undefined}
-            {props.data.cacheRefresh !== "complete" ? (
+            </UsageReadStatus>
+            {props.data.cacheRefresh === "failed" ? (
               <div
-                class={[
-                  "callout usage-callout usage-cache-warning",
-                  { warning: props.data.cacheRefresh === "failed" },
-                ]}
+                class="callout warning usage-callout usage-cache-warning"
                 role="status"
                 aria-live="polite"
               >
-                {t(
-                  props.data.cacheRefresh === "failed"
-                    ? "usage.cacheStatus.paused"
-                    : "usage.cacheStatus.warning",
-                )}
+                {t("usage.cacheStatus.paused")}
               </div>
             ) : undefined}
           </div>
         </section>
 
         {!overview().hasOverviewData ? (
-          overview().loadingOverview ? (
+          loadingOverview() ? (
             <div class="usage-panel usage-loading-card">
               <div class="usage-loading-grid">
                 <div class="skeleton usage-skeleton-block usage-skeleton-block--tall" />
@@ -464,114 +255,113 @@ export function renderUsage(props: UsageProps) {
           ) : undefined
         ) : isEmpty() ? (
           renderUsageEmptyState(() => void props.callbacks.filters.onRefresh())
-        ) : (
-          <>
-            {/* Interrupted responses leave known subtotals: keep the analytics and mark them as lower bounds. */}
-            <Show
-              when={
-                displayTotals()?.usageReport?.state === "unavailable" ||
-                props.data.overview?.usageReport?.state === "unavailable"
-              }
+        ) : undefined}
+        <Show when={showAnalytics() || retainedCharts()}>
+          {(_shown) => (
+            <div
+              class="settings-group usage-panel usage-left-card usage-trend-section"
+              hidden={!showAnalytics()}
+              inert={!showAnalytics()}
+              style={{ display: showAnalytics() ? undefined : "none" }}
             >
-              <div class="callout usage-callout" role="note">
-                {t("usage.lowerBound")}
-              </div>
-            </Show>
-            <>
-              <div class="settings-group usage-panel usage-left-card usage-trend-section">
-                {
-                  <DailyChartCompact
-                    dailyEntries={props.data.costDaily}
-                    selectedDays={props.filters.selectedDays}
-                    chartMode={props.display.chartMode}
-                    dailyChartMode={props.display.dailyChartMode}
-                    onDailyChartModeChange={(dailyChartMode) =>
-                      props.callbacks.display.onChange({ dailyChartMode })
-                    }
-                    onSelectDay={props.callbacks.filters.onSelectDay}
-                    range={{
-                      startDate: props.filters.startDate,
-                      endDate: props.filters.endDate,
-                      complete: props.data.cacheRefresh === "complete",
-                    }}
-                  />
+              <DailyChartCompact
+                dailyEntries={chartDaily()}
+                selectedDays={props.filters.selectedDays}
+                chartMode={props.display.chartMode}
+                dailyChartMode={props.display.dailyChartMode}
+                onDailyChartModeChange={(dailyChartMode) =>
+                  props.callbacks.display.onChange({ dailyChartMode })
                 }
-                <Show when={displayTotals()}>
-                  {(totals) => (
-                    <CostBreakdownCompact totals={totals()} mode={props.display.chartMode} />
-                  )}
-                </Show>
-              </div>
-              <UsageCreators
-                groups={activeAggregates().byCreator ?? []}
-                selectedKey={props.filters.creatorKey}
-                mode={props.display.chartMode}
-                onSelect={(creatorKey) => props.callbacks.filters.onScopeChange({ creatorKey })}
+                onSelectDay={props.callbacks.filters.onSelectDay}
+                providerSeries={providerSeries()}
+                range={{
+                  startDate: props.filters.startDate,
+                  endDate: props.filters.endDate,
+                  complete: chartComplete(),
+                }}
               />
-              <UsageInsights
-                totals={displayTotals()}
-                aggregates={activeAggregates()}
-                stats={insightStats()}
-                showCostHint={(displayTotals()?.missingCostEntries ?? 0) > 0}
-                showCostShares={
-                  /* Daily buckets are exact; category rollups remain full-session totals. */
-                  props.filters.selectedDays.length === 0
-                }
-                errorHours={buildPeakErrorHours(
-                  props.data.overview?.hourlyMessages ?? [],
-                  props.data.overview?.hourlyErrors ?? [],
-                )}
-                sessionCount={displaySessionCount()}
-                totalSessions={totalSessions()}
-              />
-              {renderCostWindowComparison(
-                props.data.costDaily,
-                props.filters.startDate,
-                props.filters.endDate,
-                props.filters.timeZone,
-              )}
-              {renderUsageHeatmap(
-                props.data.costDaily,
-                props.filters.startDate,
-                props.filters.endDate,
-              )}
-              {
-                <UsageMosaic
-                  overview={props.data.overview}
-                  timeZone={props.filters.timeZone}
-                  selectedHours={props.filters.selectedHours}
-                  onSelectHour={props.callbacks.filters.onSelectHour}
-                />
-              }
-            </>
-
-            <div class="usage-grid">
-              <div class="usage-grid-column">
-                <SessionsCard
-                  sessions={props.data.sessions}
-                  usage={props}
-                  totalSessions={props.data.overview?.total ?? totalSessions()}
-                  overview={props.data.sessionPage ?? props.data.overview}
-                  loading={props.data.loading}
-                />
-              </div>
-              <Show when={primarySelectedEntry()}>
-                {(selectedSession) => (
-                  <div class="usage-grid-column">
-                    <SessionDetailPanel
-                      session={selectedSession()}
-                      detail={props.detail}
-                      callbacks={props.callbacks.details}
-                      range={props.filters}
-                      contextExpanded={props.display.contextExpanded}
-                      onClose={() => props.callbacks.filters.onClearSessions()}
-                    />
-                  </div>
+              <Show when={keepAnalytics() && analyticsTotals()}>
+                {(totals) => (
+                  <CostBreakdownCompact totals={totals()} mode={props.display.chartMode} />
                 )}
               </Show>
             </div>
-          </>
-        )}
+          )}
+        </Show>
+        <Show when={keepAnalytics()}>
+          <div
+            hidden={!showAnalytics()}
+            inert={!showAnalytics()}
+            style={{ display: showAnalytics() ? "contents" : "none" }}
+          >
+            <UsageCreators
+              groups={activeAggregates().byCreator ?? []}
+              selectedKey={props.filters.creatorKey}
+              mode={props.display.chartMode}
+              onSelect={(creatorKey) => props.callbacks.filters.onScopeChange({ creatorKey })}
+            />
+            <UsageInsights
+              totals={analyticsTotals()}
+              aggregates={activeAggregates()}
+              stats={insightStats()}
+              showCostHint={(analyticsTotals()?.missingCostEntries ?? 0) > 0}
+              errorHours={buildPeakErrorHours(
+                analyticsData().overview?.hourlyMessages ?? [],
+                analyticsData().overview?.hourlyErrors ?? [],
+              )}
+              sessionCount={analyticsSessionCount()}
+              totalSessions={analyticsTotalSessions()}
+            />
+            <CostWindowComparison
+              daily={analyticsData().aggregates?.costDaily ?? props.data.costDaily}
+              rangeStartDate={props.filters.startDate}
+              rangeEndDate={props.filters.endDate}
+              timeZone={props.filters.timeZone}
+            />
+          </div>
+        </Show>
+        <Show when={showAnalytics() || retainedCharts()}>
+          {(_shown) => (
+            <div
+              hidden={!showAnalytics()}
+              inert={!showAnalytics()}
+              style={{ display: showAnalytics() ? "contents" : "none" }}
+            >
+              <UsageHeatmap
+                daily={chartDaily()}
+                rangeStartDate={props.filters.startDate}
+                rangeEndDate={props.filters.endDate}
+              />
+            </div>
+          )}
+        </Show>
+        <Show when={keepAnalytics()}>
+          <div
+            hidden={!showAnalytics()}
+            inert={!showAnalytics()}
+            style={{ display: showAnalytics() ? "contents" : "none" }}
+          >
+            <UsageMosaic
+              overview={analyticsData().overview}
+              timeZone={props.filters.timeZone}
+              selectedHours={props.filters.selectedHours}
+              onSelectHour={props.callbacks.filters.onSelectHour}
+            />
+
+            <UsageSessionsGrid
+              usage={props}
+              reveal={reveal}
+              sessions={analyticsData().sessions}
+              selectedRows={analyticsData().overview?.selectedRows ?? []}
+              totalSessions={analyticsData().overview?.total ?? analyticsTotalSessions()}
+              overview={
+                retainedChartSnapshot()?.overview ?? props.data.sessionPage ?? props.data.overview
+              }
+              loading={loading()}
+              selected={showAnalytics() ? primarySelectedEntry() : null}
+            />
+          </div>
+        </Show>
         {renderProviderUsage(
           props.data.providerUsage,
           props.data.providerUsageUnavailable,

@@ -1,5 +1,9 @@
+import { createRouter } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { RouteId } from "../../app-routes.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import type { ControlUiReadinessOutlet } from "../../app/control-ui-readiness.ts";
 import { consumeSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
@@ -29,6 +33,48 @@ afterEach(() => {
 });
 
 describe("confirmed session navigation", () => {
+  it.each([
+    ["new-session", 1],
+    ["chat", 0],
+  ] as const)("animates Chat's entrance only when leaving %s", async (from, animations) => {
+    const { context } = createDraftFixture();
+    const router = createRouter<RouteId, ApplicationContext>({
+      routes: [
+        { id: "new-session", path: "/new", component: () => ({}) },
+        { id: "chat", path: "/chat", component: () => ({}) },
+      ],
+    });
+    // The instant-thread handoff already shows Chat before the create is accepted.
+    await router.navigate(from, context);
+    const animate = vi.fn(() => ({ finished: Promise.resolve() }) as unknown as Animation);
+    const routeOutlet = Object.assign(document.createElement("openclaw-router-outlet"), {
+      presentationSettled: true,
+      settlePresentation: async () => true,
+      animate,
+    }) satisfies ControlUiReadinessOutlet;
+    Object.assign(context, { router, routeOutlet });
+    vi.mocked(context.navigateAndWait).mockImplementation(async (routeId, options) => {
+      const navigation = router.navigate(routeId, context, {}, route(options?.pathname ?? "/chat"));
+      await readyChat();
+      await navigation;
+    });
+
+    await new StartedSessionNavigation().navigate(context, {
+      client: context.gateway.snapshot.client!,
+      key: sessionKey,
+      agentId: "main",
+      entry: { displayName: "Accepted title", category: "Claws" },
+    });
+
+    expect(animate).toHaveBeenCalledTimes(animations);
+    expect(context.chatSubmissions.readAcceptedCreate()).toMatchObject({
+      creation: { sessionKey, admitted: true },
+      displayName: "Accepted title",
+      category: "Claws",
+    });
+    expect(context.chatSubmissions.creation).toBeUndefined();
+  });
+
   it.each(["leave", "stop"] as const)(
     "settles a pending composer handoff when its route retires (%s)",
     async (retire) => {

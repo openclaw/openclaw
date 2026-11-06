@@ -17,6 +17,7 @@ import {
   seedTranscriptRows,
 } from "./server.sessions.compaction-fixtures.test-support.js";
 import { embeddedRunMock } from "./test-helpers.js";
+import { createCompactionResult } from "./test-helpers.runtime-state.js";
 import {
   directSessionReq,
   expectNoSessionQueueCleanup,
@@ -35,38 +36,30 @@ vi.mock("../agents/embedded-agent-runner/compact.foreground-work.js", async (imp
 const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
 
 afterEach(() => vi.useRealTimers());
+const compactedResult = createCompactionResult();
 
 async function createCompactionSession(sessionId: string) {
   const sessionKey = "agent:main:main";
   const { storePath } = await createSessionStoreDir();
   await seedSessionEntry({ entry: sessionStoreEntry(sessionId), sessionKey, storePath });
   await seedTranscriptRows({ sessionId, sessionKey, storePath, totalLines: 3 });
-  return { storePath, sessionId, sessionKey };
+  const target = captureSessionTarget({
+    storeScope: storePath,
+    sessionKey,
+    aliases: ["main", sessionId],
+    incarnation: sessionId,
+    agentId: "main",
+  });
+  return { storePath, sessionId, sessionKey, target };
 }
 
 test.each([true, false])(
   "sessions.compact respects controller run abortability: %s",
   async (abortable) => {
-    const { storePath, sessionId, sessionKey } = await createCompactionSession(
+    const { storePath, sessionId, sessionKey, target } = await createCompactionSession(
       "sess-compact-queued-work",
     );
-    embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: {
-        summary: "summary",
-        firstKeptEntryId: "entry-1",
-        tokensBefore: 120,
-        tokensAfter: 80,
-      },
-    });
-    const target = captureSessionTarget({
-      storeScope: storePath,
-      sessionKey,
-      aliases: ["main", sessionId],
-      incarnation: sessionId,
-      agentId: "main",
-    });
+    embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce(compactedResult);
     const started = createDeferred();
     const stopped = createDeferred();
     let interrupted = false;
@@ -102,23 +95,18 @@ test.each([true, false])(
 
     try {
       const compacted = await directSessionReq("sessions.compact", { key: "main" });
-
-      if (!abortable) {
+      expect(interrupted).toBe(abortable);
+      if (abortable) {
+        expect(compacted.ok).toBe(true);
+        await activeRun;
+      } else {
         expect(compacted).toMatchObject({
           ok: false,
           error: { code: "INVALID_REQUEST", message: expect.stringContaining("has an active run") },
         });
-        expect(interrupted).toBe(false);
-        expect(isSessionControllerWorkActive(storePath, [sessionId])).toBe(true);
-        expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
-        expectNoSessionQueueCleanup();
-        return;
       }
-      expect(compacted.ok).toBe(true);
-      expect(interrupted).toBe(true);
-      await activeRun;
-      expect(isSessionControllerWorkActive(storePath, [sessionId])).toBe(false);
-      expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledOnce();
+      expect(isSessionControllerWorkActive(storePath, [sessionId])).toBe(!abortable);
+      expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(Number(abortable));
       expectNoSessionQueueCleanup();
     } finally {
       stopped.resolve();
@@ -128,15 +116,8 @@ test.each([true, false])(
 );
 
 test("sessions.compact preserves its active-run error when controller preemption times out", async () => {
-  const { sessionId, sessionKey, storePath } =
+  const { sessionId, sessionKey, storePath, target } =
     await createCompactionSession("sess-compact-timeout");
-  const target = captureSessionTarget({
-    storeScope: storePath,
-    sessionKey,
-    aliases: ["main", sessionId],
-    incarnation: sessionId,
-    agentId: "main",
-  });
   const operation = createReplyOperation({
     sessionKey,
     sessionId,
@@ -181,16 +162,7 @@ test("sessions.compact responds after an idle session compacts under its own con
   const compactionTurns: Array<string | undefined> = [];
   vi.mocked(runForegroundCompactionWork).mockImplementationOnce(async () => {
     compactionTurns.push(getCurrentSessionControllerOwner()?.key);
-    return {
-      ok: true,
-      compacted: true,
-      result: {
-        summary: "summary",
-        firstKeptEntryId: "entry-1",
-        tokensBefore: 120,
-        tokensAfter: 80,
-      },
-    };
+    return compactedResult;
   });
   // Loaded after the harness installs its runtime mocks, which a static import would precede.
   const { compactEmbeddedAgentSession } =

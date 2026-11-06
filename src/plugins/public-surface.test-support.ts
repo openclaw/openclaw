@@ -7,6 +7,12 @@ export function writeArtifact(filename: string, contents = "export {};\n") {
   return filename;
 }
 
+export function writeArtifacts(root: string, files: Record<string, string | object>) {
+  for (const [name, value] of Object.entries(files)) {
+    writeArtifact(path.join(root, name), typeof value === "string" ? value : JSON.stringify(value));
+  }
+}
+
 export function captureThrownError(run: () => unknown): Error {
   try {
     run();

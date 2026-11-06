@@ -1,14 +1,15 @@
+// @vitest-environment node
 // Control UI tests cover service worker cache behavior.
-import { createHash, webcrypto } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import vm from "node:vm";
+// Explicit package entry: Bun maps the bare "undici" import to Bun.fetch.
+import { fetch as fetchWithIntegrity } from "undici/index.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const serviceWorkerPath = path.join(here, "../../public/sw.js");
+import {
+  createFetchServiceWorker,
+  offlineBootFixture,
+  stallDownloads,
+  type ServiceWorkerFetchRequest,
+} from "./service-worker-cache.test-support.ts";
 
 describe("Control UI service worker HTTP recovery", () => {
   it("never stores or replays private, unversioned, or no-store HTTP reads", async () => {
@@ -73,6 +74,21 @@ describe("Control UI service worker HTTP recovery", () => {
       );
       expect(worker.windowClients[1].postMessage).not.toHaveBeenCalled();
     }
+  });
+
+  it("does not report expected reachability-probe failures to browser auth recovery", async () => {
+    const worker = createFetchServiceWorker("https://control.example/");
+    const request = {
+      url: worker.scope + "healthz",
+      cache: "no-store" as const,
+      headers: new Headers({ "X-OpenClaw-Reachability-Probe": "1" }),
+    };
+    worker.fetch.mockRejectedValueOnce(new TypeError("offline"));
+    expect((await worker.dispatch(request))?.type).toBe("error");
+    worker.fetch.mockResolvedValueOnce(new Response("Sign in", { status: 401 }));
+    expect((await worker.dispatch(request))?.status).toBe(401);
+    expect(worker.windowClients[0].postMessage).not.toHaveBeenCalled();
+    expect(worker.cachePut).not.toHaveBeenCalled();
   });
 
   it("serves prior public-asset versions only from complete previous caches without storing new responses", async () => {
@@ -201,6 +217,198 @@ describe("Control UI service worker HTTP recovery", () => {
 });
 
 describe("Control UI offline app shell", () => {
+  it("prepares untouched lazy modules only after the shell and idle, with four downloads at most", async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = createFetchServiceWorker();
+      worker.fetch.mockImplementation(async () => new Response("build asset"));
+      await worker.install();
+      expect(worker.fetch).toHaveBeenCalledTimes(offlineBootFixture.assets.length);
+      const downloads: Array<ReturnType<typeof createDeferred<Response>>> = [];
+      worker.fetch.mockImplementation(() => {
+        expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(true);
+        const download = createDeferred<Response>();
+        downloads.push(download);
+        return download.promise;
+      });
+      const preparation = worker.probe({ saveData: false });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(downloads).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(downloads).toHaveLength(4);
+      for (const download of downloads) {
+        download.resolve(new Response("build asset"));
+      }
+      worker.fetch.mockImplementation(async () => new Response("build asset"));
+      await vi.runAllTimersAsync();
+      await preparation;
+      worker.setOnline(false);
+      worker.fetch.mockRejectedValue(new TypeError("offline"));
+      for (const asset of offlineBootFixture.deferredAssets) {
+        expect(await (await worker.dispatch({ url: worker.scope + asset.path }))?.text()).toBe(
+          "build asset",
+        );
+      }
+      expect(worker.fetch).toHaveBeenCalledTimes(
+        offlineBootFixture.assets.length + offlineBootFixture.deferredAssets.length,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([{ saveData: true }, { effectiveType: "slow-2g" }, { effectiveType: "2g" }])(
+    "records an intentional deferred skip for %j without changing boot preparation",
+    async (network) => {
+      const worker = createFetchServiceWorker();
+      worker.fetch.mockImplementation(async () => new Response("build asset"));
+      await worker.probe(network);
+      expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(true);
+      expect(worker.fetch).toHaveBeenCalledTimes(offlineBootFixture.assets.length);
+      expect(worker.info).toHaveBeenCalledWith(
+        expect.stringContaining("skipped"),
+        network.saveData ? "save-data" : "slow-connection",
+      );
+    },
+  );
+
+  it("does not download deferred assets without a complete shell", async () => {
+    const worker = createFetchServiceWorker();
+    worker.fetch.mockRejectedValue(new TypeError("offline"));
+    await worker.probe({ saveData: false });
+    expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(false);
+    expect(worker.fetch.mock.calls.map(([url]) => url)).toEqual(
+      offlineBootFixture.assets.map((asset) => worker.scope + asset.path),
+    );
+  });
+
+  it("aborts active downloads when Save-Data is enabled and resumes when it is disabled", async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = createFetchServiceWorker();
+      worker.fetch.mockImplementation(async () => new Response("build asset"));
+      await worker.install();
+      const signals = stallDownloads(worker);
+      const preparation = worker.probe({ saveData: false });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(signals).toHaveLength(4);
+      await worker.probe({ saveData: true });
+      await preparation;
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      worker.fetch.mockImplementation(async () => new Response("build asset"));
+      const resumed = worker.probe({ saveData: false });
+      await vi.runAllTimersAsync();
+      await resumed;
+      for (const asset of offlineBootFixture.deferredAssets) {
+        expect(worker.cache.has(worker.scope + asset.path)).toBe(true);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts background downloads for foreground requests and resumes after they settle", async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = createFetchServiceWorker();
+      worker.fetch.mockImplementation(async () => new Response("build asset"));
+      await worker.install();
+      const signals = stallDownloads(worker);
+      const preparation = worker.probe({ saveData: false });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(signals).toHaveLength(4);
+      const foreground = createDeferred<Response>();
+      worker.fetch.mockImplementationOnce(() => foreground.promise);
+      const request = worker.dispatch();
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(signals).toHaveLength(4);
+      foreground.resolve(new Response("foreground"));
+      expect(await (await request)?.text()).toBe("foreground");
+      worker.fetch.mockImplementation(async () => new Response("build asset"));
+      await vi.advanceTimersByTimeAsync(999);
+      expect(worker.cache.has(worker.scope + offlineBootFixture.deferredAssets[0]!.path)).toBe(
+        false,
+      );
+      await vi.runAllTimersAsync();
+      await preparation;
+      for (const asset of offlineBootFixture.deferredAssets) {
+        expect(worker.cache.has(worker.scope + asset.path)).toBe(true);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retires obsolete caches and announces updates when chunk promotion exceeds quota", async () => {
+    const worker = createFetchServiceWorker();
+    const asset = offlineBootFixture.deferredAssets[0]!;
+    worker.priorCache.set(worker.scope + "__offline_shell__", new Response("previous shell"));
+    worker.olderCache.set(worker.scope + asset.path, new Response("build asset"));
+    worker.cachePut.mockRejectedValue(new DOMException("Cache full", "QuotaExceededError"));
+
+    await worker.activate();
+
+    expect(worker.cacheDelete.mock.calls).toEqual([["openclaw-control-older"]]);
+    expect(worker.priorCache.has(worker.scope + "__offline_shell__")).toBe(true);
+    expect(worker.cache.has(worker.scope + asset.path)).toBe(false);
+    for (const client of worker.windowClients) {
+      expect(client.postMessage).toHaveBeenCalledExactlyOnceWith(
+        { type: "sw-updated", version: "dev" },
+        [],
+      );
+    }
+  });
+
+  it("preserves verified unchanged chunks before retiring old versions, then skips them on resume", async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = createFetchServiceWorker();
+      const [reused, corrupt, ...remaining] = offlineBootFixture.deferredAssets;
+      worker.olderCache.set(worker.scope + reused!.path, new Response("build asset"));
+      worker.olderCache.set(worker.scope + corrupt!.path, new Response("corrupt"));
+      worker.priorCache.set(worker.scope + "__offline_shell__", new Response("previous shell"));
+      worker.fetch.mockImplementation(async () => new Response("build asset"));
+      await worker.install();
+      await worker.activate();
+      expect(worker.cacheDelete).toHaveBeenCalledWith("openclaw-control-older");
+      expect(
+        await worker.cache
+          .get(worker.scope + reused!.path)
+          ?.clone()
+          .text(),
+      ).toBe("build asset");
+      expect(worker.cache.has(worker.scope + corrupt!.path)).toBe(false);
+      for (const asset of remaining) {
+        worker.cache.set(worker.scope + asset.path, new Response("build asset"));
+      }
+      worker.fetch.mockClear();
+      // Exercise fetch's SRI contract on fixed bytes without opening a port.
+      worker.fetch.mockImplementation(async (_url, options) => {
+        const response = await fetchWithIntegrity("data:text/javascript,corrupt", {
+          integrity: options?.integrity,
+        });
+        return new Response(await response.arrayBuffer());
+      });
+      const rejected = worker.probe({ saveData: false });
+      await vi.runAllTimersAsync();
+      await rejected;
+      expect(worker.cache.has(worker.scope + corrupt!.path)).toBe(false);
+      expect(worker.fetch).toHaveBeenCalledExactlyOnceWith(
+        worker.scope + corrupt!.path,
+        expect.objectContaining({ integrity: corrupt!.integrity, priority: "low" }),
+      );
+      worker.fetch.mockImplementation(async () => new Response("build asset"));
+      const resumed = worker.probe({ saveData: false });
+      await vi.runAllTimersAsync();
+      await resumed;
+      expect(worker.cache.has(worker.scope + corrupt!.path)).toBe(true);
+      expect(worker.fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("bounds stalled preparation, preserves completed assets, and resumes on a later probe", async () => {
     vi.useFakeTimers();
     try {
@@ -276,6 +484,7 @@ describe("Control UI offline app shell", () => {
         {
           credentials: "same-origin",
           redirect: "error",
+          priority: "low",
           integrity: offlineBootFixture.assets[1].integrity,
           signal: expect.any(AbortSignal),
         },
@@ -312,7 +521,7 @@ describe("Control UI offline app shell", () => {
   });
 
   it.each(["wrong bytes", "private response"])(
-    "refetches %s from the current cache instead of trusting an old build",
+    "replaces %s in the current cache with integrity-matched bytes from an old build",
     async (invalid) => {
       const worker = createFetchServiceWorker();
       const url = worker.scope + offlineBootFixture.assets[0].path;
@@ -326,11 +535,12 @@ describe("Control UI offline app shell", () => {
       worker.priorCache.set(worker.scope + "__offline_shell__", new Response("old shell"));
       worker.fetch.mockImplementation(async () => new Response("build asset"));
       await worker.probe();
-      expect(worker.fetch).toHaveBeenCalledTimes(offlineBootFixture.assets.length);
-      for (const asset of offlineBootFixture.assets) {
+      expect(worker.fetch).toHaveBeenCalledTimes(offlineBootFixture.assets.length - 1);
+      for (const asset of offlineBootFixture.assets.slice(1)) {
         expect(worker.fetch).toHaveBeenCalledWith(worker.scope + asset.path, {
           credentials: "same-origin",
           redirect: "error",
+          priority: "low",
           integrity: asset.integrity,
           signal: expect.any(AbortSignal),
         });
@@ -364,6 +574,7 @@ describe("Control UI offline app shell", () => {
         {
           credentials: "same-origin",
           redirect: "error",
+          priority: "low",
           integrity: asset.integrity,
           signal: expect.any(AbortSignal),
         },
@@ -476,6 +687,23 @@ describe("Control UI offline app shell", () => {
     expect(worker.priorCache.has(worker.scope + "__offline_shell__")).toBe(true);
   });
 
+  it("preserves an installing replacement cache when the active worker is probed", async () => {
+    const worker = createFetchServiceWorker();
+    worker.fetch.mockResolvedValue(new Response("build asset"));
+    await worker.install();
+    await worker.activate();
+    const replacementName = "openclaw-control-next-fixture";
+    const replacementCache = new Map([
+      [worker.scope + "assets/next.js", new Response("installing replacement")],
+    ]);
+    worker.generations.set(replacementName, replacementCache);
+
+    await worker.probe();
+
+    expect(worker.generations.get(replacementName)).toBe(replacementCache);
+    expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(true);
+  });
+
   it("uses the cached shell when an online navigation stalls until the deadline", async () => {
     vi.useFakeTimers();
     try {
@@ -555,197 +783,3 @@ describe("Control UI offline app shell", () => {
     },
   );
 });
-
-type ServiceWorkerFetchRequest = Pick<Request, "url" | "method" | "mode" | "cache" | "headers">;
-type CacheRequest = string | ServiceWorkerFetchRequest;
-const offlineBootFixture = {
-  id: "fixture",
-  routes: ["/chat", "/new", "/settings", "/settings/connection"],
-  routePrefixes: ["/chat/", "/dashboard/", "/settings/agents/"],
-  html: '<!doctype html><html><head><script src="./assets/app-AbCd1234.js"></script></head><body>generic shell</body></html>',
-  csp: "default-src 'self'; base-uri 'none'",
-  assets: [
-    {
-      path: "assets/app-AbCd1234.js",
-      integrity: "sha256-" + createHash("sha256").update("build asset").digest("base64"),
-    },
-    {
-      path: "assets/chat-AbCd1234.css",
-      integrity: "sha256-" + createHash("sha256").update("build asset").digest("base64"),
-    },
-  ] as const,
-  publicAssetVersion: "public-fixture",
-  publicAssets: ["fonts/custom.woff2", "themes/custom.css", "manifest.webmanifest"],
-};
-type ServiceWorkerFetchEventStub = {
-  request: ServiceWorkerFetchRequest;
-  clientId: string;
-  respondWith(promise: Promise<Response | undefined>): void;
-  waitUntil(promise: Promise<unknown>): void;
-  data?: { type: string };
-  ports?: Array<{ postMessage(message: unknown): void }>;
-};
-
-function createFetchServiceWorker(
-  scope = "https://control.example/openclaw/",
-  options: { clientUrl?: string; clientType?: string; online?: boolean } = {},
-) {
-  const listeners = new Map<string, (event: ServiceWorkerFetchEventStub) => void>();
-  const cache = new Map<string, Response>();
-  const priorCache = new Map<string, Response>();
-  const generations = new Map([
-    ["openclaw-control-older", new Map<string, Response>()],
-    ["openclaw-control-old", priorCache],
-    ["openclaw-control-dev-fixture", cache],
-  ]);
-  const cacheDelete = vi.fn(async (name: string) => generations.delete(name));
-  const cacheMatch = vi.fn(async (request: CacheRequest, matchOptions?: { cacheName: string }) =>
-    generations
-      .get(matchOptions?.cacheName ?? "openclaw-control-dev-fixture")
-      ?.get(typeof request === "string" ? request : request.url)
-      ?.clone(),
-  );
-  const cachePut = vi.fn(async (request: CacheRequest, response: Response) => {
-    cache.set(typeof request === "string" ? request : request.url, response);
-  });
-  const fetch = vi.fn<(request: CacheRequest, options?: RequestInit) => Promise<Response>>();
-  const skipWaiting = vi.fn(async () => undefined);
-  const navigator = { onLine: options.online ?? true };
-  const probeReply = vi.fn();
-  const pendingWrites: Promise<unknown>[] = [];
-  const waitUntil = vi.fn((pending: Promise<unknown>) => {
-    pendingWrites.push(pending);
-  });
-  const windowClients = [
-    {
-      id: "requesting-window",
-      type: options.clientType ?? "window",
-      url: options.clientUrl ?? `${scope}chat`,
-      postMessage: vi.fn(),
-    },
-    { id: "another-window", type: "window", url: `${scope}chat/other`, postMessage: vi.fn() },
-  ] as const;
-  const getClient = vi.fn(async (id: string) => windowClients.find((client) => client.id === id));
-  const source = fs
-    .readFileSync(serviceWorkerPath, "utf8")
-    .replace(
-      "const OFFLINE_BOOT = null;",
-      () => `const OFFLINE_BOOT = ${JSON.stringify(offlineBootFixture)};`,
-    );
-  new vm.Script(source, {
-    filename: "ui/public/sw.js",
-  }).runInNewContext({
-    URL,
-    Response,
-    crypto: webcrypto,
-    btoa,
-    AbortController,
-    setTimeout,
-    clearTimeout,
-    caches: {
-      match: cacheMatch,
-      open: async () => ({ put: cachePut }),
-      keys: async () => [...generations.keys()],
-      delete: cacheDelete,
-    },
-    fetch,
-    self: {
-      addEventListener: (type: string, listener: (event: ServiceWorkerFetchEventStub) => void) =>
-        listeners.set(type, listener),
-      location: new URL("sw.js", scope),
-      registration: { scope },
-      navigator,
-      skipWaiting,
-      clients: { get: getClient, claim: async () => undefined, matchAll: async () => [] },
-    },
-  });
-  return {
-    scope,
-    cache,
-    priorCache,
-    cacheDelete,
-    cacheMatch,
-    cachePut,
-    fetch,
-    windowClients,
-    getClient,
-    skipWaiting,
-    waitUntil,
-    probeReply,
-    setOnline(online: boolean) {
-      navigator.onLine = online;
-    },
-    async activate() {
-      listeners.get("activate")?.({
-        waitUntil,
-        request: {
-          url: scope,
-          method: "GET",
-          mode: "cors",
-          cache: "default",
-          headers: new Headers(),
-        },
-        clientId: "",
-        respondWith: vi.fn(),
-      });
-      await Promise.all(pendingWrites);
-    },
-    probe() {
-      const start = pendingWrites.length;
-      listeners.get("message")?.({
-        data: { type: "sw-version-probe" },
-        ports: [{ postMessage: probeReply }],
-        request: {
-          url: scope,
-          method: "GET",
-          mode: "cors",
-          cache: "default",
-          headers: new Headers(),
-        },
-        clientId: "requesting-window",
-        respondWith: vi.fn(),
-        waitUntil,
-      });
-      return Promise.all(pendingWrites.slice(start));
-    },
-    async install() {
-      listeners.get("install")?.({
-        waitUntil,
-        request: {
-          url: scope,
-          method: "GET",
-          mode: "cors",
-          cache: "default",
-          headers: new Headers(),
-        },
-        clientId: "",
-        respondWith: vi.fn(),
-      });
-      await Promise.all(pendingWrites);
-    },
-    async dispatch(
-      requestOptions: Partial<ServiceWorkerFetchRequest> & { clientId?: string } = {},
-    ) {
-      let completion: Promise<Response | undefined> | undefined;
-      listeners.get("fetch")?.({
-        request: {
-          url:
-            requestOptions.url ??
-            `${scope}__openclaw__/assistant-media?source=media://inbound/image`,
-          method: requestOptions.method ?? "GET",
-          mode: requestOptions.mode ?? "cors",
-          cache: requestOptions.cache ?? "default",
-          headers: requestOptions.headers ?? new Headers(),
-        },
-        clientId: requestOptions.clientId ?? "requesting-window",
-        respondWith(pending) {
-          completion = pending;
-        },
-        waitUntil,
-      });
-      const result = await completion;
-      await Promise.all(pendingWrites);
-      return result;
-    },
-  };
-}

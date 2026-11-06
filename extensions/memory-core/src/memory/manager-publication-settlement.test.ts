@@ -24,18 +24,11 @@ import type { MemoryPublicationOperations } from "./manager-publication-task.js"
 import { readMemoryShadowIdentity, type MemoryShadowConnection } from "./manager-shadow-task.js";
 
 function publicationPragmas(db: DatabaseSync): MemoryShadowConnection["pragmas"] {
-  const read = (name: keyof MemoryShadowConnection["pragmas"]): number => {
-    const row = db.prepare("PRAGMA " + name).get();
-    const value = row?.[name] ?? row?.timeout;
-    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-      throw new Error("Expected the canonical connection policy");
-    }
-    return value;
-  };
-  return {
-    busy_timeout: read("busy_timeout"),
-    foreign_keys: read("foreign_keys"),
-  };
+  const foreign_keys = db.prepare("PRAGMA foreign_keys").get()?.foreign_keys;
+  if (typeof foreign_keys !== "number" || !Number.isSafeInteger(foreign_keys)) {
+    throw new Error("Expected the canonical connection policy");
+  }
+  return { foreign_keys };
 }
 
 function createPublicationDatabase(stateDir: string) {

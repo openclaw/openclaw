@@ -80,7 +80,7 @@ export type RunInspectorResult = AuditRunInspectResult;
 
 export type RunInspectorState =
   | { status: "empty" }
-  | { status: "loading"; waitingForGateway: boolean }
+  | { status: "loading" }
   | { status: "disconnected" }
   | { status: "unauthorized" }
   | { status: "unsupported" }

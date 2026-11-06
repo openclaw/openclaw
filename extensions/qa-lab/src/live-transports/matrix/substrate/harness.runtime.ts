@@ -2,52 +2,28 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   execCommand,
-  fetchHealthUrl,
   resolveComposeServiceUrl,
   waitForDockerServiceHealth,
-  waitForHealth,
 } from "../../../docker-runtime.js";
 import {
   MATRIX_QA_CLEANUP_TIMEOUT_MS,
   MATRIX_QA_INTERNAL_PORT,
   MATRIX_QA_SERVICE,
-  buildVersionsUrl,
   isMatrixVersionsReachable,
   waitForReachableMatrixBaseUrl,
   withMatrixQaHarnessTimeout,
   writeMatrixQaHarnessFiles,
-  type MatrixQaHarnessFiles,
 } from "./harness.runtime-internals.js";
-import { startMatrixQaRecordingProxy, type MatrixQaRecordingProxy } from "./recording-proxy.js";
+import { startMatrixQaRecordingProxy } from "./recording-proxy.js";
 
-type MatrixQaHarness = MatrixQaHarnessFiles & {
-  baseUrl: string;
-  recording: MatrixQaRecordingProxy;
-  restartService(): Promise<void>;
-  stopCommand: string;
-  stop(): Promise<void>;
-  upstreamBaseUrl: string;
-};
-
-export async function startMatrixQaHarness(params: {
-  outputDir: string;
-  repoRoot?: string;
-  image?: string;
-  homeserverPort?: number;
-  serverName?: string;
-}): Promise<MatrixQaHarness> {
+export async function startMatrixQaHarness(params: { outputDir: string; repoRoot?: string }) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const requestedHomeserverPort = params.homeserverPort ?? 0;
   const files = await writeMatrixQaHarnessFiles({
     outputDir: path.resolve(params.outputDir),
-    image: params.image,
-    homeserverPort: requestedHomeserverPort,
-    serverName: params.serverName,
   });
   const compose = (...args: string[]) =>
     execCommand("docker", ["compose", "-f", files.composeFile, ...args], repoRoot);
   const resolvePublishedPort = async () =>
-    requestedHomeserverPort ||
     parseMatrixQaPublishedPort(
       (await compose("port", MATRIX_QA_SERVICE, String(MATRIX_QA_INTERNAL_PORT))).stdout,
     );
@@ -86,12 +62,6 @@ export async function startMatrixQaHarness(params: {
           hostBaseUrl,
         });
       }
-      await waitForHealth(buildVersionsUrl(readyBaseUrl), {
-        label: "Matrix homeserver",
-        composeFile: files.composeFile,
-        fetchImpl: fetchHealthUrl,
-        sleepImpl: sleep,
-      });
       return readyBaseUrl;
     };
     let upstreamBaseUrl = await resolveReadyUpstreamBaseUrl(homeserverPort);
@@ -99,7 +69,6 @@ export async function startMatrixQaHarness(params: {
 
     return {
       ...files,
-      homeserverPort,
       baseUrl: recording.baseUrl,
       recording,
       async restartService() {

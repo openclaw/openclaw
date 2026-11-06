@@ -9,7 +9,7 @@ import { showToast } from "../../lib/toast.ts";
 import { isUsageCacheIncomplete } from "./cache-status.ts";
 import { formatIsoDate } from "./helpers.ts";
 import { buildDailyCsv, buildSessionsCsv } from "./query.ts";
-import type { UsageJsonExport } from "./types.ts";
+import type { UsageJsonExport } from "./usage-state-types.ts";
 
 registerUsageEnglish();
 
@@ -75,6 +75,7 @@ export function createUsageExportRequest(
     },
     onError: (error) => {
       showToast({
+        severity: "error",
         message: `${t("usage.export.label")}: ${formatUiError(error, "request failed")}`,
       });
     },

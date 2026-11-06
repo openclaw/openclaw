@@ -1,9 +1,9 @@
-// Exec safe-bin tests cover doctor validation of executable helper paths.
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { ExecToolConfig } from "../../../config/types.tools.js";
 import {
   collectExecSafeBinCoverageWarnings,
   collectExecSafeBinTrustedDirHintWarnings,
@@ -13,156 +13,64 @@ import {
 } from "./exec-safe-bins.js";
 
 const originalPath = process.env.PATH ?? "";
-
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const binConfig = (
+  safeBins: string[],
+  safeBinProfiles?: ExecToolConfig["safeBinProfiles"],
+): OpenClawConfig => ({
+  tools: { exec: { safeBins, ...(safeBinProfiles ? { safeBinProfiles } : {}) } },
+});
 afterEach(() => {
   process.env.PATH = originalPath;
 });
 
-describe("doctor exec safe bin helpers", () => {
-  it("formats coverage warnings", () => {
-    const warnings = collectExecSafeBinCoverageWarnings({
-      hits: [
-        { scopePath: "tools.exec", bin: "node", kind: "missingProfile", isInterpreter: true },
-        {
-          scopePath: "agents.list.runner.tools.exec",
-          bin: "jq",
-          kind: "riskySemantics",
-          warning:
-            "jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-        },
-        {
-          scopePath: "tools.exec",
-          bin: "myfilter",
-          kind: "missingProfile",
-          isInterpreter: false,
-        },
-      ],
+it("reports scoped interpreter, custom-profile and risky-bin warnings", () => {
+  const cfg: OpenClawConfig = {
+    ...binConfig(["node", "myfilter"]),
+    agents: { entries: { runner: { tools: { exec: { safeBins: ["jq"] } } } } },
+  };
+  expect(
+    collectExecSafeBinCoverageWarnings({
+      hits: scanExecSafeBinCoverage(cfg),
       doctorFixCommand: "openclaw doctor --fix",
-    });
+    }),
+  ).toEqual([
+    expect.stringMatching(/tools.exec.*interpreter\/runtime 'node' without profile/),
+    expect.stringMatching(/tools.exec.*'myfilter'.*missing safeBinProfiles.myfilter/),
+    expect.stringMatching(/agents.entries.runner.tools.exec.*'jq'.*environment.*approval-gated/),
+    expect.stringContaining('Run "openclaw doctor --fix"'),
+  ]);
+});
 
-    expect(warnings).toEqual([
-      "- tools.exec.safeBins includes interpreter/runtime 'node' without profile.",
-      "- tools.exec.safeBins entry 'myfilter' is missing safeBinProfiles.myfilter.",
-      "- agents.list.runner.tools.exec.safeBins includes 'jq': jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      '- Run "openclaw doctor --fix" to scaffold missing custom safeBinProfiles entries.',
-    ]);
-  });
+it.each([
+  [["node", "jq", "myfilter"], ["jq", "node"], true],
+  [["/usr/local/bin/jq", "sed.exe", "myfilter"], ["jq", "sed"], true],
+  [["awk", "sed"], ["awk", "sed"], false],
+] as const)("scaffolds only custom bins: %j", (bins, warned, scaffold) => {
+  const result = maybeRepairExecSafeBinProfiles(binConfig([...bins]));
+  expect(result.config).toEqual(binConfig([...bins], scaffold ? { myfilter: {} } : undefined));
+  expect(result.changes).toHaveLength(scaffold ? 1 : 0);
+  expect(result.warnings).toEqual(
+    warned.map((bin) =>
+      expect.stringMatching(new RegExp(`'${bin}'.*(?:approval-gated|explicit allowlist)`)),
+    ),
+  );
+});
 
-  it("scaffolds custom safeBin profiles but warns on interpreters and risky bins", () => {
-    const result = maybeRepairExecSafeBinProfiles({
-      tools: {
-        exec: {
-          safeBins: ["node", "jq", "myfilter"],
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(result.changes).toEqual([
-      "- tools.exec.safeBinProfiles.myfilter: added scaffold profile {} (review and tighten flags/positionals).",
-    ]);
-    expect(result.warnings).toEqual([
-      "- tools.exec.safeBins includes 'jq': jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      "- tools.exec.safeBins includes interpreter/runtime 'node' without profile; remove it from safeBins or use explicit allowlist entries.",
-    ]);
-    expect(result.config.tools?.exec?.safeBinProfiles).toEqual({ myfilter: {} });
-  });
-
-  it("does not scaffold normalized risky safeBins from path-like entries", () => {
-    const hits = scanExecSafeBinCoverage({
-      tools: {
-        exec: {
-          safeBins: ["/usr/local/bin/jq", "sed.exe", "myfilter"],
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(hits).toEqual([
-      { scopePath: "tools.exec", bin: "myfilter", kind: "missingProfile", isInterpreter: false },
-      {
-        scopePath: "tools.exec",
-        bin: "jq",
-        kind: "riskySemantics",
-        warning:
-          "jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      },
-      {
-        scopePath: "tools.exec",
-        bin: "sed",
-        kind: "riskySemantics",
-        warning:
-          "sed scripts can execute commands and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      },
-    ]);
-
-    const result = maybeRepairExecSafeBinProfiles({
-      tools: {
-        exec: {
-          safeBins: ["/usr/local/bin/jq", "sed.exe", "myfilter"],
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(result.changes).toEqual([
-      "- tools.exec.safeBinProfiles.myfilter: added scaffold profile {} (review and tighten flags/positionals).",
-    ]);
-    expect(result.warnings).toEqual([
-      "- tools.exec.safeBins includes 'jq': jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      "- tools.exec.safeBins includes 'sed': sed scripts can execute commands and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-    ]);
-    expect(result.config.tools?.exec?.safeBinProfiles).toEqual({ myfilter: {} });
-  });
-
-  it("warns on awk-family safeBins instead of scaffolding them", () => {
-    const result = maybeRepairExecSafeBinProfiles({
-      tools: {
-        exec: {
-          safeBins: ["awk", "sed"],
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toEqual([
-      "- tools.exec.safeBins includes 'awk': awk-family interpreters can execute commands, access ENVIRON, and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      "- tools.exec.safeBins includes 'sed': sed scripts can execute commands and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-    ]);
-    expect(result.config.tools?.exec?.safeBinProfiles).toBeUndefined();
-  });
-
-  it("flags safeBins that resolve outside trusted directories", () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-safe-bin-"));
-    try {
-      const binPath = join(tempDir, "custom-safe-bin");
-      writeFileSync(binPath, "#!/bin/sh\nexit 0\n");
-      chmodSync(binPath, 0o755);
-      process.env.PATH = [tempDir, originalPath]
-        .filter((entry) => entry.length > 0)
-        .join(delimiter);
-
-      const hits = scanExecSafeBinTrustedDirHints({
-        tools: {
-          exec: {
-            safeBins: ["custom-safe-bin"],
-            safeBinProfiles: { "custom-safe-bin": {} },
-          },
-        },
-      } as OpenClawConfig);
-
-      expect(hits).toStrictEqual([
-        {
-          scopePath: "tools.exec",
-          bin: "custom-safe-bin",
-          resolvedPath: binPath,
-        },
-      ]);
-
-      const warnings = collectExecSafeBinTrustedDirHintWarnings(hits);
-      expect(warnings).toStrictEqual([
-        `- tools.exec.safeBins entry 'custom-safe-bin' resolves to '${binPath}' outside trusted safe-bin dirs.`,
-        "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
-      ]);
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
+it("flags safeBins that resolve outside trusted directories", () => {
+  const tempDir = tempDirs.make("openclaw-safe-bin-");
+  const binPath = join(tempDir, "custom-safe-bin");
+  writeFileSync(binPath, "#!/bin/sh\nexit 0\n");
+  chmodSync(binPath, 0o755);
+  process.env.PATH = [tempDir, originalPath].filter((entry) => entry.length > 0).join(delimiter);
+  const hits = scanExecSafeBinTrustedDirHints(
+    binConfig(["custom-safe-bin"], { "custom-safe-bin": {} }),
+  );
+  expect(hits).toStrictEqual([
+    { scopePath: "tools.exec", bin: "custom-safe-bin", resolvedPath: binPath },
+  ]);
+  expect(collectExecSafeBinTrustedDirHintWarnings(hits)).toStrictEqual([
+    `- tools.exec.safeBins entry 'custom-safe-bin' resolves to '${binPath}' outside trusted safe-bin dirs.`,
+    "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
+  ]);
 });

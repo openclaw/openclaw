@@ -4,22 +4,16 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
-import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
-import {
-  releaseMainSessionRecoveryOwner,
-  type MainSessionRecoveryPendingTarget,
-} from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
-import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import {
   resolveReplySourceTurnId,
   setChannelSourceTurnId,
-  setChannelSourceTurnSameThreadRequired,
 } from "../../auto-reply/reply/source-turn-id.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
@@ -51,10 +45,6 @@ import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
 import { yieldAfterAgentAcceptedAck } from "./agent-handler-helpers.js";
 import { captureAgentJobSession } from "./agent-job.js";
-import {
-  resolveAgentRestartRecoveryContext,
-  resolveAgentRestartRecoveryExecutionIdentityAdmission,
-} from "./agent-restart-recovery-context.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import { prepareAgentRunExecutionIdentityFacts } from "./agent-run-execution-lineage.js";
@@ -68,7 +58,7 @@ import { createAgentRunUndispatchedOutcome } from "./agent-run-undispatched-outc
 import {
   annotateAgentRunUserTurnPrompt,
   finalizePreparedAgentRunUserTurn,
-  releaseStoppedAgentRunUserTurn,
+  releasePreparedAgentRunUserTurn,
 } from "./agent-run-user-turn.js";
 
 export async function startAgentRunExecution(params: StartAgentRunExecutionParams): Promise<void> {
@@ -80,19 +70,10 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
   const run = () =>
     // Autonomous turns prepare their own workspace and cannot borrow a previous chat run's gate.
     runWithAgentWorkspaceReadiness(undefined, () => executeAgentRun(params, cleanup.resolve));
-  try {
-    await runWithSessionControllerCleanup(() =>
-      input ? withSessionControllerSource(input, run) : run(),
-    );
-    cleanup.resolve();
-  } catch (error) {
-    // A resource-owner receipt proves completed disposal despite callback errors.
-    // Other cleanup failures retain source custody until explicit recovery.
-    if (error instanceof PluginRuntimeCloseCompletedError) {
-      cleanup.resolve();
-    }
-    throw error;
-  }
+  await runWithSessionControllerCleanup(() =>
+    input ? withSessionControllerSource(input, run) : run(),
+  );
+  cleanup.resolve();
 }
 
 async function executeAgentRun(
@@ -132,8 +113,14 @@ async function executeAgentRun(
     await using runtimeResources = {
       stack: new AsyncDisposableStack(),
       async [Symbol.asyncDispose]() {
-        await this.stack.disposeAsync();
-        runtimeDisposed = true;
+        try {
+          await this.stack.disposeAsync();
+          runtimeDisposed = true;
+        } catch (error) {
+          // Capture the owner's receipt before await-using combines it with a publication error.
+          runtimeDisposed = error instanceof PluginRuntimeCloseCompletedError;
+          throw error;
+        }
       },
     };
     let preparedModelRuntimeLease = runtimeResources.stack.use(prepared.preparedModelRuntimeLease);
@@ -152,7 +139,7 @@ async function executeAgentRun(
         }
       : undefined;
     const assertSettlementCurrent = () => {
-      params.assertContextCurrent?.();
+      params.assertGatewayLifetimeCurrent?.();
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       // Cancellation closes execution, but its retained producer still records the outcome.
       if (
@@ -164,7 +151,8 @@ async function executeAgentRun(
       }
     };
     const assertDispatchCurrent = () => {
-      params.assertContextCurrent?.();
+      params.assertGatewayLifetimeCurrent?.();
+      params.executionSource?.();
       prepared.operatorAuthority?.assertCurrent();
       prepared.userTurn.assertRequesterCurrent?.();
       abortController.signal.throwIfAborted();
@@ -189,7 +177,11 @@ async function executeAgentRun(
       const refsToDiscard = unpersistedOffloadedRefs;
       unpersistedOffloadedRefs = [];
       try {
-        await releaseStoppedAgentRunUserTurn(prepared.userTurn, prepared.activeRunAbort);
+        await releasePreparedAgentRunUserTurn(
+          prepared.userTurn,
+          "cancelled",
+          isUserInitiatedAgentRunAbortReason(abortController.signal.reason) ? true : undefined,
+        );
       } catch (error) {
         diagnostics.warning("failed to settle pending agent input")(error);
       }
@@ -221,19 +213,20 @@ async function executeAgentRun(
             abortSignal: abortController.signal,
           },
           async () =>
-            withPreparedModelRuntimePluginGenerationScope(
-              replyDispatchRuntime.pluginGeneration,
-              () => {
-                dispatched = true;
-                return dispatchAgentRunWithMedia(dispatch, params);
-              },
-              () => (leaseActive ? preparedModelRuntimeLease.snapshot : undefined),
+            preparedModelRuntimeLease.run(() =>
+              withPreparedModelRuntimePluginGenerationScope(
+                replyDispatchRuntime.pluginGeneration,
+                () => {
+                  dispatched = true;
+                  return dispatchAgentRunWithMedia(dispatch, params);
+                },
+                () => (leaseActive ? preparedModelRuntimeLease.snapshot : undefined),
+              ),
             ),
         ),
       );
     const execute = async () => {
       await yieldAfterAgentAcceptedAck();
-      let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
       const settleUnstartedFollowup = (outcome: AgentRunTerminalOutcome) =>
         !dispatched
           ? settleUnstartedGatewayFollowup({
@@ -253,9 +246,6 @@ async function executeAgentRun(
           captureJobSession,
           settleUnstartedFollowup,
           deferFinal,
-          onRecoveryRestored: (target) => {
-            pendingRecovery = target;
-          },
         });
       try {
         if (prepared.activeRunAbort.controller.signal.aborted) {
@@ -304,9 +294,7 @@ async function executeAgentRun(
           });
         }
 
-        let message = prepared.userTurn.message;
-        let execApprovalContinuationPromptRange =
-          prepared.userTurn.execApprovalContinuationPromptRange;
+        let { message, execApprovalContinuationPromptRange } = prepared.userTurn;
         const execApprovalContinuationTranscriptPromptRange = execApprovalContinuationPromptRange;
 
         // Admission owns plugin/settlement adoption; other inter-session work
@@ -318,7 +306,7 @@ async function executeAgentRun(
             task: message,
             gatewayContextResolver: params.context.resolveGatewayContext,
             assertCurrent: assertDispatchCurrent,
-            acpSession: params,
+            session: params,
           });
         }
         if (
@@ -357,49 +345,21 @@ async function executeAgentRun(
           : params.agentId;
         const { runtimePluginToolGrant, pluginSubagentToolsAllow } =
           resolveGatewayPluginSubagentToolPolicy(params.client);
-        const executionIdentityAdmission = resolveAgentRestartRecoveryExecutionIdentityAdmission({
-          collectionEnabled: isExecutionIdentityCollectionEnabled(params.cfg),
-          isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
-          retryOnly: params.request.internalExecutionIdentityRetry,
-          runId: params.runId,
-          sessionEntry: params.sessionEntry,
-        });
-        const restartRecoveryContext = resolveAgentRestartRecoveryContext({
-          isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
-          canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
-          expectedExistingSessionId: params.request.expectedExistingSessionId,
-          resolvedSessionId: params.resolvedSessionId,
-          resolvedSessionKey: params.resolvedSessionKey,
-          runId: params.runId,
-          sessionEntry: params.sessionEntry,
-        });
-        const restartRecoveryChannelContext = restartRecoveryContext?.channel;
         const runContext = {
-          messageChannel:
-            restartRecoveryContext?.messageChannel ?? params.delivery.originMessageChannel,
-          accountId:
-            restartRecoveryChannelContext?.requesterAccountId ?? params.delivery.resolvedAccountId,
-          senderId: restartRecoveryChannelContext?.requesterSenderId,
+          messageChannel: params.delivery.originMessageChannel,
+          accountId: params.delivery.resolvedAccountId,
           groupId: params.groupId,
           groupChannel: params.groupChannel,
           groupSpace: params.groupSpace,
-          currentChannelId: restartRecoveryChannelContext?.currentChannelId,
           currentThreadTs:
-            restartRecoveryChannelContext?.currentThreadTs ??
-            (prepared.resolvedThreadId != null ? String(prepared.resolvedThreadId) : undefined),
+            prepared.resolvedThreadId != null ? String(prepared.resolvedThreadId) : undefined,
         };
         setChannelSourceTurnId(
           runContext,
           resolveReplySourceTurnId({
-            sourceTurnId: restartRecoveryChannelContext?.sourceTurnId,
             admissionRunId: params.runId,
             ingressProvider: runContext.messageChannel,
-            entry: params.sessionEntry,
           }),
-        );
-        setChannelSourceTurnSameThreadRequired(
-          runContext,
-          restartRecoveryChannelContext?.sameChannelThreadRequired,
         );
 
         const executionIdentitySpawnFacts = prepareAgentRunExecutionIdentityFacts(
@@ -408,7 +368,7 @@ async function executeAgentRun(
           prepared.operatorAuthority?.profileId,
         );
         // Awaited routing can retire this owner before final dispatch.
-        params.assertContextCurrent?.();
+        params.assertGatewayLifetimeCurrent?.();
         const callerContext = resolveChatSendCallerContext(params.client);
         const clientCaps = [...callerContext.GatewayClientCaps];
         const gatewayUiCommandTarget = captureGatewayUiCommandTarget(params.client);
@@ -423,16 +383,14 @@ async function executeAgentRun(
                 {
                   client: params.client,
                   context: gatewayContext,
-                  sessionMutationCommitGuard: params.assertContextCurrent,
+                  sessionMutationCommitGuard: params.assertGatewayLifetimeCurrent,
                 },
                 params.resolvedSessionKey,
                 !params.inputProvenance &&
                   !params.restoredCronContinuation &&
                   !params.isOneShotModelRun &&
-                  !params.isRestartRecoveryResumeRun &&
                   !params.request.internalEvents &&
                   !params.request.internalRuntimeHandoffId &&
-                  !params.request.internalExecutionIdentityRetry &&
                   !params.request.execApprovalFollowupExpectedSessionId &&
                   params.sessionEffects !== "internal" &&
                   !params.request.suppressPromptPersistence &&
@@ -454,6 +412,14 @@ async function executeAgentRun(
               },
               cronCreatorAuthority: prepared.cronCreatorAuthority,
               ingressOpts: {
+                // An owner fact taken from the requester, such as a spawning channel owner,
+                // fences the run like a channel owner's own turn, not only its admission.
+                assertSourceCurrent: prepared.userTurn.assertRequesterCurrent
+                  ? composeSessionSourceAssertion([
+                      params.executionSource,
+                      prepared.userTurn.assertRequesterCurrent,
+                    ])
+                  : params.executionSource,
                 skillLibraryAuthoring,
                 message,
                 images: params.images,
@@ -485,9 +451,7 @@ async function executeAgentRun(
                 ...(execApprovalContinuationPromptRange
                   ? { execApprovalContinuationPromptRange }
                   : {}),
-                ...(execApprovalContinuationTranscriptPromptRange
-                  ? { execApprovalContinuationTranscriptPromptRange }
-                  : {}),
+                execApprovalContinuationTranscriptPromptRange,
                 groupId: params.groupId,
                 groupChannel: params.groupChannel,
                 groupSpace: params.groupSpace,
@@ -506,7 +470,6 @@ async function executeAgentRun(
                 toolsAllow: pluginSubagentToolsAllow ?? params.restoredCronContinuation?.toolsAllow,
                 runtimePluginToolGrant,
                 trustedInternalHandoff: prepared.trustedInternalHandoff,
-                pinnedWidgetAuthoring: restartRecoveryContext?.pinnedWidgetAuthoring,
                 toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
                 scheduledToolPolicy: params.restoredCronContinuation
                   ? resolveScheduledToolPolicyContext({
@@ -522,7 +485,7 @@ async function executeAgentRun(
                 cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,
                 acpTurnSource: params.request.acpTurnSource,
                 internalEvents: params.request.internalEvents,
-                runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
+                runtimeContextFragments: prepared.userTurn.runtimeContextFragments,
                 inputProvenance: params.inputProvenance,
                 privateCompletion: prepared.userTurn.privateCompletion,
                 replyExpectation: prepared.userTurn.replyExpectation,
@@ -538,9 +501,6 @@ async function executeAgentRun(
                 disableMessageTool: params.request.disableMessageTool,
                 swarmCollector: params.request.swarmCollector,
                 swarmOutputSchema: params.request.swarmOutputSchema,
-                forceRestartSafeTools: params.request.forceRestartSafeTools,
-                forceCodeModeTools: params.request.forceCodeModeTools,
-                ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
                 operationalRunInstance: prepared.operationalRunInstance,
                 operatorAuthority: prepared.operatorAuthority,
                 onAdmittedRunContext: (admittedRunContext) => {
@@ -571,17 +531,6 @@ async function executeAgentRun(
                     return;
                   }
                   params.io.emitExecutionStarted?.();
-                  if (params.resolvedSessionKey) {
-                    emitSessionsChanged(
-                      params.context,
-                      {
-                        sessionKey: params.resolvedSessionKey,
-                        agentId: params.agentId,
-                        reason: "agent.run.started",
-                      },
-                      { accessChanged: false },
-                    );
-                  }
                 },
                 onActiveModelSelected: createAgentRunModelSelectionHandler({
                   runId: params.runId,
@@ -612,16 +561,6 @@ async function executeAgentRun(
                   sessionEntry: params.sessionEntry,
                 }),
                 allowGatewaySubagentBinding: true,
-                ...(params.mainRestartRecoveryOwnerLease
-                  ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }
-                  : {}),
-                ...(params.isRestartRecoveryResumeRun ? { mainRestartRecoveryAdmitted: true } : {}),
-                ...(params.request.internalExecutionIdentityRecoveryAttempt !== undefined
-                  ? {
-                      mainRestartRecoveryAttempt:
-                        params.request.internalExecutionIdentityRecoveryAttempt,
-                    }
-                  : {}),
                 allowModelOverride: prepared.effectiveAllowModelOverride,
               },
               runId: params.runId,
@@ -639,8 +578,6 @@ async function executeAgentRun(
               context: params.context,
               isIncognito: diagnostics.incognito,
               followupCompletion: prepared.followupCompletion,
-              restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
-              canonicalSkillWorkspaceDir: params.sessionEntry?.worktree?.canonicalWorkspaceDir,
             },
             executionIdentitySpawnFacts,
           ),
@@ -658,33 +595,9 @@ async function executeAgentRun(
         try {
           if (!dispatched) {
             try {
-              const restoreAdmittedRecovery = prepared.restoreAdmittedRestartRecoveryInterrupted;
-              if (restoreAdmittedRecovery) {
-                pendingRecovery ??= await repairMainSessionRecoveryMutation({
-                  mutation: restoreAdmittedRecovery,
-                  onError: diagnostics.warning("failed to restore undispatched restart recovery"),
-                });
-              }
+              await params.releaseCronContinuationClaimWithRecovery();
             } finally {
-              try {
-                await params.releaseCronContinuationClaimWithRecovery();
-              } finally {
-                try {
-                  pendingRecovery ??= await releaseMainSessionRecoveryOwner(
-                    params.mainRestartRecoveryOwnerLease,
-                  );
-                } catch (err) {
-                  diagnostics.warning("failed to release undispatched main restart recovery owner")(
-                    err,
-                  );
-                } finally {
-                  try {
-                    await cleanupAdmittedRun();
-                  } finally {
-                    scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
-                  }
-                }
-              }
+              await cleanupAdmittedRun();
             }
           }
         } finally {

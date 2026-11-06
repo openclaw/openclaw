@@ -1,12 +1,15 @@
 import { createStore, For, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import "../../../components/modal-dialog.ts";
 import { registerChatCameraEnglish } from "../../../i18n/locales/en-chat-camera.ts";
+import "../../../components/modal-dialog.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import type { ElementProperties } from "../../../types/solid-elements.d.ts";
 import { useNativeAttachmentCapture } from "./chat-attachment-picker-policy.ts";
-import "./chat-camera-capture.css";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 registerEnglishCatalog(registerChatCameraEnglish);
 type CameraStage = "closed" | "requesting" | "live" | "capturing" | "review" | "error";
@@ -46,6 +49,7 @@ function CameraCaptureContent(_props: CameraProps, host: OpenClawChatCameraCaptu
   // This synchronous scope retires permission/encoding work before Solid commits the view.
   let scope: { signal?: AbortSignal; release: () => void } | undefined;
   let video: HTMLVideoElement | undefined;
+  let cancelButton!: HTMLButtonElement;
   let releaseTrack: (() => void) | undefined;
   let captureDestination: CameraProps["onCapture"];
   let uploadDestination: CameraProps["onUpload"];
@@ -300,7 +304,11 @@ function CameraCaptureContent(_props: CameraProps, host: OpenClawChatCameraCaptu
     failed() && state.nativeFallback && Boolean(nativeCaptureDestination);
   return (
     <Show when={state.stage !== "closed"}>
-      <openclaw-modal-dialog label={t("chat.camera.title")} onModal-cancel={close}>
+      <openclaw-modal-dialog
+        prop:initialFocus={() => cancelButton}
+        label={t("chat.camera.title")}
+        onModal-cancel={close}
+      >
         <section class="camera">
           <header>
             <div>
@@ -414,6 +422,9 @@ function CameraCaptureContent(_props: CameraProps, host: OpenClawChatCameraCaptu
             <button
               type="button"
               autofocus
+              ref={(element) => {
+                cancelButton = element;
+              }}
               onClick={() => (reviewing() ? void startCamera() : close())}
             >
               {reviewing() ? t("chat.camera.retake") : t("common.cancel")}
@@ -447,7 +458,7 @@ function CameraCaptureContent(_props: CameraProps, host: OpenClawChatCameraCaptu
   );
 }
 
-export const ChatCameraCapture = defineSolidBridge<CameraProps, { show(): void }>(
+defineSolidBridge<CameraProps, { show(): void }>(
   "openclaw-chat-camera-capture",
   CameraCaptureContent,
   {
@@ -471,5 +482,14 @@ export const ChatCameraCapture = defineSolidBridge<CameraProps, { show(): void }
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-chat-camera-capture": OpenClawChatCameraCapture;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-camera-capture": HTMLAttributes<OpenClawChatCameraCapture> &
+        ElementProperties<CameraProps>;
+    }
   }
 }

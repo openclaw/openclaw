@@ -1,179 +1,133 @@
-// Codex tests cover private binding connection selection.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it } from "vitest";
 import { createCodexCatalogHomeResolver } from "../session-catalog-homes.js";
-import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
+import { resolveCodexAppServerHomeDir as homeDir } from "./auth-start-options.js";
 import {
-  requireCodexSupervisionModelSelection,
-  resolveCodexBindingAppServerConnection,
+  requireCodexSupervisionModelSelection as selectModel,
+  resolveCodexBindingAppServerConnection as resolveConnection,
+  type CodexBindingAppServerConnectionParams,
 } from "./binding-connection.js";
 import {
-  resolveCodexSupervisionAppServerRuntimeOptions,
+  resolveCodexSupervisionAppServerRuntimeOptions as supervisionOptions,
   type CodexPluginConfig,
 } from "./config.js";
-import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+import { buildCodexAppServerConnectionFingerprint as fingerprint } from "./plugin-app-cache-key.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const defaults = { env: {}, requirementsToml: null };
+const connect = (params: CodexBindingAppServerConnectionParams) =>
+  resolveConnection({ ...defaults, ...params });
+const supervisedConfig = (enabled = true, port?: number): CodexPluginConfig => ({
+  supervision: { enabled },
+  ...(port ? { appServer: { transport: "websocket", url: `ws://127.0.0.1:${port}` } } : {}),
+});
 function supervisedBinding(pluginConfig: CodexPluginConfig, agentDir?: string) {
   return {
     connectionScope: "supervision" as const,
-    appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
-      resolveCodexSupervisionAppServerRuntimeOptions({
-        pluginConfig,
-        env: {},
-        requirementsToml: null,
-      }),
+    appServerRuntimeFingerprint: fingerprint(
+      supervisionOptions({ ...defaults, pluginConfig }),
       agentDir,
     ),
   };
 }
 
 describe("Codex binding app-server connection", () => {
-  it.each(["agent", "user"] as const)("preserves %s-home auth ownership", async (homeScope) => {
-    const connection = await resolveCodexBindingAppServerConnection({
-      binding: {},
-      authProfileId: "openai:work",
-      pluginConfig: { appServer: { homeScope } },
-      env: {},
-      requirementsToml: null,
-    });
-
-    expect(connection.appServer.start.homeScope).toBe(homeScope);
-    expect(connection.usesSupervisionConnection).toBe(false);
-    expect(connection.requestAuthProfileId).toBe("openai:work");
-    expect(connection.clientAuthProfileId).toBe(homeScope === "user" ? null : "openai:work");
-  });
-
-  it("uses native user-home auth only for an enabled supervised binding", async () => {
-    const connection = await resolveCodexBindingAppServerConnection({
-      binding: supervisedBinding({ supervision: { enabled: true } }),
-      authProfileId: "openai:work",
-      pluginConfig: { supervision: { enabled: true } },
-      env: {},
-      requirementsToml: null,
-    });
-
-    expect(connection.appServer.start.homeScope).toBe("user");
-    expect(connection.usesSupervisionConnection).toBe(true);
-    expect(connection.requestAuthProfileId).toBeUndefined();
-    expect(connection.clientAuthProfileId).toBeNull();
-  });
+  it.each(["agent", "user", "supervision"] as const)(
+    "preserves %s-home auth ownership",
+    async (scope) => {
+      const supervised = scope === "supervision";
+      const homeScope = supervised ? "user" : scope;
+      const pluginConfig = supervised ? supervisedConfig() : { appServer: { homeScope } };
+      const connection = await connect({
+        binding: supervised ? supervisedBinding(pluginConfig) : {},
+        authProfileId: "openai:work",
+        pluginConfig,
+      });
+      expect(connection).toMatchObject({
+        appServer: { start: { homeScope } },
+        usesSupervisionConnection: supervised,
+        clientAuthProfileId: homeScope === "user" ? null : "openai:work",
+      });
+    },
+  );
 
   it.each(["agent", "user"] as const)(
     "recovers the exact secondary Codex home with configured %s scope before browsing after restart",
     async (homeScope) => {
-      const root = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-home-")),
+      const root = await fs.realpath(tempDirs.make("openclaw-codex-binding-home-"));
+      const alphaAgentDir = path.join(root, "agents/alpha/agent");
+      const betaAgentDir = path.join(root, "agents/beta/agent");
+      const processCodexHome = path.join(root, "process-codex-home");
+      const alphaCodexHome = homeDir(alphaAgentDir);
+      await Promise.all(
+        [processCodexHome, alphaCodexHome, homeDir(betaAgentDir)].map((dir) =>
+          fs.mkdir(dir, { recursive: true }),
+        ),
       );
-      try {
-        const alphaAgentDir = path.join(root, "agents", "alpha", "agent");
-        const betaAgentDir = path.join(root, "agents", "beta", "agent");
-        const processCodexHome = path.join(root, "process-codex-home");
-        const alphaCodexHome = resolveCodexAppServerHomeDir(alphaAgentDir);
-        await Promise.all(
-          [processCodexHome, alphaCodexHome, resolveCodexAppServerHomeDir(betaAgentDir)].map(
-            (dir) => fs.mkdir(dir, { recursive: true }),
-          ),
-        );
-        const config = {
-          agents: {
-            ownership: "explicit",
-            entries: { alpha: { agentDir: alphaAgentDir }, beta: { agentDir: betaAgentDir } },
-          },
-        } as OpenClawConfig;
-        const pluginConfig = { supervision: { enabled: true }, appServer: { homeScope } };
-        const env = { ...process.env, CODEX_HOME: processCodexHome };
-        const registerCatalog = () =>
-          createCodexCatalogHomeResolver({
-            resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-            config,
-            getRuntimeConfig: () => config,
-            getPluginConfig: () => pluginConfig,
-            env,
-          });
-        const homes = await registerCatalog().forAgent("beta");
-        const source = homes.find(
-          (home) => home.appServer.start.env?.CODEX_HOME === alphaCodexHome,
-        );
-        expect(source).toBeDefined();
-        const fingerprint = buildCodexAppServerConnectionFingerprint(
-          source!.appServer,
-          betaAgentDir,
-        );
-
-        // A fresh plugin instance must recover the durable binding without a catalog warmup.
-        registerCatalog();
-
-        const connection = await resolveCodexBindingAppServerConnection({
-          binding: {
-            connectionScope: "supervision",
-            appServerRuntimeFingerprint: fingerprint,
-          },
-          pluginConfig,
+      const config = {
+        agents: {
+          ownership: "explicit",
+          entries: { alpha: { agentDir: alphaAgentDir }, beta: { agentDir: betaAgentDir } },
+        },
+      } as OpenClawConfig;
+      const pluginConfig = { ...supervisedConfig(), appServer: { homeScope } };
+      const env = { ...process.env, CODEX_HOME: processCodexHome };
+      const registerCatalog = () =>
+        createCodexCatalogHomeResolver({
+          resolveRuntimeOptions: supervisionOptions,
           config,
-          agentDir: betaAgentDir,
+          getRuntimeConfig: () => config,
+          getPluginConfig: () => pluginConfig,
           env,
-          requirementsToml: null,
         });
-
-        expect(connection.appServer.start.homeScope).toBe(source!.appServer.start.homeScope);
-        expect(connection.clientAuthProfileId).toBeNull();
-        expect(connection.appServer.start.env?.CODEX_HOME).toBe(alphaCodexHome);
-        expect(buildCodexAppServerConnectionFingerprint(connection.appServer, betaAgentDir)).toBe(
-          fingerprint,
-        );
-      } finally {
-        await fs.rm(root, { recursive: true, force: true });
-      }
+      const homes = await registerCatalog().forAgent("beta");
+      const source = homes.find((home) => home.appServer.start.env?.CODEX_HOME === alphaCodexHome);
+      expect(source).toBeDefined();
+      const persistedFingerprint = fingerprint(source!.appServer, betaAgentDir);
+      // Recovery must not depend on warming the fresh plugin's catalog.
+      registerCatalog();
+      const connection = await connect({
+        binding: {
+          connectionScope: "supervision",
+          appServerRuntimeFingerprint: persistedFingerprint,
+        },
+        pluginConfig,
+        config,
+        agentDir: betaAgentDir,
+        env,
+      });
+      expect(connection).toMatchObject({
+        appServer: {
+          start: {
+            homeScope: source!.appServer.start.homeScope,
+            env: { CODEX_HOME: alphaCodexHome },
+          },
+        },
+        clientAuthProfileId: null,
+      });
+      expect(fingerprint(connection.appServer, betaAgentDir)).toBe(persistedFingerprint);
     },
   );
 
   it("requires the exact native model pair for materialized supervised requests", () => {
-    expect(
-      requireCodexSupervisionModelSelection({
-        connectionScope: "supervision",
-        model: " gpt-5.5 ",
-        modelProvider: " openai ",
-      }),
-    ).toEqual({ model: "gpt-5.5", modelProvider: "openai" });
-
-    expect(() =>
-      requireCodexSupervisionModelSelection({
-        connectionScope: "supervision",
-        model: "gpt-5.5",
-      }),
-    ).toThrow("missing its native model and provider");
+    const select = (modelProvider?: string) =>
+      selectModel({ connectionScope: "supervision", model: " gpt-5.5 ", modelProvider });
+    expect(select(" openai ")).toEqual({ model: "gpt-5.5", modelProvider: "openai" });
+    expect(() => select()).toThrow("missing its native model and provider");
   });
 
-  it("fails closed when a supervised binding remains after supervision is disabled", async () => {
-    await expect(
-      resolveCodexBindingAppServerConnection({
-        binding: { connectionScope: "supervision" },
-        pluginConfig: { supervision: { enabled: false } },
-        env: {},
-        requirementsToml: null,
-      }),
-    ).rejects.toThrow("Codex supervision is disabled");
-  });
-
-  it("fails closed when a supervised binding connection changes", async () => {
-    const binding = supervisedBinding({
-      supervision: { enabled: true },
-      appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
-    });
-
-    await expect(
-      resolveCodexBindingAppServerConnection({
-        binding,
-        pluginConfig: {
-          supervision: { enabled: true },
-          appServer: { transport: "websocket", url: "ws://127.0.0.1:4600" },
-        },
-        env: {},
-        requirementsToml: null,
-      }),
-    ).rejects.toThrow("supervision connection changed");
-  });
+  it.each(["disabled", "changed"] as const)(
+    "fails closed when supervision is %s",
+    async (failure) => {
+      const binding = supervisedBinding(supervisedConfig(true, 4500));
+      const pluginConfig =
+        failure === "disabled" ? supervisedConfig(false) : supervisedConfig(true, 4600);
+      await expect(connect({ binding, pluginConfig })).rejects.toThrow(
+        failure === "disabled" ? "Codex supervision is disabled" : "supervision connection changed",
+      );
+    },
+  );
 });

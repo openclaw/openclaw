@@ -10,6 +10,20 @@ import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.re
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
+export function readRetainedAgentDeletionIds(database: EngineConnection): string[] {
+  if (!tableExists(database, "agent_deletion_journal")) {
+    return [];
+  }
+  return executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<Pick<DB, "agent_deletion_journal">>(database)
+      .selectFrom("agent_deletion_journal")
+      .select("agent_id")
+      .where("cleanup_completed", "=", 1)
+      .where("delete_files", "=", 0),
+  ).rows.map((row) => row.agent_id);
+}
+
 /** Capture deletion status and retained-store discovery in the worker's shared read transaction. */
 export function readAgentDatabaseDeletionWorkerSnapshot(
   database: EngineConnection,
@@ -18,21 +32,19 @@ export function readAgentDatabaseDeletionWorkerSnapshot(
 ): AgentDatabaseDeletionWorkerSnapshot {
   return runSqliteReadSnapshotSync(
     database,
-    () => ({
-      retainedDeletions: readRetainedAgentDeletionsFromDatabase(database, statePath, purpose),
-      registeredAgentDatabases: readRegisteredAgentDatabaseRows(database, statePath, false),
-      deletedAgents: tableExists(database, "agent_deletion_journal")
-        ? executeSqliteQuerySync(
-            database,
-            getNodeSqliteKysely<Pick<DB, "agent_deletion_journal">>(database)
-              .selectFrom("agent_deletion_journal")
-              .select(["agent_id", "cleanup_completed"]),
-          ).rows.map((row) => ({
-            agentId: row.agent_id,
-            status: row.cleanup_completed === 1 ? ("complete" as const) : ("pending" as const),
-          }))
-        : [],
-    }),
+    () => {
+      const deletedAgents: AgentDatabaseDeletionWorkerSnapshot["deletedAgents"] = [];
+      return {
+        retainedDeletions: readRetainedAgentDeletionsFromDatabase(
+          database,
+          statePath,
+          purpose,
+          deletedAgents,
+        ),
+        registeredAgentDatabases: readRegisteredAgentDatabaseRows(database, statePath, false),
+        deletedAgents,
+      };
+    },
     { operationLabel: "agentDeletionJournal.snapshot" },
   );
 }

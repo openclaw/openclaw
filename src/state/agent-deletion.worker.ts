@@ -1,10 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
-import { readClawInstallRecordFromDatabase } from "../claws/provenance-read.kernel.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { readTemplateInstallRecordFromDatabase } from "../templates/provenance-read.kernel.js";
 import {
   readAgentDeletionJournalAuthorityInDatabase,
   retireAgentDeletionJournalInDatabase,
@@ -59,22 +59,22 @@ export function assertAgentDeletionWorkerPredicate(
   ) {
     throw new Error(`Agent ${predicate.agentId} deletion no longer owns database cleanup.`);
   }
-  assertClawInstall(database, predicate);
+  assertTemplateInstall(database, predicate);
 }
 
-function assertClawInstall(
+function assertTemplateInstall(
   database: OpenClawStateDatabase,
   predicate: Omit<AgentDeletionWorkerPredicate, "operationId">,
 ): void {
   if (
-    predicate.expectedClawInstall !== undefined &&
+    predicate.expectedTemplateInstall !== undefined &&
     !isDeepStrictEqual(
-      readClawInstallRecordFromDatabase(database.db, predicate.agentId) ?? null,
-      predicate.expectedClawInstall,
+      readTemplateInstallRecordFromDatabase(database.db, predicate.agentId) ?? null,
+      predicate.expectedTemplateInstall,
     )
   ) {
-    throw Object.assign(new Error(`Claw removal no longer owns agent ${predicate.agentId}.`), {
-      code: "CLAW_INSTALL_CHANGED",
+    throw Object.assign(new Error(`Template removal no longer owns agent ${predicate.agentId}.`), {
+      code: "TEMPLATE_INSTALL_CHANGED",
     });
   }
 }
@@ -154,7 +154,7 @@ export const agentDeletionOperations = {
     input: {
       entry: Parameters<typeof beginAgentDeletionJournalInDatabase>[1];
       lease: OpenClawStateLeaseIdentity;
-      expectedClawInstall?: AgentDeletionWorkerPredicate["expectedClawInstall"];
+      expectedTemplateInstall?: AgentDeletionWorkerPredicate["expectedTemplateInstall"];
       preserveDeleteFiles?: boolean;
       recoveryOperationId?: string;
     },
@@ -163,9 +163,9 @@ export const agentDeletionOperations = {
     context.write(
       (database) => {
         assertLease(database, input.lease, input.entry.agentId);
-        assertClawInstall(database, {
+        assertTemplateInstall(database, {
           agentId: input.entry.agentId,
-          expectedClawInstall: input.expectedClawInstall,
+          expectedTemplateInstall: input.expectedTemplateInstall,
         });
         ensureAgentProvenanceSchema({ database, ...context.stateOptions() });
         const { result, receipt } = agentDeletionJournalPublication.capture(database.db, () =>
@@ -286,7 +286,7 @@ export const agentDeletionOperations = {
       },
       { journalChanged: true },
     ),
-  "agentDeletion.releaseClawRows": (
+  "agentDeletion.releaseTemplateRows": (
     input: {
       guard: AgentDeletionWorkerGuard;
       files: Array<{ path: string; action: string }>;
@@ -308,11 +308,11 @@ export const agentDeletionOperations = {
             input.files.filter((file) => file.action !== "error").map((file) => file.path),
           ),
         ];
-        if (paths.length && tableExists(database.db, "claw_workspace_files")) {
+        if (paths.length && tableExists(database.db, "template_workspace_files")) {
           executeSqliteQuerySync(
             database.db,
             query
-              .deleteFrom("claw_workspace_files")
+              .deleteFrom("template_workspace_files")
               .where("agent_id", "=", agentId)
               .where("target_path", "in", paths),
           );
@@ -320,16 +320,16 @@ export const agentDeletionOperations = {
         if (!input.complete) {
           return false;
         }
-        if (tableExists(database.db, "claw_package_refs")) {
+        if (tableExists(database.db, "template_package_refs")) {
           executeSqliteQuerySync(
             database.db,
-            query.deleteFrom("claw_package_refs").where("agent_id", "=", agentId),
+            query.deleteFrom("template_package_refs").where("agent_id", "=", agentId),
           );
         }
-        if (tableExists(database.db, "claw_installs")) {
+        if (tableExists(database.db, "template_installs")) {
           executeSqliteQuerySync(
             database.db,
-            query.deleteFrom("claw_installs").where("agent_id", "=", agentId),
+            query.deleteFrom("template_installs").where("agent_id", "=", agentId),
           );
         }
         if (!completeAgentDeletionJournalInDatabase(database, agentId, operationId)) {
@@ -339,7 +339,7 @@ export const agentDeletionOperations = {
       },
       { journalChanged: true, unregisterDatabases: input.complete },
     ),
-  "agentDeletion.handoffClawRetry": (
+  "agentDeletion.handoffTemplateRetry": (
     input: { guard: AgentDeletionWorkerGuard; retryOperationId: string; nowMs: number },
     context: WorkerWriteOperationContext,
   ) =>
@@ -352,10 +352,10 @@ export const agentDeletionOperations = {
           !journal ||
           journal.operationId !== operationId ||
           journal.cleanupCompleted ||
-          (input.guard.predicate.expectedClawInstall !== undefined &&
+          (input.guard.predicate.expectedTemplateInstall !== undefined &&
             !isDeepStrictEqual(
-              readClawInstallRecordFromDatabase(database.db, agentId) ?? null,
-              input.guard.predicate.expectedClawInstall,
+              readTemplateInstallRecordFromDatabase(database.db, agentId) ?? null,
+              input.guard.predicate.expectedTemplateInstall,
             ))
         ) {
           assertLease(database, input.guard.lease, agentId, "commit");
@@ -364,7 +364,7 @@ export const agentDeletionOperations = {
         const result = executeSqliteQuerySync(
           database.db,
           getNodeSqliteKysely<DB>(database.db)
-            .updateTable("claw_installs")
+            .updateTable("template_installs")
             .set({ status: "partial", updated_at_ms: input.nowMs })
             .where("agent_id", "=", agentId),
         );

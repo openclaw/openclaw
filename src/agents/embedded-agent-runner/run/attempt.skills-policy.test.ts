@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,13 +6,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { resolveInternalSessionEffectsIdentity } from "../../../config/sessions/internal-session-key.js";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createFixtureSkillEntry } from "../../../skills/test-support/test-helpers.js";
-import { runSkillExperienceReview } from "../../../skills/workshop/experience-review.js";
-import { createExperienceReviewCandidate } from "../../../skills/workshop/experience-review.test-support.js";
-import {
-  bindActiveOperatorTurnAuthority,
-  createCronCreatorAuthorityCapability,
-  runWithCronCreatorAuthorityCapability,
-} from "../../cron-creator-authority-context.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { formatToolExecutionGatedMessage } from "../../tool-policy-shared.js";
 import { createToolSearchTools } from "../../tool-search.js";
@@ -31,14 +23,7 @@ import {
   preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
 } from "./attempt-spawn-workspace.test-support.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
 
-const reviewRunEmbeddedAgent = vi.hoisted(() => vi.fn());
-vi.mock("../../embedded-agent.js", () => ({ runEmbeddedAgent: reviewRunEmbeddedAgent }));
-vi.mock("../../../skills/workshop/library.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../skills/workshop/library.js")>()),
-  listWorkshopChanges: async () => [],
-}));
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
 const foregroundSession = { sessionId: "embedded-session", sessionKey: "agent:main:main" };
@@ -49,7 +34,6 @@ const skillsPrompt =
 beforeAll(preloadRunEmbeddedAttemptForTests);
 beforeEach(() => {
   resetEmbeddedAttemptHarness();
-  reviewRunEmbeddedAgent.mockReset();
 });
 afterEach(async () => {
   await cleanupTempPaths(tempPaths);
@@ -58,11 +42,7 @@ afterEach(async () => {
 
 function enableSkills() {
   const entry = createFixtureSkillEntry("demo");
-  hoisted.resolveEmbeddedRunSkillEntriesMock.mockReturnValue({
-    shouldLoadSkillEntries: true,
-    skillEntries: [entry],
-    loadSkillEntries: () => [entry],
-  });
+  hoisted.prepareWorkspaceSkillsMock.mockResolvedValue([entry]);
   hoisted.resolveSkillsPromptForRunMock.mockReturnValue(skillsPrompt);
 }
 
@@ -143,10 +123,11 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       },
     });
 
-    expect(hoisted.resolveEmbeddedRunSkillEntriesMock.mock.calls[0]?.[0]).toMatchObject({
-      workspaceDir: sandboxWorkspace,
-      skillsSnapshot: undefined,
-    });
+    expect(hoisted.prepareWorkspaceSkillsMock).toHaveBeenCalledWith(
+      sandboxWorkspace,
+      expect.objectContaining({ workspaceOnly: true }),
+      expect.any(Function),
+    );
     expect(hoisted.resolveSkillsPromptForRunMock.mock.calls[0]?.[0]).toMatchObject({
       workspaceDir: sandboxWorkspace,
       skillsSnapshot: {
@@ -156,44 +137,6 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         discoverySkills: [],
       },
     });
-  });
-
-  it("preserves local operator tool schemas in the detached experience review", async () => {
-    const workspaceDir = await tempDir();
-    const capture = (runId: string | undefined) => {
-      const toolNames = ["skill_workshop"];
-      if (bindActiveOperatorTurnAuthority(runId)?.source === "local") {
-        toolNames.push("transcripts");
-      }
-      const tools = toolNames.map((name) => tool(name, async () => ok()));
-      return { toolNames, toolDigest: toolDigest(tools, `system:${toolNames.join(",")}`) };
-    };
-    const runId = "foreground-parity-run";
-    const capability = createCronCreatorAuthorityCapability(runId, { kind: "local" });
-    assert(capability);
-    const foreground = runWithCronCreatorAuthorityCapability(capability, () => capture(runId));
-    let review: ReturnType<typeof capture> | undefined;
-    reviewRunEmbeddedAgent.mockImplementation(async (params: RunEmbeddedAgentParams) => {
-      review = capture(params.runId);
-      return { meta: { durationMs: 1 } };
-    });
-    const candidate = await createExperienceReviewCandidate(
-      runId,
-      [{ role: "user", content: "Inspect the available tools.", timestamp: 1 }],
-      { workspaceDir, modelId: "gpt-test" },
-    );
-    candidate.ctx.foregroundPromptContext = {
-      ...candidate.ctx.foregroundPromptContext,
-      sandboxSessionKey: foregroundSession.sessionKey,
-      promptCacheKey: "foreground-cache-prefix",
-      reasoningLevel: "on",
-      trigger: "manual",
-      cronCreatorCallerOrigin: { kind: "local" },
-    };
-    candidate.config = { skills: { workshop: { autonomous: { mode: "auto" } } } };
-    await runSkillExperienceReview(candidate);
-    expect(foreground.toolNames).toContain("transcripts");
-    expect(review).toEqual(foreground);
   });
 
   it("preserves tool schemas and source bytes while hiding unreadable draft-review skills", async () => {
@@ -239,7 +182,11 @@ describe("runEmbeddedAttempt skill policy projections", () => {
           ? {
               sessionPersistence: "detached" as const,
               toolExecutionAllow: ["skill_workshop"],
-              skillWorkshopReviewOf: "agent:main:main",
+              inputProvenance: {
+                kind: "internal_system" as const,
+                sourceTool: "session_fork",
+                sourceSessionKey: "agent:main:main",
+              },
               disableTrajectory: true,
               verboseLevel: "off" as const,
               trigger: "user" as const,
@@ -265,7 +212,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       ["unrestricted", {}, skillsPrompt, true],
       ["wildcard", { toolsAllow: ["*"] }, skillsPrompt, true],
       ["mixed wildcard", { toolsAllow: ["message", "*"] }, skillsPrompt, true],
-      ["finite", { toolsAllow: ["message"] }, undefined, false],
+      ["finite", { toolsAllow: ["message"] }, skillsPrompt, false],
       [
         "read executable",
         { toolExecutionAllow: ["skill_workshop", "read", "skills_read", "skills_search"] },

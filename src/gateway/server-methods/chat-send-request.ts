@@ -1,6 +1,8 @@
 import { createHmac } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type { Static } from "typebox";
+import type { ChatAppContextAttachment } from "../../../packages/gateway-protocol/src/chat-app-context.js";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -23,7 +25,6 @@ import {
   type AttachedChatWorkContext,
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
-import type { SessionRestartResume } from "../../config/sessions/restart-resume.js";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -42,6 +43,7 @@ import {
 import type { ChatAttachment } from "../chat-attachments.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeChatHumanMentions } from "./chat-human-mentions.js";
 import {
@@ -63,7 +65,6 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
-  restartResume?: SessionRestartResume;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   chatSendReceivedAtMs: number;
@@ -83,6 +84,7 @@ export type NormalizedChatSendRequest = {
   /** Submitted annotation identity is immutable even when profile aliases later merge. */
   requestIdentity?: string;
   mentions?: HumanMention[];
+  appContext?: ChatAppContextAttachment[];
   workContext?: AttachedChatWorkContext;
   reconnectResumeRequested: boolean;
 };
@@ -97,12 +99,15 @@ export function normalizeChatSendRequest(params: {
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
   goalResume?: SessionGoalOperation & { action: "resume" };
-  restartResume?: SessionRestartResume;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult | Promise<NormalizeChatSendRequestResult> {
   const chatSendReceivedAtMs = performance.now();
   const reject = (error: string) => ({ ok: false as const, error });
   const client = params.client;
+  const recoveredInput =
+    typeof params.params.idempotencyKey === "string"
+      ? readQueuedChatInputAdmission(params.params.idempotencyKey)
+      : undefined;
   const clientInfo = client?.connect?.client;
   const supportsTaskSuggestions =
     isOperatorUiClient(clientInfo) &&
@@ -129,6 +134,7 @@ export function normalizeChatSendRequest(params: {
       p.queueMode ||
       p.toolBindings ||
       p.workContext ||
+      p.appContext ||
       p.systemInputProvenance ||
       p.systemProvenanceReceipt ||
       p.suppressCommandInterpretation !== undefined ||
@@ -274,6 +280,9 @@ export function normalizeChatSendRequest(params: {
       "Human mentions require a signed-in Control UI chat. Remove the selected mentions to use this mode.",
     );
   }
+  if (p.appContext && !ordinaryChat) {
+    return reject("App context is only supported for ordinary chat messages.");
+  }
   if (p.workContext && !ordinaryChat) {
     return reject("Working context is only supported for ordinary chat messages.");
   }
@@ -290,6 +299,7 @@ export function normalizeChatSendRequest(params: {
     p.message,
     p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
     ...(workContext ? [workContext.snapshot] : []),
+    ...(p.appContext ? [{ appContext: stableStringify(p.appContext) }] : []),
     ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
   ]);
 
@@ -302,10 +312,10 @@ export function normalizeChatSendRequest(params: {
       ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
       : {}),
     ...(params.goalResume ? { goalOperation: params.goalResume } : {}),
-    ...(params.restartResume ? { restartResume: params.restartResume } : {}),
     explicitOrigin: explicitOriginResult.value,
     inboundMessage: modelMessage,
     ...(workContext ? { workContext } : {}),
+    ...(p.appContext ? { appContext: p.appContext } : {}),
     systemInputProvenance,
     systemProvenanceReceipt,
     suppressCommandInterpretation: commandInterpretationSuppressed,
@@ -319,6 +329,14 @@ export function normalizeChatSendRequest(params: {
   };
   if (stopCommand) {
     return { ok: true, value };
+  }
+  if (recoveredInput) {
+    // Approved text may differ from the submitted bytes; retries keep their original identity.
+    const requestIdentity = recoveredInput.target.message["__openclaw"]?.chatRequestIdentity;
+    return {
+      ok: true,
+      value: { ...value, ...(typeof requestIdentity === "string" ? { requestIdentity } : {}) },
+    };
   }
   return loadChatRequestIdentityKeyAsync().then((key) => {
     // A keyed verifier survives redaction without storing an offline prompt digest.

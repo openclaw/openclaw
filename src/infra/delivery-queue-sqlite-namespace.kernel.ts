@@ -168,7 +168,7 @@ type PendingDeliveryQueueReplacement = {
   replacementEntry: DeliveryQueueEntryState;
 };
 
-export function assertDeliveryQueueReplacement(params: PendingDeliveryQueueReplacement): undefined {
+function assertDeliveryQueueReplacement(params: PendingDeliveryQueueReplacement): undefined {
   if (params.expectedEntry.id !== params.replacementEntry.id) {
     throw new Error(
       `Delivery queue replacement id mismatch: ${params.expectedEntry.id} != ${params.replacementEntry.id}`,

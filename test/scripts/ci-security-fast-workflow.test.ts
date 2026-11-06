@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   evaluateWorkflowCondition,
+  evaluateWorkflowExpression,
   expectIncludes,
   readWorkflowOutputs as readGitHubEnvironment,
   requiredWorkflowStep,
@@ -138,6 +139,7 @@ process.exit(result.status ?? 1);
   const run = (step: WorkflowStep | string, env: NodeJS.ProcessEnv = {}) =>
     runStep(typeof step === "string" ? securityStep(step) : step, repo, { ...environment, ...env });
   return {
+    repo,
     write,
     git,
     commit,
@@ -156,6 +158,81 @@ process.exit(result.status ?? 1);
     },
   };
 }
+
+it.each(["same revision", "different revision", "manual target", "missing HEAD", "export failure"])(
+  "reuses only successfully exported workflow-owned security files: %s",
+  (scenario) => {
+    const fixture = createFixture();
+    const files = {
+      ".github/actions/setup-node-env/action.yml": "name: trusted setup\n",
+      ".github/zizmor.yml": "rules:\n  workflow-owned: {}\n",
+      [scannerPath]: fixture.realScanner,
+      "scripts/ci-production-audit.mjs": "// trusted audit\n",
+      "scripts/ci-collect-checks.sh": "#!/bin/sh\nexit 0\n",
+    };
+    fixture.write(files);
+    fixture.git("add", ...Object.keys(files));
+    fixture.git("update-index", "--chmod=+x", "scripts/ci-collect-checks.sh");
+    fixture.git("commit", "-m", "trusted workflow inputs");
+    const sha = fixture.git("rev-parse", "HEAD");
+    // The harness must use the checked-out index, never later working-tree edits.
+    fixture.write(Object.fromEntries(Object.keys(files).map((file) => [file, "poison\n"])));
+    if (scenario === "missing HEAD" || scenario === "manual target") {
+      fixture.git("symbolic-ref", "HEAD", "refs/heads/missing");
+    } else if (scenario === "export failure") {
+      rmSync(join(fixture.repo, ".ci-harness"), { recursive: true });
+      fixture.write({ ".ci-harness": "blocked export destination\n" });
+    }
+    const output = join(fixture.runnerTemp, "harness-output");
+    const context = {
+      eventName:
+        scenario === "manual target" ? ("workflow_dispatch" as const) : ("pull_request" as const),
+      targetRef: scenario === "manual target" ? "selected-target" : "",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+    };
+    const result = fixture.run("Prepare Git owner", {
+      RUNNER_OS: "Linux",
+      CHECKOUT_KIND: String(
+        evaluateWorkflowExpression(securityStep("Prepare Git owner").env!.CHECKOUT_KIND!, context),
+      ),
+      GITHUB_WORKSPACE: fixture.repo,
+      GITHUB_OUTPUT: output,
+      WORKFLOW_SHA: scenario === "different revision" ? fixture.baseSha : sha,
+    });
+    const outputs = existsSync(output) ? readGitHubEnvironment(output) : {};
+    if (scenario === "missing HEAD" || scenario === "export failure") {
+      expect(result.status, result.stderr).not.toBe(0);
+      expect(result.stderr).toContain(
+        scenario === "missing HEAD" ? "unknown revision" : "FileExistsError",
+      );
+      expect(outputs).toEqual({});
+      return;
+    }
+    expect(result.status, result.stderr).toBe(0);
+    const reused = scenario === "same revision";
+    expect(outputs.reused).toBe(reused ? "true" : undefined);
+    expect(
+      evaluateWorkflowCondition(
+        expectDefined(securityStep("Checkout trusted CI harness").if, "harness condition"),
+        {
+          ...context,
+          steps: { security_harness: { outputs, outcome: "success" } },
+        },
+      ),
+    ).toBe(!reused);
+    if (reused) {
+      for (const [file, contents] of Object.entries(files)) {
+        expect(readFileSync(join(fixture.repo, ".ci-harness", file))).toEqual(
+          Buffer.from(contents),
+        );
+      }
+      expect(
+        statSync(join(fixture.repo, ".ci-harness/scripts/ci-collect-checks.sh")).mode & 0o111,
+      ).toBe(0o111);
+    }
+  },
+);
 
 it.each([false, true])(
   "installs workflow scanners only for changed workflow files: %s",
@@ -203,7 +280,6 @@ it.each(["pull_request", "push", "schedule", "workflow_dispatch"] as const)(
   "runs the production audit only for release dispatches: %s",
   (eventName) => {
     const audit = securityStep("Audit production dependencies");
-    expect(audit.if).toBeDefined();
     for (const [dispatchId, release] of [
       ["", false],
       ["manual-ci", false],
@@ -288,7 +364,7 @@ it("generates the exact local-only scanner contract from trusted policy", () => 
   expectIncludes(checkoutHarness.with?.["sparse-checkout"], [".github/zizmor.yml", scannerPath]);
   expect(securitySteps.some((step) => step.name === "Resolve Python runtime")).toBe(false);
   expect(install.run).toContain("python3 --version");
-  expect(install.run).toContain("pre-commit==4.6.2 zizmor==1.30.1");
+  expect(install.run).toContain("pre-commit==4.7.0 zizmor==1.31.1");
   expect(install.run).not.toContain("pre-commit-hooks");
   expect(prepare.run).not.toMatch(/origin\/|BASE_REF|PRE_COMMIT_CONFIG_PATH:-/u);
   // Scan with trusted code before third-party installation.

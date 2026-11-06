@@ -1,6 +1,6 @@
 import type { SystemAgentChatParams } from "../../packages/gateway-protocol/src/index.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { SystemAgentAssistantPlan, SystemAgentAssistantPlanner } from "./assistant.js";
+import type { SystemAgentAssistantPlan } from "./assistant.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { isInvalidConfigSetOperation } from "./operations-internal.js";
 import {
@@ -12,13 +12,10 @@ import { loadSystemAgentOverview } from "./overview.js";
 import {
   resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
 type SystemAgentDialogueOptions = {
   loadOverview?: typeof loadSystemAgentOverview;
-  planWithAssistant?: SystemAgentAssistantPlanner;
-  deps?: SystemAgentVerifiedInferenceDeps;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
 };
 
@@ -47,18 +44,15 @@ export async function resolveSystemAgentOperation(
     return operation;
   }
   const overview = await (opts.loadOverview ?? loadSystemAgentOverview)();
-  const planner = opts.planWithAssistant ?? (await import("./assistant.js")).planSystemAgentCommand;
+  const { planSystemAgentCommand } = await import("./assistant.js");
   let plan: SystemAgentAssistantPlan | null;
   try {
-    plan = await planner({
+    plan = await planSystemAgentCommand({
       input,
       overview,
       verifiedInference: opts.verifiedInference,
     });
-    if (
-      plan &&
-      !(await resolveSystemAgentVerifiedInferenceRoute(opts.verifiedInference, opts.deps))
-    ) {
+    if (plan && !(await resolveSystemAgentVerifiedInferenceRoute(opts.verifiedInference))) {
       throw new SystemAgentInferenceUnavailableError("planner", [], "route-changed");
     }
   } catch (error) {

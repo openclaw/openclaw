@@ -43,10 +43,6 @@ function wrapInlineCode(text: string): string {
   return `${fence}${body}${fence}`;
 }
 
-function sanitizeFenceLanguage(language: string): string {
-  return language.trim().replace(/[^A-Za-z0-9_+#.-]/g, "");
-}
-
 function applyInlineStyles(text: string, style: unknown): string {
   // Keep boundary whitespace outside Markdown emphasis delimiters.
   const content = text.trim();
@@ -93,32 +89,6 @@ function renderMentionElement(element: Record<string, unknown>): string {
   return `@${escapeMarkdownText(mention)}`;
 }
 
-function renderEmotionElement(element: Record<string, unknown>): string {
-  const text =
-    toStringOrEmpty(element.emoji) ||
-    toStringOrEmpty(element.text) ||
-    toStringOrEmpty(element.emoji_type);
-  return escapeMarkdownText(text);
-}
-
-function renderCodeBlockElement(element: Record<string, unknown>): string {
-  const language = sanitizeFenceLanguage(
-    toStringOrEmpty(element.language) || toStringOrEmpty(element.lang),
-  );
-  const code = (toStringOrEmpty(element.text) || toStringOrEmpty(element.content)).replace(
-    /\r\n/g,
-    "\n",
-  );
-  const trailingNewline = code.endsWith("\n") ? "" : "\n";
-  // The enclosing fence must outlast any literal backtick run in the code.
-  let fenceLength = 3;
-  for (const run of code.matchAll(/`+/g)) {
-    fenceLength = Math.max(fenceLength, run[0].length + 1);
-  }
-  const fence = "`".repeat(fenceLength);
-  return `${fence}${language}\n${code}${trailingNewline}${fence}`;
-}
-
 function renderElement(
   element: unknown,
   attachments: PostParseResult["attachments"],
@@ -159,8 +129,13 @@ function renderElement(
       }
       return renderMediaPlaceholders ? "[media]" : "";
     }
-    case "emotion":
-      return renderEmotionElement(element);
+    case "emotion": {
+      const text =
+        toStringOrEmpty(element.emoji) ||
+        toStringOrEmpty(element.text) ||
+        toStringOrEmpty(element.emoji_type);
+      return escapeMarkdownText(text);
+    }
     case "md":
     case "lark_md":
       return toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
@@ -173,8 +148,23 @@ function renderElement(
       return code ? wrapInlineCode(code) : "";
     }
     case "code_block":
-    case "pre":
-      return renderCodeBlockElement(element);
+    case "pre": {
+      const language = (toStringOrEmpty(element.language) || toStringOrEmpty(element.lang))
+        .trim()
+        .replace(/[^A-Za-z0-9_+#.-]/g, "");
+      const code = (toStringOrEmpty(element.text) || toStringOrEmpty(element.content)).replace(
+        /\r\n/g,
+        "\n",
+      );
+      const trailingNewline = code.endsWith("\n") ? "" : "\n";
+      // The enclosing fence must outlast any literal backtick run in the code.
+      let fenceLength = 3;
+      for (const run of code.matchAll(/`+/g)) {
+        fenceLength = Math.max(fenceLength, run[0].length + 1);
+      }
+      const fence = "`".repeat(fenceLength);
+      return `${fence}${language}\n${code}${trailingNewline}${fence}`;
+    }
     default:
       return escapeMarkdownText(toStringOrEmpty(element.text));
   }
@@ -239,13 +229,6 @@ function resolveLocalePayload(candidate: unknown): PostPayload | null {
   return null;
 }
 
-function resolvePostPayload(parsed: unknown): PostPayload | null {
-  return (
-    toPostPayload(parsed) ??
-    (isRecord(parsed) ? (resolveLocalePayload(parsed.post) ?? resolveLocalePayload(parsed)) : null)
-  );
-}
-
 type PostParseOptions = {
   renderMediaPlaceholders?: boolean;
   emptyTextFallback?: string;
@@ -266,7 +249,11 @@ export function renderPostContent(
   options: PostParseOptions = {},
 ): PostParseResult {
   try {
-    const payload = resolvePostPayload(parsed);
+    const payload =
+      toPostPayload(parsed) ??
+      (isRecord(parsed)
+        ? (resolveLocalePayload(parsed.post) ?? resolveLocalePayload(parsed))
+        : null);
     if (!payload) {
       return {
         textContent: FALLBACK_POST_TEXT,
@@ -304,7 +291,7 @@ export function renderPostContent(
 
     const title = escapeMarkdownText(payload.title.trim());
     const body = paragraphs.join("\n").trim();
-    const textContent = [title, body].filter(Boolean).join("\n\n").trim();
+    const textContent = [title, body].filter(Boolean).join("\n\n");
 
     return {
       textContent: textContent || (options.emptyTextFallback ?? FALLBACK_POST_TEXT),

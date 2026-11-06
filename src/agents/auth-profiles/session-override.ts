@@ -1,6 +1,9 @@
 /** Keeps automatic auth profiles stable unless reset, unavailable, or recovering a preference. */
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import {
+  matchesSessionAuthProfileOverrideSnapshot,
+  resolveSessionAuthProfileOverrideSource,
+} from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import {
   sessionEntryCommitGuardOptions,
@@ -98,18 +101,6 @@ function applySessionAuthProfileOverrideState(
   entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
 }
 
-function matchesSessionAuthProfileOverrideSnapshot(
-  entry: SessionEntry,
-  snapshot: SessionAuthProfileOverrideSnapshot,
-): boolean {
-  return (
-    entry.sessionId === snapshot.sessionId &&
-    entry.authProfileOverride === snapshot.authProfileOverride &&
-    entry.authProfileOverrideSource === snapshot.authProfileOverrideSource &&
-    entry.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount
-  );
-}
-
 function synchronizeSessionEntry(entry: SessionEntry, latest: SessionEntry): void {
   for (const key of Object.keys(entry)) {
     if (!Object.hasOwn(latest, key)) {
@@ -119,16 +110,11 @@ function synchronizeSessionEntry(entry: SessionEntry, latest: SessionEntry): voi
   Object.assign(entry, latest);
 }
 
-async function persistSessionAuthProfileOverrideState(params: {
-  agentId: string;
-  sessionEntry: SessionEntry;
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  state: SessionAuthProfileOverrideState;
-  storePath?: string;
-  assertCommitAllowed?: SessionSourceAssertion;
-  expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
-}): Promise<SessionEntry | undefined> {
+async function persistSessionAuthProfileOverrideState(
+  params: Parameters<typeof clearSessionAuthProfileOverride>[0] & {
+    state: SessionAuthProfileOverrideState;
+  },
+): Promise<SessionEntry | undefined> {
   const { sessionEntry, sessionStore, sessionKey, state, storePath, expectedSnapshot } = params;
   params.assertCommitAllowed?.();
   const updatedAt = Date.now();
@@ -285,22 +271,11 @@ export async function clearSessionAuthProfileOverride(params: {
   });
 }
 
-async function resolveSessionAuthProfileOverride(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  modelId: string;
-  agentId: string;
-  agentDir: string;
-  reader?: SessionEntryCohortReader;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath?: string;
-  assertCommitAllowed?: SessionSourceAssertion;
-  isNewSession: boolean;
-  acceptedProviderIds?: string[];
-  requesterProfileId?: string;
-}): Promise<SessionAuthProfileOverrideResult> {
+async function resolveSessionAuthProfileOverride(
+  params: Omit<Parameters<typeof resolveSessionAuthSelection>[0], "configuredProfileId"> & {
+    acceptedProviderIds?: string[];
+  },
+): Promise<SessionAuthProfileOverrideResult> {
   const {
     agentId,
     cfg,
@@ -314,6 +289,17 @@ async function resolveSessionAuthProfileOverride(params: {
   } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
     return { profileId: sessionEntry?.authProfileOverride, store: undefined };
+  }
+
+  let current = sessionEntry.authProfileOverride?.trim();
+  const source = resolveSessionAuthProfileOverrideSource(sessionEntry);
+  if (
+    current &&
+    (source === "user" || source === "user-link") &&
+    params.nativeAuthProfileIds?.includes(current)
+  ) {
+    // Native pins belong to the admitted runtime; missing stored credentials do not invalidate them.
+    return { profileId: current, store: undefined };
   }
 
   const hasConfiguredAuthProfiles =
@@ -342,9 +328,6 @@ async function resolveSessionAuthProfileOverride(params: {
     }),
   );
   const order = [...new Set(orderResolutions.flatMap((resolution) => resolution.profileIds))];
-  let current = sessionEntry.authProfileOverride?.trim();
-  const source = resolveSessionAuthProfileOverrideSource(sessionEntry);
-
   const overrideTarget = {
     agentId,
     sessionEntry,
@@ -496,7 +479,7 @@ async function resolveSessionAuthProfileOverride(params: {
           })
           .find(
             (profileId) =>
-              (store.usageStats?.[profileId]?.failureCounts?.rate_limit ?? 0) > 0 &&
+              store.usageStats?.[profileId]?.lastRateLimitAt !== undefined &&
               !isProfileUnavailableForSessionModel(profileId),
           )
       : undefined;
@@ -590,6 +573,8 @@ export async function resolveSessionAuthSelection(params: {
   modelId: string;
   agentId: string;
   configuredProfileId?: string;
+  /** Native login identities admitted by the prepared runtime's core-owned policy. */
+  nativeAuthProfileIds?: readonly string[];
   agentDir: string;
   reader?: SessionEntryCohortReader;
   sessionEntry?: SessionEntry;
@@ -636,6 +621,11 @@ export async function resolveSessionAuthSelection(params: {
   if (!profileId) {
     return undefined;
   }
+  const source = rotatedPinnedProfileId || configuredProfileId ? "user" : "auto";
+  if (params.nativeAuthProfileIds?.includes(profileId)) {
+    // Apply pin/default precedence first; native login identities are not stored credentials.
+    return { profileId, source, routeRequirement: undefined };
+  }
   // A session pin overrides the configured account; that unused personal credential
   // does not belong in this operation's private auth view or its validation.
   const authStore =
@@ -668,7 +658,7 @@ export async function resolveSessionAuthSelection(params: {
   }
   return {
     profileId,
-    source: rotatedPinnedProfileId || configuredProfileId ? "user" : "auto",
+    source,
     routeRequirement: profileAuthRequirement({ cfg, store: authStore, profileId }),
   };
 }

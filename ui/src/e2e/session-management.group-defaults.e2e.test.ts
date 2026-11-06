@@ -1,9 +1,6 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { Locator, Page } from "playwright";
-import { afterEach, expect, it } from "vitest";
-import { readRepositoryBranches } from "../../../src/agents/worktrees/branches.runtime.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { expect, it } from "vitest";
+import type { ManagedWorktreeBranchesResult } from "../../../src/agents/worktrees/types.js";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import {
@@ -19,16 +16,16 @@ import {
   withSessionPage,
 } from "./session-page.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const gitRepository = {
   branches: [{ kind: "local", name: "main" }],
   defaultBranch: "main",
   repositoryStatus: "git",
 };
 const clientCwd = "/home/peter/client-work";
-const dialogSelector = `openclaw-modal-dialog[label='New session defaults for "Client work"']`;
+const dialogSelector = `openclaw-modal-dialog[label='New session defaults for “Client work”']`;
 const groupSelector = '[data-session-section="category:Client work"]';
 const defaultsSelector = '.sidebar-session-group-menu [data-value="group-defaults"]';
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
@@ -93,6 +90,8 @@ async function withGroupGateway(
 }
 
 async function openDefaults(page: Page) {
+  await chooseSidebarMenuOption(page, "Status", "All");
+  await closeSidebarMenu(page);
   const group = page.locator(groupSelector);
   await group.waitFor({ state: "visible", timeout: 10_000 });
   await group.locator(".sidebar-recent-sessions__head").hover();
@@ -105,14 +104,15 @@ async function openDefaults(page: Page) {
 
 suite.define(() => {
   it("saves current-checkout group defaults for an agent workspace without a commit", async () => {
-    const workspace = tempDirs.make("openclaw-group-unborn-");
-    await promisify(execFile)("git", ["init", "-b", "main", "--template=", workspace]);
-    const repository = await readRepositoryBranches(workspace, { includeRepositoryStatus: true });
+    const workspace = "/home/peter/unborn-workspace";
     await withGroupGateway(
       {
         methodResponses: {
           "sessions.create": { key: "agent:main:unborn-group", runStarted: true },
-          "worktrees.branches": repository,
+          "worktrees.branches": {
+            branches: [],
+            repositoryStatus: "not_git",
+          } satisfies ManagedWorktreeBranchesResult,
         },
         workspace,
       },
@@ -328,7 +328,7 @@ suite.define(() => {
             page,
             `group-defaults-${groupCwd ? "folder" : "workspace"}.png`,
           );
-          await expectText(environment, "Couldn't verify Git");
+          await expectText(environment, "Couldn’t verify Git");
           await expect.poll(() => save.isDisabled()).toBe(true);
           expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
 
@@ -367,8 +367,8 @@ suite.define(() => {
         const { dialog, environment, save } = await openDefaults(page);
         await expectAttribute(environment, "data-session-group-environment", "restricted");
         await expect.poll(() => save.isDisabled()).toBe(true);
-        await expectText(environment, "requires operator.admin");
-        await expect.poll(() => environment.textContent()).not.toContain("Couldn't verify Git");
+        await expectText(environment, "You need admin access");
+        await expect.poll(() => environment.textContent()).not.toContain("Couldn’t verify Git");
         expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
 
         await gateway.setMethodResponse("worktrees.branches", gitRepository);
@@ -429,7 +429,10 @@ suite.define(() => {
 
       await page.reload();
       const unavailable = page.locator(".new-session-page__catalog-unavailable");
-      await expectText(unavailable, "This session target is unavailable.");
+      await expectText(
+        unavailable,
+        "Couldn’t use this device or workspace. Refresh and try again.",
+      );
       await expect.poll(() => start.isDisabled()).toBe(true);
       await expect.poll(() => message.inputValue()).toBe("keep this draft");
     });
@@ -483,7 +486,8 @@ suite.define(() => {
           message: "rejected group defaults",
         });
 
-        const alert = dialog.getByRole("alert");
+        await dialog.locator("openclaw-toast-host").getByRole("alert").waitFor();
+        const alert = dialog.locator('.exec-approval-error[role="alert"]');
         await alert.waitFor({ state: "visible" });
         await expectText(alert, "rejected group defaults");
         await expectAttribute(modeTrigger, "data-value", "local");
@@ -506,6 +510,8 @@ suite.define(() => {
       savedGitGroup({ deferredMethods: ["sessions.groups.defaults"] }),
       async (page, gateway) => {
         await page.goto(`${suite.server.baseUrl}chat`);
+        await chooseSidebarMenuOption(page, "Status", "All");
+        await closeSidebarMenu(page);
         const group = page.locator(groupSelector);
         await group.waitFor({ state: "visible", timeout: 10_000 });
         await gateway.waitForRequest("sessions.groups.list");
@@ -563,7 +569,10 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new?group=Deleted`);
         const unavailable = page.locator(".new-session-page__catalog-unavailable");
         await unavailable.waitFor();
-        await expectText(unavailable, "This session target is unavailable.");
+        await expectText(
+          unavailable,
+          "Couldn’t use this device or workspace. Refresh and try again.",
+        );
         await page.locator(".new-session-page__message").fill("do not create this session");
         const start = page.getByRole("button", { name: "Start session" });
         await expect.poll(() => start.isDisabled()).toBe(true);

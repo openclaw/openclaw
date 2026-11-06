@@ -49,6 +49,11 @@ function formatPrefixedModelId(prefix: string, modelId: string): string {
   return `${prefix.replace(/\/+$/u, "")}/${modelId.replace(/^\/+/u, "")}`;
 }
 
+function resolveModelAlias(aliases: Record<string, string> | undefined, model: string): string {
+  const key = normalizeLowercaseStringOrEmpty(model);
+  return aliases && Object.hasOwn(aliases, key) ? (aliases[key] ?? model) : model;
+}
+
 export function stripSelfProviderModelPrefix(provider: string, model: string): string {
   const prefix = `${normalizeLowercaseStringOrEmpty(provider)}/`;
   const trimmed = model.trim();
@@ -82,7 +87,7 @@ export function normalizeProviderModelIdWithPolicies(params: {
     }
   }
 
-  modelId = policy.aliases?.[normalizeLowercaseStringOrEmpty(modelId)] ?? modelId;
+  modelId = resolveModelAlias(policy.aliases, modelId);
 
   if (!modelId.includes("/")) {
     for (const rule of policy.prefixWhenBareAfterAliasStartsWith ?? []) {
@@ -136,7 +141,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "sonnet-4.6": "claude-sonnet-4-6",
     };
     const providerModel = stripSelfProviderModelPrefix(normalizedProvider, model);
-    return anthropicAliases[normalizeLowercaseStringOrEmpty(providerModel)] ?? providerModel;
+    return resolveModelAlias(anthropicAliases, providerModel);
   }
   if (normalizedProvider === "vercel-ai-gateway") {
     const vercelAliases: Record<string, string> = {
@@ -145,7 +150,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       sonnet: "claude-sonnet-4-6",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
-    const aliased = vercelAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
+    const aliased = resolveModelAlias(vercelAliases, model);
     return normalizeLowercaseStringOrEmpty(aliased).startsWith("claude-")
       ? `anthropic/${aliased}`
       : aliased;
@@ -164,7 +169,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "grok-4-fast-reasoning": "grok-4-fast",
       "grok-4-1-fast-reasoning": "grok-4-1-fast",
     };
-    return xaiAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
+    return resolveModelAlias(xaiAliases, model);
   }
   if (normalizedProvider === "together") {
     return normalizeTogetherModelId(model);

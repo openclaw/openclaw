@@ -1,6 +1,20 @@
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import * as pathExistence from "openclaw/plugin-sdk/path-existence-runtime";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMemoryWikiConfig } from "./config.js";
 import { OBSIDIAN_ACTIONS, runObsidianAction } from "./obsidian.js";
+
+const command = path.join(
+  "/usr/local/bin",
+  process.platform === "win32" ? "obsidian.EXE" : "obsidian",
+);
+beforeEach(() => {
+  vi.stubEnv("PATH", "/usr/local/bin");
+  vi.stubEnv("PATHEXT", ".EXE");
+  vi.spyOn(pathExistence, "executableFileExists").mockResolvedValue(true);
+});
+afterEach(() => vi.restoreAllMocks());
 
 describe("runObsidianAction", () => {
   it.each([
@@ -25,32 +39,24 @@ describe("runObsidianAction", () => {
         },
         { homedir: "/Users/tester" },
       );
-      const calls: Array<{ command: string; argv: string[]; options: unknown }> = [];
-      const execImpl = async (
-        command: string,
-        argv?: readonly string[] | null,
-        options?: unknown,
-      ) => {
-        calls.push({ command, argv: argv ? [...argv] : [], options });
-        return { stdout: "search output\n", stderr: "" };
-      };
+      const exec = vi.spyOn(processRuntime, "runExec").mockResolvedValue({
+        stdout: "search output\n",
+        stderr: "",
+      });
       const result = await runObsidianAction({
         config,
         action,
         value,
-        deps: {
-          exec: execImpl,
-          resolveCommand: async () => "/usr/local/bin/obsidian",
-        },
       });
 
-      expect(calls).toEqual([
+      expect(exec).toHaveBeenCalledExactlyOnceWith(
+        command,
+        ["vault=OpenClaw Wiki", ...expectedArgv],
         {
-          command: "/usr/local/bin/obsidian",
-          argv: ["vault=OpenClaw Wiki", ...expectedArgv],
-          options: { logOutput: false, timeoutMs: 10_000 },
+          logOutput: false,
+          timeoutMs: 10_000,
         },
-      ]);
+      );
       expect(result.stdout).toBe("search output\n");
     },
   );
@@ -59,14 +65,12 @@ describe("runObsidianAction", () => {
 describe("Obsidian CLI availability", () => {
   it("fails cleanly when the obsidian cli is not installed", async () => {
     const config = resolveMemoryWikiConfig(undefined, { homedir: "/Users/tester" });
+    vi.mocked(pathExistence.executableFileExists).mockResolvedValue(false);
 
     await expect(
       runObsidianAction({
         config,
         action: OBSIDIAN_ACTIONS[3],
-        deps: {
-          resolveCommand: async () => null,
-        },
       }),
     ).rejects.toThrow("Obsidian CLI is not available on PATH.");
   });

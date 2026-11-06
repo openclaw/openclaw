@@ -84,8 +84,22 @@ export function toolingDependencyOptions(checkout, consumer, { tsx = false } = {
   }
   let root = checkout;
   try {
+    // Hook-local Git context must not redirect probes for another checkout.
+    const gitEnv = { ...process.env };
+    for (const key of [
+      "GIT_DIR",
+      "GIT_WORK_TREE",
+      "GIT_COMMON_DIR",
+      "GIT_INDEX_FILE",
+      "GIT_PREFIX",
+      "GIT_OBJECT_DIRECTORY",
+      "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ]) {
+      delete gitEnv[key];
+    }
     const git = (cwd, args) =>
       spawnSync(process.env.OPENCLAW_PR_GIT || "git", ["-C", cwd, ...args], {
+        env: gitEnv,
         encoding: "utf8",
         timeout: 10_000,
         stdio: ["ignore", "pipe", "pipe"],
@@ -223,9 +237,15 @@ if (root) {
           ? root
           : contained(root, join(root, relative(checkout, owner.directory)));
       const directory = qualifiedPackage(owner.manifest, root, specifier, consumer, donor);
-      resolved = nextResolve(specifier, {
+      const donorParent = join(donor, "package.json");
+      // CJS nextResolve retains its original parent. Resolve exports from the
+      // qualified donor before passing its absolute entry through the hook chain.
+      const request = context.conditions.includes("require")
+        ? createRequire(donorParent).resolve(specifier)
+        : specifier;
+      resolved = nextResolve(request, {
         ...context,
-        parentURL: pathToFileURL(join(donor, "package.json")).href,
+        parentURL: pathToFileURL(donorParent).href,
       });
       contained(directory, fileURLToPath(resolved.url));
       return resolved;

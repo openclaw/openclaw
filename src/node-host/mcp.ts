@@ -8,45 +8,43 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { assignSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
+import { listAllMcpTools } from "../agents/mcp-catalog-listing.js";
 import {
-  connectMcpClient,
-  disposeMcpClient,
-  isMcpHttpSessionExpired,
-} from "../agents/mcp-client-lifecycle.js";
-import { redactMcpDiagnosticError } from "../agents/mcp-error.js";
-import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
-import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
-import { collectMcpPaginatedItems } from "../agents/mcp-pagination.js";
+  isAppOnlyMcpTool,
+  readMcpToolUiMetadata,
+  sanitizeMcpMetadataText,
+  summarizeServerCapabilities,
+} from "../agents/mcp-metadata.js";
 import {
   McpSdkCompatibilityError,
   mcpCallToolResultSchema,
 } from "../agents/mcp-sdk-compatibility.js";
-import { isMcpToolAllowed } from "../agents/mcp-tool-filter.js";
+import { createListedMcpToolFilter } from "../agents/mcp-tool-filter.js";
 import {
   normalizeMcpToolCatalog,
   type McpToolCatalogMetadata,
 } from "../agents/mcp-tool-metadata.js";
 import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
-import { resolveMcpTransport } from "../agents/mcp-transport.js";
-import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
+import type { resolveMcpTransport } from "../agents/mcp-transport.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import {
   NODE_MCP_TOOL_CALL_TIMEOUT_MS,
   NODE_MCP_TOOLS_CALL_COMMAND,
 } from "../infra/node-commands.js";
 import { VERSION } from "../version.js";
+import type { NodeHostClient } from "./client.js";
+import { bindNodeMcpElicitation } from "./mcp-elicitation.js";
+import { listEnabledNodeHostMcpServers } from "./mcp-server-config.js";
 
 const NODE_MCP_PLUGIN_ID = "node-mcp";
 const NODE_MCP_DESCRIPTION_MAX_CHARS = 1_024;
 const NODE_MCP_NAME_MAX_CHARS = 64;
 const NODE_MCP_SERVER_FRAGMENT_MAX_CHARS = 31;
-const NODE_MCP_ERROR_MAX_CHARS = 1_024;
+export const NODE_MCP_ERROR_MAX_CHARS = 1_024;
 const NODE_MCP_MAX_DESCRIPTORS = 128;
 const NODE_MCP_MAX_DESCRIPTOR_BYTES = 1024 * 1024;
 const NODE_MCP_MAX_CATALOG_BYTES = 10 * 1024 * 1024;
-const NODE_MCP_MAX_LIST_PAGES = NODE_MCP_MAX_DESCRIPTORS;
-// The byte cap charges every response; this separately bounds retained tiny-tool object overhead.
-const NODE_MCP_MAX_LISTED_TOOLS = NODE_MCP_MAX_DESCRIPTORS * NODE_MCP_MAX_LIST_PAGES;
 const NODE_MCP_CONNECT_CONCURRENCY = 6;
 const NODE_MCP_RETRY_INITIAL_MS = 250;
 const NODE_MCP_RETRY_MAX_MS = 60_000;
@@ -58,6 +56,7 @@ type NodeHostMcpTransport = Pick<
 
 type NodeHostMcpSession = NodeHostMcpTransport & {
   client: Client;
+  withElicitation?: ReturnType<typeof bindNodeMcpElicitation>;
   connected: boolean;
   toolCallTimeoutMs: number;
   abortController: AbortController;
@@ -95,13 +94,10 @@ export class NodeHostMcpError extends Error {
 export type NodeHostMcpManager = Awaited<ReturnType<typeof startNodeHostMcpManager>>;
 
 type NodeHostMcpManagerDeps = {
+  elicitationClient?: NodeHostClient;
   onDescriptorsChanged?: () => void;
   signal?: AbortSignal;
 };
-
-function formatMcpError(error: unknown): string {
-  return truncateUtf16Safe(redactMcpDiagnosticError(error), NODE_MCP_ERROR_MAX_CHARS);
-}
 
 function sanitizeDescriptorFragment(raw: string, fallback: string): string {
   const cleaned = raw
@@ -187,6 +183,7 @@ async function disposeNodeHostMcpSession(
   session: NodeHostMcpSession,
 ): Promise<void> {
   session.abortController.abort(new Error("node host MCP session retired"));
+  const { disposeMcpClient } = await import("../agents/mcp-client-lifecycle.js");
   if ((await disposeMcpClient(session)) === "uncertain") {
     console.warn(
       `node host MCP server "${serverName}" cleanup could not be confirmed; check the server process`,
@@ -199,6 +196,20 @@ export async function startNodeHostMcpManager(
   servers: Record<string, McpServerConfig> | undefined,
   deps: NodeHostMcpManagerDeps = {},
 ) {
+  const [
+    { connectMcpClient, isMcpHttpSessionExpired },
+    { redactMcpDiagnosticError },
+    { createMcpJsonSchemaValidator },
+    { resolveMcpTransport },
+  ] = await Promise.all([
+    import("../agents/mcp-client-lifecycle.js"),
+    import("../agents/mcp-error.js"),
+    import("../agents/mcp-json-schema-validator.js"),
+    import("../agents/mcp-transport.js"),
+  ]);
+  function formatMcpError(error: unknown): string {
+    return truncateUtf16Safe(redactMcpDiagnosticError(error), NODE_MCP_ERROR_MAX_CHARS);
+  }
   const descriptors: NodePluginToolDescriptor[] = [];
   const connectionAdmission = pLimit(NODE_MCP_CONNECT_CONCURRENCY);
   const lifecycleAbortController = new AbortController();
@@ -218,6 +229,9 @@ export async function startNodeHostMcpManager(
         retryDelayMs: NODE_MCP_RETRY_INITIAL_MS,
       },
     ]),
+  );
+  const safeServerNames = assignSafeServerNames(
+    Object.keys(servers ?? {}).filter((name) => states.has(name)),
   );
   let closed = false;
   let startupComplete = false;
@@ -290,35 +304,23 @@ export async function startNodeHostMcpManager(
     signal: AbortSignal,
     resetRetryDelay = false,
   ) => {
-    const normalized = await collectMcpPaginatedItems({
-      label: "MCP tool listing",
-      itemLabel: "tools",
-      timeoutMs: session.requestTimeoutMs,
-      maxPages: NODE_MCP_MAX_LIST_PAGES,
-      maxItems: NODE_MCP_MAX_LISTED_TOOLS,
-      maxBytes: NODE_MCP_MAX_CATALOG_BYTES,
-      signal,
-      loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
-        const page = await session.client.request(
-          { method: "tools/list", params: cursor === undefined ? undefined : { cursor } },
-          {
-            timeout: requestTimeoutMs,
-            maxTotalTimeout: requestTimeoutMs,
-            signal: requestSignal,
-          },
-        );
-        return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
-      },
-    }).then((tools) =>
-      normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
-        isMcpToolAllowed(state.config.toolFilter, toolName) ? "include" : "exclude",
-      ),
-    );
+    const tools = await listAllMcpTools(session.client, session.requestTimeoutMs, signal);
     if (closed || state.current !== session) {
       return;
     }
+    const isToolAllowed = createListedMcpToolFilter(
+      state.config.toolFilter,
+      safeServerNames.get(state.serverName) ?? state.serverName,
+      tools,
+      summarizeServerCapabilities(session.client.getServerCapabilities()),
+    );
+    const normalized = normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (name) =>
+      isToolAllowed(name) ? "include" : "exclude",
+    );
     session.toolMetadata = normalized.metadata;
-    state.listedTools = normalized.tools;
+    state.listedTools = normalized.tools.filter(
+      (tool) => !isAppOnlyMcpTool(readMcpToolUiMetadata(tool)),
+    );
     if (resetRetryDelay) {
       state.retryDelayMs = NODE_MCP_RETRY_INITIAL_MS;
     }
@@ -344,6 +346,9 @@ export async function startNodeHostMcpManager(
         const client = new Client(
           { name: "openclaw-node-host", version: VERSION },
           {
+            ...(deps.elicitationClient
+              ? { capabilities: { elicitation: { form: {}, url: {} } } }
+              : {}),
             jsonSchemaValidator: createMcpJsonSchemaValidator(),
             versionNegotiation: { mode: "legacy" },
             listChanged: {
@@ -358,6 +363,9 @@ export async function startNodeHostMcpManager(
         const createdSession: NodeHostMcpSession = {
           ...resolved,
           client,
+          ...(deps.elicitationClient
+            ? { withElicitation: bindNodeMcpElicitation(client, deps.elicitationClient) }
+            : {}),
           connected: false,
           toolCallTimeoutMs: resolveMcpRequestTimeoutMs(
             state.config,
@@ -494,13 +502,17 @@ export async function startNodeHostMcpManager(
 
   return {
     descriptors,
-    async callMcpTool(params: {
-      server: string;
-      tool: string;
-      arguments?: Record<string, unknown>;
-      timeoutMs?: number;
-      signal?: AbortSignal;
-    }) {
+    async callMcpTool(
+      this: void,
+      params: {
+        server: string;
+        tool: string;
+        arguments?: Record<string, unknown>;
+        elicitationId?: string;
+        timeoutMs?: number;
+        signal?: AbortSignal;
+      },
+    ) {
       const state = states.get(params.server);
       const session = state?.current;
       if (!state || !session?.connected) {
@@ -523,17 +535,28 @@ export async function startNodeHostMcpManager(
         clampPositiveTimerTimeoutMs(params.timeoutMs) ?? NODE_MCP_TOOL_CALL_TIMEOUT_MS;
       const validateResult = session.toolMetadata?.validatorForCall(params.tool);
       try {
-        const result = await session.client.request(
-          {
-            method: "tools/call",
-            params: { name: params.tool, arguments: params.arguments ?? {} },
-          },
-          mcpCallToolResultSchema,
-          {
-            timeout: Math.min(requestedTimeoutMs, session.toolCallTimeoutMs),
-            ...(params.signal ? { signal: params.signal } : {}),
-          },
-        );
+        const timeout = Math.min(requestedTimeoutMs, session.toolCallTimeoutMs);
+        const call = (options: { timeout: number; signal?: AbortSignal }) =>
+          session.client.request(
+            {
+              method: "tools/call",
+              params: { name: params.tool, arguments: params.arguments ?? {} },
+            },
+            mcpCallToolResultSchema,
+            options,
+          );
+        const result = session.withElicitation
+          ? await session.withElicitation(
+              params.elicitationId,
+              {
+                timeout,
+                signal: params.signal
+                  ? AbortSignal.any([params.signal, session.abortController.signal])
+                  : session.abortController.signal,
+              },
+              call,
+            )
+          : await call({ timeout, ...(params.signal ? { signal: params.signal } : {}) });
         validateResult?.(result);
         return result;
       } catch (error) {
@@ -596,16 +619,4 @@ export async function startNodeHostMcpManager(
       await Promise.allSettled(closing);
     },
   };
-}
-
-function listEnabledNodeHostMcpServers(
-  servers: Record<string, McpServerConfig> | undefined,
-): ReadonlyArray<readonly [string, McpServerConfig]> {
-  return Object.entries(normalizeConfiguredMcpServers(servers))
-    .filter(
-      ([serverName, config]) =>
-        serverName.length > 0 && serverName === serverName.trim() && config.enabled !== false,
-    )
-    .map(([serverName, config]) => [serverName, config as McpServerConfig] as const)
-    .toSorted(([left], [right]) => left.localeCompare(right));
 }

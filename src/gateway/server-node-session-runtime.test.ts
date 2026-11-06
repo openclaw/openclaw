@@ -44,6 +44,8 @@ function registerNode(
   runtime: ReturnType<typeof createRuntime>,
   connId: string,
   pairingGeneration: string | undefined,
+  nodeId = "node-a",
+  surface?: { platform: string; caps: string[]; commands: string[] },
 ) {
   const frames: string[] = [];
   const socket = {
@@ -59,8 +61,15 @@ function registerNode(
     connect: {
       role: "node",
       scopes: [],
-      client: { id: "node-host", version: "1.0.0", platform: "macos", mode: "node" },
-      device: { id: "node-a" },
+      client: {
+        id: "node-host",
+        version: "1.0.0",
+        platform: surface?.platform ?? "macos",
+        mode: "node",
+      },
+      caps: surface?.caps,
+      commands: surface?.commands,
+      device: { id: nodeId },
     } as unknown as GatewayWsClient["connect"],
   };
   runtime.nodeRegistry.register(client, {
@@ -167,6 +176,76 @@ const inventoryOrder = [
   "inventory",
   `broadcast:${GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED}`,
 ];
+
+test("routes fanout and removes both session indexes through connected nodes", async () => {
+  const runtime = createRuntime({
+    resolveCurrentPairingState: async (nodeId) => ({
+      identity: "identity-a",
+      generation: nodeId === "node-b" ? "generation-b" : "generation-a",
+    }),
+    isPairingStateCurrent: (nodeId, expected) =>
+      expected.identity === "identity-a" &&
+      expected.generation === (nodeId === "node-b" ? "generation-b" : "generation-a"),
+  });
+  const a = registerNode(runtime, "conn-a", "generation-a");
+  const b = registerNode(runtime, "conn-b", "generation-b", "node-b");
+  expect(runtime.nodeHasSessionSubscribers("main")).toBe(false);
+  expect(runtime.nodeHasSessionSubscribers("  ")).toBe(false);
+  runtime.nodeSubscribe("node-a", " main ", "conn-a");
+  runtime.nodeSubscribe("node-a", "secondary", "conn-a");
+  runtime.nodeSubscribe("node-b", "main", "conn-b");
+  expect(runtime.nodeHasSessionSubscribers(" main ")).toBe(true);
+  expect(runtime.nodeHasSessionSubscribers("Main")).toBe(false);
+  await runtime.nodeSendToSession("main", "chat", { ok: true });
+  expect(a.frames.map((frame) => JSON.parse(frame).payload)).toEqual([{ ok: true }]);
+  expect(b.frames.map((frame) => JSON.parse(frame).payload)).toEqual([{ ok: true }]);
+
+  runtime.nodeUnsubscribe("node-a", " main ", "conn-a");
+  runtime.nodeUnsubscribe("node-b", "main", "conn-retired");
+  await runtime.nodeSendToSession("main", "chat", { ok: true });
+  expect(a.frames).toHaveLength(1);
+  expect(b.frames).toHaveLength(2);
+  runtime.nodeUnsubscribeAll("node-a", "stale-generation");
+  expect(runtime.nodeHasSessionSubscribers("secondary")).toBe(true);
+  runtime.nodeUnsubscribeAll("node-a");
+  runtime.nodeUnsubscribe("node-b", "main", "conn-b");
+  expect(runtime.nodeHasSessionSubscribers("main")).toBe(false);
+  expect(runtime.nodeHasSessionSubscribers("secondary")).toBe(false);
+  await runtime.nodeSendToSession("main", "tick", {});
+  await runtime.nodeSendToSession("secondary", "tick", {});
+  expect(a.frames).toHaveLength(1);
+  expect(b.frames).toHaveLength(2);
+});
+
+test("settles a failed node transport while delivering to its subscribed sibling", async () => {
+  const runtime = createRuntime();
+  const a = registerNode(runtime, "conn-a", "generation-a");
+  const b = registerNode(runtime, "conn-b", "generation-a", "node-b");
+  const sendRaw = vi.fn(() => {
+    throw new Error("transport failed");
+  });
+  runtime.nodeRegistry.registerTransport(
+    a.client,
+    { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
+    { send: () => true, sendRaw },
+  );
+  runtime.nodeSubscribe("node-a", "main", "conn-a");
+  runtime.nodeSubscribe("node-b", "main", "conn-b");
+  await expect(runtime.nodeSendToSession("main", "tick", {})).resolves.toBeUndefined();
+  expect(sendRaw).toHaveBeenCalledOnce();
+  expect(a.frames).toEqual([]);
+  expect(b.frames.map((frame) => JSON.parse(frame))).toEqual([
+    { type: "event", event: "tick", payload: {} },
+  ]);
+});
+
+test("drops unserializable payloads before reaching a subscribed node transport", async () => {
+  const runtime = createRuntime();
+  const { socket } = registerNode(runtime, "conn-a", "generation-a");
+  runtime.nodeSubscribe("node-a", "main", "conn-a");
+  await expect(runtime.nodeSendToSession("main", "tick", { invalid: 1n })).resolves.toBeUndefined();
+  expect(socket.send).not.toHaveBeenCalled();
+});
 
 test.each(["chat", "agent"] as const)(
   "%s snapshots attach, resubscribe, and changed projections while preserving append ordering",
@@ -544,4 +623,30 @@ test("preserves subscriptions for an exact live pairing generation promotion", a
   expect(runtime.nodeHasSessionSubscribers("main")).toBe(true);
   await runtime.nodeSendToSession("main", "chat", { ok: true });
   expect(frames).toHaveLength(1);
+});
+
+test("uses explicit Talk capability instead of platform names", async () => {
+  const runtime = createRuntime();
+  registerNode(runtime, "conn-android", "generation-a", "node-a", {
+    platform: "android",
+    caps: ["device"],
+    commands: [],
+  });
+  await expect(runtime.hasTalkNodeConnected()).resolves.toBe(false);
+  registerNode(runtime, "conn-linux", "generation-a", "node-a", {
+    platform: "linux",
+    caps: ["talk"],
+    commands: [],
+  });
+  await expect(runtime.hasTalkNodeConnected()).resolves.toBe(true);
+});
+
+test("accepts nodes that declare Talk command support", async () => {
+  const runtime = createRuntime();
+  registerNode(runtime, "conn-talk", "generation-a", "node-a", {
+    platform: "custom",
+    caps: [],
+    commands: ["talk.ptt.start"],
+  });
+  await expect(runtime.hasTalkNodeConnected()).resolves.toBe(true);
 });

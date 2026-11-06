@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentStreamParams } from "../agents/command/shared-types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
+import { TLS_CERTIFICATE_ERROR_USER_TEXT } from "../agents/failover/user-copy.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { SessionWorkStartError } from "../config/sessions/session-work-start.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -23,6 +24,7 @@ const ERROR_TYPE_BY_REASON = {
   overloaded: "api_error",
   billing: "insufficient_quota",
   server_error: "api_error",
+  route_unavailable: "api_error",
   timeout: "api_error",
   tls_certificate: "api_error",
   context_overflow: "invalid_request_error",
@@ -58,7 +60,9 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
   }
   let status = described.status ?? resolveFailoverStatus(reason) ?? 500;
   let message: string;
-  if (reason === "server_error" || reason === "timeout") {
+  if (reason === "tls_certificate") {
+    message = TLS_CERTIFICATE_ERROR_USER_TEXT;
+  } else if (reason === "server_error" || reason === "timeout") {
     status =
       described.status && described.status >= 400 && described.status < 500
         ? described.status

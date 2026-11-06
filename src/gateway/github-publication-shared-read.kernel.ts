@@ -96,7 +96,7 @@ function readSharedGitHubPublicationWorkspace(
   return {
     kind: "worktree" as const,
     worktreeId: worktree.id,
-    branch: worktree.branch,
+    branch: entry.worktree.githubPullRequest?.head.branch ?? worktree.branch,
     repositoryFingerprint: worktree.repo_fingerprint,
   };
 }
@@ -110,6 +110,13 @@ export function readSharedGitHubPublicationRequestInDatabase(
 ): GitHubPublicationRow | undefined {
   return runSqliteReadSnapshotSync(db, () => {
     if (!tableExists(db, "github_publication_requests")) {
+      return undefined;
+    }
+    if (
+      "authorEligibilityOnly" in selector &&
+      selector.authorEligibilityOnly &&
+      entry.worktree?.githubPullRequest?.origin === "external-pr"
+    ) {
       return undefined;
     }
     let selection = githubPublicationDatabase(db)

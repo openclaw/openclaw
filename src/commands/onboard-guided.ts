@@ -10,7 +10,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 // Guided onboarding verifies the selected AI connection before persisting its route.
 import type { SetupInferenceDetection } from "../system-agent/setup-inference.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { displayPath, resolveUserPath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import {
   resolveOnboardingAgentTarget,
@@ -69,7 +69,7 @@ async function runGuidedOnboardingFlow(
         : t("wizard.guided.invalidConfigUnknown");
     await prompter.note(
       t("wizard.guided.invalidConfigDetails", {
-        path: shortenHomePath(snapshot.path),
+        path: displayPath(snapshot.path),
         issues,
       }),
       t("wizard.setup.invalidConfigTitle"),
@@ -85,6 +85,10 @@ async function runGuidedOnboardingFlow(
   }
   const existingConfig =
     snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
+  // Migrations add an implicit agent roster, so only the pre-migration view shows authored setup.
+  const unconfigured = isUnconfiguredConfigSource(
+    snapshot.sourceConfigBeforeMigrations ?? existingConfig,
+  );
   const custodianMode = (deps.handoffMode ?? "hatch") === "hatch";
   const localOnboarding = custodianMode
     ? await import("../state/local-onboarding-state.js")
@@ -94,7 +98,7 @@ async function runGuidedOnboardingFlow(
   const previousLocalSetup = localOnboarding?.readLocalOnboardingState(snapshot.path);
   const offerQuickstart =
     custodianMode &&
-    (!snapshot.exists || isUnconfiguredConfigSource(existingConfig)) &&
+    (!snapshot.exists || unconfigured) &&
     // An interrupted setup's ask-first consent must survive; quick start assumes full discovery.
     existingConfig.wizard?.accessMode !== "guarded" &&
     opts.nonInteractive !== true &&
@@ -145,7 +149,7 @@ async function runGuidedOnboardingFlow(
   const replacePreviousSetup =
     !snapshot.exists ||
     (previousLocalSetup?.status === "pending" && localSetup === undefined) ||
-    (previousLocalSetup?.status === "completed" && isUnconfiguredConfigSource(existingConfig));
+    (previousLocalSetup?.status === "completed" && unconfigured);
   const handoffAgentId = firstAgent?.team
     ? normalizeAgentId(firstAgent.name)
     : resumingSetup && hasAuthoredRoster
@@ -447,7 +451,8 @@ async function runGuidedOnboardingFlow(
   // onboarding; authored model-only configs without that receipt stay untouched.
   const alreadyConfigured =
     localSetup?.status !== "pending" && Boolean(detection?.setupComplete || existingConfig.gateway);
-  let gatewayExternallyManaged = false;
+  // Something other than this terminal keeps the Gateway alive after onboarding exits.
+  let gatewayRunsWithoutTerminal = false;
   const { resolveSetupWorkspaceSelection } = await import("../wizard/setup.workspace.js");
   const workspaceSelection = await resolveSetupWorkspaceSelection({
     baseConfig: existingConfig,
@@ -490,6 +495,16 @@ async function runGuidedOnboardingFlow(
       await showSessionMigrationWarnings(prompter, created.sessionMigrationWarnings);
     }
   } else {
+    const { canOfferGatewayServiceForOnboarding } =
+      await import("../wizard/setup.gateway-service-offer.js");
+    const keepGatewayRunning =
+      quickstart &&
+      !skippedInference &&
+      (await canOfferGatewayServiceForOnboarding()) &&
+      (await prompter.confirm({
+        message: t("wizard.guided.quickstartKeepRunningQuestion"),
+        initialValue: true,
+      }));
     // Announced default: apply the same setup plan the conversational "yes"
     // would, then hand off to the hatch instead of parking in the OpenClaw chat.
     const applyProgress = prompter.progress(t("wizard.guided.settingUp"));
@@ -526,7 +541,9 @@ async function runGuidedOnboardingFlow(
               ? { finalizeConfig: enableDefaultOnboardingInternalHooks }
               : {}),
             surface: "cli",
-            ...(quickstart || skippedInference ? { installDaemon: false } : {}),
+            ...((quickstart && !keepGatewayRunning) || skippedInference
+              ? { installDaemon: false }
+              : {}),
             runtime,
           },
           localSetup?.status === "pending"
@@ -548,8 +565,8 @@ async function runGuidedOnboardingFlow(
         failureTitle = t("wizard.guided.gatewaySetupFailed");
         throw new Error(gateway.error);
       }
-      gatewayExternallyManaged =
-        applied.gateway.status === "skipped" && applied.gateway.reason === "external";
+      gatewayRunsWithoutTerminal =
+        gateway.status === "skipped" ? gateway.reason === "external" : keepGatewayRunning;
       // Accepted one-shot setup exception: record completion after Gateway startup.
       const appliedSnapshot =
         localSetup?.status === "pending"
@@ -658,10 +675,9 @@ async function runGuidedOnboardingFlow(
           existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
         )
       : appliedWorkspace;
-  if (quickstart && !gatewayExternallyManaged) {
+  if (quickstart && !gatewayRunsWithoutTerminal) {
     await prompter.outro(t("wizard.guided.setupDone"));
     return {
-      workspace: hatchWorkspace,
       next: "foreground-gateway",
       ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
     };
@@ -680,7 +696,7 @@ async function runGuidedOnboardingFlow(
     });
     if (handoff) {
       await prompter.outro(t("wizard.guided.browserHandoffReady"));
-      return { workspace: hatchWorkspace, next: "browser" };
+      return { next: "browser" };
     }
   }
   if (setupOnly) {

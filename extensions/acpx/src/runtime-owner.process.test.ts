@@ -305,38 +305,32 @@ it.for(["global", "shared-project"])(
   },
 );
 
-it("closes a completed oneshot without mixing its replacement record identity", async (context) => {
+it("continues a completed oneshot in the same conversation after restart", async (context) => {
   await withOwner(
     context,
-    "acpx-oneshot-owner-process",
-    async ({ state, cfg, runtime, manager }) => {
-      const target = { cfg, sessionKey: "agent:main:acp:oneshot", agentId: "main" };
-      const handle = await initialize(manager, target, "oneshot");
-      expect(
-        await prompt(manager, target, state.workspaceDir, "first", "oneshot", "record"),
-      ).toMatchObject({ history: ["first"] });
-      expect(readAcpSessionEntry(target)?.acp?.identity).toMatchObject({
-        state: "resolved",
-        acpxRecordId: handle.acpxRecordId,
-      });
-      expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
-      const replacement = await runtime.ensureSession({
-        sessionKey: target.sessionKey,
-        agentId: target.agentId,
-        agent: harness,
-        mode: "oneshot",
-        persistedHandle: handle,
-      });
+    "acpx-completed-oneshot-process",
+    async ({ state, cfg, restart, manager: initialManager }) => {
+      let manager = initialManager;
+      const target = { cfg, sessionKey: "agent:main:acp:continued", agentId: "main" };
+      await initialize(manager, target, "oneshot");
       try {
-        expect(replacement.backendSessionId).not.toBe(handle.backendSessionId);
+        const first = await prompt(manager, target, state.workspaceDir, "first", "continued");
+        expect(first.history).toEqual(["first"]);
+        expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
+        manager = await restart();
+        const second = await prompt(manager, target, state.workspaceDir, "second", "continued");
+        expect(second).toMatchObject({
+          sessionId: first.sessionId,
+          history: ["first", "second"],
+        });
+        expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
       } finally {
-        await runtime.close({ handle: replacement, reason: "done", discardPersistentState: true });
+        await expect(discard(manager, target, "test-cleanup", false)).resolves.toMatchObject({
+          runtimeClosed: true,
+          metaCleared: true,
+        });
       }
-      await expect(discard(manager, target, "oneshot-delete")).resolves.toMatchObject({
-        runtimeClosed: true,
-        metaCleared: true,
-      });
-      expect(readAcpSessionEntry(target)?.acp).toBeUndefined();
+      expect((await readAcpSessionEntryAsync(target))?.acp).toBeUndefined();
     },
   );
 });

@@ -46,8 +46,9 @@ vi.mock("./update-immutable-generation.js", async (importOriginal) => ({
   verifyImmutableGeneration: mocks.verify,
   installImmutableLauncher: mocks.launcher,
 }));
-vi.mock("./update-immutable-service.js", () => ({
-  verifyImmutableService: async () => {},
+vi.mock("./update-immutable-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-immutable-service.js")>()),
+  readImmutableService: async () => ({}),
   inspectImmutableActivationService: mocks.inspect,
   assertImmutableServiceProcessCurrent: mocks.current,
 }));

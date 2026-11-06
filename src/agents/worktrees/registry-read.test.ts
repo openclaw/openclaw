@@ -1,18 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -38,7 +36,8 @@ import {
 import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
 import { resolveWorktreeForPath } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
-import { useManagedWorktreeTestRepository } from "./service.test-support.js";
+import { makeWorktreeRecord, useManagedWorktreeTestRepository } from "./service.test-support.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 import { interceptWorktreeWorkerOperation } from "./worker-operation.test-support.js";
 
@@ -87,26 +86,23 @@ vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useWorktreeStateRoots(() => {
+  writerGate.buffer = undefined;
+});
 const initializeRepository = useManagedWorktreeTestRepository();
 function recordFixture(
   root: string,
   id: string,
   overrides: Partial<ManagedWorktreeRecord> = {},
 ): ManagedWorktreeRecord {
-  return {
-    repoFingerprint: "0123456789abcdef",
-    repoRoot: path.join(root, "repo"),
+  return makeWorktreeRecord(path.join(root, "repo"), id, {
     branch: `openclaw/${id}`,
-    baseRef: "HEAD",
     ownerKind: "manual",
-    createdAt: 1,
-    lastActiveAt: 1,
     ...overrides,
     id,
     name: id,
     path: path.join(root, id),
-  };
+  });
 }
 function expectRecent(value: number | undefined, since: number) {
   expect(value).toBeGreaterThanOrEqual(since);
@@ -134,6 +130,7 @@ async function serviceFixture() {
 function holdPublication(type: "worktrees.insert" | "worktrees.update", afterCommit = false) {
   const entered = createDeferred();
   const release = createDeferred();
+  const refused = createDeferred<unknown>();
   let writes = 0;
   const transport = interceptWorktreeWorkerOperation(
     (execute) => async (command, executeOptions) => {
@@ -149,11 +146,15 @@ function holdPublication(type: "worktrees.insert" | "worktrees.update", afterCom
       if (afterCommit) {
         throw new Error("Synthetic lost registry reply after native commit");
       }
-      return execute(command, executeOptions);
+      return execute(command, executeOptions).catch((error: unknown) => {
+        refused.resolve(error);
+        throw error;
+      });
     },
   );
   return {
     entered: entered.promise,
+    refused: refused.promise,
     release: () => release.resolve(),
     writes: () => writes,
     restore: () => transport.mockRestore(),
@@ -183,13 +184,6 @@ async function withPublication(
     }
   }
 }
-
-afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  writerGate.buffer = undefined;
-  vi.restoreAllMocks();
-});
 
 it("serves committed worktree rows while a background write is blocked", async ({ signal }) => {
   const root = tempDirs.make("worktree-reader-writer-isolation-");
@@ -281,6 +275,7 @@ it("reads registry records without retiring a temporarily unavailable worktree",
 
 it("creates, resolves, lists, and publishes activity without caller-thread registry SQL", async () => {
   const { env, service, params } = await serviceFixture();
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   await service.listRegistryRecords();
   const { db } = openOpenClawStateDatabase({ env });
   const sql = observeHostDataSql();
@@ -296,7 +291,7 @@ it("creates, resolves, lists, and publishes activity without caller-thread regis
       { sessionEntry: { worktree: { id: record.id } }, candidatePaths: [] },
       { candidatePaths: [path.join(record.path, "README.md")] },
     ]) {
-      expect((await resolveWorktreeForPath({ env, ...selection }))?.record).toEqual(record);
+      expect((await resolveWorktreeForPath(selection))?.record).toEqual(record);
     }
     expect(await service.list()).toEqual([record]);
     expect(registryQueries()).toEqual([]);
@@ -381,6 +376,16 @@ it.each(["replacement", "retained lock", "checkout lease", "caller"] as const)(
         current = false;
       }
       publication.release();
+      if (kind === "checkout lease") {
+        // Keep replacement custody through the native refusal, then let settlement reacquire it.
+        await expect(
+          awaitGateBeforeSettlement(publication.refused, pending, "Publication was not refused"),
+        ).resolves.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+        db.prepare("DELETE FROM state_leases WHERE scope = ? AND owner = ?").run(
+          WORKTREE_MUTATION_LEASE_SCOPE,
+          "replacement-owner",
+        );
+      }
       await expect(pending).rejects.toThrow(/changed|lease|revoked/i);
       if (existing) {
         expect(getRegistryWorktree(env, existing.id)).toMatchObject({

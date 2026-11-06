@@ -16,30 +16,32 @@ import {
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
-import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
-import { SkillLibraryError } from "../../skills/skill-library-error.js";
+import { transferCommandOwnerAuthorityToSuccessor } from "../command-owner-authority.js";
 import { createGoalContinuationReturnScope } from "./goal-continuation-return.js";
 import type { GoalContinuation } from "./goal-continuation.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
 import { isFollowupRunAborted, type FollowupRun, type QueueSettings } from "./queue/types.js";
+import { buildTranscriptFollowupRun } from "./transcript-followup-run.js";
 
 export type { GoalContinuation } from "./goal-continuation.types.js";
 
-/** Selects supported placement facts; execution still acquires a fresh turn claim. */
-export async function isSupportedWorkerGoalPlacement(params: {
+/** Selects supported Codex placement facts; execution still acquires a fresh turn claim. */
+async function resolveCodexGoalPlacement(params: {
   agentId?: string;
   sessionKey: string;
   sessionId: string;
-}): Promise<boolean> {
-  if (getRegisteredAgentHarness("codex")?.harness.cloudPlacement?.mode !== "remote-exec") {
-    return false;
+  requiresWorker?: boolean;
+}): Promise<"local" | "worker" | undefined> {
+  const harness = getRegisteredAgentHarness("codex")?.harness;
+  if (!harness) {
+    return undefined;
   }
   const service = getInProcessGatewayRequestContext()?.workerSessionPlacementService;
   const prepared = await service?.prepareSessionPlacement?.(params.sessionId);
   if (!prepared) {
-    return false;
+    return params.requiresWorker ? undefined : "local";
   }
   try {
     const pending = prepared.prepareRead();
@@ -47,13 +49,23 @@ export async function isSupportedWorkerGoalPlacement(params: {
       await pending;
     }
     const placement = prepared.current();
-    return Boolean(
-      placement &&
-      placement.executionMode === "remote-exec" &&
-      placement.state !== "local" &&
-      placement.agentId === params.agentId &&
-      placement.sessionKey === params.sessionKey,
-    );
+    if (!placement) {
+      return params.requiresWorker ? undefined : "local";
+    }
+    if (
+      placement.agentId !== params.agentId ||
+      placement.sessionKey !== params.sessionKey ||
+      placement.sessionId !== params.sessionId
+    ) {
+      return undefined;
+    }
+    if (placement.state === "local") {
+      return params.requiresWorker ? undefined : "local";
+    }
+    return placement.executionMode === "remote-exec" &&
+      harness.cloudPlacement?.mode === "remote-exec"
+      ? "worker"
+      : undefined;
   } finally {
     prepared.release();
   }
@@ -73,8 +85,36 @@ export function isGoalContinuationCurrent(
     !entry.abortedLastRun &&
     (entry.agentHarnessId === undefined ||
       entry.agentHarnessId === "openclaw" ||
-      (entry.agentHarnessId === "codex" && continuation.workerGoal === true)),
+      (entry.agentHarnessId === "codex" &&
+        (continuation.workerGoal === true || continuation.localCodexGoal === true))),
   );
+}
+
+/** Revalidates Codex placement at admission; built-in runs have no placement marker. */
+export async function isGoalContinuationPlacementCurrent(params: {
+  continuation: GoalContinuation;
+  agentId?: string;
+  sessionKey: string;
+  hasOperatorAuthority: boolean;
+  requiresWorker: boolean;
+}): Promise<boolean> {
+  const { continuation } = params;
+  if (!continuation.workerGoal && !continuation.localCodexGoal) {
+    return true;
+  }
+  if (!params.hasOperatorAuthority) {
+    return false;
+  }
+  if (continuation.localCodexGoal && params.requiresWorker) {
+    return false;
+  }
+  const placement = await resolveCodexGoalPlacement({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: continuation.sessionId,
+    requiresWorker: continuation.workerGoal === true,
+  });
+  return continuation.workerGoal ? placement === "worker" : placement === "local";
 }
 
 function isGoalContinuationOutcome(result: EmbeddedAgentRunResult): boolean {
@@ -141,14 +181,18 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   if (!eligible() || !entry?.goal) {
     return false;
   }
-  const workerGoal =
-    entry.agentHarnessId === "codex" &&
-    Boolean(params.base.operatorAuthority) &&
-    (await isSupportedWorkerGoalPlacement({
-      agentId: params.base.run.agentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.expectedSession.sessionId,
-    }));
+  const codexPlacement =
+    entry.agentHarnessId === "codex" && params.base.operatorAuthority
+      ? await resolveCodexGoalPlacement({
+          agentId: params.base.run.agentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.expectedSession.sessionId,
+          requiresWorker: Boolean(params.base.run.config?.cloudWorkers?.requiredProfile),
+        })
+      : undefined;
+  if (entry.agentHarnessId === "codex" && !codexPlacement) {
+    return false;
+  }
   params.base.operatorAuthority?.assertCurrent();
   if (!eligible()) {
     return false;
@@ -156,7 +200,8 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   const continuation: GoalContinuation = {
     ...params.expectedSession,
     goalId: params.initialGoalId ?? entry.goal.id,
-    ...(workerGoal ? { workerGoal: true as const } : {}),
+    ...(codexPlacement === "worker" ? { workerGoal: true as const } : {}),
+    ...(codexPlacement === "local" ? { localCodexGoal: true as const } : {}),
   };
   if (!isGoalContinuationCurrent(continuation, entry)) {
     return false;
@@ -167,54 +212,46 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   }
   const base = params.base;
   const cancellation = new AbortController();
-  const nudge: FollowupRun = {
-    ...base,
-    goalContinuation: continuation,
-    prompt: formatSystemTurnPrompt(
+  const transcript = buildTranscriptFollowupRun(base, {
+    prompt:
       "Advance the active goal; keep it active until fully achieved. Use the current goal context, and verify the entire objective before marking it complete.",
-    ),
+    sourceTool: "session_goal_continue",
+    expiredSkillAuthoringMessage:
+      "Skill authoring requires a fresh user request after the previous turn settled.",
+  });
+  // A session-event turn (for example a background exec completion) owns an
+  // occurrence-scoped signal, settlement hooks, and one-shot source delivery that
+  // all end when the event settles. The Goal turn outlives that occurrence, so it
+  // keeps only its own cancellation and the session's ordinary routed delivery.
+  // It still is not an authenticated channel turn, so the event origin and its
+  // explicit delivery suppression stay on the run as data, and inherited owner
+  // authority moves to the requester's own live check.
+  const sourceEvent = base.run.internalEventExecution;
+  const sourceSignal = sourceEvent ? undefined : base.abortSignal;
+  let run = transcript.run;
+  if (sourceEvent) {
+    run = {
+      ...transcript.run,
+      internalEventExecution: undefined,
+      sessionEventOrigin: sourceEvent.deliver === false ? { deliver: false } : {},
+    };
+    if (transferCommandOwnerAuthorityToSuccessor(run) === "removed") {
+      run.senderIsOwner = false;
+    }
+  }
+  const nudge: FollowupRun = {
+    ...transcript,
+    run,
+    ...(sourceEvent ? { queuedFollowupReplyDisposition: undefined } : {}),
+    goalContinuation: continuation,
     summaryLine: "goal-continuation",
     messageId: ["goal", continuation.sessionId, continuation.goalId, params.sourceRunId].join(":"),
-    abortSignal: base.abortSignal
-      ? AbortSignal.any([base.abortSignal, cancellation.signal])
+    abortSignal: sourceSignal
+      ? AbortSignal.any([sourceSignal, cancellation.signal])
       : cancellation.signal,
-    enqueuedAt: Date.now(),
-    disableCollectBatching: true,
-    transcriptPrompt: undefined,
-    userTurnTranscriptRecorder: undefined,
-    sourceTurnId: undefined,
-    currentInboundContext: undefined,
-    images: undefined,
-    imageOrder: undefined,
-    media: undefined,
-    turnAdoptionLifecycle: undefined,
-    replyOperationRunStates: undefined,
-    onQueueDisposition: undefined,
     controllerInput: params.controllerInput,
-    controllerClaim: undefined,
     strandedReplyRetry: undefined,
     stalledTurnRecovery: undefined,
-    queuedFollowupReplyDisposition:
-      source?.kind === "deliver"
-        ? { kind: "deliver", deliver: source.deliver.createSourceRetry?.() ?? source.deliver }
-        : source,
-    run: {
-      ...base.run,
-      inputProvenance: { kind: "internal_system", sourceTool: "session_goal_continue" },
-      suppressNextUserMessagePersistence: true,
-      skillLibraryAuthoring: base.run.skillLibraryAuthoring && {
-        target: "personal",
-        defaultTarget: "personal",
-        multipleProfiles: base.run.skillLibraryAuthoring.multipleProfiles,
-        bind: () => {},
-        invoke: async () => {
-          throw new SkillLibraryError(
-            "AUTHORITY_EXPIRED",
-            "Skill authoring requires a fresh user request after the previous turn settled.",
-          );
-        },
-      },
-    },
   };
   if (params.controllerInput) {
     bindSessionControllerSource(params.controllerInput, nudge);
@@ -244,24 +281,24 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
 export function createGoalContinuationReturn(
   params: Omit<GoalContinuationParams, "result" | "sourceRunId"> | undefined,
 ): <T>(run: () => T) => T {
-  if (!params?.initialGoalId) {
+  if (!params) {
     return (run) => run();
   }
-  const continuation: GoalContinuation = {
-    sessionId: params.expectedSession.sessionId,
-    lifecycleRevision: params.expectedSession.lifecycleRevision,
-    goalId: params.initialGoalId,
-  };
   return createGoalContinuationReturnScope({
     base: params.base,
     sessionKey: params.sessionKey,
-    continuation,
+    storePath: params.storePath,
+    expectedSession: {
+      sessionId: params.expectedSession.sessionId,
+      lifecycleRevision: params.expectedSession.lifecycleRevision,
+    },
+    initialGoalId: params.initialGoalId,
     operation: params.operation,
-    context: (entry, existing) =>
+    context: (continuation, entry, existing) =>
       isGoalContinuationCurrent(continuation, entry)
         ? refreshActiveGoalContext(existing, entry)
         : undefined,
-    async resume({ base, runId, result, isCurrent }) {
+    async resume({ continuation, base, runId, result, isCurrent }) {
       // The controller sees this pending input before admission reads yield to Stop.
       const input = reserveSessionControllerSource(params.queueKey, {
         policy: params.settings,

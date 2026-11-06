@@ -30,7 +30,7 @@ vi.mock("../../agents/sandbox/context.js", () => {
   optionalMediaRuntimesLoaded("sandbox-context");
   return {
     resolveSandboxContext: unavailable,
-    ensureSandboxWorkspaceForSession: unavailable,
+    prepareSandboxWorkspaceForSession: unavailable,
   };
 });
 
@@ -38,7 +38,6 @@ vi.mock("../../agents/sandbox/context.js", () => {
 vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => {
   optionalMediaRuntimesLoaded("stage-sandbox-media");
   return {
-    SANDBOX_MEDIA_MAX_BYTES: 50 * 1024 * 1024,
     stageSandboxMedia: unavailable,
   };
 });

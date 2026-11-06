@@ -52,14 +52,12 @@ function firstDrift(report: ReturnType<typeof detectDrift>) {
   return expectDefined(report.drifts[0], "detected plugin drift");
 }
 
-function npmRecords(ids: string[]) {
-  return Object.fromEntries(
-    ids.map((id) => [id, npmRecord("2026.5.3", { resolvedName: `@openclaw/${id}` })]),
-  );
-}
-
 function expectRegistryLookup(name = "@openclaw/whatsapp") {
   expect(fetchClawHubPackageDetail).toHaveBeenCalledWith({ name, baseUrl: "https://clawhub.ai" });
+}
+
+function hubTarget<T extends object>(fields: T) {
+  return { packageName: hubPackage, requestedTarget: "2026.9.4", ...fields };
 }
 
 function expectNoRepair(entry: ReturnType<typeof firstDrift>) {
@@ -68,65 +66,31 @@ function expectNoRepair(entry: ReturnType<typeof firstDrift>) {
   expect(fetchClawHubPackageDetail).not.toHaveBeenCalled();
 }
 
-const driftCases: Array<
-  Omit<Parameters<typeof detectDrift>[0], "gatewayVersion"> & {
-    name: string;
-    gatewayVersion?: string;
-    expected: unknown[];
-  }
-> = [
-  {
-    name: "treats build qualifiers as matching",
+it("reports only active, unpinned cohort mismatches in plugin order", () => {
+  const report = detectDrift({
     gatewayVersion: "2026.5.4-1",
     installRecords: {
       whatsapp: npmRecord("2026.5.4"),
       discord: npmRecord("2026.5.4-1", { resolvedName: "@openclaw/discord" }),
-    },
-    expected: [],
-  },
-  {
-    name: "ignores exact catalog pins",
-    gatewayVersion: "2026.5.7",
-    installRecords: {
+      slack: npmRecord("2026.5.3", {
+        resolvedName: "@openclaw/slack",
+        resolvedVersion: undefined,
+        version: "2026.5.3",
+      }),
+      matrix: npmRecord("2026.5.3", { resolvedName: "@openclaw/matrix" }),
+      telegram: npmRecord("2026.5.3", { resolvedName: "@openclaw/telegram" }),
+      brave: { source: "npm", spec: "@openclaw/brave-plugin@latest" },
       "wecom-openclaw-plugin": npmRecord("2026.5.6", {
         resolvedName: "@wecom/wecom-openclaw-plugin",
         spec: "@wecom/wecom-openclaw-plugin@2026.5.6",
       }),
     },
-    expected: [],
-  },
-  {
-    name: "falls back to version when resolvedVersion is absent",
-    installRecords: {
-      whatsapp: npmRecord("2026.5.3", { resolvedVersion: undefined, version: "2026.5.3" }),
-    },
-    expected: [expect.objectContaining({ installedVersion: "2026.5.3" })],
-  },
-  {
-    name: "skips plugins with no recorded version",
-    installRecords: {
-      whatsapp: { source: "npm", spec: "@openclaw/whatsapp@latest" } satisfies InstallRecord,
-    },
-    expected: [],
-  },
-  {
-    name: "skips explicitly disabled plugins",
-    installRecords: npmRecords(["whatsapp", "discord"]),
-    config: {
-      plugins: { entries: { whatsapp: { enabled: false }, discord: { enabled: true } } },
-    },
-    expected: [expect.objectContaining({ pluginId: "discord" })],
-  },
-  {
-    name: "sorts drifts by pluginId",
-    installRecords: npmRecords(["whatsapp", "discord", "matrix"]),
-    expected: ["discord", "matrix", "whatsapp"].map((pluginId) =>
-      expect.objectContaining({ pluginId }),
-    ),
-  },
-];
-it.each(driftCases)("detectPluginVersionDrift: $name", ({ expected, ...input }) => {
-  expect(detectDrift({ gatewayVersion: "2026.5.4", ...input }).drifts).toEqual(expected);
+    config: { plugins: { entries: { telegram: { enabled: false }, slack: { enabled: true } } } },
+  });
+  expect(report.drifts).toEqual([
+    expect.objectContaining({ pluginId: "matrix", installedVersion: "2026.5.3" }),
+    expect.objectContaining({ pluginId: "slack", installedVersion: "2026.5.3" }),
+  ]);
 });
 describe("resolvePluginVersionDriftTargets", () => {
   beforeEach(() => vi.mocked(fetchNpmPackageTargetStatus).mockReset());
@@ -205,12 +169,7 @@ describe("resolvePluginVersionDriftTargets for ClawHub installs", () => {
     {
       installed: "2026.9.3",
       latest: "2026.9.3",
-      resolution: {
-        status: "registry-current",
-        packageName: "@openclaw/whatsapp",
-        requestedTarget: "2026.9.4",
-        version: "2026.9.3",
-      },
+      resolution: hubTarget({ status: "registry-current", version: "2026.9.3" }),
       lag: { registryVersion: "2026.9.3", expectedVersion: "2026.9.4" },
     },
     {
@@ -302,12 +261,7 @@ describe("resolvePluginVersionDriftTargets for ClawHub installs", () => {
     );
     expectRegistryLookup();
     const entry = firstDrift(report);
-    expect(entry.targetResolution).toEqual({
-      status: "resolved",
-      packageName: "@openclaw/whatsapp",
-      requestedTarget: "2026.9.4",
-      version: "2026.9.3",
-    });
+    expect(entry.targetResolution).toEqual(hubTarget({ status: "resolved", version: "2026.9.3" }));
     const command = repairCommand(entry);
     expect(command).toBe("openclaw plugins update whatsapp");
     const rawId = expectDefined(command, "repair command").replace("openclaw plugins update ", "");
@@ -320,6 +274,14 @@ describe("resolvePluginVersionDriftTargets for ClawHub installs", () => {
     expect(selection).toEqual({ pluginIds: ["whatsapp"] });
     const selectedId = expectDefined(selection.pluginIds[0], "selected install owner");
     const record = expectDefined(installRecords[selectedId], "selected install record");
+    expect(
+      resolvePluginUpdateSelection({
+        installs: { whatsapp: record },
+        rawIds: ["whatsapp-alias"],
+        installOwnerByPluginId: new Map([["whatsapp-alias", "whatsapp"]]),
+        rejectedPluginIds: new Map([["whatsapp-alias", "fixture ownership rejection"]]),
+      }),
+    ).toEqual({ pluginIds: [], error: "fixture ownership rejection" });
     expect(
       resolveClawHubUpdateSpecs({
         record,
@@ -388,12 +350,9 @@ describe("resolvePluginVersionDriftTargets for ClawHub installs", () => {
   ])("keeps drift reported when $label", async ({ arrange, error }) => {
     arrange();
     const entry = await hubEntry();
-    expect(entry.targetResolution).toMatchObject({
-      status: "unresolved",
-      packageName: "@openclaw/whatsapp",
-      requestedTarget: "2026.9.4",
-      error: expect.stringContaining(error),
-    });
+    expect(entry.targetResolution).toMatchObject(
+      hubTarget({ status: "unresolved", error: expect.stringContaining(error) }),
+    );
   });
 });
 

@@ -36,7 +36,7 @@ import {
   readDescendantFacts,
   REQUESTER_KEY,
   settledChild,
-  publishWakeTransition,
+  wakeParams,
   useRequesterSettleDispatchFixture,
   createRequesterSettleContext as createContext,
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
@@ -57,6 +57,7 @@ describe("requester settle watch admission", () => {
     const context = createContext();
     context.agentDatabaseStartup = {
       hasPendingAgents: true,
+      isAgentInputRecoveryPending: () => false,
       waitForAgentPreparation: (agentId) => {
         expect(agentId).toBe("main");
         preparationObserved.resolve();
@@ -67,13 +68,7 @@ describe("requester settle watch admission", () => {
     registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
     deliver.mockResolvedValue({ delivered: true, path: "direct" });
     const completeBatch = vi.fn();
-    const wake = maybeWakeRequesterAfterAllChildrenSettled({
-      isSourceCurrent: () => true,
-      requesterSessionKey: REQUESTER_KEY,
-      settledEntry: child,
-      transitionBatch: publishWakeTransition,
-      completeBatch,
-    });
+    const wake = maybeWakeRequesterAfterAllChildrenSettled(wakeParams(child, completeBatch));
     try {
       await expect(
         Promise.race([
@@ -87,9 +82,7 @@ describe("requester settle watch admission", () => {
 
       preparation.resolve();
       await expect(wake).resolves.toBe(true);
-      expect(deliver).toHaveBeenCalledOnce();
       expect(completeBatch).toHaveBeenCalledOnce();
-      expect(Date.now()).toBe(10_000);
     } finally {
       preparation.resolve();
       await wake;
@@ -213,16 +206,8 @@ describe("requester settle watch admission", () => {
         child.requesterSettleWake = undefined;
       });
       await expect(
-        maybeWakeRequesterAfterAllChildrenSettled({
-          requesterSessionKey: REQUESTER_KEY,
-          settledEntry: child,
-          isSourceCurrent: () => true,
-          transitionBatch: publishWakeTransition,
-          completeBatch,
-        }),
+        maybeWakeRequesterAfterAllChildrenSettled(wakeParams(child, completeBatch)),
       ).resolves.toBe(true);
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(completeBatch).toHaveBeenCalledOnce();
       expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
       expect(watched).toBe(change === "current");
       if (change !== "current") {

@@ -1,3 +1,4 @@
+import { throwIfSettledRejected } from "../../infra/error-graph-internal.js";
 import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../../sessions/session-controller.lifecycle.js";
 import { settlesWithin } from "../../shared/settle-within.js";
 
@@ -14,15 +15,7 @@ export async function completeAbortRetirements<T>(
           "Cancellation was requested, but cleanup is still pending. Check the turn status before retrying Stop.",
         );
       }
-      const failures = (await settlement).flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "Cancellation cleanup failed");
-      }
-      if (failures.length === 1) {
-        throw failures[0];
-      }
+      throwIfSettledRejected(await settlement, "Cancellation cleanup failed");
     })(),
   ]);
   if (

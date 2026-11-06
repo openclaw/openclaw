@@ -10,6 +10,11 @@ import { containerHasTerminated } from "./container-inspect.js";
 
 const log = createSubsystemLogger("docker");
 const sandboxContainerLifecycleQueue = new KeyedAsyncQueue();
+const pendingLifecycles = new Map<string, number>();
+
+export function isSandboxContainerLifecycleBusy(name: string): boolean {
+  return pendingLifecycles.has(name);
+}
 
 export type ContainerSourceLease = {
   authority: AdmittedRunOperatorAuthority;
@@ -206,9 +211,16 @@ export async function withSandboxContainerLifecycle<T>(
   operation: (source: ContainerSourceLease | undefined) => Promise<T>,
 ): Promise<T> {
   const source = retainContainerSource(authority);
+  pendingLifecycles.set(name, (pendingLifecycles.get(name) ?? 0) + 1);
   try {
     return await sandboxContainerLifecycleQueue.enqueue(name, () => operation(source));
   } finally {
+    const pending = pendingLifecycles.get(name)! - 1;
+    if (pending) {
+      pendingLifecycles.set(name, pending);
+    } else {
+      pendingLifecycles.delete(name);
+    }
     if (source && !source.adopted) {
       source.release();
     }
@@ -287,7 +299,7 @@ export function releaseSandboxContainerSource(
 export async function removeSandboxContainerRuntime(
   engine: SandboxContainerEngine,
   name: string,
-  generation?: { id: string | null; assertCurrent: () => void },
+  generation?: { id: string | null; assertCurrent: () => void; signal?: AbortSignal },
 ): Promise<void> {
   await sandboxContainerLifecycleQueue.enqueue(name, async () => {
     generation?.assertCurrent();
@@ -310,7 +322,10 @@ export async function removeSandboxContainerRuntime(
       }
       return;
     }
-    const result = await execContainer(engine, ["rm", "-f", target], { allowFailure: true });
+    const result = await execContainer(engine, ["rm", "-f", target], {
+      allowFailure: true,
+      signal: generation?.signal,
+    });
     if (result.code !== 0) {
       const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
       if (!/No such (container|object)|does not exist/iu.test(detail)) {

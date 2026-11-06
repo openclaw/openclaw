@@ -75,63 +75,6 @@ export function createChannelWizard(
     completion: Promise<unknown>;
   } | null = null;
 
-  async function start(channel: string | null): Promise<void> {
-    const client = getClient();
-    if (!client) {
-      return;
-    }
-    const generation = ++currentGeneration;
-    abortController?.abort();
-    abortController = new AbortController();
-    wizardSessionId = null;
-    currentChannel = channel;
-    setState({ phase: "starting", channel });
-    try {
-      const cancellation = pendingCancellation;
-      if (cancellation?.client === client) {
-        await cancellation.completion;
-        if (currentGeneration !== generation) {
-          return;
-        }
-      }
-      const result = await requestWithTimeout<WizardStartResult>(
-        client,
-        "wizard.start",
-        {
-          flow: "channels",
-          ...(channel ? { channel } : {}),
-        },
-        (lateResult) => cancelRunningWizardResult(client, lateResult),
-      );
-      if (currentGeneration !== generation) {
-        // The modal was closed/superseded mid-start, but the gateway already
-        // created a running session; cancel it or later starts get rejected.
-        cancelRunningWizardResult(client, result);
-        return;
-      }
-      wizardSessionId = result.sessionId ?? null;
-      applyResult(result);
-    } catch (err) {
-      if (currentGeneration !== generation) {
-        return;
-      }
-      setState({ phase: "error", channel, message: formatUiError(err) });
-    }
-  }
-
-  async function answer(value: unknown): Promise<void> {
-    const current = currentState;
-    if (!getClient() || !wizardSessionId || current.phase !== "step" || current.busy) {
-      return;
-    }
-    const generation = currentGeneration;
-    if (current.step.type === "select" && typeof value === "string" && isKnownChannel(value)) {
-      currentChannel ??= value;
-    }
-    setState({ ...current, busy: true, validationError: null });
-    await advance(generation, { stepId: current.step.id, value });
-  }
-
   async function advance(
     generation: number,
     response?: { stepId: string; value: unknown },
@@ -176,30 +119,6 @@ export function createChannelWizard(
         return;
       }
       setState({ phase: "error", channel: currentChannel, message: formatUiError(err) });
-    }
-  }
-
-  async function cancel(): Promise<void> {
-    const client = getClient();
-    const sessionId = wizardSessionId;
-    currentGeneration += 1;
-    wizardSessionId = null;
-    abortController?.abort();
-    abortController = null;
-    currentChannel = null;
-    setState({ phase: "idle" });
-    if (client && sessionId) {
-      // Replacement starts await this settlement, so it needs the same ceiling as wizard.start.
-      const completion = Promise.resolve()
-        .then(() => requestWithTimeout(client, "wizard.cancel", { sessionId, closeInput: true }))
-        .catch(() => {
-          // Session may already be finished/purged; closing the modal wins.
-        });
-      pendingCancellation = { client, completion };
-      await completion;
-      if (pendingCancellation?.completion === completion) {
-        pendingCancellation = null;
-      }
     }
   }
 
@@ -254,8 +173,83 @@ export function createChannelWizard(
     get state() {
       return currentState;
     },
-    start,
-    answer,
-    cancel,
+    async start(channel: string | null): Promise<void> {
+      const client = getClient();
+      if (!client) {
+        return;
+      }
+      const generation = ++currentGeneration;
+      abortController?.abort();
+      abortController = new AbortController();
+      wizardSessionId = null;
+      currentChannel = channel;
+      setState({ phase: "starting", channel });
+      try {
+        const cancellation = pendingCancellation;
+        if (cancellation?.client === client) {
+          await cancellation.completion;
+          if (currentGeneration !== generation) {
+            return;
+          }
+        }
+        const result = await requestWithTimeout<WizardStartResult>(
+          client,
+          "wizard.start",
+          {
+            flow: "channels",
+            ...(channel ? { channel } : {}),
+          },
+          (lateResult) => cancelRunningWizardResult(client, lateResult),
+        );
+        if (currentGeneration !== generation) {
+          // The modal was closed/superseded mid-start, but the gateway already
+          // created a running session; cancel it or later starts get rejected.
+          cancelRunningWizardResult(client, result);
+          return;
+        }
+        wizardSessionId = result.sessionId ?? null;
+        applyResult(result);
+      } catch (err) {
+        if (currentGeneration !== generation) {
+          return;
+        }
+        setState({ phase: "error", channel, message: formatUiError(err) });
+      }
+    },
+    async answer(value: unknown): Promise<void> {
+      const current = currentState;
+      if (!getClient() || !wizardSessionId || current.phase !== "step" || current.busy) {
+        return;
+      }
+      const generation = currentGeneration;
+      if (current.step.type === "select" && typeof value === "string" && isKnownChannel(value)) {
+        currentChannel ??= value;
+      }
+      setState({ ...current, busy: true, validationError: null });
+      await advance(generation, { stepId: current.step.id, value });
+    },
+    async cancel(): Promise<void> {
+      const client = getClient();
+      const sessionId = wizardSessionId;
+      currentGeneration += 1;
+      wizardSessionId = null;
+      abortController?.abort();
+      abortController = null;
+      currentChannel = null;
+      setState({ phase: "idle" });
+      if (client && sessionId) {
+        // Replacement starts await this settlement, so it needs the same ceiling as wizard.start.
+        const completion = Promise.resolve()
+          .then(() => requestWithTimeout(client, "wizard.cancel", { sessionId, closeInput: true }))
+          .catch(() => {
+            // Session may already be finished/purged; closing the modal wins.
+          });
+        pendingCancellation = { client, completion };
+        await completion;
+        if (pendingCancellation?.completion === completion) {
+          pendingCancellation = null;
+        }
+      }
+    },
   };
 }

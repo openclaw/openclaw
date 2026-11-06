@@ -1,11 +1,10 @@
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
-import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
+  withCodexAppServerAuthProfileIdAtEffect,
 } from "./app-server/auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
@@ -57,11 +56,10 @@ type CodexDiagnosticsCandidate = Omit<
 
 export async function handleCodexDiagnosticsFeedback(
   deps: CodexCommandDeps,
-  context: PluginCommandContext,
+  ctx: PluginCommandContext,
   pluginConfig: CodexPluginConfig | undefined,
   args: string,
 ): Promise<PluginCommandResult> {
-  const ctx = { ...context };
   if (ctx.senderIsOwner !== true) {
     return { text: "Only an owner can send Codex diagnostics." };
   }
@@ -273,54 +271,76 @@ async function sendCodexDiagnosticsFeedbackForTargets(
   for (const target of targets) {
     let prepared: Awaited<ReturnType<CodexCommandDeps["bindingStore"]["prepareRead"]>>;
     try {
-      const assertCurrent = () => {
-        ctx.assertOwnerCurrent?.();
-        const current = resolvePendingCodexDiagnosticsTarget(target, prepared?.read(), ctx.config);
-        if (!codexDiagnosticsTargetsMatch([target], current ? [current] : [])) {
-          throw new Error("The Codex diagnostics session changed before upload; request it again.");
-        }
-      };
-      let connection: Awaited<ReturnType<typeof resolveCodexBindingAppServerConnection>>;
-      try {
-        prepared = await deps.bindingStore.prepareRead(target.identity);
-        connection = await resolveCodexBindingAppServerConnection({
-          binding: target,
-          authProfileId: target.authProfileId,
-          pluginConfig,
-          agentDir: target.agentDir,
-          config: ctx.config,
-        });
-      } catch (error) {
-        failed.push({
-          target,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        continue;
-      }
-      const response = await safeCodexControlRequest(
+      prepared = await deps.bindingStore.prepareRead(target.identity);
+      const connection = await resolveCodexBindingAppServerConnection({
+        binding: target,
+        authProfileId: target.authProfileId,
         pluginConfig,
-        CODEX_CONTROL_METHODS.feedback,
-        {
-          classification: "bug",
-          threadId: target.threadId,
-          includeLogs: true,
-          tags: buildDiagnosticsTags(ctx),
-          ...(reason ? { reason } : {}),
-        },
-        {
-          config: ctx.config,
-          agentDir: target.agentDir,
-          assertCurrent,
-          ...(connection.clientAuthProfileId !== undefined
-            ? { authProfileId: connection.clientAuthProfileId }
-            : {}),
-          ...(connection.usesSupervisionConnection
-            ? { startOptions: connection.appServer.start }
-            : {}),
-          ...(target.sessionId ? { sessionId: target.sessionId } : {}),
-          ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
-        },
-      );
+        agentDir: target.agentDir,
+        config: ctx.config,
+      });
+      const send = async (reader?: {
+        read(): Promise<string | undefined>;
+        assertCurrent(): void;
+      }) => {
+        let authProfileId = target.authProfileId;
+        const assertCurrent = () => {
+          ctx.assertOwnerCurrent?.();
+          reader?.assertCurrent();
+          const current = resolvePendingCodexDiagnosticsTarget(
+            target,
+            prepared?.read(),
+            authProfileId,
+          );
+          if (!codexDiagnosticsTargetsMatch([target], current ? [current] : [])) {
+            throw new Error(
+              "The Codex diagnostics session changed before upload; request it again.",
+            );
+          }
+        };
+        return safeCodexControlRequest(
+          pluginConfig,
+          CODEX_CONTROL_METHODS.feedback,
+          {
+            classification: "bug",
+            threadId: target.threadId,
+            includeLogs: true,
+            tags: buildDiagnosticsTags(ctx),
+            ...(reason ? { reason } : {}),
+          },
+          {
+            config: ctx.config,
+            agentDir: target.agentDir,
+            assertCurrent,
+            ...(reader
+              ? {
+                  assertDispatchCurrentAsync: async () => {
+                    authProfileId = await reader.read();
+                    assertCurrent();
+                  },
+                }
+              : {}),
+            ...(connection.clientAuthProfileId !== undefined
+              ? { authProfileId: connection.clientAuthProfileId }
+              : {}),
+            ...(connection.usesSupervisionConnection
+              ? { startOptions: connection.appServer.start }
+              : {}),
+            ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+            ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+          },
+        );
+      };
+      const response = connection.usesSupervisionConnection
+        ? await send()
+        : await withCodexAppServerAuthProfileIdAtEffect(
+            {
+              agentDir: target.agentDir,
+              authProfileId: prepared?.read()?.authProfileId,
+              config: ctx.config,
+            },
+            send,
+          );
       if (!response.ok) {
         failed.push({ target, error: response.error });
         continue;
@@ -330,6 +350,8 @@ async function sendCodexDiagnosticsFeedbackForTargets(
         : undefined;
       sent.push({ ...target, threadId: responseThreadId ?? target.threadId });
       recordCodexDiagnosticsUpload(target.threadId, ctx, now, cooldownScope);
+    } catch (error) {
+      failed.push({ target, error: error instanceof Error ? error.message : String(error) });
     } finally {
       prepared?.release();
     }
@@ -385,10 +407,6 @@ async function resolveCodexDiagnosticsTargets(
       sessionKey: ctx.sessionKey,
       sessionId: ctx.sessionId,
       channel: ctx.channel,
-      channelId: ctx.channelId,
-      accountId: ctx.accountId,
-      messageThreadId: ctx.messageThreadId,
-      threadParentId: ctx.threadParentId,
     });
   }
   for (const session of ctx.diagnosticsSessions ?? []) {
@@ -410,10 +428,6 @@ async function resolveCodexDiagnosticsTargets(
       sessionKey: session.sessionKey,
       sessionId: session.sessionId,
       channel: session.channel,
-      channelId: session.channelId,
-      accountId: session.accountId,
-      messageThreadId: session.messageThreadId,
-      threadParentId: session.threadParentId,
     });
   }
   const seenBindingKeys = new Set<string>();
@@ -438,27 +452,15 @@ async function resolveCodexDiagnosticsTargets(
 function resolvePendingCodexDiagnosticsTarget(
   target: CodexDiagnosticsTarget,
   binding: CodexAppServerThreadBinding | undefined,
-  config?: PluginCommandContext["config"],
+  implicitAuthProfileId: string | undefined,
 ): CodexDiagnosticsTarget | undefined {
   if (!binding?.threadId) {
     return undefined;
   }
-  // Diagnostics upload is an external disclosure; resolve current auth at its effect boundary.
   const authProfileId =
     binding.connectionScope === "supervision"
       ? undefined
-      : binding.authProfileId?.trim() ||
-        resolveCodexAppServerAuthProfileId({
-          authProfileId: binding.authProfileId,
-          config,
-          store: ensureAuthProfileStore(target.agentDir, {
-            profileId: binding.authProfileId,
-            allowKeychainPrompt: false,
-            config,
-            externalCliProviderIds: ["openai"],
-            ...(binding.authProfileId ? { externalCliProfileIds: [binding.authProfileId] } : {}),
-          }),
-        });
+      : binding.authProfileId?.trim() || implicitAuthProfileId;
   return createCodexDiagnosticsTarget(target, binding, authProfileId);
 }
 
@@ -498,10 +500,6 @@ function createCodexDiagnosticsTarget(
     sessionKey: target.sessionKey,
     sessionId: target.sessionId,
     channel: target.channel,
-    channelId: target.channelId,
-    accountId: target.accountId,
-    messageThreadId: target.messageThreadId,
-    threadParentId: target.threadParentId,
   };
   if (binding.connectionScope === "supervision") {
     return {

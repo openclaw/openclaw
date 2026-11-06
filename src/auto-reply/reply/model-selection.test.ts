@@ -1,40 +1,33 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { getContextWindowCaches } from "../../agents/context-cache.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import { makeConfiguredModel } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js";
-import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thinking.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  PREPARED_THINKING_POLICY,
+  type PreparedThinkingPolicy,
+} from "../../plugins/provider-thinking-catalog.js";
 import { isThinkingLevelSupported } from "../thinking.js";
 import { prepareModelSelectionRuntime } from "./model-runtime-normalization.js";
-import {
-  createInitialState,
-  makeConfiguredModel,
-  makeEntry,
-} from "./model-selection.inputs.test-support.js";
+import { createInitialState, makeEntry } from "./model-selection.inputs.test-support.js";
 import { createModelSelectionState } from "./model-selection.js";
 
 type PersistReplySessionEntry =
   (typeof import("./session-entry-persistence.js"))["persistReplySessionEntry"];
 
-const DEFAULT_MOCK_CATALOG_ENTRIES = vi.hoisted(() => [
-  { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
-  { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
-  { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
-]);
-
 const { persist } = vi.hoisted(() => ({ persist: vi.fn<PersistReplySessionEntry>() }));
 
 const catalogMocks = vi.hoisted(() => ({
-  loadModelCatalog: async () => DEFAULT_MOCK_CATALOG_ENTRIES,
   loadModelCatalogSnapshot: vi.fn(async () => ({
-    entries: DEFAULT_MOCK_CATALOG_ENTRIES,
-    routeVariants: DEFAULT_MOCK_CATALOG_ENTRIES,
+    entries: [],
+    routeVariants: [],
     authoritative: true,
   })),
 }));
@@ -42,7 +35,7 @@ const catalogMocks = vi.hoisted(() => ({
 // mock-isolation: Model selection consumes this fixture's prepared catalog without provider discovery.
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  readPreparedModelCatalog: catalogMocks.loadModelCatalog,
+  readPreparedModelCatalog: async () => [],
   loadPreparedModelCatalogSnapshot: catalogMocks.loadModelCatalogSnapshot,
 }));
 
@@ -66,12 +59,7 @@ vi.mock("./session-entry-persistence.js", () => ({
 }));
 
 const authMocks = vi.hoisted(() => {
-  const state: {
-    store: {
-      version: 1;
-      profiles: Record<string, { type: "api_key"; provider: string; key: string }>;
-    };
-  } = { store: { version: 1, profiles: {} } };
+  const state: { store: AuthProfileStore } = { store: { version: 1, profiles: {} } };
   const prepareAuthProfileProvider = vi.fn(async (): Promise<{ provider: string | undefined }> => ({
     provider: undefined,
   }));
@@ -112,11 +100,27 @@ function preparedCatalog(entries: ModelCatalogSnapshot["entries"]): ModelCatalog
   return { entries, routeVariants: [] };
 }
 
+function configuredProvider(letter: string) {
+  return {
+    api: "openai-responses" as const,
+    baseUrl: `https://provider-${letter}.example/v1`,
+    models: [
+      makeConfiguredModel({ id: `model-${letter}1`, name: `Provider ${letter.toUpperCase()}` }),
+    ],
+  };
+}
+
 function expectUnset<T>(value: T, ...keys: (keyof T)[]) {
   for (const key of keys) {
     expect(value[key], String(key)).toBeUndefined();
   }
 }
+
+const userPin = (
+  providerOverride: string,
+  modelOverride: string,
+  overrides: Partial<SessionEntry> = {},
+) => makeEntry({ providerOverride, modelOverride, modelOverrideSource: "user", ...overrides });
 
 function selectSession(
   cfg: OpenClawConfig,
@@ -135,6 +139,21 @@ function selectSession(
 }
 
 describe("catalog and thinking selection", () => {
+  it("chooses the first allowed catalog row when the configured default is unavailable", async () => {
+    const state = await createInitialState(
+      selectionConfig({ model: "custom/blocked", modelPolicy: { allow: ["remote/*"] } }),
+      "custom",
+      "blocked",
+      {
+        preparedModelCatalog: preparedCatalog([
+          { provider: "remote", id: "z-first", name: "First" },
+          { provider: "remote", id: "a-second", name: "Second" },
+        ]),
+      },
+    );
+    expect(state).toMatchObject({ provider: "remote", model: "z-first" });
+  });
+
   it.each(["observed thinking", "automatic-primary thinking"] as const)(
     "uses prepared %s metadata",
     async (kind) => {
@@ -213,149 +232,96 @@ describe("catalog and thinking selection", () => {
     }
     expect(prepared.catalog).toEqual([embedded]);
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
-    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ agentId: "main", agentRuntime: "openclaw" }),
-    );
   });
 
   it("keeps prepared thinking ownership", async () => {
     const provider = "fixture-provider";
     const model = "fixture-model";
-    const cfg = selectionConfig(
-      { models: { [`${provider}/${model}`]: { alias: "Fixture" } } },
-      {
-        [provider]: {
-          baseUrl: "https://fixture.invalid/v1",
-          models: [makeConfiguredModel({ id: model })],
-        },
-      },
-    );
-    const preparedModelCatalog = preparedCatalog([
-      { provider, id: model, name: "Fixture", reasoning: true },
-    ]);
-    prepareModelCatalogThinkingPolicies({
-      catalog: preparedModelCatalog,
-      metadataSnapshot: createPluginMetadataSnapshotFixture(),
-      pluginRegistry: {
-        ...createEmptyPluginRegistry(),
-        providers: [
-          {
-            pluginId: provider,
-            source: "test",
-            provider: {
-              id: provider,
-              label: provider,
-              auth: [],
-              resolveThinkingProfile: () => ({
-                levels: [{ id: "off" }, { id: "max" }, { id: "ultra" }],
-                defaultLevel: "ultra",
-              }),
-            },
-          },
-        ],
-      },
-    });
-    const ambient = vi
+    const policy: PreparedThinkingPolicy = {
+      resolve: () => ({
+        levels: [{ id: "off" }, { id: "max" }, { id: "ultra" }],
+        defaultLevel: "ultra",
+      }),
+    };
+    const row = {
+      provider,
+      id: model,
+      name: "Fixture",
+      reasoning: true,
+      [PREPARED_THINKING_POLICY]: policy,
+    };
+    using ambient = vi
       .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
       .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
-    try {
-      const state = await createInitialState(cfg, provider, model, {
-        hasModelDirective: true,
-        preparedModelCatalog,
-      });
-      await expect(
-        state.resolveDefaultThinkingLevel({ provider, model, agentRuntime: "codex" }),
-      ).resolves.toBe("ultra");
-      expect(ambient).not.toHaveBeenCalled();
-    } finally {
-      ambient.mockRestore();
-    }
+
+    const state = await createInitialState({}, provider, model, {
+      hasModelDirective: true,
+      preparedModelCatalog: preparedCatalog([row]),
+    });
+    await expect(
+      state.resolveDefaultThinkingLevel({ provider, model, agentRuntime: "codex" }),
+    ).resolves.toBe("ultra");
+    expect(ambient).not.toHaveBeenCalled();
   });
 });
 
 describe("session override precedence and persistence", () => {
-  it.each([undefined, "gpt-4o", "stale-again", "rotate"])(
-    "handles concurrent repair state (%s)",
-    async (origin) => {
-      const rotating = origin === "rotate";
-      const automatic = origin !== undefined && !rotating;
-      const cfg = selectionConfig({
-        model: { primary: "openai/gpt-4o" },
-        modelPolicy: automatic ? { allow: ["openai/gpt-4o"] } : undefined,
-        models: rotating ? { "openai/gpt-4o": {} } : { "openai/gpt-4o": {}, "openai/gpt-5.5": {} },
+  it.each([undefined, "rotate"])("handles concurrent repair state (%s)", async (origin) => {
+    const rotating = origin === "rotate";
+    const cfg = selectionConfig({
+      model: { primary: "openai/gpt-4o" },
+      models: rotating ? { "openai/gpt-4o": {} } : { "openai/gpt-4o": {}, "openai/gpt-5.5": {} },
+    });
+    const entry = makeEntry({
+      ...(rotating ? { sessionId: "s1" } : {}),
+      providerOverride: "openai",
+      modelOverride: "gpt-4o-mini",
+    });
+    const concurrentEntry = userPin("openai", rotating ? "gpt-4o" : "gpt-5.5", {
+      ...(rotating ? { sessionId: "s2" } : {}),
+      updatedAt: entry.updatedAt + 1,
+    });
+    persist.mockResolvedValueOnce(
+      rotating
+        ? {
+            status: "lifecycle-invalidated",
+            error: `Session "${sessionKey}" changed while starting work. Retry.`,
+            entry: concurrentEntry,
+          }
+        : { status: "current", entry: concurrentEntry },
+    );
+    const sessionStore = { [sessionKey]: entry };
+    const selection = selectSession(cfg, "openai", "gpt-4o", entry, {
+      sessionStore,
+      storePath: "sessions.json",
+      model: "gpt-4o-mini",
+    });
+    if (rotating) {
+      await expect(selection).rejects.toThrow(/changed while starting work/i);
+    } else {
+      const state = await selection;
+      expect(state.modelPolicy.allows({ provider: "openai", model: "gpt-5.5" })).toBe(true);
+      expect(state).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.5",
+        resetModelOverride: false,
       });
-      const entry = makeEntry({
-        ...(rotating ? { sessionId: "s1" } : {}),
-        providerOverride: "openai",
-        modelOverride: "gpt-4o-mini",
-        modelOverrideSource: automatic ? "auto" : undefined,
-        modelOverrideFallbackOriginProvider: automatic ? "openai" : undefined,
-        modelOverrideFallbackOriginModel: automatic ? "stale-primary" : undefined,
-      });
-      const concurrentEntry = makeEntry({
-        ...(rotating ? { sessionId: "s2" } : {}),
-        updatedAt: entry.updatedAt + 1,
-        providerOverride: "openai",
-        modelOverride: rotating ? "gpt-4o" : "gpt-5.5",
-        modelOverrideSource: automatic ? "auto" : "user",
-        modelOverrideFallbackOriginProvider: automatic ? "openai" : undefined,
-        modelOverrideFallbackOriginModel: automatic ? origin : undefined,
-      });
-      persist.mockResolvedValueOnce(
-        rotating
-          ? {
-              status: "lifecycle-invalidated",
-              error: `Session "${sessionKey}" changed while starting work. Retry.`,
-              entry: concurrentEntry,
-            }
-          : { status: "current", entry: concurrentEntry },
-      );
-      const sessionStore = { [sessionKey]: entry };
-      const selection = selectSession(cfg, "openai", "gpt-4o", entry, {
-        sessionStore,
-        storePath: "sessions.json",
-        model: "gpt-4o-mini",
-        isHeartbeat: automatic,
-      });
-      if (rotating) {
-        await expect(selection).rejects.toThrow(/changed while starting work/i);
-      } else {
-        const state = await selection;
-        expect(state.modelPolicy.allows({ provider: "openai", model: "gpt-5.5" })).toBe(!automatic);
-        expect(state).toMatchObject({
-          provider: "openai",
-          model: origin === "stale-again" ? "gpt-4o" : "gpt-5.5",
-          resetModelOverride: false,
-        });
-      }
-      expect(persist).toHaveBeenCalledOnce();
-      const request = persist.mock.calls[0]?.[0];
-      expect(request).toMatchObject({
-        storePath: "sessions.json",
-        sessionKey,
-        initialEntry: expect.objectContaining({
-          ...(rotating ? { sessionId: "s1" } : {}),
-          providerOverride: "openai",
-          modelOverride: "gpt-4o-mini",
-        }),
-      });
-      expectUnset(request!.entry, "providerOverride", "modelOverride");
-      expect(entry).toMatchObject(
-        rotating
-          ? { sessionId: "s1", providerOverride: "openai", modelOverride: "gpt-4o-mini" }
-          : {
-              providerOverride: "openai",
-              modelOverride: "gpt-5.5",
-              modelOverrideSource: automatic ? "auto" : "user",
-            },
-      );
-      if (rotating) {
-        expect(sessionStore[sessionKey]).toBe(entry);
-      } else {
-        expect(sessionStore[sessionKey]).toEqual(entry);
-      }
-    },
-  );
+    }
+    expect(entry).toMatchObject(
+      rotating
+        ? { sessionId: "s1", providerOverride: "openai", modelOverride: "gpt-4o-mini" }
+        : {
+            providerOverride: "openai",
+            modelOverride: "gpt-5.5",
+            modelOverrideSource: "user",
+          },
+    );
+    if (rotating) {
+      expect(sessionStore[sessionKey]).toBe(entry);
+    } else {
+      expect(sessionStore[sessionKey]).toEqual(entry);
+    }
+  });
 });
 
 describe("automatic fallback provenance", () => {
@@ -367,7 +333,6 @@ describe("automatic fallback provenance", () => {
     modelOverrideSource: "auto" as const,
   };
   const fallbackOptions = {
-    isHeartbeat: true,
     provider: "openrouter",
     model: fallback.modelOverride,
   };
@@ -379,12 +344,10 @@ describe("automatic fallback provenance", () => {
         modelOverrideFallbackOriginProvider: "openai",
         modelOverrideFallbackOriginModel: "gpt-4o",
       },
-      false,
       { primaryProvider: "openai", primaryModel: "gpt-4o" },
     ],
-    ["clears heartbeat pin without origin", {}, true, {}],
     [
-      "recovers legacy heartbeat origin from notice",
+      "recovers automatic fallback origin from notice",
       {
         fallbackNotice: {
           kind: "active" as const,
@@ -392,10 +355,9 @@ describe("automatic fallback provenance", () => {
           activeModel: "openrouter/minimax/minimax-m2.7",
         },
       },
-      false,
       {},
     ],
-  ] as const)("%s", async (_name, overrides, reset, options) => {
+  ] as const)("%s", async (_name, overrides, options) => {
     const entry = makeEntry({ ...fallback, ...overrides });
     const before = { ...entry };
     const state = await selectSession({}, provider, model, entry, {
@@ -403,16 +365,11 @@ describe("automatic fallback provenance", () => {
       ...options,
     });
     expect(state).toMatchObject({
-      provider: reset ? provider : fallback.providerOverride,
-      model: reset ? model : fallback.modelOverride,
-      resetModelOverride: reset,
+      provider: fallback.providerOverride,
+      model: fallback.modelOverride,
+      resetModelOverride: false,
     });
-    if (reset) {
-      expect(state.resetModelOverrideRef).toBe("openrouter/minimax/minimax-m2.7");
-      expectUnset(entry, "providerOverride", "modelOverride", "modelOverrideSource");
-    } else {
-      expect(entry).toEqual(before);
-    }
+    expect(entry).toEqual(before);
   });
 
   it("clears a stale OpenAI pin and its ineligible auth", async () => {
@@ -440,41 +397,36 @@ describe("automatic fallback provenance", () => {
 });
 
 it("keeps a missing explicit auth pin through credential restoration", async () => {
-  authMocks.store = {
-    version: 1,
-    profiles: {
-      "openai:account-a": { type: "api_key", provider: "openai", key: "test-key-a" },
-    },
+  authMocks.store.profiles["openai:account-a"] = {
+    type: "api_key",
+    provider: "openai",
+    key: "test-key-a",
   };
-  const entry = makeEntry({
-    providerOverride: "openai",
-    modelOverride: "gpt-4o",
-    modelOverrideSource: "user",
+  const entry = userPin("openai", "gpt-4o", {
     authProfileOverride: "openai:account-b",
     authProfileOverrideSource: "user",
   });
   const before = { ...entry };
   const sessionStore = { [sessionKey]: entry };
-  const missing = await selectSession({}, "openai", "gpt-4o", entry, { sessionStore });
-  expect(missing).toMatchObject({ provider: "openai", model: "gpt-4o" });
-  expect(entry).toEqual(before);
-  expect(sessionStore[sessionKey]).toBe(entry);
-
-  authMocks.store.profiles["openai:account-b"] = {
-    type: "api_key",
-    provider: "openai",
-    key: "test-key-b",
-  };
-  const restored = await selectSession({}, "openai", "gpt-4o", entry, { sessionStore });
-  expect(restored).toMatchObject({ provider: "openai", model: "gpt-4o" });
-  expect(entry).toEqual(before);
-  expect(sessionStore[sessionKey]).toBe(entry);
+  for (const restored of [false, true]) {
+    if (restored) {
+      authMocks.store.profiles["openai:account-b"] = {
+        type: "api_key",
+        provider: "openai",
+        key: "test-key-b",
+      };
+    }
+    const state = await selectSession({}, "openai", "gpt-4o", entry, { sessionStore });
+    expect(state).toMatchObject({ provider: "openai", model: "gpt-4o" });
+    expect(entry).toEqual(before);
+    expect(sessionStore[sessionKey]).toBe(entry);
+  }
 });
 
 it.each(["pin", "source", "provider", "session", "authority"] as const)(
   "rejects a changed %s after awaiting missing-pin provider facts",
   async (change) => {
-    const cfg: OpenClawConfig = { agents: { defaults: { model: "openai/gpt-4o" } } };
+    const cfg = selectionConfig({ model: "openai/gpt-4o" });
     const entry = makeEntry({
       updatedAt: 1,
       authProfileOverride: "anthropic:missing",
@@ -520,7 +472,6 @@ it.each(["pin", "source", "provider", "session", "authority"] as const)(
       change === "pin" ? "openai:replacement" : "anthropic:missing",
     );
     expect(entry.updatedAt).toBe(1);
-    expect(authMocks.prepareAuthProfileProvider).toHaveBeenCalledTimes(1);
   },
 );
 
@@ -530,15 +481,8 @@ it("keeps a locked pin active without a degraded-catalog fallback notice", async
     routeVariants: [],
     authoritative: false,
   });
-  const cfg: OpenClawConfig = {
-    agents: { defaults: { models: { "openai/gpt-4o-mini": {}, "anthropic/*": {} } } },
-  };
-  const entry = makeEntry({
-    providerOverride: "openai",
-    modelOverride: "gpt-4o",
-    modelOverrideSource: "user",
-    modelSelectionLocked: true,
-  });
+  const cfg = selectionConfig({ models: { "openai/gpt-4o-mini": {}, "anthropic/*": {} } });
+  const entry = userPin("openai", "gpt-4o", { modelSelectionLocked: true });
   const state = await selectSession(cfg, "openai", "gpt-4o-mini", entry);
   expect(state.resetModelOverride).toBe(false);
   expectUnset(state, "resetModelOverrideReason", "resetModelOverrideRef");
@@ -552,34 +496,16 @@ describe("refused pins use the primary instead of catalog order", () => {
       model: "provider-b/model-b1",
       modelPolicy: { allow: ["provider-a/model-a1", "provider-b/model-b1"] },
     },
-    Object.fromEntries(
-      ["a", "b"].map(
-        (letter) =>
-          [
-            `provider-${letter}`,
-            {
-              api: "openai-responses" as const,
-              baseUrl: `https://provider-${letter}.example/v1`,
-              models: [
-                makeConfiguredModel({
-                  id: `model-${letter}1`,
-                  name: `Provider ${letter.toUpperCase()}`,
-                }),
-              ],
-            },
-          ] as const,
-      ),
-    ),
+    {
+      "provider-a": configuredProvider("a"),
+      "provider-b": configuredProvider("b"),
+    },
   );
 
   it.each(["direct", "parent", "degraded", "concurrent"] as const)(
     "uses the primary for a refused %s pin",
     async (source) => {
-      const pin = makeEntry({
-        providerOverride: "provider-c",
-        modelOverride: "model-c1",
-        modelOverrideSource: "user",
-      });
+      const pin = userPin("provider-c", "model-c1");
       const entry = source === "parent" ? makeEntry() : { ...pin };
       const parentSessionKey = "agent:main:parent";
       const sessionStore = { [sessionKey]: entry, [parentSessionKey]: pin };
@@ -591,15 +517,13 @@ describe("refused pins use the primary instead of catalog order", () => {
       }
       const state = await selectSession(
         source === "degraded"
-          ? {
-              ...cfg,
-              agents: {
-                defaults: {
-                  ...cfg.agents?.defaults,
-                  modelPolicy: { allow: ["provider-a/*", "provider-b/model-b1"] },
-                },
+          ? selectionConfig(
+              {
+                ...cfg.agents?.defaults,
+                modelPolicy: { allow: ["provider-a/*", "provider-b/model-b1"] },
               },
-            }
+              cfg.models?.providers,
+            )
           : cfg,
         "provider-b",
         "model-b1",

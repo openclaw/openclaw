@@ -997,7 +997,7 @@ rules:
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: oauth-state-reuses-pkce-verifier
   - id: ghsa-6mqc-jqh6-x8fc.openclaw-canvas-auth-local-direct-bypass
-    message: Canvas/A2UI auth helper allows local-direct requests before bearer-or-capability auth.
+    message: Canvas auth helper allows local-direct requests before bearer-or-capability auth.
     severity: ERROR
     languages:
       - typescript
@@ -2875,18 +2875,20 @@ rules:
     message: Dangerous host env override pivot reaches host env sanitization boundary or policy.
     severity: ERROR
     languages:
-      - json
       - typescript
       - javascript
+      - json
     pattern-either:
       - patterns:
           - pattern-inside: |
               { ... }
           - pattern-regex: '"(GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|YARN_RC_FILENAME|CC|CXX|CMAKE_C_COMPILER|CMAKE_CXX_COMPILER|RUSTC_WRAPPER|CARGO_BUILD_RUSTC|CARGO_BUILD_RUSTC_WRAPPER|MAKEFLAGS|MFLAGS)"'
+          - pattern-not-inside: resolveEnvironmentValue(...)
       - patterns:
           - pattern-inside: |
               { ... }
           - pattern-regex: '"(GIT_CONFIG_[A-Z0-9_]+|NPM_CONFIG_[A-Z0-9_]+|CARGO_REGISTRIES_[A-Z0-9_]+|TF_VAR_[A-Z0-9_]+)"'
+          - pattern-not-inside: resolveEnvironmentValue(...)
       - patterns:
           - pattern-either:
               - pattern: |
@@ -2902,6 +2904,8 @@ rules:
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: openclaw-dangerous-host-env-override-pivots
+      advisory-id: GHSA-J425-WHC4-4JGC
+      source-file: security/opengrep/rules/ghsa-j425-whc4-4jgc/host-env-overrides.yml
   - id: ghsa-jf25-7968-h2h5.openclaw-nodes-screen-record-outpath-guard-missing
     message: The nodes tool (which contains screen_record) must be wrapped via applyNodesToolWorkspaceGuard, which adds outPath to the pathParamKeys. Without this, screen_record outPath bypasses the workspace boundary. See GHSA-JF25-7968-H2H5.
     severity: ERROR

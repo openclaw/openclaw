@@ -1,17 +1,17 @@
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
-import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.js";
-import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type {
-  SourceReplyDeliveryMode,
-  TaskSuggestionDeliveryMode,
-} from "../auto-reply/get-reply-options.types.js";
+  AdmittedRunOperatorAuthority,
+  OperationalRunInstanceRef,
+} from "../agents/admitted-run-context.js";
+import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
+import type { LlmBoundaryOptions } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.types.js";
+import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
+import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/queue-settings.types.js";
-import type { ReplyDispatchDeliveryOutcome } from "../auto-reply/reply/reply-dispatch-outcome.types.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { ReplyOperationStaleReason } from "../auto-reply/reply/reply-run-finalization-lease.js";
 import type { SessionEntryTargetPatchScope } from "../config/sessions/session-accessor.types.js";
@@ -19,11 +19,10 @@ import type { SessionActor } from "../config/sessions/session-actor-contract.js"
 import type { SessionAdmissionDatabaseClaim } from "../config/sessions/session-admission-claim.types.js";
 import type { SessionAdmissionTransition } from "../config/sessions/session-admission-transition.types.js";
 import type { SessionEntryCohortReader } from "../config/sessions/session-entry-read-runtime.types.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
+import type { Context, Model } from "../llm/types.js";
 import type { Deferred, createDeferredCore } from "../shared/deferred.js";
-import type { ReplyPayload } from "../shared/reply-payload.types.js";
 import type { OpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type {
@@ -34,6 +33,8 @@ import type {
 import type { AgentWorkAdmissionIdentity } from "./session-agent-work-admission.js";
 import type {
   ReplyBackendQueueMessageOptions,
+  ReplyMessageInjectionResolution,
+  ReplyMessageInjectionRejectionReason,
   ReplyToolAuthorityRoute,
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRequester,
@@ -45,6 +46,7 @@ import type {
   ReplyBackendMessageInjectionV2,
   ReplyBackendHandle,
   ReplyTurnParticipantInput,
+  ReplySteerNowResult,
 } from "./session-controller.backend-contracts.js";
 import type { LifecycleDiagnosticOperation } from "./session-controller.lifecycle-diagnostics.js";
 import type { SessionTarget } from "./session-controller.target.js";
@@ -55,6 +57,9 @@ import type {
 
 export type {
   ReplyBackendCancelReason,
+  ReplyMessageInjectionResolution,
+  ReplyMessageInjectionRejectionReason,
+  ReplyBackendQueueMessageMismatch,
   ReplyBackendQueueMessageOptions,
   ReplyMessageInjectionOptions,
   ReplyToolAuthorityRoute,
@@ -73,21 +78,7 @@ export type {
 export type ReplyOperationPhase = ReplyOperationActivePhase | "completed" | "failed" | "aborted";
 type ReplyOperationResult = Exclude<ControllerReplyOperationResult, { kind: "yielded" }>;
 
-export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
-
-export type ReplyMessageInjectionResolution =
-  | {
-      reason: ReplyMessageInjectionRejectionReason;
-      errorMessage?: string;
-      backend?: ReplyBackendHandle;
-      cancelPendingUserInput?: ReplyBackendHandle["cancelPendingUserInput"];
-    }
-  | {
-      backend: ReplyBackendHandle;
-      injection: ReplyBackendMessageInjection;
-      /** Internal FIFO preflight for a released synchronous sink. */
-      prepareQueueMessage?: () => Promise<void>;
-    };
+export type ReplyTurnKind = "visible" | "queued_followup";
 
 /** An adapter over one existing execution owner; it never acquires another run slot. */
 type ReplyMessageInjectionOwner = {
@@ -98,9 +89,9 @@ type ReplyMessageInjectionOwner = {
   readonly admissionIdentity: object;
   acceptParticipant?(participant: ReplyTurnParticipantInput): void;
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
-  projectToolAuthorityFingerprintAsync(
+  projectToolAuthorityFingerprintAsync: (
     overlay: ReplyToolAuthorityOverlay,
-  ): Promise<string | undefined>;
+  ) => Promise<string | undefined>;
   projectRequesterToolAuthorityFingerprint(
     requester: ReplyToolAuthorityRequester,
   ): string | undefined;
@@ -137,18 +128,6 @@ export type ReplyRunInterruptTarget = {
   readonly [replyRunInterruptTargetOperation]: ReplyOperation;
 };
 
-export type ReplyMessageInjectionRejectionReason =
-  | "no_active_run"
-  | "not_running"
-  | "stale_run"
-  | "injection_unavailable"
-  | "guarded_injection_unsupported"
-  | "requester_origin_mismatch"
-  | "audio_input_unsupported"
-  | "collaborative_steering_disabled"
-  | ReplyBackendQueueMessageMismatch
-  | "runtime_rejected";
-
 export type ReplyMessageInjectionOutcome =
   | { status: "indeterminate"; errorMessage: string }
   | { status: "accepted" }
@@ -164,15 +143,6 @@ export type ReplyMessageInjectionAttempt = {
   /** Settles after the backend confirms or rejects this exact injection. */
   outcome: Promise<ReplyMessageInjectionOutcome>;
 };
-
-export type ReplyBackendQueueMessageMismatch =
-  | "transcript_commit_wait_unsupported"
-  | "input_visibility_mismatch"
-  | "tool_authority_mismatch"
-  | "image_input_unsupported"
-  | "source_reply_delivery_mode_mismatch"
-  | "reply_expectation_mismatch"
-  | "task_suggestion_delivery_mode_mismatch";
 
 export type ReplyOperation = {
   readonly watchdog: SessionControllerWatchdog;
@@ -249,6 +219,11 @@ export type ReplyOperation = {
   /** A steered input joined this operation; any earlier source answer predates it. */
   markSteeredInputAccepted(params: { inboundAudio: boolean }): void;
   markSourceReplyDelivered(): void;
+  /**
+   * Observe the moment a final message-tool send answers this turn's source, while the
+   * run continues. Channel progress UI retires here instead of rendering below the answer.
+   */
+  onSourceReplyDelivered(listener: () => void): () => void;
   /** Freeze the complete caller policy before a concrete backend attempt attaches. */
   /** @deprecated Use bindToolAuthoritySnapshotAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   bindToolAuthoritySnapshot(snapshot: ReplyToolAuthoritySnapshot): void;
@@ -331,6 +306,17 @@ export class ReplyRunAlreadyActiveError extends Error {
   }
 }
 
+/** A mutation or finishing owner fences admission without owning an active run. */
+export class ReplyRunLifecycleAdmissionBlockedError extends Error {
+  constructor(
+    sessionKey: string,
+    readonly databaseIncarnation?: string,
+  ) {
+    super(`Session "${sessionKey}" changed during turn admission. Retry.`);
+    this.name = "ReplyRunLifecycleAdmissionBlockedError";
+  }
+}
+
 export class ReplyRunFollowupAdmissionBlockedError extends Error {
   constructor(sessionKey: string) {
     super(`Reply follow-up admission is blocked for ${sessionKey}`);
@@ -397,11 +383,6 @@ export type ReplyOperationAdmission = {
   resolveSessionTarget?: () => SessionEntryTargetPatchScope | undefined;
   sessionActor?: SessionActor;
   acquireSessionActor?: () => Promise<SessionActor | undefined>;
-  /** Accepted input keeps its durable claim while capacity admission adopts the writer. */
-  adoptInput?: (writer?: {
-    runId: string;
-    assertCurrent?: () => void;
-  }) => Promise<InternalSessionEntry>;
   afterTransition?: (transition: SessionAdmissionTransition) => Promise<void>;
 };
 
@@ -461,6 +442,10 @@ export type SessionEffectRef = {
   run: <T>(run: () => Promise<T>) => Promise<T>;
 };
 export type Effect = {
+  admissionTransitions?: Map<
+    object,
+    (transition: SessionAdmissionTransition, isActive: SessionEffectRef["isActive"]) => void
+  >;
   diagnostic?: LifecycleDiagnosticOperation;
   sourceInput?: SessionControllerInput;
   agent?: AgentWorkAdmissionIdentity;
@@ -478,7 +463,12 @@ export type Effect = {
   handoffs: Set<string>;
   validated: Deferred;
 };
-export type SessionMutationKind = "reset" | "delete" | "compaction";
+export type SessionMutationKind =
+  | "reset"
+  | "delete"
+  | "compaction"
+  | "read-marker"
+  | "background-result";
 
 export type Mutation = {
   diagnostic?: LifecycleDiagnosticOperation;
@@ -560,8 +550,12 @@ export type SessionControllerInput = {
     predecessor: Promise<boolean>;
     settled: Promise<boolean>;
     settle(accepted: boolean): void;
-    accepted?: boolean;
     admitted?: boolean;
+    steerNow?: {
+      target: ReplyMessageInjectionTarget;
+      queueIdentity: string;
+      result?: ReplySteerNowResult;
+    };
   };
   claim?: SessionControllerMailboxClaim;
   ready?: (claim: SessionControllerMailboxClaim) => void;
@@ -591,6 +585,8 @@ export type SessionControllerMailboxClaim = {
   retryBeforeExecution?: boolean;
 };
 
+type FollowupSummaryEntry = { source: FollowupRun; line: string };
+
 /** All runnable inputs, including direct native producers, share this ordered owner. */
 export type SessionControllerMailbox = {
   readonly key: string;
@@ -615,22 +611,24 @@ export type SessionControllerMailbox = {
   cap: number;
   dropPolicy: "old" | "new" | "summarize";
   droppedCount: number;
-  summaryLines: string[];
-  summarySources: FollowupRun[];
+  summaryEntries: FollowupSummaryEntry[];
   activeSummarySources: Set<FollowupRun>;
   summaryElisions: Array<{
     contextKey: string;
-    count: number;
-    sources: FollowupRun[];
-    summaryLines: string[];
+    entries: FollowupSummaryEntry[];
     sourceRefs: Map<FollowupRun, FollowupRun>;
   }>;
-  evictedSummaryCount: number;
   lastRun?: FollowupRun["run"];
-  recentSources: Map<string, { input: SessionControllerInput; expires: number }>;
+  // Redelivery records outlive runs; retain only the exact input identity.
+  recentSources: Map<
+    string,
+    { inputInstance: SessionControllerInput["instance"]; expires: number }
+  >;
 };
 
 export type SessionControllerSourceAdapter = {
+  /** Original personal ingress, bound at admission; identity evidence, not an execution grant. */
+  initiatingPersonalOperator?: AdmittedRunOperatorAuthority;
   readonly scope?: string;
   readonly authority?: { assertCurrent(): void; signal?: AbortSignal };
   readonly signal?: AbortSignal;
@@ -652,6 +650,7 @@ export type SessionControllerSourceAdapter = {
 export type SessionControllerSourceInjection = {
   admit(): Promise<boolean>;
   accepted(accepted: boolean): void;
+  /** Authoritative final custody; only proven withdrawal can undo native acceptance. */
   finish(consumed: boolean): void;
 };
 
@@ -664,6 +663,8 @@ export type SessionControllerWithdrawalHold = (() => void) & {
 export const inputCancellation = Symbol.for("openclaw.sessionControllerInputCancellation");
 
 export type FollowupRun = FollowupRunPayload & {
+  /** @internal Host-only fallback eligibility; false preserves a caller without a profile grant. */
+  sessionPrincipalTurn?: boolean;
   run: FollowupRunPayload["run"] & {
     /** Observe admission without transferring the runner's settlement custody. */
     onOperationAdmitted?: (operation: ReplyOperation) => void;
@@ -681,7 +682,11 @@ type ReplyOperationAdmissionSnapshot =
   | {
       status: "accepted";
       mode: "steer" | "followup";
-      reason?: "requester-mismatch" | "steering-unavailable" | "explicit-followup";
+      reason?:
+        | "requester-mismatch"
+        | "steering-unavailable"
+        | "explicit-followup"
+        | "collaborative-steering-disabled";
     }
   | {
       status: "skipped";
@@ -710,15 +715,6 @@ export type ReplyOperationRunState = {
   replyCompletion?: ReplyCompletion;
   /** The source delivery owner can keep spawned completion turns private. */
   sessionEventDelivery?: false;
-  heartbeat?: {
-    prepareReply: (
-      replyResult: ReplyPayload | ReplyPayload[] | undefined,
-      runState: ReplyOperationRunState,
-    ) => Promise<{
-      reply?: ReplyPayload;
-      settle?: (outcome: ReplyDispatchDeliveryOutcome) => Promise<void>;
-    }>;
-  };
   admission?: ReplyOperationAdmissionSnapshot;
   /** Latest queue-owned disposition; original acceptance still records custody. */
   followupQueueDisposition?: FollowupQueueDisposition;
@@ -759,14 +755,9 @@ export type EmbeddedAgentQueueHandle = {
     revokeApprovals: () => void,
   ) => Promise<boolean>;
   /** Atomically consumes one plain-text answer for this run's pending user-input request. */
-  claimPendingUserInputAnswer?: (
-    text: string,
-    options?: EmbeddedAgentQueueMessageOptions,
-  ) => Promise<boolean>;
+  claimPendingUserInputAnswer?: ReplyBackendHandle["claimPendingUserInputAnswer"];
   /** Cancels this run's pending user-input request before an image is queued as a later turn. */
   cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
-  /** Exact heartbeat owner retained after its reply-operation registration clears. */
-  readonly preemptByVisibleTurn?: () => boolean;
   queueMessage: (
     text: string,
     options?: EmbeddedAgentQueueMessageOptions,
@@ -774,6 +765,19 @@ export type EmbeddedAgentQueueHandle = {
   messageInjection?: ReplyBackendMessageInjection;
   messageInjectionV2?: ReplyBackendMessageInjectionV2;
   isStreaming: () => boolean;
+  /** Borrow current model context only while this attempt owns the session. */
+  readSessionForkContext?: () =>
+    | {
+        model: Model;
+        systemPrompt: string;
+        tools: Context["tools"];
+        messages: AgentMessage[];
+        projectMessages?: (messages: AgentMessage[]) => AgentMessage[];
+        sessionVersion?: number;
+        boundary?: LlmBoundaryOptions;
+        blockImages?: boolean;
+      }
+    | undefined;
   isStopped?: () => boolean;
   /** True after this handle has accepted an abort, even while cleanup retains it. */
   isAborted?: () => boolean;
@@ -790,9 +794,10 @@ export type EmbeddedAgentQueueHandle = {
   readonly supportsCrossProfileSteering?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: (reason?: "restart") => void;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplyDeliveryMode?: ReplyBackendHandle["sourceReplyDeliveryMode"];
   terminalReplyExpectation?: ReplyExpectation;
-  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+  supportsUserReplyPromotion?: boolean;
+  taskSuggestionDeliveryMode?: ReplyBackendHandle["taskSuggestionDeliveryMode"];
 };
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;

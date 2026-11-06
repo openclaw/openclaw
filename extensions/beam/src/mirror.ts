@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import {
   listActiveSessionCatalogs,
@@ -15,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { clampNumber, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   BEAM_MAX_BODY_BYTES,
   BEAM_MAX_ITEM_CHARS,
@@ -124,7 +127,7 @@ export function beamMirrorId(catalogId: string, hostId: string, threadId: string
  * message text crosses the wire; reasoning, tool calls, tool results, and raw
  * payloads collapse into compact counts.
  */
-export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptItem[]) {
+function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptItem[]) {
   const out: BeamTranscriptItem[] = [];
   const dropped = new Map<string, number>();
   let truncated = items.some((item) => item.truncated);
@@ -157,7 +160,7 @@ export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptIte
 }
 
 /** Drop oldest items until the payload fits the receiver's item and byte caps. */
-export function fitBeamMirrorUpload(upload: BeamUpload): BeamUpload {
+function fitBeamMirrorUpload(upload: BeamUpload): BeamUpload {
   const items = upload.items.slice(-BEAM_MAX_ITEMS);
   const fitted: BeamUpload = { ...upload, items };
   let bytes = Buffer.byteLength(JSON.stringify(fitted), "utf8");
@@ -207,18 +210,16 @@ type TrackedMirrorSession = {
   candidate: BeamMirrorCandidate;
   fingerprint: string;
   expiresAt: number;
+  retired?: true;
 };
 
 export function createBeamMirrorRunner(params: {
   runtime: { config: Pick<PluginRuntime["config"], "current"> };
   logger: { warn: (message: string) => void; info: (message: string) => void };
-  fetchFn?: typeof fetch;
   now?: () => number;
-  listCatalogs?: () => ActiveSessionCatalog[];
   signal: AbortSignal;
 }) {
   const now = params.now ?? Date.now;
-  const listCatalogs = params.listCatalogs ?? listActiveSessionCatalogs;
   const tracked = new Map<string, TrackedMirrorSession>();
   const { signal } = params;
   let lastWarnAt = 0;
@@ -229,22 +230,8 @@ export function createBeamMirrorRunner(params: {
 
   // Catalog work cannot be cancelled, so detach its late result after stop.
   // Guarded transport cleanup remains joined to the active scan in upload().
-  const raceCatalog = async <T>(operation: Promise<T>): Promise<T> => {
-    let rejectAbort: (error: Error) => void;
-    const aborted = new Promise<never>((_, reject) => {
-      rejectAbort = reject;
-    });
-    const abort = () => rejectAbort(stopError);
-    signal.addEventListener("abort", abort, { once: true });
-    try {
-      if (signal.aborted) {
-        abort();
-      }
-      return await Promise.race([operation, aborted]);
-    } finally {
-      signal.removeEventListener("abort", abort);
-    }
-  };
+  const raceCatalog = <T>(operation: Promise<T>): Promise<T> =>
+    racePromiseWithAbortSignal(operation, signal, () => stopError);
 
   // Retry state keeps a bounded sender-owned superset until the receiver's TTL.
   // The extra capacity prevents independent clocks from dropping a live row.
@@ -252,17 +239,17 @@ export function createBeamMirrorRunner(params: {
     key: string,
     candidate: BeamMirrorCandidate,
     fingerprint: string,
+    retired = false,
   ) => {
     tracked.delete(key);
-    tracked.set(key, { candidate, fingerprint, expiresAt: now() + BEAM_RETENTION_MS });
-    if (tracked.size <= MIRROR_RETRY_CAP) {
-      return;
-    }
+    tracked.set(key, {
+      candidate,
+      fingerprint,
+      expiresAt: now() + BEAM_RETENTION_MS,
+      ...(retired ? { retired: true } : {}),
+    });
     // At capacity, retry order is best effort; retain the just-acknowledged upload.
-    for (const oldest of tracked.keys()) {
-      tracked.delete(oldest);
-      break;
-    }
+    pruneMapToMaxSize(tracked, MIRROR_RETRY_CAP);
   };
 
   const warnThrottled = (message: string) => {
@@ -272,7 +259,7 @@ export function createBeamMirrorRunner(params: {
     }
   };
 
-  const upload = async (payload: BeamUpload): Promise<boolean> => {
+  const upload = async (payload: BeamUpload): Promise<boolean | "retired"> => {
     if (signal.aborted || redirectBlocked) {
       return false;
     }
@@ -292,7 +279,6 @@ export function createBeamMirrorRunner(params: {
     try {
       guarded = await fetchWithSsrFGuard({
         url: endpoint,
-        fetchImpl: params.fetchFn,
         timeoutMs: MIRROR_UPLOAD_TIMEOUT_MS,
         signal,
         policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(endpoint),
@@ -327,6 +313,29 @@ export function createBeamMirrorRunner(params: {
     const { response, release } = guarded;
     try {
       signal.throwIfAborted();
+      if (response.status === 409) {
+        const receipt: unknown = JSON.parse(
+          (
+            await readResponseWithLimit(response, 4096, {
+              signal,
+              timeoutMs: MIRROR_UPLOAD_TIMEOUT_MS,
+            })
+          ).toString("utf8"),
+        );
+        if (
+          isRecord(receipt) &&
+          receipt.beamId === payload.beamId &&
+          isRecord(receipt.handoff) &&
+          receipt.handoff.owner === "gateway" &&
+          typeof receipt.handoff.id === "string" &&
+          /^[a-f0-9]{32}$/.test(receipt.handoff.id)
+        ) {
+          params.logger.info(
+            "Beam source retired at the receiver; continue its logical conversation in Team.",
+          );
+          return "retired";
+        }
+      }
       if (!response.ok) {
         warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);
       }
@@ -407,7 +416,7 @@ export function createBeamMirrorRunner(params: {
         return;
       }
       const activeSinceMs = now() - mirror.activeWindowMinutes * 60_000;
-      const catalogs = listCatalogs().filter(
+      const catalogs = listActiveSessionCatalogs().filter(
         (catalog) =>
           // Never mirror the local beam receiver back out: a two-gateway pair
           // would otherwise re-mirror each other's rows forever.
@@ -464,6 +473,10 @@ export function createBeamMirrorRunner(params: {
       for (const candidate of selected) {
         signal.throwIfAborted();
         const key = mirrorCandidateKey(candidate);
+        const trackedSource = tracked.get(key);
+        if (trackedSource?.retired && trackedSource.expiresAt > now()) {
+          continue;
+        }
         const catalog = catalogById.get(candidate.catalogId);
         if (!catalog) {
           continue;
@@ -478,7 +491,7 @@ export function createBeamMirrorRunner(params: {
           const uploaded = await upload(payload);
           signal.throwIfAborted();
           if (uploaded) {
-            trackSuccessfulUpload(key, candidate, fingerprint);
+            trackSuccessfulUpload(key, candidate, fingerprint, uploaded === "retired");
           }
         } catch (error) {
           signal.throwIfAborted();
@@ -491,6 +504,12 @@ export function createBeamMirrorRunner(params: {
       const terminalEntries: Array<[string, TrackedMirrorSession]> = [];
       for (const [key, entry] of tracked) {
         signal.throwIfAborted();
+        if (entry.retired) {
+          if (entry.expiresAt <= tickNow) {
+            tracked.delete(key);
+          }
+          continue;
+        }
         const candidate = observed.get(key);
         // A listed idle row is conclusive even on a partial page. Only an absent
         // row requires a complete scan, so active overflow never becomes terminal.
@@ -515,7 +534,7 @@ export function createBeamMirrorRunner(params: {
           try {
             const payload = await buildUpload(agentId, catalog, entry.candidate, true);
             signal.throwIfAborted();
-            uploaded = await upload(payload);
+            uploaded = (await upload(payload)) !== false;
             signal.throwIfAborted();
           } catch {
             signal.throwIfAborted();

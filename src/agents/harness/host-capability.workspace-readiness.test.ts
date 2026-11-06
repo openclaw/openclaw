@@ -2,6 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+  type InternalToolExecutionPreparer,
+} from "../../../packages/agent-core/src/internal-hooks.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -11,11 +16,6 @@ import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js"
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import { markCodeModeControlTool } from "../code-mode-control-tools.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-  type InternalToolExecutionPreparer,
-} from "../runtime/internal-hooks.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { runWithAgentWorkspaceReadiness } from "../workspace-readiness.js";

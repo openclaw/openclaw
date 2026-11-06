@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { normalizeLowercaseStringOrEmpty as normalizeMarker } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -27,10 +27,7 @@ export function buildTuiLastSessionScopeKey(params: {
 }): string {
   const agentId = normalizeAgentId(params.agentId);
   const connectionUrl = params.connectionUrl.trim() || "local";
-  return createHash("sha256")
-    .update(`${params.sessionScope}\n${agentId}\n${connectionUrl}`)
-    .digest("hex")
-    .slice(0, 32);
+  return sha256HexPrefixCore(`${params.sessionScope}\n${agentId}\n${connectionUrl}`, 32);
 }
 
 function isHeartbeatSessionKey(sessionKey: string): boolean {
@@ -63,13 +60,7 @@ export async function readTuiLastSessionKey(params: {
     type: "tui.lastSession.read",
     stateKey: `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${params.scopeKey}`,
   });
-  if (result === undefined) {
-    return null;
-  }
-  if (!result.ok || result.type !== "tui.lastSession.read") {
-    throw new Error("Unexpected remembered TUI session read result");
-  }
-  if (!result.row) {
+  if (!result?.row) {
     return null;
   }
   const stored: unknown = JSON.parse(result.row.value_json);

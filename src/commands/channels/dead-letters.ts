@@ -1,9 +1,9 @@
-import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
 import { parseLogsPositiveInt } from "../../cli/logs-cli.options.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 
 type ChannelsDeadLettersOptions = {
   channel?: string;
@@ -27,7 +27,6 @@ function resolveScope(options: ChannelsDeadLettersOptions) {
 
 export async function channelsDeadLettersListCommand(
   options: ChannelsDeadLettersOptions,
-  runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   const { channelId, accountId } = resolveScope(options);
   const queue = createChannelIngressQueue({ channelId, accountId });
@@ -38,19 +37,21 @@ export async function channelsDeadLettersListCommand(
     limit: parseLogsPositiveInt(options.limit, 100, "--limit"),
   });
   if (options.json) {
-    writeRuntimeJson(runtime, { channelId, accountId, deadLetters });
+    defaultRuntime.writeJson({ channelId, accountId, deadLetters });
     return;
   }
-  runtime.log(theme.heading(`Channel ingress dead letters (${channelId}/${accountId})`));
+  defaultRuntime.log(
+    theme.heading(terminalText`Channel ingress dead letters (${channelId}/${accountId})`),
+  );
   if (deadLetters.length === 0) {
-    runtime.log(theme.muted("No dead-lettered ingress events."));
+    defaultRuntime.log(theme.muted("No dead-lettered ingress events."));
     return;
   }
   const now = Date.now();
   for (const entry of deadLetters) {
     const age = formatDurationHuman(Math.max(0, now - entry.failedAt));
-    runtime.log(
-      `- ${sanitizeTerminalText(entry.id)}: ${sanitizeTerminalText(entry.reason)}; attempts=${entry.attempts}; failed ${age} ago`,
+    defaultRuntime.log(
+      terminalText`- ${entry.id}: ${entry.reason}; attempts=${entry.attempts}; failed ${age} ago`,
     );
   }
 }
@@ -59,7 +60,6 @@ export async function channelsDeadLettersListCommand(
 export async function channelsDeadLettersResubmitCommand(
   eventId: string,
   options: ChannelsDeadLettersOptions,
-  runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   const { channelId, accountId } = resolveScope(options);
   const queue = createChannelIngressQueue({ channelId, accountId });
@@ -69,22 +69,27 @@ export async function channelsDeadLettersResubmitCommand(
   const result = await queue.resubmit(eventId);
   if (result.kind === "resubmitted") {
     if (options.json) {
-      writeRuntimeJson(runtime, { channelId, accountId, eventId, result });
+      defaultRuntime.writeJson({ channelId, accountId, eventId, result });
     } else {
-      runtime.log(
-        `${theme.success("Resubmitted")} channel ingress event ${sanitizeTerminalText(eventId)} (${channelId}/${accountId}).`,
+      defaultRuntime.log(
+        `${theme.success("Resubmitted")} ${terminalText`channel ingress event ${eventId} (${channelId}/${accountId}). The running channel retries it within 5 minutes by default (longer if configured).`}`,
       );
     }
     return;
   }
-  if (result.kind === "completed") {
-    throw new Error(`Ingress event ${eventId} is completed and cannot be resubmitted.`);
+  let message: string;
+  switch (result.kind) {
+    case "completed":
+      message = `Ingress event ${eventId} is completed and cannot be resubmitted.`;
+      break;
+    case "active":
+      message = `Ingress event ${eventId} is already ${result.status}.`;
+      break;
+    case "unrecoverable":
+      message = `Ingress event ${eventId} has no retained payload and cannot be resubmitted.`;
+      break;
+    default:
+      message = `Ingress event ${eventId} was not found for ${channelId}/${accountId}.`;
   }
-  if (result.kind === "active") {
-    throw new Error(`Ingress event ${eventId} is already ${result.status}.`);
-  }
-  if (result.kind === "unrecoverable") {
-    throw new Error(`Ingress event ${eventId} has no retained payload and cannot be resubmitted.`);
-  }
-  throw new Error(`Ingress event ${eventId} was not found for ${channelId}/${accountId}.`);
+  throw new Error(options.json ? message : terminalText`${message}`);
 }

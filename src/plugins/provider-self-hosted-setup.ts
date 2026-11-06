@@ -3,12 +3,13 @@ import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/upsert-with-lock.js";
+import { resolveDefaultModelMaxTokens } from "../agents/defaults.js";
 import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
-  SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -83,7 +84,11 @@ function buildOpenAICompatibleSelfHostedProviderConfig(
                 input: params.input ?? ["text"],
                 cost: SELF_HOSTED_DEFAULT_COST,
                 contextWindow: params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-                maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
+                maxTokens:
+                  params.maxTokens ??
+                  resolveDefaultModelMaxTokens(
+                    params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+                  ),
               },
             ],
           },
@@ -108,11 +113,14 @@ type OpenAICompatibleSelfHostedProviderSetupParams = OpenAICompatibleSelfHostedP
 export async function promptAndConfigureOpenAICompatibleSelfHostedProviderAuth(
   params: OpenAICompatibleSelfHostedProviderSetupParams,
 ): Promise<ProviderAuthResult> {
+  const configuredBaseUrl =
+    resolveMergedModelProviderConfig(params.cfg, params.providerId)?.baseUrl?.trim() ?? "";
   const baseUrlRaw = await params.prompter.text({
     message: `${params.providerLabel} base URL`,
-    initialValue: params.defaultBaseUrl,
+    // Prefilling the default makes typed input append to it. Hint it instead, and
+    // prefill only a stored URL the operator may want to edit.
+    initialValue: configuredBaseUrl || undefined,
     placeholder: params.defaultBaseUrl,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
   });
   const apiKeyRaw = await params.prompter.text({
     message: `${params.providerLabel} API key`,
@@ -126,7 +134,10 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProviderAuth(
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
 
-  const baseUrl = (baseUrlRaw ?? "").trim().replace(/\/+$/, "");
+  const baseUrl = (baseUrlRaw?.trim() || configuredBaseUrl || params.defaultBaseUrl).replace(
+    /\/+$/,
+    "",
+  );
   const apiKey = normalizeStringifiedOptionalString(apiKeyRaw) ?? "";
   const modelId = normalizeStringifiedOptionalString(modelIdRaw) ?? "";
   const credential: AuthProfileCredential = {

@@ -1,6 +1,6 @@
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import {
-  resolveDaemonInstallRuntimeInputs,
+  resolveDaemonInstallPlanInputs,
   resolveDaemonRuntimeBinDir,
 } from "../../commands/daemon-install-plan.shared.js";
 import { emitNodeRuntimeWarning } from "../../commands/daemon-install-runtime-warning.js";
@@ -14,8 +14,8 @@ import {
   resolveNodeWindowsTaskName,
   resolveNodeServiceIdentityEnvironment,
 } from "../../daemon/constants.js";
+import { installDurableServiceCli } from "../../daemon/durable-service-entrypoint.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
-import { resolveDurableNodeEntrypoint } from "../../daemon/npx-service-install.js";
 import { resolveNodeProgramArguments } from "../../daemon/program-args.js";
 import {
   buildPlatformRuntimeLogHints,
@@ -37,7 +37,7 @@ import {
   readSystemdUserLingerStatus,
   resolveSystemdUserServiceAccount,
 } from "../../daemon/systemd.js";
-import { loadDeviceIdentityIfPresent } from "../../infra/device-identity.js";
+import { loadDeviceIdentityIfPresentAsync } from "../../infra/device-identity-async.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { canReuseNodeHostDeviceToken } from "../../node-host/gateway-auth.js";
@@ -91,9 +91,9 @@ function renderNodeServiceStartHints(): string[] {
   return buildPlatformServiceStartHints({
     installHint: formatCliCommand("openclaw node install"),
     startCommand: formatCliCommand("openclaw node start"),
-    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
-    systemdServiceName: resolveNodeSystemdServiceName(),
-    windowsTaskName: resolveNodeWindowsTaskName(),
+    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel(process.env.OPENCLAW_PROFILE)}.plist`,
+    systemdServiceName: resolveNodeSystemdServiceName(process.env.OPENCLAW_PROFILE),
+    windowsTaskName: resolveNodeWindowsTaskName(process.env.OPENCLAW_PROFILE),
   });
 }
 
@@ -173,7 +173,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   let pinSnapshot;
   try {
     pinSnapshot = await withDaemonRuntimePinMigration(
-      { ...installEnv, ...resolveNodeServiceIdentityEnvironment() },
+      { ...installEnv, ...resolveNodeServiceIdentityEnvironment(installEnv) },
       () =>
         readDaemonRuntimePinForInstall(
           { kind: "node", env: installEnv },
@@ -202,9 +202,12 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
   let pinnedRuntimePath = opts.runtimePath ?? (opts.runtime ? undefined : pinSnapshot.pin?.path);
-  const runtimeRaw = opts.runtime || resolveGatewayDaemonRuntime([pinnedRuntimePath ?? ""]);
+  const runtimeRaw =
+    opts.runtime ||
+    pinSnapshot.pin?.runtime ||
+    resolveGatewayDaemonRuntime([pinnedRuntimePath ?? ""]);
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node" or "bun")');
+    fail('Invalid --runtime (use "node", "bun", or "standalone")');
     return;
   }
 
@@ -249,19 +252,20 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const retainedRuntime = recordedRuntime?.status === "supported" ? recordedRuntime : undefined;
 
   const wrapperPath = installEnv.OPENCLAW_WRAPPER;
-  const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
-    env: installEnv,
-    runtime: retainedRuntime?.runtime ?? runtimeRaw,
-    runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
-    runtimePath: restoredRuntimePath ?? retainedRuntime?.path,
-    pinnedRuntimePath,
-    devMode: restoreServiceCli ? false : undefined,
-    wrapperPath,
-    warn,
-  });
-  const cliEntrypoint =
-    restoreServiceCli?.entrypoint ??
-    (!devMode && !wrapperPath ? await resolveDurableNodeEntrypoint(installEnv) : undefined);
+  // Planning validates the runtime and wrapper; the durable copy is checked and placed during install.
+  const { devMode, runtime, runtimePath, cliEntrypoint, durableCliReplacement } =
+    await resolveDaemonInstallPlanInputs({
+      service: "node",
+      env: installEnv,
+      runtime: retainedRuntime?.runtime ?? runtimeRaw,
+      runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
+      runtimePath: restoredRuntimePath ?? retainedRuntime?.path,
+      pinnedRuntimePath,
+      serviceCli: restoreServiceCli,
+      wrapperPath,
+      installDurableCli: true,
+      warn,
+    });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     cliEntrypoint,
     host,
@@ -299,7 +303,9 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   });
   if (!opts.authFromEnv) {
     const savedGateway = (await loadNodeHostConfig(installEnv))?.gateway;
-    const identity = savedGateway ? loadDeviceIdentityIfPresent({ env: installEnv }) : null;
+    const identity = savedGateway
+      ? await loadDeviceIdentityIfPresentAsync({ env: installEnv })
+      : null;
     if (
       identity &&
       (await canReuseNodeHostDeviceToken({
@@ -329,38 +335,46 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     warnings,
     emit: (payload) => emit({ ...payload, message: installationMessage }),
     fail,
-    install: async () => {
-      await service.install({
-        runtimePinUpdate: {
-          expected: pinSnapshot,
-          pin: pinnedRuntimePath ? { runtime: runtimeRaw, path: pinnedRuntimePath } : undefined,
-          ...(opts.expectedRuntimePin !== undefined
-            ? {
-                requireDefinitionMatch: true as const,
-                ...(!restoreServiceCli && pinSnapshot.definition !== undefined
-                  ? { requireRunning: true as const }
-                  : {}),
-              }
-            : {}),
-        },
+    install: () =>
+      installDurableServiceCli({
         env: installEnv,
-        stdout,
+        replacement: durableCliReplacement,
+        verify: () => service.isLoaded({ env: process.env }),
         warn,
-        programArguments,
-        workingDirectory,
-        environment,
-        environmentValueSources: {
-          OPENCLAW_GATEWAY_TOKEN: "file",
-          OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
-          CF_ACCESS_CLIENT_ID: "file",
-          CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
-        },
-        description: "OpenClaw Node Host",
-        ...(restoreServiceCli
-          ? { workingDirectory: existingManagedCommand?.workingDirectory }
-          : {}),
-      });
-    },
+        install: (beforeMutation, beforeRecovery) =>
+          service.install({
+            beforeMutation,
+            beforeRecovery,
+            runtimePinUpdate: {
+              expected: pinSnapshot,
+              pin: pinnedRuntimePath ? { runtime: runtimeRaw, path: pinnedRuntimePath } : undefined,
+              ...(opts.expectedRuntimePin !== undefined
+                ? {
+                    requireDefinitionMatch: true as const,
+                    ...(!restoreServiceCli && pinSnapshot.definition !== undefined
+                      ? { requireRunning: true as const }
+                      : {}),
+                  }
+                : {}),
+            },
+            env: installEnv,
+            stdout,
+            warn,
+            programArguments,
+            workingDirectory,
+            environment,
+            environmentValueSources: {
+              OPENCLAW_GATEWAY_TOKEN: "file",
+              OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+              CF_ACCESS_CLIENT_ID: "file",
+              CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
+            },
+            description: "OpenClaw Node Host",
+            ...(restoreServiceCli
+              ? { workingDirectory: existingManagedCommand?.workingDirectory }
+              : {}),
+          }),
+      }),
     // Failed installation must not carry a misleading linger warning (#107033).
     onVerified: () => warnIfSystemdUserLingerDisabled(warn),
   });
@@ -370,7 +384,14 @@ export async function runNodeDaemonLifecycle(
   action: "uninstall" | "start" | "restart" | "stop",
   opts: NodeDaemonOutputOptions = {},
 ) {
-  const params = { serviceNoun: "Node", service: resolveNodeService(), opts };
+  const params = {
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    renderFailureHints: () => [
+      `Run ${formatCliCommand("openclaw node status")} to inspect the service, then retry.`,
+    ],
+    opts,
+  };
   if (action === "uninstall") {
     return await runServiceUninstall({
       ...params,
@@ -477,8 +498,8 @@ export async function runNodeDaemonStatus(opts: NodeDaemonOutputOptions = {}) {
     );
     for (const hint of buildPlatformRuntimeLogHints({
       env: hintEnv,
-      systemdServiceName: resolveNodeSystemdServiceName(),
-      windowsTaskName: resolveNodeWindowsTaskName(),
+      systemdServiceName: resolveNodeSystemdServiceName(process.env.OPENCLAW_PROFILE),
+      windowsTaskName: resolveNodeWindowsTaskName(process.env.OPENCLAW_PROFILE),
     })) {
       defaultRuntime.log(errorText(hint));
     }

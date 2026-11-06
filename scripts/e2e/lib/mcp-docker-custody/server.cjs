@@ -6,6 +6,11 @@ const record = (method) =>
   fs.appendFileSync("/proof/requests.jsonl", `${JSON.stringify({ method })}\n`);
 const reply = (id, result) =>
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+const markReady = (value) => {
+  // The directory watcher must never observe a partially written ready marker.
+  fs.writeFileSync("/proof/ready.tmp", value);
+  fs.renameSync("/proof/ready.tmp", "/proof/ready");
+};
 
 // Background work survives stdin EOF, as it can in a real MCP server. Container
 // removal must come from the transport's Docker custody, not this fixture.
@@ -19,7 +24,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   }
   if (request.method === "initialize") {
     if (mode === "timeout") {
-      fs.writeFileSync("/proof/ready", "initialize-withheld");
+      markReady("initialize-withheld");
       return;
     }
     reply(request.id, {
@@ -40,7 +45,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       reply(request.id, { tools: [] });
     };
     const watcher = fs.watch("/proof", release);
-    fs.writeFileSync("/proof/ready", "tools/list");
+    markReady("tools/list");
     release();
   } else if (request.method === "ping") {
     reply(request.id, {});

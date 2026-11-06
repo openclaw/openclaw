@@ -1,4 +1,7 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { formatCliCommand } from "../cli/command-format.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 
@@ -8,9 +11,19 @@ export type McpOAuthIdentity = {
   principal: "operator" | "requester";
   serverName: string;
   serverUrl: string;
+  /**
+   * Whether operator config `mcp.servers` defines this server (only those resolve in
+   * `openclaw mcp login`); false means a plugin declares it, absent means unknown.
+   */
+  configured?: boolean;
 };
 
-export function operatorMcpOAuthIdentity(serverName: string, serverUrl: string): McpOAuthIdentity {
+/** Pass `cfg` when known so sign-in errors can name the CLI for `mcp.servers` entries. */
+export function operatorMcpOAuthIdentity(
+  serverName: string,
+  serverUrl: string,
+  cfg?: OpenClawConfig,
+): McpOAuthIdentity {
   const safeServerName = sanitizeServerName(serverName, new Set<string>());
   const hash = sha256Hex(`${serverName}\0${serverUrl}`);
   return {
@@ -18,7 +31,34 @@ export function operatorMcpOAuthIdentity(serverName: string, serverUrl: string):
     principal: "operator",
     serverName,
     serverUrl,
+    ...(cfg ? { configured: Object.hasOwn(cfg.mcp?.servers ?? {}, serverName) } : {}),
   };
+}
+
+/**
+ * Terminal sign-in steps, or undefined when the CLI cannot sign in: `openclaw mcp login`
+ * runs offline only and resolves only operator `mcp.servers`, never plugin-declared servers.
+ */
+export function mcpOAuthCliLoginSteps(identity: McpOAuthIdentity): string | undefined {
+  if (identity.principal !== "operator" || !identity.configured) {
+    return undefined;
+  }
+  const login = formatCliCommand(`openclaw mcp login ${quoteCliArg(identity.serverName)}`);
+  return `stop the Gateway with ${formatCliCommand("openclaw gateway stop")}, run ${login}, then start the Gateway again`;
+}
+
+/** Recovery sentence for MCP OAuth credential errors. */
+export function mcpOAuthSignInHint(identity: McpOAuthIdentity): string {
+  if (identity.principal === "requester") {
+    return "Reconnect from the channel through the MCP connect flow.";
+  }
+  const steps = mcpOAuthCliLoginSteps(identity);
+  if (steps) {
+    return `Sign in from Settings → MCP, or from the Gateway's terminal: ${steps}.`;
+  }
+  return identity.configured === false
+    ? "Select Connect on the plugin's page in Settings to sign in again."
+    : "Sign in again from Settings: select Connect on the plugin's page, or Sign in on the MCP page.";
 }
 
 export function requesterMcpOAuthIdentity(

@@ -17,7 +17,6 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   {
     code: "session-store-sync-listing",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-09-08",
     deprecated: "2026-10-11",
     warningStarts: "2026-10-11",
     replacement:
@@ -30,17 +29,10 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotations and one shared DEP_PLUGIN_SDK warning per plugin and session-store family per process on legacy use",
     ],
-    tests: [
-      "src/plugin-sdk/session-store-runtime.async.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Plugins can list current session metadata through the existing session worker without loading saved prompts or creating missing databases. Bundled Discord thread-close and Codex pre-archive enumeration use the async API; the released synchronous contract remains available. Stored data and update behavior are unchanged.",
   },
   {
     code: "github-publication-native-callbacks",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-08-19",
     deprecated: "2026-10-09",
     warningStarts: "2026-10-09",
     replacement:
@@ -69,20 +61,10 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotations naming the V2 or Async replacement; one shared runtime DEP_PLUGIN_SDK warning per plugin and github-publication family per process, including bounded unscoped SDK use",
     ],
-    tests: [
-      "test/type-contracts/gateway-placement-compat.ts",
-      "src/state/github-publication.worker.test.ts",
-      "src/gateway/github-publication-admission.test.ts",
-      "src/gateway/server-methods/users-github.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "GitHub publication adds required V2 requester capabilities and worker-owned request, lifecycle, execution, recovery, and reporting commands. Legacy publication methods retain their signatures but fail at invocation with migration guidance until removal in an announced later stable release. Personal connection cancellation and disconnection add awaited worker methods while retaining their released synchronous contracts; schemas, stored data, retention, and update behavior are unchanged.",
   },
   {
     code: "session-store-opaque-mutations",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-09-08",
     deprecated: "2026-10-09",
     warningStarts: "2026-10-09",
     replacement:
@@ -99,19 +81,10 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotations and one shared DEP_PLUGIN_SDK warning per plugin and session-store family per process on legacy use",
     ],
-    tests: [
-      "test/type-contracts/session-persistence-compat.ts",
-      "src/plugin-sdk/session-store-runtime.worker-patch.test.ts",
-      "src/plugin-sdk/session-store-runtime.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Plugins can prepare entry changes outside SQLite or submit conditional data patches to the existing worker. Public upserts and transcript watermarks use typed worker reducers. Released callback contracts remain compatible; native incognito and cross-store adapters retain their separate cutover boundaries.",
   },
   {
     code: "codex-transcript-sync-validation",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-09-08",
     deprecated: "2026-10-06",
     warningStarts: "2026-10-06",
     replacement:
@@ -121,20 +94,12 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/codex-session-transcript-runtime.validateCodexSessionTranscriptReadAdmission",
       "openclaw/plugin-sdk/codex-session-transcript-runtime.validateCodexSessionTranscriptContextVersion",
     ],
-    tests: [
-      "test/type-contracts/codex-session-transcript-runtime.compat.ts",
-      "src/config/sessions/session-transcript-context-read.worker.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Codex history validates retained worker projections off the Gateway thread while preserving the released synchronous reader and validator signatures. Storage and update behavior are unchanged.",
   },
   {
     code: "deprecated-session-store-beta5-api",
     status: "removed",
     removeAfter: "2026-09-30",
     owner: "sdk",
-    introduced: "2026-05-21",
     deprecated: "2026-07-12",
     warningStarts: "2026-07-12",
     replacement:
@@ -151,18 +116,10 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "openclaw package root saveSessionStore",
     ],
     diagnostics: ["plugin compatibility registry and migration guide"],
-    tests: [
-      "src/plugin-sdk/session-store-runtime.test.ts",
-      "src/index.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "The September 30, 2026 approved cutoff in 1783c5fd6fc5b03d2b376ba7cbbab4461940207e retired the beta.5 session-store bridge, its option types, and package-root loadSessionStore/saveSessionStore aliases ahead of the former October 12 window. Plugins must use scoped row APIs and identity-backed transcript APIs; the session-store-runtime subpath and resolveStorePath remain available.",
   },
   {
     code: "transcript-lock-sync-message-preparation",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-09-08",
     deprecated: "2026-10-05",
     warningStarts: "2026-10-08",
     replacement:
@@ -179,18 +136,10 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotations; one runtime warning per plugin for legacy transcript callbacks/locks; incognito targets receive an actionable replacement error",
     ],
-    tests: [
-      "src/plugin-sdk/session-transcript-lock.native.test.ts",
-      "test/type-contracts/session-transcript-preparation-compat.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Transcript writes have an optimistic, actor-compatible preparation contract. Legacy durable callbacks/locks retain transaction ordering; incognito callers migrate to preparation options. Stored data and update behavior are unchanged, and ordinary incognito routing stays host-owned.",
   },
   {
     code: "session-upstream-links-sync-persistence",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-07-14",
     deprecated: "2026-10-05",
     warningStarts: "2026-10-05",
     replacement:
@@ -204,19 +153,10 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotations and one shared DEP_SESSION_PERSISTENCE warning per plugin and upstream-link capability family; unscoped consumers share one SDK-level warning",
     ],
-    tests: [
-      "test/type-contracts/session-catalog-upstream-compat.ts",
-      "test/type-contracts/agent-harness-session-compat.ts",
-      "src/sessions/session-upstream-links.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Bundled session adoption and native initialization await upstream-link writes through the shared-state worker. Released synchronous SDK methods remain compatible through 2026-12-31; schemas, stored data, retention, and update behavior are unchanged.",
   },
   {
     code: "session-observer-progress-sync-reads",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-09-08",
     deprecated: "2026-10-04",
     warningStarts: "2026-10-04",
     replacement:
@@ -232,20 +172,10 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "GetReplyOptions.onVerboseProgressVisibility",
       "tryDispatchAcpReplyHook boolean-only event inputs",
     ],
-    tests: [
-      "src/plugins/compat/registry.test.ts",
-      "src/plugin-sdk/reply-runtime.contract.test.ts",
-      "test/type-contracts/gateway-session-observer-compat.ts",
-      "src/plugin-sdk/acp-runtime.test.ts",
-      "src/gateway/session-observer.test.ts",
-    ],
-    releaseNote:
-      "Session observer lifecycle and progress visibility expose awaited worker-backed methods. Released synchronous observer methods, reply-hook booleans, and visibility callbacks remain compatible; schemas, stored data, retention, and update behavior are unchanged.",
   },
   {
     code: "channel-inbound-sync-envelope-timestamps",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-10-05",
     deprecated: "2026-10-05",
     warningStarts: "2026-10-05",
     replacement:
@@ -262,21 +192,11 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/inbound-envelope.resolveInboundRouteEnvelopeBuilder",
       "openclaw/plugin-sdk/inbound-envelope.resolveInboundRouteEnvelopeBuilderWithRuntime",
     ],
-    tests: [
-      "src/plugin-sdk/shipped-channel-compat.test.ts",
-      "src/channels/inbound-event/envelope.test.ts",
-      "src/channels/inbound-event/envelope.worker.test.ts",
-      "src/plugin-sdk/direct-dm.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Bundled channels prepare activity timestamps through the existing session reader while released plugins retain their synchronous envelope callbacks. Stored data, schemas, retention, and update behavior are unchanged.",
   },
   {
     code: "reply-run-start-unprepared-transcript",
     ...DEPRECATED_SESSION_COMPAT,
     owner: "agent-runtime",
-    introduced: "2026-10-04",
     deprecated: "2026-10-04",
     warningStarts: "2026-10-04",
     replacement:
@@ -289,18 +209,10 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotation and one runtime DEP_SESSION_PERSISTENCE warning per plugin and callback family per process",
     ],
-    tests: [
-      "src/plugin-sdk/reply-runtime.contract.test.ts",
-      "src/gateway/server-methods/chat-send-reply-dispatch.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Reply runtimes can pass prepared transcript boundaries without Gateway-thread reads. Released plugin callbacks keep their arguments and synchronous completion acknowledgment; stored data and update behavior are unchanged.",
   },
   {
     code: "session-manager-sync-context-read",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-10-04",
     deprecated: "2026-10-04",
     warningStarts: "2026-10-04",
     replacement:
@@ -310,19 +222,10 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotation and one runtime DEP_SESSION_PERSISTENCE warning per plugin and capability family per process",
     ],
-    tests: [
-      "test/type-contracts/agent-sessions.context-compat.ts",
-      "src/agents/sessions/session-manager-incognito.test.ts",
-      "src/agents/sessions/session-manager-model-context-snapshot.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Plugins can await full-fidelity SessionManager context reads and asynchronous consumers. Owner and admission checks cover consumption; later transcript writes do not invalidate the captured snapshot. The synchronous reader remains available through 2026-12-31. Storage and update behavior are unchanged.",
   },
   {
     code: "session-reset-freshness-sync-read",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-10-05",
     deprecated: "2026-10-05",
     warningStarts: "2026-10-05",
     replacement:
@@ -332,19 +235,11 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotation and migration documentation; bounded capability-family warnings on legacy preparation",
     ],
-    tests: [
-      "test/type-contracts/session-reset-freshness-compat.ts",
-      "src/config/sessions/entry-freshness.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Channel plugins can await session reset freshness through the transcript worker. Existing plugins retain the synchronous method and reset policy; stored data and update behavior are unchanged.",
   },
   {
     code: "agent-end-sync-side-effects",
     ...DEPRECATED_SESSION_COMPAT,
     owner: "agent-runtime",
-    introduced: "2026-05-30",
     deprecated: "2026-10-04",
     warningStarts: "2026-10-04",
     replacement:
@@ -354,19 +249,11 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotation and migration documentation; bounded capability-family warnings on legacy preparation",
     ],
-    tests: [
-      "src/plugin-sdk/agent-harness-runtime.test.ts",
-      "src/agents/harness/agent-end-side-effects.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Harness plugins can await transcript-anchor preparation before releasing turn authority. The synchronous agent-end helper remains compatible for published plugins; stored data and update behavior are unchanged.",
   },
   {
     code: "native-session-generation-sync-authority",
     ...DEPRECATED_SESSION_COMPAT,
     owner: "agent-runtime",
-    introduced: "2026-09-22",
     deprecated: "2026-10-03",
     warningStarts: "2026-10-03",
     replacement:
@@ -378,20 +265,11 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/agent-harness-session-runtime.reclaimNativeSessionGeneration",
       "openclaw/plugin-sdk/agent-harness-session-runtime.NativeSessionGenerationOperations",
     ],
-    tests: [
-      "test/type-contracts/agent-harness-session-compat.ts",
-      "src/agents/harness/native-session/binding-generation.test.ts",
-      "src/agents/harness/native-session/binding-generation-authority.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Native harnesses can admit binding operations through worker-backed session authority. Released official harness plugins retain synchronous authority capture and lineage-checking mutation callbacks across host upgrades.",
   },
   {
     code: "native-session-deletion-unbound-callbacks",
     ...DEPRECATED_SESSION_COMPAT,
     owner: "agent-runtime",
-    introduced: "2026-08-26",
     deprecated: "2026-10-11",
     warningStarts: "2026-10-11",
     replacement:
@@ -406,18 +284,10 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript contract documentation and one shared DEP_SESSION_PERSISTENCE warning per plugin and native-session-deletion family per process, emitted only for unbound callbacks",
     ],
-    tests: [
-      "src/config/sessions/session-native-binding.reclamation.test.ts",
-      "src/config/sessions/session-native-binding.settlement.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Session replacement can settle typed native bindings through the existing worker transaction. Unbound synchronous harness callbacks are deprecated with supported factory replacements; stored data and update behavior are unchanged.",
   },
   {
     code: "session-manager-sync-persistence",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-10-01",
     deprecated: "2026-10-01",
     warningStarts: "2026-10-01",
     replacement:
@@ -451,19 +321,10 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations naming awaited twins",
       "one runtime DEP_SESSION_PERSISTENCE warning per plugin and capability family per process",
     ],
-    tests: [
-      "src/plugins/compat/registry.test.ts",
-      "src/agents/sessions/session-manager-async-entries.test.ts",
-      "src/agents/sessions/session-manager-async-message.test.ts",
-      "src/agents/sessions/session-manager-maintenance-async.test.ts",
-    ],
-    releaseNote:
-      "Plugins can await SessionManager transcript mutations through the existing SQLite worker. Synchronous methods retain their shipped return values as deprecated third-party adapters through 2026-12-31; storage formats and update behavior are unchanged.",
   },
   {
     code: "extension-session-sync-persistence",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-10-01",
     deprecated: "2026-10-01",
     warningStarts: "2026-10-01",
     replacement:
@@ -478,18 +339,11 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotations, migration guide, and shared once-per-plugin-and-family DEP_SESSION_PERSISTENCE warning",
     ],
-    tests: [
-      "src/plugins/compat/registry.test.ts",
-      "src/agents/sessions/sdk.metadata-admission.test.ts",
-    ],
-    releaseNote:
-      "Extensions can await transcript entries, session names, and labels; the shipped synchronous methods remain third-party compatibility adapters through 2026-12-31.",
   },
   {
     code: "provider-replay-sync-persistence",
     ...DEPRECATED_SESSION_COMPAT,
     owner: "provider",
-    introduced: "2026-10-01",
     deprecated: "2026-10-01",
     warningStarts: "2026-10-01",
     replacement:
@@ -505,20 +359,11 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotations, versioned migration guide, and shared once-per-plugin-and-family DEP_SESSION_PERSISTENCE warning",
     ],
-    tests: [
-      "src/plugins/compat/registry.test.ts",
-      "src/plugins/provider-replay-helpers.test.ts",
-      "src/plugins/provider-runtime.test.ts",
-      "src/plugin-sdk/provider-model-shared.test.ts",
-    ],
-    releaseNote:
-      "Provider replay hooks can await committed transcript metadata through additive V2 context types. Legacy hooks, context types, and the synchronous Gemini helper remain available for third-party migration through 2026-12-31.",
   },
   {
     code: "agent-execution-preparation-released-signature",
     status: "active",
     owner: "sdk",
-    introduced: "2026-10-06",
     replacement:
       "Keep the execution input shapes shipped in v2026.9.9 and v2026.10.1-beta.1 by openOpenClawAgentSqliteWorkerStore, including the beta capturePreparedGenerationClaim method for parameter-derived types. Private native-adoption capabilities are not plugin requirements. The released two-argument prepare contract remains supported without migration or deprecation; host admission reuses the native owner’s published schema facts.",
     docsPath:
@@ -528,18 +373,10 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/sqlite-runtime.openOpenClawAgentSqliteWorkerStore publicationSource.execution.prepare",
     ],
     diagnostics: ["SDK type assertions and compatibility documentation; no runtime warnings"],
-    tests: [
-      "test/type-contracts/sqlite-runtime.preparation-compat.ts",
-      "src/state/openclaw-agent-execution.creation-witness.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Agent execution and host admission reuse completed native preparation and published schema facts. Released execution objects do not require private host capabilities; preparation calls and implementations retain their Promise contract. Schemas, stored data, and update behavior are unchanged.",
   },
   {
     code: "acp-session-sync-read",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-09-04",
     deprecated: "2026-10-11",
     warningStarts: "2026-10-11",
     replacement:
@@ -552,15 +389,11 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotation and one shared DEP_PLUGIN_SDK warning per plugin and ACP-session family per process on legacy use",
     ],
-    tests: ["src/plugin-sdk/acp-runtime.test.ts", "src/acp/runtime/session-meta-read.test.ts"],
-    releaseNote:
-      "ACP session reads run through the existing worker. Bundled callers await metadata while the released synchronous SDK reader remains deprecated and supported; schemas, stored data, and update behavior are unchanged.",
   },
   {
     code: "acp-session-metadata-released-signatures",
     status: "active",
     owner: "sdk",
-    introduced: "2026-10-04",
     replacement:
       "Keep the released one-argument ACP reader and manager read/write injection signatures. Internal actor bindings are not plugin arguments; actor activation must preserve these callable contracts. The APIs remain supported and are not deprecated.",
     docsPath: "/plugins/sdk-migration/compatibility-policy#acp-metadata-binding-compatibility",
@@ -570,19 +403,11 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "AcpSessionManagerDeps.upsertSessionMeta",
     ],
     diagnostics: ["SDK type assertions and compatibility documentation; no runtime warnings"],
-    tests: [
-      "src/plugin-sdk/acp-runtime.test.ts",
-      "src/acp/runtime/session-meta-read.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Released ACP readers and manager injection callbacks keep their one-argument contracts while incognito sessions use the internal memory actor.",
   },
   {
     code: "memory-session-released-signatures",
     status: "active",
     owner: "sdk",
-    introduced: "2026-10-05",
     replacement:
       "Keep the released Memory entry, corpus, and reset-recall reader signatures. Internal actor sources are not plugin arguments; actor activation must preserve the existing Promise results and synchronous message observers. These APIs remain supported and are not deprecated.",
     docsPath: "/plugins/sdk-migration/compatibility-policy#memory-session-binding-compatibility",
@@ -592,18 +417,10 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/memory-core-host-engine-sessions.readSessionResetRecallCutoff",
     ],
     diagnostics: ["SDK type assertions and compatibility documentation; no runtime warnings"],
-    tests: [
-      "test/type-contracts/memory-core-host-engine-sessions.contract.ts",
-      "src/config/sessions/session-actor-memory-search.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Released Memory readers retain their argument and return contracts while incognito reads use the internal memory actor. Durable storage and update behavior are unchanged.",
   },
   {
     code: "transcript-strict-sync-message-preparation",
     ...DEPRECATED_SESSION_COMPAT,
-    introduced: "2026-09-08",
     deprecated: "2026-10-05",
     warningStarts: "2026-10-08",
     replacement:
@@ -618,11 +435,5 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: [
       "TypeScript @deprecated annotations; one runtime warning per plugin shared with legacy transcript locks; incognito targets receive an actionable replacement error",
     ],
-    tests: [
-      "src/plugin-sdk/session-transcript-runtime.worker-preparation.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "Strict and ordinary transcript appends accept prepared source authority and awaited message preparation. Legacy durable callbacks remain compatible through 2026-12-31; stored data and update behavior are unchanged.",
   },
 ] as const satisfies readonly PluginCompatRecord[];

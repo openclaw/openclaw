@@ -1,49 +1,46 @@
 import { createSignal, onSettled } from "solid-js";
 import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
-import type { CronJob, CronRunLogEntry, CronScratchGetResult } from "../../api/types.ts";
+import type { CronJob, CronRunLogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { watchAgentScope, watchSelectedAgent } from "../../lib/agents/index.ts";
-import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
+import { createChannelCapability } from "../../lib/channels/index.ts";
+import {
+  hasCronFormErrors,
+  normalizeCronFormState,
+  validateCronForm,
+} from "../../lib/cron/form.ts";
 import {
   addCronJob,
   cancelCronEdit,
   createInitialCronState,
-  hasCronFormErrors,
   invalidateCronMutation,
   invalidateCronRefresh,
   loadCronJobsPage,
   loadCronStatus,
-  normalizeCronFormState,
   removeCronJob,
   runCronJob,
   startCronClone,
   startCronEdit,
   toggleCronJob,
   updateCronJobsFilter,
-  validateCronForm,
 } from "../../lib/cron/index.ts";
 import {
-  loadCronRuns,
-  loadCronRunsForJob,
-  loadMoreCronRuns,
-  updateCronRunsFilter,
-} from "../../lib/cron/runs.ts";
+  hasCronInventoryEvents,
+  isCronInventoryInvalidation,
+} from "../../lib/cron/inventory-connection.ts";
+import { loadCronRuns, selectCronRunsForJob, updateCronRunsFilter } from "../../lib/cron/runs.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import { formatMissingOperatorReadScopeMessage } from "../../lib/gateway-errors.ts";
-import {
-  loadModelCatalog,
-  modelCatalogRefreshError,
-  subscribeModelCatalogCache,
-} from "../../lib/model-catalog-store.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
+import { profileDirectory } from "../../lib/profile-directory.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
+import { createCronPresentation } from "./cron-page-presentation.ts";
 import {
   createDeliveryConversations,
   invalidateStaleDeliveryRoute,
@@ -51,39 +48,40 @@ import {
 } from "./delivery-conversations.ts";
 import { createCronEventEditor } from "./event-editor.ts";
 import { resolveCronEventPatch, validateCronEventSelection } from "./event-source.ts";
-import { createCronRouteSelection, resolveCronRouteData } from "./route-model.ts";
+import { canManageCronJob } from "./human-owner.ts";
+import * as cronRoute from "./route-model.ts";
 import { createCronRunTranscript } from "./run-transcript.tsx";
-import type { CronDetailTab, CronListTab, CronProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerCronEnglish);
+
+type CronListTab = "tasks" | "activity";
+type CronDetailTab = "settings" | "history";
 
 /** Owns page presentation; cron admission and mutation chains remain synchronous. */
 export function createCronPage(context: () => ApplicationContext, host: () => HTMLElement) {
   let routeSearch = "";
   let cron = createInitialCronState();
-  const [cronModelSuggestions, setCronModelSuggestions] = createSignal<string[]>([]);
-  const [modelSuggestionsError, setModelSuggestionsError] = createSignal<string | null>(null);
   const [listTab, setListTab] = createSignal<CronListTab>("tasks");
   const [detailTab, setDetailTab] = createSignal<CronDetailTab>("settings");
-  const [heartbeatScratch, setHeartbeatScratch] = createSignal("");
   let active = false;
   const cleanups: Array<() => void> = [];
   const gateway = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   let boundContext: ApplicationContext | null = null;
   let gatewayAvailable = false;
-  let notify: (() => void) | undefined;
-  const projection = projectSource(null, {
-    read: () => cron,
-    subscribe: (_source, listener) => {
-      notify = listener;
-      return () => {
-        notify = undefined;
-      };
-    },
-    equality: "revision",
+  const projection = projectMutableSource(null, () => cron);
+  const presentation = createCronPresentation({
+    currentState: () => cron,
+    readState: projection.read,
+    connection: gateway,
+    context,
+    active: () => active,
+    publish: publishCronState,
   });
   const agents = projectOwner(context().agents, (source) => source.state);
-  const channels = projectOwner(context().channels, (source) => source.state);
+  const channels = projectOwner(
+    context().acquireChannels(createChannelCapability),
+    (source) => source.state,
+  );
   const runtimeConfig = projectOwner(context().runtimeConfig, (source) => source.state);
   const runTranscript = createCronRunTranscript(publish, () => {
     const scope = gateway.capture();
@@ -96,11 +94,13 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         }
       : null;
   });
-  const routeSelection = createCronRouteSelection();
+  const routeSelection = cronRoute.createCronRouteSelection();
   let pendingRunScroll = false;
   const runRows = new Map<HTMLElement, () => CronRunLogEntry>();
-  let modelSuggestionsRequest: { state: CronState; agentId: string } | null = null;
-  let stopModelSuggestions: (() => void) | undefined;
+  const canCreateCron = () => readGatewayOperatorAccess(context().gateway.snapshot).canAdmin;
+  const canManageJob = (job: CronJob): boolean => canManageCronJob(context().gateway, job);
+  const canManageCron = (): boolean =>
+    cron.cronEditingJob ? canManageJob(cron.cronEditingJob) : canCreateCron();
   const deliveryDirectory = createDeliveryConversations({
     currentCronState: () => cron,
     canManage: canManageCron,
@@ -116,14 +116,12 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     isCurrentConnection: (scope) => gateway.isCurrent(scope),
     notify: publish,
   });
-  let heartbeatScratchRequest = 0;
   const safetyRefresh = useVisiblePoll(600_000, () => ensureInitialData(true));
   const observeAgentScope = watchAgentScope((scopeId, intentChanged) => {
     if (!intentChanged) {
       // Hydration refines scope without replacing operator intent or drafts.
       cron.cronAgentId = scopeId;
       void refreshCron();
-      void loadModelSuggestions(cron);
       if ((cron.cronEditingJob || cron.cronCreateOpen) && !cron.cronForm.agentId.trim()) {
         void deliveryDirectory.load();
       }
@@ -139,22 +137,28 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     ensureInitialData();
     publish();
   });
-  function canManageCron(): boolean {
-    return readGatewayOperatorAccess(context().gateway.snapshot).canAdmin;
-  }
-
   function bindContext() {
     cleanups.splice(0).forEach((stop) => stop());
     const currentContext = context();
+    let location = currentContext.router.getState().location;
+    cleanups.push(
+      currentContext.router.subscribe((state) => {
+        if (state.location !== location) {
+          location = state.location;
+          presentation.retire();
+        }
+      }),
+    );
     const sourceChanged = boundContext !== null && boundContext.gateway !== currentContext.gateway;
     let first = boundContext === null || sourceChanged;
     boundContext = currentContext;
     agents.replaceSource(currentContext.agents);
-    channels.replaceSource(currentContext.channels);
+    channels.replaceSource(currentContext.acquireChannels(createChannelCapability));
     runtimeConfig.replaceSource(currentContext.runtimeConfig);
     if (sourceChanged) {
       gateway.invalidate();
     }
+    let selfUserId = currentContext.gateway.snapshot.selfUser?.id;
     const applySnapshot = () => {
       if (!active || context() !== currentContext) {
         return;
@@ -162,8 +166,11 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       const snapshot = currentContext.gateway.snapshot;
       const previousConnected = gateway.capture() !== null;
       const presentationChanged = routeSelection.bind(currentContext.gateway);
-      const changed = gateway.transition(snapshot) || presentationChanged;
-      if (presentationChanged) {
+      // Profile hydration retires shared inventory even while its page scope stays stable.
+      const identityChanged = selfUserId !== snapshot.selfUser?.id;
+      selfUserId = snapshot.selfUser?.id;
+      const changed = gateway.transition(snapshot) || presentationChanged || identityChanged;
+      if (presentationChanged || identityChanged) {
         gateway.invalidate();
       }
       const nextAvailable = isGatewayAvailable(snapshot);
@@ -173,17 +180,16 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       if (first || presentationChanged || cron.client !== snapshot.client) {
         resetGatewayState(snapshot);
       } else if (changed) {
+        presentation.retire();
         invalidateCronRefresh(cron);
         cron.client = snapshot.client;
         cron.connected = snapshot.phase === "connected";
         runTranscript.reconnect();
-        heartbeatScratchRequest += 1;
         if (!cron.cronEditingJob && !cron.cronCreateOpen) {
           routeSelection.requested = false;
         }
       }
-      if (snapshot.phase === "connected" && !readGatewayOperatorAccess(snapshot).canAdmin) {
-        clearHeartbeatScratch();
+      if (snapshot.phase === "connected" && !canManageCron()) {
         deliveryDirectory.clear();
       }
       if (snapshot.phase === "connected" && !hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
@@ -205,13 +211,23 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     cleanups.push(
       observeAgentScope(currentContext.agentSelection),
       watchSelectedAgent(currentContext.agentSelection, (agentId) => {
-        if (modelSuggestionsRequest?.agentId !== agentId) {
-          void loadModelSuggestions(cron);
+        if (presentation.modelRequest?.agentId !== agentId) {
+          presentation.resetModels();
+          publish();
         }
       }),
       currentContext.gateway.subscribeEvents((event) => {
-        if (active && context() === currentContext && event.event === "cron") {
-          void refreshCron({ coalesce: true, event: event.payload });
+        if (
+          active &&
+          context() === currentContext &&
+          (event.event === "cron" ||
+            (hasCronInventoryEvents(currentContext.gateway.snapshot) &&
+              isCronInventoryInvalidation(event, currentContext.gateway.snapshot)))
+        ) {
+          void refreshCron({
+            coalesce: true,
+            event: event.event === "cron" ? event.payload : undefined,
+          });
         }
       }),
     );
@@ -229,12 +245,10 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     safetyRefresh.start();
     return () => {
       active = false;
+      presentation.dispose();
       safetyRefresh.stop();
       cleanups.splice(0).forEach((stop) => stop());
       gateway.dispose();
-      stopModelSuggestions?.();
-      modelSuggestionsRequest = null;
-      heartbeatScratchRequest += 1;
       invalidateCronRefresh(cron);
     };
   });
@@ -248,20 +262,20 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     }
     preparePanel();
     eventSource.sync();
-    notify?.();
+    projection.publish();
     // The state writer owns route admission; its DOM requests follow this publication's commit.
     onSettled(() => {
       if (active) {
+        ensureEditorSources();
         afterRender();
       }
     });
   }
 
   function resetGatewayState(snapshot: ApplicationContext["gateway"]["snapshot"]) {
-    stopModelSuggestions?.();
-    stopModelSuggestions = undefined;
+    presentation.retire();
+    presentation.resetModels();
     runTranscript.close();
-    clearHeartbeatScratch();
     eventSource.reset();
     invalidateCronRefresh(cron);
     const connected = snapshot.phase === "connected";
@@ -270,15 +284,16 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       connected,
     });
     nextCron.canRefresh = () => canRefreshCron(nextCron);
+    nextCron.canRefreshRuns = () =>
+      nextCron.cronEditingJob
+        ? detailTab() === "history"
+        : !nextCron.cronCreateOpen && listTab() === "activity";
     cron = nextCron;
-    const routeData = resolveCronRouteData(routeSearch);
+    const routeData = cronRoute.resolveCronRouteData(routeSearch);
     cron.cronSessionFilter = routeData.session;
     routeSelection.requested = false;
     cron.cronAgentId = context().agentSelection.state.scopeId;
-    setCronModelSuggestions([]);
     deliveryDirectory.retireEditor();
-    setModelSuggestionsError(null);
-    modelSuggestionsRequest = null;
   }
 
   function canRefreshCron(current: CronState = cron) {
@@ -296,16 +311,41 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (!canRefreshCron() || !cron.connected || !cron.client) {
       return;
     }
+    // Owner choices share the page's visibility and Gateway admission, not an eager subscription.
+    const current = cron;
+    void profileDirectory(context().gateway)
+      .load(forceRefresh)
+      .then(() => {
+        if (canRefreshCron(current)) {
+          publish();
+        }
+      });
     if (!context().agents.state.agentsList && !context().agents.state.agentsLoading) {
       void context().agents.ensureList();
     }
     if (forceRefresh || (!cron.cronStatus && !cron.cronLoading)) {
       void refreshCron({ coalesce: true });
-    } else if (!cron.cronRuns.length && !cron.cronRunsLoadingMore) {
-      void runCronTask(loadCronRuns);
     }
-    if (forceRefresh || modelSuggestionsRequest?.state !== cron) {
-      void loadModelSuggestions(cron);
+    onSettled(() => ensureEditorSources(forceRefresh));
+  }
+
+  function ensureEditorSources(forceRefresh = false) {
+    if (!active) {
+      return;
+    }
+    // The settled tab is authoritative; setters may still expose the previous tab.
+    if (!cron.cronCreateOpen && (!cron.cronEditingJob || detailTab() === "history")) {
+      presentation.resetModels();
+      return;
+    }
+    const agentId = context().agentSelection.state.selectedId;
+    if (!canRefreshCron() || !cron.connected || !cron.client || !agentId) {
+      return;
+    }
+    const request = presentation.modelRequest;
+    if (forceRefresh || request?.state !== cron || request.agentId !== agentId) {
+      void presentation.loadModels(cron);
+      void context().acquireChannels(createChannelCapability).refresh(false);
     }
   }
 
@@ -321,10 +361,12 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (search === routeSearch) {
       return;
     }
+    presentation.retire();
     routeSearch = search;
     runTranscript.close();
     cron.cronError = null;
-    const routeData = resolveCronRouteData(search);
+    cron.cronNotice = null;
+    const routeData = cronRoute.resolveCronRouteData(search);
     if (JSON.stringify(cron.cronSessionFilter) !== JSON.stringify(routeData.session)) {
       resetGatewayState(context().gateway.snapshot);
       ensureInitialData();
@@ -344,9 +386,10 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     const mode = editingJobId ? "job" : cron.cronCreateOpen ? "create" : "overview";
     const panelKey = `${mode}:${editingJobId ?? ""}`;
     if (panelKey !== lastPanelKey) {
+      presentation.retire();
       lastPanelKey = panelKey;
       runTranscript.close();
-      setDetailTab(editingJobId && cron.cronRunsRunId ? "history" : "settings");
+      setDetailTab(cronRoute.resolveCronDetailTab(cron.cronEditingJob, cron.cronRunsRunId));
       const scroller = host().closest(".content");
       if (scroller instanceof HTMLElement && typeof scroller.scrollTo === "function") {
         scroller.scrollTo({ top: 0 });
@@ -360,7 +403,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     const client = cron.client;
     if (routeData?.jobId && client && cron.connected && !routeSelection.requested) {
       const connectionScope = gateway.capture();
-      void runCronTask((current) =>
+      void presentation.runTask((current) =>
         routeSelection.resolve(
           current,
           () =>
@@ -383,99 +426,60 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     }
   }
 
-  async function refreshCron(options: { coalesce?: boolean; event?: unknown } = {}) {
-    const cronState = cron;
-    if (!canRefreshCron(cronState) || !cronState.connected || !cronState.client) {
-      return;
-    }
-    void runCronTask((current) => loadCronRuns(current, options));
-    void context().channels.refresh(false);
+  async function refreshCron(
+    options: { coalesce?: boolean; event?: unknown; refresh?: boolean } = {},
+  ) {
+    // Scope and tab setters can share this turn; optional reads follow their committed surface.
+    onSettled(() => void presentation.runTask((current) => loadCronRuns(current, options)));
     await Promise.all([
-      runCronTask((current) => loadCronStatus(current, options)),
-      runCronTask((current) =>
-        loadCronJobsPage(current, { tableFilters: true, event: options.event }),
+      presentation.read("status", (current) => loadCronStatus(current, options)),
+      presentation.read("jobs", (current) =>
+        loadCronJobsPage(current, { ...options, tableFilters: true }),
       ),
     ]);
   }
 
   function updateJobsFilters(patch: Parameters<typeof updateCronJobsFilter>[1]) {
-    void runCronTask(async (cronState) => {
+    void presentation.read("jobs", async (cronState) => {
       updateCronJobsFilter(cronState, patch);
       await loadCronJobsPage(cronState, { append: false, tableFilters: true });
     });
   }
 
-  async function loadModelSuggestions(cronState: CronState) {
-    const client = cronState.client;
-    const agentId = context().agentSelection.state.selectedId;
-    // Last-good suggestions belong to one agent, including when its successor has no catalog.
-    if (modelSuggestionsRequest?.agentId !== agentId) {
-      modelSuggestionsRequest = null;
-      setCronModelSuggestions([]);
-      setModelSuggestionsError(null);
-      publishCronState(cronState);
-    }
-    if (!client || !agentId || !isGatewayAvailable(context().gateway.snapshot)) {
+  function toggle(job: CronJob, enabled: boolean): void {
+    const view = presentation.capture();
+    if (
+      !presentation.isCurrent(view) ||
+      !canManageJob(job) ||
+      !cron.connected ||
+      !cron.client ||
+      cron.cronBusy
+    ) {
       return;
     }
-    const connectionScope = gateway.capture();
-    if (!connectionScope) {
+    const selected =
+      cron.cronEditingJob?.id === job.id
+        ? cron.cronEditingJob
+        : cron.cronJobs.find((entry) => entry.id === job.id);
+    if (!selected || !canManageJob(selected)) {
       return;
     }
-    stopModelSuggestions ??= subscribeModelCatalogCache(
-      client,
-      (update) => {
-        if (active && cron.client === client && update.type === "invalidated") {
-          void loadModelSuggestions(cron);
-        }
-      },
-      () => ({ agentId: context().agentSelection.state.selectedId ?? undefined }),
-    );
-    const request = { state: cronState, agentId };
-    modelSuggestionsRequest = request;
-    // Only the latest catalog request may publish rows or errors.
-    const isCurrent = () =>
-      active &&
-      cron === cronState &&
-      gateway.isCurrent(connectionScope) &&
-      modelSuggestionsRequest === request &&
-      context().agentSelection.state.selectedId === agentId;
-    try {
-      const result = await loadModelCatalog(client, { agentId });
-      if (isCurrent()) {
-        setCronModelSuggestions(
-          result.models
-            .filter((entry) => entry.manualSelectionAllowed !== false)
-            .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider)),
-        );
-        setModelSuggestionsError(modelCatalogRefreshError(result));
-        publishCronState(cronState);
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        setModelSuggestionsError(formatUiError(error));
-        publishCronState(cronState);
-      }
-    }
+    const scope = gateway.capture();
+    const editorGeneration = deliveryDirectory.generation;
+    const pending = presentation.runTask(async (state) => {
+      await toggleCronJob(state, selected, enabled);
+      deliveryDirectory.reconcileRoute(state, scope, editorGeneration);
+    });
+    void presentation.mutate(view, pending, { id: selected.id, enabled });
   }
 
-  async function runCronTask<T>(task: (cronState: CronState) => Promise<T>): Promise<T> {
-    const cronState = cron;
-    try {
-      const result = task(cronState);
-      publishCronState(cronState);
-      return await result;
-    } finally {
-      publishCronState(cronState);
-    }
-  }
-
-  function runCronAdminTask<T>(task: (cronState: CronState) => Promise<T>): void {
+  function runCronAdminTask<T>(job: CronJob, task: (cronState: CronState) => Promise<T>): void {
     // Recheck access at dispatch after possible reconnect or downgrade.
-    if (!canManageCron()) {
+    const current = cron.cronJobs.find((entry) => entry.id === job.id) ?? cron.cronEditingJob;
+    if (!current || current.id !== job.id || !canManageJob(current)) {
       return;
     }
-    void runCronTask(task);
+    void presentation.runTask(task);
   }
 
   function patchForm(patch: Partial<CronFormState>) {
@@ -497,72 +501,35 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   }
 
   function selectJob(job: CronJob, runId: string | null = null) {
-    clearHeartbeatScratch();
-    routeSelection.select(job.id, runId);
-    pendingRunScroll = Boolean(runId);
-    if (runId) {
-      setDetailTab("history");
-    }
+    const selection = cronRoute.resolveCronDetailSelection(cron, job, runId);
+    routeSelection.select(job.id, selection.runId);
+    pendingRunScroll = Boolean(selection.runId);
+    setDetailTab(selection.tab);
     cron.cronCreateOpen = false;
-    startCronEdit(cron, job);
-    void runCronTask(async (cronState) => {
-      // Claim the run pane before awaiting to retire the previous job's history.
-      await loadCronRunsForJob(cronState, job.id, runId);
-    });
-    deliveryDirectory.openEditor();
-    if (job.payload?.kind === "heartbeat") {
-      void loadHeartbeatScratch(cron, job.id, heartbeatScratchRequest);
+    // Inspecting another run of the current saved job must not discard its draft.
+    if (cron.cronEditingJob !== job) {
+      startCronEdit(cron, job);
+      deliveryDirectory.openEditor();
     }
-  }
-
-  function clearHeartbeatScratch() {
-    heartbeatScratchRequest += 1;
-    setHeartbeatScratch("");
-  }
-
-  async function loadHeartbeatScratch(cronState: CronState, jobId: string, requestId: number) {
-    const client = cronState.client;
-    if (!canManageCron() || !client || !cronState.connected) {
-      return;
-    }
-    const connectionScope = gateway.capture();
-    if (!connectionScope) {
-      return;
-    }
-    // Revalidate scratch access, connection, and selection after the request.
-    const isCurrent = () =>
-      cron === cronState &&
-      heartbeatScratchRequest === requestId &&
-      gateway.isCurrent(connectionScope) &&
-      canManageCron() &&
-      cronState.cronEditingJob?.id === jobId &&
-      cronState.cronForm.payloadKind === "heartbeat";
-    try {
-      const result = await client.request<CronScratchGetResult>("cron.scratch.get", { id: jobId });
-      if (isCurrent()) {
-        setHeartbeatScratch(result.scratch?.content ?? "");
-        publishCronState(cronState);
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        cronState.cronError = formatUiError(error);
-        publishCronState(cronState);
-      }
-    }
+    // Claim the history target synchronously; fetch after its selected tab settles.
+    selectCronRunsForJob(cron, job.id, selection.runId);
+    publishCronState();
+    onSettled(() => void presentation.runTask(loadCronRuns));
   }
 
   function resetEditor(createOpen: boolean) {
-    clearHeartbeatScratch();
     routeSelection.target = null;
     // Retire discovery before resetting its editor's form.
     eventSource.reset();
     deliveryDirectory.retireEditor();
     cancelCronEdit(cron, context().agentSelection.state.selectedId);
     cron.cronCreateOpen = createOpen;
+    const identity = context().gateway.snapshot.selfUser?.identity;
+    cron.cronForm.ownerProfileId = identity?.type === "profile" ? identity.id : "";
   }
 
   function openCreate(patch?: Partial<CronFormState>) {
-    if (!canManageCron()) {
+    if (!canCreateCron()) {
       return;
     }
     resetEditor(true);
@@ -574,37 +541,37 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   }
 
   function cloneJob(job: CronJob) {
-    if (!canManageCron()) {
+    if (!canCreateCron()) {
       return;
     }
-    clearHeartbeatScratch();
     routeSelection.target = null;
     // A clone is a prefilled create: the editor submits cron.add, not update.
     startCronClone(cron, job);
+    const identity = context().gateway.snapshot.selfUser?.identity;
+    cron.cronForm.ownerProfileId = identity?.type === "profile" ? identity.id : "";
     cron.cronCreateOpen = true;
     deliveryDirectory.openEditor();
     publishCronState();
   }
 
   async function removeJob(job: CronJob) {
+    const view = presentation.capture();
     const currentContext = context();
     const cronState = cron;
     const connectionScope = gateway.capture();
-    const hadAdminAccess = canManageCron();
     const selectedJob =
       cronState.cronEditingJob?.id === job.id
         ? cronState.cronEditingJob
         : cronState.cronJobs.find(
             (entry) => entry.id === job.id && entry.updatedAtMs === job.updatedAtMs,
           );
-    if (!connectionScope || !hadAdminAccess || !selectedJob) {
+    if (!presentation.isCurrent(view) || !connectionScope || !canManageJob(job) || !selectedJob) {
       return;
     }
     const selectedJobId = selectedJob.id;
     const selectedJobRevision = selectedJob.updatedAtMs;
-    const selectedJobName = selectedJob.name;
     const confirmed = await showConfirmDialog({
-      title: t("cron.actions.removeConfirmTitle", { name: selectedJobName }),
+      title: t("cron.actions.removeConfirmTitle", { name: selectedJob.name }),
       message: t("cron.actions.removeConfirmMessage"),
       confirmLabel: t("cron.actions.remove"),
       danger: true,
@@ -619,14 +586,14 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       context() !== currentContext ||
       cron !== cronState ||
       !gateway.isCurrent(connectionScope) ||
-      !canManageCron() ||
       !currentJob ||
+      !canManageJob(currentJob) ||
       currentJob.updatedAtMs !== selectedJobRevision
     ) {
       return;
     }
     const editorGeneration = deliveryDirectory.generation;
-    await runCronTask(async (current) => {
+    const pending = presentation.runTask(async (current) => {
       const editorOwnedDiscovery = current.cronEditingJob?.id === selectedJobId;
       await removeCronJob(current, currentJob);
       // Rejected removals resolve with cronError. Only a confirmed editor exit
@@ -639,20 +606,25 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       }
       // The overview must resume all-job history after removing its selected task.
       if (current.cronRunsScope === "job" && current.cronRunsJobId === null) {
-        await loadCronRunsForJob(current, null);
+        selectCronRunsForJob(current, null);
+        await loadCronRuns(current);
       }
     });
+    return presentation.mutate(view, pending);
   }
 
   function closePanel() {
     resetEditor(false);
+    selectCronRunsForJob(cron, null);
     publishCronState();
-    void runCronTask(async (cronState) => {
-      await loadCronRunsForJob(cronState, null);
-    });
+    onSettled(() => void presentation.runTask(loadCronRuns));
   }
 
-  function submitForm(runNow = false) {
+  function submitForm(runNow = false): void {
+    const view = presentation.capture();
+    if (!presentation.isCurrent(view) || !canManageCron()) {
+      return;
+    }
     // Synchronize the revision-bound catalog before validating a possibly replaced definition.
     eventSource.sync();
     const eventErrors = validateCronEventSelection(cron.cronForm, eventSource.view);
@@ -665,7 +637,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     }
     const connectionScope = gateway.capture();
     const editorGeneration = deliveryDirectory.generation;
-    runCronAdminTask(async (cronState) => {
+    const pending = presentation.runTask(async (cronState) => {
       const editing = Boolean(cronState.cronEditingJob);
       const result = await addCronJob(cronState);
       if (!result.saved) {
@@ -680,7 +652,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       if (editing) {
         return;
       }
-      if (runNow && result.jobId) {
+      if (runNow) {
         // Explicit create-and-run intent survives navigation while saving.
         await runCronJob(cronState, result.jobId, "force");
       }
@@ -690,35 +662,45 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         !cronState.cronCreateOpen &&
         cronState.cronRunsScope === "job"
       ) {
-        await loadCronRunsForJob(cronState, null);
+        selectCronRunsForJob(cronState, null);
+        await loadCronRuns(cronState);
       }
     });
+    void presentation.mutate(view, pending);
   }
 
   const actions = {
-    onListTabChange: setListTab,
-    onDetailTabChange: setDetailTab,
+    onListTabChange: (tab: CronListTab) => {
+      setListTab(tab);
+      onSettled(() => void presentation.runTask(loadCronRuns));
+    },
+    onDetailTabChange: (tab: CronDetailTab) => {
+      setDetailTab(tab);
+      onSettled(() => {
+        ensureEditorSources();
+        void presentation.runTask(loadCronRuns);
+      });
+    },
     onFormChange: patchForm,
-    onRefresh: () => void refreshCron(),
+    onRefresh: () => {
+      onSettled(() => ensureEditorSources(true));
+      return refreshCron({ refresh: true });
+    },
     onSubmit: () => submitForm(),
     onSubmitRunNow: () => submitForm(true),
     onSelectJob: selectJob,
     onOpenCreate: openCreate,
     onClosePanel: closePanel,
     onClone: cloneJob,
-    onToggle: (job, enabled) => {
-      const scope = gateway.capture();
-      const editorGeneration = deliveryDirectory.generation;
-      runCronAdminTask(async (cronState) => {
-        await toggleCronJob(cronState, job, enabled);
-        deliveryDirectory.reconcileRoute(cronState, scope, editorGeneration);
-      });
+    onToggle: (job: CronJob, enabled: boolean) => toggle(job, enabled),
+    onRun: (job: CronJob, mode?: "force" | "due") =>
+      runCronAdminTask(job, (cronState) => runCronJob(cronState, job.id, mode ?? "force")),
+    onRemove: (job: CronJob) => {
+      const view = presentation.capture();
+      return removeJob(job).catch((error: unknown) => presentation.reportError(view, error));
     },
-    onRun: (job, mode) =>
-      runCronAdminTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
-    onRemove: removeJob,
     onLoadMoreJobs: () =>
-      void runCronTask((cronState) =>
+      void presentation.read("jobs", (cronState) =>
         loadCronJobsPage(cronState, { append: true, tableFilters: true }),
       ),
     onJobsFiltersChange: updateJobsFilters,
@@ -730,27 +712,33 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         cronJobsSortBy: "nextRunAtMs",
         cronJobsSortDir: "asc",
       }),
-    onLoadMoreRuns: () => void runCronTask((cronState) => loadMoreCronRuns(cronState)),
-    onRunsFiltersChange: (patch) =>
-      void runCronTask(async (cronState) => {
+    onLoadMoreRuns: () =>
+      void presentation.runTask((cronState) => loadCronRuns(cronState, { append: true })),
+    onRunsFiltersChange: (patch: Parameters<typeof updateCronRunsFilter>[1]) =>
+      void presentation.runTask(async (cronState) => {
         updateCronRunsFilter(cronState, patch);
         if (patch.cronRunsRunId !== undefined && cronState.cronEditingJob) {
           routeSelection.select(cronState.cronEditingJob.id, patch.cronRunsRunId);
         }
         await loadCronRuns(cronState);
       }),
-    onViewRunTranscript: (entry, trigger) => void runTranscript.open(entry, trigger),
-  } satisfies Pick<CronProps, Extract<keyof CronProps, `on${string}`>>;
+    onViewRunTranscript: (entry: CronRunLogEntry, trigger: HTMLButtonElement) =>
+      void runTranscript.open(entry, trigger),
+  };
   return {
     context,
     inventories: { agents, channels, runtimeConfig },
     cron: projection.read,
+    saving: presentation.saving,
+    toggleSavingJobId: presentation.toggleSavingJobId,
+    getActionRetired: () => presentation.retired,
+    reads: presentation.reads,
     canManageCron,
-    cronModelSuggestions,
-    modelSuggestionsError,
+    canManageJob,
+    canCreateCron,
+    cronModelSuggestions: presentation.modelSuggestions,
     listTab,
     detailTab,
-    heartbeatScratch,
     actions,
     runTranscript,
     deliveryDirectory,

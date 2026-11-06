@@ -3,7 +3,6 @@ import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-i
 import {
   collectErrorGraphCandidates,
   PlatformMessageNotDispatchedError,
-  readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
 import {
   captureChannelReadAuthority,
@@ -18,7 +17,7 @@ import {
   readResponseTextPrefix,
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { isTransientNetworkError, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
@@ -186,8 +185,6 @@ export async function readMattermostError(
 export function createMattermostClient(params: {
   baseUrl: string;
   botToken: string;
-  /** Timeout for REST requests in milliseconds (default: 30000). */
-  timeoutMs?: number;
   /** Allow requests to private/internal IPs (self-hosted/LAN deployments). */
   allowPrivateNetwork?: boolean;
   assertRequestCurrent?: () => void;
@@ -198,7 +195,6 @@ export function createMattermostClient(params: {
   }
   const apiBaseUrl = `${baseUrl}/api/v4`;
   const token = params.botToken.trim();
-  const requestTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, MATTERMOST_REQUEST_TIMEOUT_MS);
   const assertSenderCurrent = params.assertRequestCurrent;
   let postDispatchStarted = false;
   const assertRequestCurrent = assertSenderCurrent
@@ -230,7 +226,7 @@ export function createMattermostClient(params: {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const { timeoutMs: initTimeoutMs, isMessagePost, ...requestInit } = init ?? {};
-    const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, requestTimeoutMs);
+    const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, MATTERMOST_REQUEST_TIMEOUT_MS);
     const { response, release } = await fetchWithSsrFGuard({
       url,
       init: requestInit,
@@ -337,6 +333,7 @@ export async function fetchMattermostChannelPosts(
     limit?: number;
     before?: string;
     after?: string;
+    skipFetchThreads?: boolean;
   } = {},
 ): Promise<{ messages: MattermostPost[]; hasMore: boolean }> {
   const before = normalizeOptionalString(options.before);
@@ -355,6 +352,9 @@ export async function fetchMattermostChannelPosts(
   }
   if (after) {
     query.set("after", after);
+  }
+  if (options.skipFetchThreads) {
+    query.set("skipFetchThreads", "true");
   }
   const response = await client.request<unknown>(
     `/channels/${encodeURIComponent(channelId)}/posts?${query.toString()}`,
@@ -404,33 +404,6 @@ export async function sendMattermostTyping(
 export type CreateDmChannelRetryOptions = NonNullable<MattermostAccountConfig["dmChannelRetry"]> & {
   onRetry?: (attempt: number, delayMs: number, error: Error) => void;
 };
-
-const RETRYABLE_NETWORK_ERROR_CODES = new Set([
-  "ECONNRESET",
-  "ECONNREFUSED",
-  "ETIMEDOUT",
-  "ESOCKETTIMEDOUT",
-  "ECONNABORTED",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "EPIPE",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_DNS_RESOLVE_FAILED",
-  "UND_ERR_CONNECT",
-  "UND_ERR_SOCKET",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_BODY_TIMEOUT",
-]);
-
-const RETRYABLE_NETWORK_ERROR_NAMES = new Set([
-  "AbortError",
-  "TimeoutError",
-  "ConnectTimeoutError",
-  "HeadersTimeoutError",
-  "BodyTimeoutError",
-]);
 
 const RETRYABLE_NETWORK_MESSAGE_SNIPPETS = [
   "network error",
@@ -507,15 +480,7 @@ export function isRetryableError(error: Error): boolean {
     }
   }
 
-  if (
-    candidates.some((candidate) =>
-      RETRYABLE_NETWORK_ERROR_CODES.has(readErrorCode(candidate) ?? ""),
-    )
-  ) {
-    return true;
-  }
-
-  if (candidates.some((candidate) => RETRYABLE_NETWORK_ERROR_NAMES.has(readErrorName(candidate)))) {
+  if (isTransientNetworkError(error)) {
     return true;
   }
 
@@ -528,24 +493,6 @@ export function isRetryableError(error: Error): boolean {
       RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern))
     );
   });
-}
-
-function readErrorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  const { code, errno } = error as {
-    code?: unknown;
-    errno?: unknown;
-  };
-  const raw = typeof code === "string" && code.trim() ? code : errno;
-  if (typeof raw === "string" && raw.trim()) {
-    return raw.trim().toUpperCase();
-  }
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return String(raw);
-  }
-  return undefined;
 }
 
 export async function createMattermostPost(

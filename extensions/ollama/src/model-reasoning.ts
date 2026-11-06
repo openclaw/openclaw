@@ -3,12 +3,10 @@ import {
   normalizeOllamaCloudModelId,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
   OLLAMA_DEFAULT_COST,
-  OLLAMA_DEFAULT_MAX_TOKENS,
 } from "./defaults.js";
 
 const OLLAMA_THINKING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type OllamaThinkValue = boolean | (typeof OLLAMA_THINKING_EFFORTS)[number];
-type OllamaThinkingLevelMap = Model["thinkingLevelMap"];
 
 export function readOllamaThinkingMapValue(value: string | null | undefined) {
   return value === "false"
@@ -22,7 +20,7 @@ export function readOllamaThinkingMapValue(value: string | null | undefined) {
 export async function buildOllamaThinkingLevelMap(
   modelId: string,
   thinking: unknown,
-): Promise<OllamaThinkingLevelMap> {
+): Promise<Model["thinkingLevelMap"]> {
   if (
     !thinking ||
     typeof thinking !== "object" ||
@@ -62,7 +60,8 @@ export async function buildOllamaThinkingLevelMap(
     input: ["text"],
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+    // Thinking-level clamping reads only the level map; the output cap is a placeholder.
+    maxTokens: OLLAMA_DEFAULT_CONTEXT_WINDOW,
     thinkingLevelMap: nativeMap,
   };
   return {

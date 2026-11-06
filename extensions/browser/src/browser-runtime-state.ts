@@ -8,10 +8,6 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { SessionBrowserDashboard } from "./browser-dashboard.types.js";
 
-type BrowserDashboardOperation = {
-  promise: Promise<unknown>;
-};
-
 export type BrowserDashboardRegistration = {
   kind: "dashboard-registration";
   targetId: string;
@@ -32,7 +28,7 @@ export type BrowserStateRuntime = {
   sessionTabInitialization?: Promise<void>;
   sessionTabOperations: Map<BrowserSessionTabOperationKey, Promise<void>>;
   gateway?: PluginRuntime["gateway"];
-  dashboardOperations: Map<string, BrowserDashboardOperation>;
+  dashboardOperations: Map<string, Promise<void>>;
   dashboardEvents?: OpenClawPluginGatewayEvents;
   sessionDashboards?: Map<string, SessionBrowserDashboard>;
 };

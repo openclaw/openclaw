@@ -113,7 +113,6 @@ type DiscordStatusReactionTimeline = {
   scenarioTitle: string;
   seenSequence: string[];
   snapshots: DiscordReactionSnapshot[];
-  triggerMessageId: string;
 };
 
 type DiscordThreadReplyAttachmentEvidence = {
@@ -321,16 +320,8 @@ function validateDiscordQaRuntimeEnv(runtimeEnv: DiscordQaRuntimeEnv, prefix: st
 
 export function parseDiscordQaCredentialPayload(payload: unknown): DiscordQaRuntimeEnv {
   const parsed = discordQaCredentialPayloadSchema.parse(payload);
-  const runtimeEnv = {
-    guildId: parsed.guildId,
-    channelId: parsed.channelId,
-    driverBotToken: parsed.driverBotToken,
-    sutBotToken: parsed.sutBotToken,
-    sutApplicationId: parsed.sutApplicationId,
-    ...(parsed.voiceChannelId ? { voiceChannelId: parsed.voiceChannelId } : {}),
-  };
-  validateDiscordQaRuntimeEnv(runtimeEnv, "Discord credential payload");
-  return runtimeEnv;
+  validateDiscordQaRuntimeEnv(parsed, "Discord credential payload");
+  return parsed;
 }
 
 export function buildDiscordQaConfig(
@@ -536,45 +527,6 @@ export async function getCurrentDiscordVoiceState(params: { token: string; guild
   }
 }
 
-export async function waitForDiscordVoiceState(params: {
-  channelId: string;
-  guildId: string;
-  sutBotId: string;
-  timeoutMs: number;
-  token: string;
-}) {
-  const startedAt = Date.now();
-  let lastState: DiscordVoiceState | null = null;
-  let lastError: string | undefined;
-  while (Date.now() - startedAt < params.timeoutMs) {
-    try {
-      const state = await getCurrentDiscordVoiceState({
-        token: params.token,
-        guildId: params.guildId,
-      });
-      lastState = state;
-      lastError = undefined;
-      if (
-        state?.channel_id === params.channelId &&
-        (!state.user_id || state.user_id === params.sutBotId)
-      ) {
-        return state;
-      }
-    } catch (error) {
-      lastError = formatErrorMessage(error);
-    }
-    await sleep(500);
-  }
-  const stateDetails = lastState
-    ? `last voice state channel=${lastState.channel_id ?? "none"} user=${lastState.user_id ?? "unknown"}`
-    : "no current voice state";
-  throw new Error(
-    `SUT bot did not join Discord voice channel ${params.channelId} (${stateDetails}${
-      lastError ? `; last error: ${lastError}` : ""
-    })`,
-  );
-}
-
 export async function sendChannelMessage(token: string, channelId: string, content: string) {
   return await requestDiscord<DiscordMessage>(`/channels/${channelId}/messages`, token, {
     body: {
@@ -748,7 +700,6 @@ export async function observeStatusReactionTimeline(params: {
     scenarioTitle: params.scenarioTitle,
     seenSequence,
     snapshots,
-    triggerMessageId: params.messageId,
   } satisfies DiscordStatusReactionTimeline;
 }
 
@@ -764,11 +715,6 @@ export async function pollChannelMessages(params: {
   afterSnowflake: string;
   timeoutMs: number;
   predicate: (message: DiscordObservedMessage) => boolean;
-  observedMessages: DiscordObservedMessage[];
-  observationScenarioId: string;
-  observationScenarioTitle: string;
-  triggerMessageId?: string;
-  triggerTimestamp?: string;
 }) {
   const startedAt = Date.now();
   let afterSnowflake = params.afterSnowflake;
@@ -787,18 +733,8 @@ export async function pollChannelMessages(params: {
       if (!normalized) {
         continue;
       }
-      const matchedScenario = params.predicate(normalized);
-      const observedMessage: DiscordObservedMessage = {
-        ...normalized,
-        scenarioId: params.observationScenarioId,
-        scenarioTitle: params.observationScenarioTitle,
-        matchedScenario,
-        triggerMessageId: params.triggerMessageId,
-        triggerTimestamp: params.triggerTimestamp,
-      };
-      params.observedMessages.push(observedMessage);
-      if (matchedScenario) {
-        return { message: observedMessage, afterSnowflake };
+      if (params.predicate(normalized)) {
+        return { message: normalized, afterSnowflake };
       }
     }
     await sleep(1_000);
@@ -930,8 +866,6 @@ export async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
       outputDir: params.outputDir,
     });
     return {
-      id: params.scenario.id,
-      title: params.scenario.title,
       status,
       details:
         status === "pass"

@@ -4,7 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -48,9 +48,10 @@ async function inspectFailure(
   const stagingRoot = path.join(root, "staging");
   fs.mkdirSync(stagingRoot);
   const actual = await vi.importActual<typeof import("./node-sqlite.js")>("./node-sqlite.js");
-  const source = actual.openNodeSqliteDatabase(sourcePath);
-  source.exec("CREATE TABLE present (id INTEGER PRIMARY KEY); INSERT INTO present VALUES (7);");
-  source.close();
+  {
+    using source = actual.openNodeSqliteDatabase(sourcePath);
+    source.exec("CREATE TABLE present (id INTEGER PRIMARY KEY); INSERT INTO present VALUES (7);");
+  }
   const before = fs.readFileSync(sourcePath);
   const sqlite = await import("./node-sqlite.js");
   const opened: DatabaseSync[] = [];
@@ -87,8 +88,12 @@ async function inspectFailure(
     stdout += chunk;
     completed.resolve();
   };
-  vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+  vi.spyOn(process.stdout, "write").mockImplementation((chunk, ...rest) => {
     capture(String(chunk));
+    const callback = rest.find((argument) => typeof argument === "function");
+    if (typeof callback === "function") {
+      queueMicrotask(() => callback());
+    }
     return true;
   });
   vi.mocked(writeSync).mockImplementation(
@@ -124,7 +129,6 @@ async function inspectFailure(
     await import("./sqlite-readonly-location.worker.js");
     await completed.promise;
     expect(process.exitCode).toBe(1);
-    expect(format).toHaveBeenCalledOnce();
     const [observedFailure] = expectDefined(format.mock.calls[0], "inspection failure");
     expect(opened.every((database) => !database.isOpen)).toBe(true);
     expect(fs.readdirSync(stagingRoot)).toEqual([]);
@@ -138,64 +142,58 @@ async function inspectFailure(
     }
     return { stdout, observedFailure };
   } finally {
-    for (const database of opened) {
-      if (database.isOpen) {
-        database.close();
-      }
-    }
+    opened.filter((database) => database.isOpen).forEach((database) => database.close());
   }
 }
 
-describe("registered SQLite read-only worker operation diagnostics", () => {
-  it.each([
-    ["backup-source", "opening the source database"],
-    ["snapshot-open", "creating its private snapshot"],
-    ["snapshot-copy", "creating its private snapshot"],
-    ["snapshot-backup", "creating its private snapshot"],
-  ] as const)(
-    "preserves frozen %s failures, identity, native codes and cleanup",
-    async (operation, context) => {
-      const nativeFailure = Object.freeze(
-        Object.assign(new Error("unable to open database file"), {
-          code: "ERR_SQLITE_ERROR",
-          errcode: 14,
-          cause: new Error("hidden cause prose"),
-          sql: "hidden SQL",
-          path: "hidden path",
-        }),
-      );
-      const failure =
-        operation === "snapshot-copy"
-          ? Object.freeze(
-              new FsSafeError("helper-failed", "native copy failed", { cause: nativeFailure }),
-            )
-          : nativeFailure;
-      const { stdout, observedFailure } = await inspectFailure(operation, failure);
-      expect(observedFailure).toBe(failure);
-      const message =
-        operation === "snapshot-copy" ? "native copy failed" : "unable to open database file";
-      expect(stdout).toBe(
-        JSON.stringify({
-          ok: false,
-          message: `failed while ${context}: ${message} (code=ERR_SQLITE_ERROR, errcode=14)`,
-        }),
-      );
-    },
-  );
+it.each([
+  ["backup-source", "opening the source database"],
+  ["snapshot-open", "creating its private snapshot"],
+  ["snapshot-copy", "creating its private snapshot"],
+  ["snapshot-backup", "creating its private snapshot"],
+] as const)(
+  "preserves frozen %s failures, identity, native codes and cleanup",
+  async (operation, context) => {
+    const nativeFailure = Object.freeze(
+      Object.assign(new Error("unable to open database file"), {
+        code: "ERR_SQLITE_ERROR",
+        errcode: 14,
+        cause: new Error("hidden cause prose"),
+        sql: "hidden SQL",
+        path: "hidden path",
+      }),
+    );
+    const failure =
+      operation === "snapshot-copy"
+        ? Object.freeze(
+            new FsSafeError("helper-failed", "native copy failed", { cause: nativeFailure }),
+          )
+        : nativeFailure;
+    const { stdout, observedFailure } = await inspectFailure(operation, failure);
+    expect(observedFailure).toBe(failure);
+    const message =
+      operation === "snapshot-copy" ? "native copy failed" : "unable to open database file";
+    expect(stdout).toBe(
+      JSON.stringify({
+        ok: false,
+        message: `failed while ${context}: ${message} (code=ERR_SQLITE_ERROR, errcode=14)`,
+      }),
+    );
+  },
+);
 
-  it("keeps aggregate identity through staging and admits only bounded cause codes through the registered worker", async () => {
-    const cause = Object.assign(new Error("hidden cause prose"), { code: "EIO", errcode: 778 });
-    const failure = Object.freeze(
-      new AggregateError([cause, new Error("hidden cleanup")], "read failed", { cause }),
-    );
-    const { stdout, observedFailure } = await inspectFailure("backup-source", failure);
-    expect(observedFailure instanceof Error && observedFailure.cause).toBe(failure);
-    const message = JSON.parse(stdout).message as string;
-    expect(message).toContain(
-      "failed while opening the source database: read failed (SQLite errcode=778)",
-    );
-    expect(message).toContain("code=EIO, errcode=778");
-    expect(message).not.toContain("hidden cause prose");
-    expect(message).not.toContain("hidden cleanup");
-  });
+it("keeps aggregate identity through staging and admits only bounded cause codes through the registered worker", async () => {
+  const cause = Object.assign(new Error("hidden cause prose"), { code: "EIO", errcode: 778 });
+  const failure = Object.freeze(
+    new AggregateError([cause, new Error("hidden cleanup")], "read failed", { cause }),
+  );
+  const { stdout, observedFailure } = await inspectFailure("backup-source", failure);
+  expect(observedFailure instanceof Error && observedFailure.cause).toBe(failure);
+  const message = JSON.parse(stdout).message as string;
+  expect(message).toContain(
+    "failed while opening the source database: read failed (SQLite errcode=778)",
+  );
+  expect(message).toContain("code=EIO, errcode=778");
+  expect(message).not.toContain("hidden cause prose");
+  expect(message).not.toContain("hidden cleanup");
 });

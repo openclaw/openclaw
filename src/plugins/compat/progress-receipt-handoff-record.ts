@@ -4,7 +4,6 @@ export const PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD = {
   code: "reply-dispatch-progress-receipt-handoff",
   status: "deprecated",
   owner: "sdk",
-  introduced: "2026-09-19",
   deprecated: "2026-10-06",
   warningStarts: "2026-10-06",
   removalGate: "stable-deprecation-period",
@@ -16,9 +15,5 @@ export const PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD = {
   ],
   diagnostics: [
     "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
-  ],
-  tests: [
-    "src/plugin-sdk/shipped-channel-compat.test.ts",
-    "src/auto-reply/reply/dispatch-from-config.continuation-settlement.test.ts",
   ],
 } as const satisfies PluginCompatRecord;

@@ -27,7 +27,7 @@ export type LlamaServerAsset = LlamaServerArchive & {
   dependencies?: readonly LlamaServerDependency[];
 };
 
-export type WindowsVcRuntimeDependency = {
+type WindowsVcRuntimeDependency = {
   archive: "vc-redist";
   containerOffset: number;
   containerSize: number;

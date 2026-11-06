@@ -31,7 +31,7 @@ type RetentionBindings = {
 };
 
 export class ChatPageRetainedSessions {
-  private readonly listeners = new Set<() => void>();
+  private render?: () => void;
   private readonly sessionsByPane = new Map<string, Map<string, number>>();
   private readonly unbound = new Set<string>();
   private pendingAtFocus = new WeakSet<AbortController>();
@@ -46,9 +46,9 @@ export class ChatPageRetainedSessions {
   ) {}
 
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
+    this.render = listener;
     return () => {
-      this.listeners.delete(listener);
+      this.render = undefined;
     };
   }
 
@@ -114,9 +114,7 @@ export class ChatPageRetainedSessions {
   }
 
   private publish(): void {
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.render?.();
   }
 
   private readonly refreshRetention = () => this.publish();
@@ -145,6 +143,29 @@ export class ChatPageRetainedSessions {
       }
     }
     return new Map(bound.map((pane) => [pane.id, this.retainPane(pane)]));
+  }
+
+  retainProvisional(
+    panes: readonly ChatSplitPane[],
+  ): ReadonlyMap<string, readonly (string | undefined)[]> {
+    // Provisional keys are display-only: rollback must not start their chats,
+    // and admission alone owns eviction and saved pane binding.
+    return new Map(
+      panes.map((pane) => {
+        const slots: (string | undefined)[] = Array.from(
+          { length: RETAINED_SESSIONS_PER_PANE },
+          () => undefined,
+        );
+        for (const [key, slot] of this.sessionsByPane.get(pane.id) ?? []) {
+          slots[slot] = key;
+        }
+        if (!slots.some((key) => key && areUiSessionKeysEquivalent(key, pane.sessionKey))) {
+          const emptySlot = slots.indexOf(undefined);
+          slots[emptySlot < 0 ? slots.length : emptySlot] = pane.sessionKey;
+        }
+        return [pane.id, slots];
+      }),
+    );
   }
 
   private retainPane(pane: ChatSplitPane): (string | undefined)[] {

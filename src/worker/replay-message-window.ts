@@ -7,7 +7,6 @@ import {
 export type WorkerReplayMessageWindowUnavailable = {
   reason: "provider-replay-message-limit";
   messageCount: number;
-  limitMessages: number;
 };
 
 type WorkerReplayMessageWindow<T> =
@@ -33,7 +32,6 @@ export function windowWorkerReplayMessages<T extends ReplayWindowMessage>(
       details: {
         reason: "provider-replay-message-limit",
         messageCount: messages.length - replayIndex,
-        limitMessages,
       },
     };
   }

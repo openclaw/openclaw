@@ -6,31 +6,20 @@ import {
   FailoverError,
 } from "../../agents/failover/error.js";
 import {
-  loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { captureAbortedPartial, deferAbortedPartialPersistence } from "./chat-aborted-partial.js";
+import * as partial from "./chat-aborted-partial.js";
 
 it.each([
-  {
-    name: "rejected partial",
-    code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
-    wrapped: false,
-    retained: false,
-  },
-  {
-    name: "wrapped rejected partial",
-    code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
-    wrapped: true,
-    retained: false,
-  },
-  { name: "unrelated format failure", code: undefined, wrapped: false, retained: true },
-])("honors the settled producer's $name", async ({ code, wrapped, retained }) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  ["rejected partial", CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE, false, false],
+  ["wrapped rejected partial", CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE, true, false],
+  ["unrelated format failure", undefined, false, true],
+] as const)("honors the settled producer's %s", (_name, code, wrapped, retained) =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:abort-partial",
@@ -41,22 +30,13 @@ it.each([
     const cfg = { agents: { entries: { main: {} } } };
     const producer = createDeferred<unknown>();
     let settlement: Promise<void> | undefined;
-    const text = "Buffered text is not validation evidence";
-    const snapshot = captureAbortedPartial({
+    const text = "Unvalidated partial";
+    const snapshot = partial.captureAbortedPartial({
       ...scope,
       runId: "rejected-partial",
       text,
       abortOrigin: "rpc",
-      session: {
-        ok: true,
-        value: {
-          cfg,
-          storePath: scope.storePath,
-          entry: loadSessionEntry(scope),
-          canonicalKey: scope.sessionKey,
-          agentId: scope.agentId,
-        },
-      },
+      session: await partial.prepareChatAbortSessionSnapshot({ cfg, key: scope.sessionKey }),
       resolveTerminalProducer: () => ({
         sessionId: scope.sessionId,
         sessionKey: scope.sessionKey,
@@ -69,7 +49,7 @@ it.each([
     const warn = vi.fn();
     const before = await loadTranscriptEvents(scope);
     try {
-      deferAbortedPartialPersistence(snapshot, {
+      partial.deferAbortedPartialPersistence(snapshot, {
         trackExecution: trackAsyncWork,
         logGateway: { ...createSubsystemLogger("test/abort-partial"), warn },
         broadcast: vi.fn(),
@@ -84,23 +64,17 @@ it.each([
         wrapped ? new Error("Wrapped producer failure", { cause: failure }) : failure,
       );
       await settlement;
-      const events = await loadTranscriptEvents(scope);
-      if (retained) {
-        expect(events).toContainEqual(
-          expect.objectContaining({
-            message: expect.objectContaining({
-              role: "assistant",
-              content: [{ type: "text", text }],
-            }),
-          }),
-        );
-      } else {
-        expect(events).toEqual(before);
-      }
+      const message = expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text }],
+      });
+      expect(await loadTranscriptEvents(scope)).toEqual(
+        retained ? expect.arrayContaining([expect.objectContaining({ message })]) : before,
+      );
       expect(warn).not.toHaveBeenCalled();
     } finally {
       producer.resolve(undefined);
       await settlement;
     }
-  });
-});
+  }),
+);

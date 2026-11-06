@@ -2,6 +2,7 @@ import { fork } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import {
   assertChildRuntimeAvailable,
   observeChildRuntime,
@@ -24,6 +25,7 @@ import {
   resolveSqliteInspectionSignal,
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
+import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { agentSchemaMetadataKey } from "./openclaw-agent-db-metadata.js";
 import { agentDatabaseValidationKey } from "./openclaw-agent-db-validation-facts.js";
@@ -75,6 +77,7 @@ export function createAgentSchemaInspectionWorker() {
   let inspectionCount = 0;
   let snapshotCount = 0;
   let sequence = 0;
+  let releasePrestart: (() => void) | undefined;
   const startReader = (timeoutMs: number): ReaderProcess => {
     const entry = resolveRuntimeProcessEntrypointUrl("agentSchemaInspection");
     assertChildRuntimeAvailable();
@@ -127,7 +130,6 @@ export function createAgentSchemaInspectionWorker() {
           kind === "agent" &&
           !input.verifyCurrentSchemaShape &&
           !input.requireStartupMigrationReadiness &&
-          !input.inspectOwnership &&
           !input.inspectEmptyStore;
         let postgresAgent = Boolean(getDatabaseEngineInput("agent"));
         let postgresAgentId: string | undefined;
@@ -149,17 +151,37 @@ export function createAgentSchemaInspectionWorker() {
               return null;
             }
             postgresAgent = false;
-          } else if (!postgresAgent) {
+          } else {
+            // Admission reads the server version; a runtime open could demand migration custody.
             const { withPostgresStoreMetadata } =
               await import("../infra/database-engine/postgres-store-metadata.js");
             const result = await withPostgresStoreMetadata(
               selection.postgres,
               physical,
-              async (_client, metadata) => {
+              async (client, metadata) => {
                 if (metadata.store !== "agent") {
                   throw new Error("PostgreSQL agent inspection requires an agent store.");
                 }
-                return { version: metadata.version };
+                if (!input.inspectOwnership) {
+                  return { version: metadata.version };
+                }
+                const { rows } = await client.query<{
+                  agent_id: string | null;
+                  role: string | null;
+                  schema_version: number | null;
+                }>(`SELECT agent_id, role, schema_version::integer AS schema_version
+                    FROM ${quoteSqliteIdentifier(physical.namespace)}.schema_meta WHERE meta_key = 'primary'`);
+                const row = rows[0];
+                return {
+                  version: metadata.version,
+                  agentSchemaMeta: row
+                    ? {
+                        agentId: normalizeNullableString(row.agent_id),
+                        role: row.role,
+                        schemaVersion: row.schema_version,
+                      }
+                    : null,
+                };
               },
             );
             signal?.throwIfAborted();
@@ -258,6 +280,8 @@ export function createAgentSchemaInspectionWorker() {
         );
         const active = (reader ??= startReader(timeoutMs));
         active.closeBudgetMs = timeoutMs;
+        releasePrestart?.();
+        releasePrestart = undefined;
         const requestId = ++sequence;
         const response = createDeferredCore<AgentSchemaInspection | StateSchemaInspection | null>();
         let failure: Error | undefined;
@@ -394,6 +418,27 @@ export function createAgentSchemaInspectionWorker() {
     },
   };
   return {
+    /** Load the isolated reader while startup discovers its targets; no database is opened. */
+    prestart(callerSignal?: AbortSignal): void {
+      const signal = resolveSqliteInspectionSignal(callerSignal);
+      signal?.throwIfAborted();
+      if (disposed || busy) {
+        throw new Error("Agent schema inspection worker is unavailable for prestart");
+      }
+      if (reader) {
+        return;
+      }
+      // An unused reader has no work to settle. Inspection installs its full budget below.
+      const active = (reader = startReader(0));
+      const onAbort = () => {
+        active.retired = true;
+        active.child.kill("SIGKILL");
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const release = () => signal?.removeEventListener("abort", onAbort);
+      releasePrestart = release;
+      void active.closed.then(release);
+    },
     get processCount() {
       return processCount;
     },
@@ -427,6 +472,8 @@ export function createAgentSchemaInspectionWorker() {
     },
     async [Symbol.asyncDispose]() {
       disposed = true;
+      releasePrestart?.();
+      releasePrestart = undefined;
       if (!reader) {
         return;
       }

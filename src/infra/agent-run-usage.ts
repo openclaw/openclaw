@@ -4,20 +4,16 @@ type AgentRunUsage = {
   usageReport?: { state: "available" | "unavailable" };
 };
 
-type RecordAgentRunOutputTokensParams = {
+const usageByRun = new Map<string, Map<string, AgentRunUsage>>();
+
+/** Adds one completed model call and emits the new generation-scoped total. */
+export function recordAgentRunOutputTokens(params: {
   runId: string;
   lifecycleGeneration: string;
   outputTokens: number;
   usageReport?: AgentRunUsage["usageReport"];
   emit: (usage: AgentRunUsage) => boolean;
-};
-
-const usageByRun = new Map<string, Map<string, AgentRunUsage>>();
-
-/** Adds one completed model call and emits the new generation-scoped total. */
-export function recordAgentRunOutputTokens(
-  params: RecordAgentRunOutputTokensParams,
-): AgentRunUsage | undefined {
+}): AgentRunUsage | undefined {
   const outputTokens = Math.floor(params.outputTokens);
   if (
     !Number.isFinite(outputTokens) ||

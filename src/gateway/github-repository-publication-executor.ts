@@ -41,6 +41,9 @@ import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
+const MAX_WORKFLOW_ANCESTRY_COMMITS = 1_000;
+const MAX_WORKFLOW_ANCESTRY_BOUNDARIES = 32;
+
 async function api(
   endpoint: string,
   identity: PreparedGitHubPublicationIdentity,
@@ -128,6 +131,7 @@ export async function executeRepositoryGitHubPublication(params: {
   execution: RepositoryGitHubPublicationExecutionAsync;
   snapshot: GitHubRepositoryPublicationSnapshot;
   snapshotRoot: string;
+  requesterProfileId?: string;
   storePath: string;
   assertWorkspace: () => void;
   readCurrentEntry: () => InternalSessionEntry | undefined;
@@ -188,11 +192,11 @@ export async function executeRepositoryGitHubPublication(params: {
       throw new Error("GitHub publication workspace base branch could not be verified.");
     }
     const remoteBase = objectSha(baseRef.object);
-    const readMergeBase = async (source: string) => {
+    const readMergeBase = async (source: string, target = remoteBase) => {
       const lineage = await requirePublicationCommand(
         [
           ...githubPublicationApiArgs(
-            "repos/" + repository + "/compare/" + source + "..." + remoteBase + "?per_page=1",
+            "repos/" + repository + "/compare/" + source + "..." + target + "?per_page=1",
             "GET",
             identity.host ?? resolveGitHubHost(),
           ),
@@ -207,6 +211,106 @@ export async function executeRepositoryGitHubPublication(params: {
     // A requested topic/tag/commit may be ahead of or diverged from the PR base.
     // GitHub's merge-base proves shared history without changing the accepted source.
     const mergeBase = await readMergeBase(snapshot.baseCommit);
+    const hasUniqueWorkflowAncestor = async (sourceCommit: string, ancestor: string) => {
+      const unavailableAncestry = new GitHubPublicationKnownFailure(
+        "GitHub returned incomplete workflow ancestry.",
+        {
+          code: "unavailable",
+          nextAction: "Retry after GitHub can return the complete source commit history.",
+        },
+      );
+      const parents = new Map<string, string[]>();
+      let total = 0;
+      for (let page = 1; page === 1 || parents.size < total; page++) {
+        const raw = await requirePublicationCommand(
+          [
+            ...githubPublicationApiArgs(
+              "repos/" +
+                repository +
+                "/compare/" +
+                remoteBase +
+                "..." +
+                sourceCommit +
+                "?per_page=100&page=" +
+                page,
+              "GET",
+              identity.host ?? resolveGitHubHost(),
+            ),
+            "--jq",
+            "{total_commits, commits: [.commits[] | {sha, parents: [.parents[] | {sha}]}]}",
+          ],
+          { env: identity.env, beforeRun: assertCurrent },
+        );
+        assertCurrent();
+        const value: unknown = JSON.parse(raw);
+        if (
+          !isRecord(value) ||
+          !Array.isArray(value.commits) ||
+          typeof value.total_commits !== "number" ||
+          !Number.isSafeInteger(value.total_commits) ||
+          value.total_commits < 1 ||
+          (page > 1 && value.total_commits !== total) ||
+          value.commits.length === 0
+        ) {
+          throw unavailableAncestry;
+        }
+        total = value.total_commits;
+        if (total > MAX_WORKFLOW_ANCESTRY_COMMITS) {
+          throw new GitHubPublicationKnownFailure(
+            "Workflow inheritance exceeds the source-history limit.",
+            {
+              code: "github_rejected",
+              nextAction: `Ask a maintainer to publish this workspace; guest workflow inheritance checks at most ${MAX_WORKFLOW_ANCESTRY_COMMITS} source commits.`,
+            },
+          );
+        }
+        for (const commit of value.commits) {
+          const sha = objectSha(commit);
+          if (!isRecord(commit) || !Array.isArray(commit.parents) || parents.has(sha)) {
+            throw unavailableAncestry;
+          }
+          parents.set(sha, commit.parents.map(objectSha));
+        }
+      }
+      if (parents.size !== total || !parents.has(sourceCommit)) {
+        throw unavailableAncestry;
+      }
+      // The inverse comparison contains every source-only commit. Its boundary
+      // parents are common ancestors; all must be below the reported merge-base
+      // to prove it is unique, including when the source itself contains merges.
+      const boundary = new Set<string>();
+      for (const commitParents of parents.values()) {
+        if (!commitParents.length) {
+          // Keep merges of unrelated roots maintainer-only rather than infer
+          // workflow ownership across a history with no common boundary.
+          return false;
+        }
+        for (const parent of commitParents) {
+          if (!parents.has(parent)) {
+            boundary.add(parent);
+          }
+        }
+      }
+      if (!boundary.size) {
+        return false;
+      }
+      boundary.delete(ancestor);
+      if (boundary.size > MAX_WORKFLOW_ANCESTRY_BOUNDARIES) {
+        throw new GitHubPublicationKnownFailure(
+          "Workflow inheritance exceeds the ancestry-boundary limit.",
+          {
+            code: "github_rejected",
+            nextAction: `Ask a maintainer to publish this workspace; guest workflow inheritance checks at most ${MAX_WORKFLOW_ANCESTRY_BOUNDARIES} additional ancestry boundaries.`,
+          },
+        );
+      }
+      for (const parent of boundary) {
+        if ((await readMergeBase(parent, ancestor)) !== parent) {
+          return false;
+        }
+      }
+      return true;
+    };
     let headCommit = row.head_commit;
     let preparedCommitMessage: string | undefined;
     const verifyCommit = (value: unknown) => {
@@ -306,16 +410,26 @@ export async function executeRepositoryGitHubPublication(params: {
           comparisonRepository,
           comparisonTree: objectSha(comparison.tree),
           readUpstream: async () => {
-            // REST exposes one merge-base, not all of them. A source base on the
-            // target's history (or containing it), followed only by our linear
-            // checkpoint commits, has a unique best common ancestor. A diverged
-            // source base cannot provide that proof without fetching its graph.
-            if (mergeBase !== snapshot.baseCommit && mergeBase !== remoteBase) {
+            const sourceCommit = row.previous_head_commit ?? snapshot.baseCommit;
+            const ancestor =
+              sourceCommit === snapshot.baseCommit ? mergeBase : await readMergeBase(sourceCommit);
+            // Prove the history of the same published/source commit whose
+            // definition the guard compares, not a potentially older snapshot base.
+            if (
+              ancestor !== sourceCommit &&
+              ancestor !== remoteBase &&
+              !(await hasUniqueWorkflowAncestor(sourceCommit, ancestor))
+            ) {
               return undefined;
             }
-            const ancestor = row.previous_head_commit
-              ? await readMergeBase(row.previous_head_commit)
-              : mergeBase;
+            if (
+              sourceCommit !== snapshot.baseCommit &&
+              mergeBase !== snapshot.baseCommit &&
+              mergeBase !== remoteBase &&
+              !(await hasUniqueWorkflowAncestor(snapshot.baseCommit, mergeBase))
+            ) {
+              return undefined;
+            }
             const readTreeSha = async (commit: string) => {
               const value = await api(
                 "repos/" + repository + "/git/commits/" + commit,
@@ -331,7 +445,13 @@ export async function executeRepositoryGitHubPublication(params: {
               readTreeSha(ancestor),
               readTreeSha(remoteBase),
             ]);
-            return { repository, ancestorTree, targetTree };
+            const sourceAncestorTree =
+              mergeBase === ancestor
+                ? ancestorTree
+                : mergeBase === remoteBase
+                  ? targetTree
+                  : await readTreeSha(mergeBase);
+            return { repository, ancestorTree, sourceAncestorTree, targetTree };
           },
           readTree: (owner, sha) =>
             api("repos/" + owner + "/git/trees/" + sha, identity, assertCurrent),
@@ -344,6 +464,7 @@ export async function executeRepositoryGitHubPublication(params: {
     assertPublicationAction();
     const content = await prepareGitHubPublicationContent({
       row,
+      requesterProfileId: params.requesterProfileId,
       storePath: params.storePath,
       accountId: identity.account.accountId,
       host: identity.host ?? resolveGitHubHost(),

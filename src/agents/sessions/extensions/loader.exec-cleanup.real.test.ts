@@ -1,145 +1,95 @@
 import "../../../test-utils/prepare-compiled-subprocesses.js";
-import type { ChildProcess } from "node:child_process";
-import { once } from "node:events";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, test, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
-import { isChildProcessTreeAlive } from "../../../process/child-process-tree.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { isProcessAlive } from "../../../../test/scripts/live-process-fixture.test-support.js";
 import { hasCommandProcessCleanupError } from "../../../process/exec-result.js";
-import { COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS } from "../../../process/exec-spawn.js";
-import { createCommandTerminationController } from "../../../process/exec-termination.js";
-import * as commands from "../../../process/exec.js";
+import * as adapters from "../../../process/supervisor/adapters/child.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createEventBus } from "../event-bus.js";
 import type { ExecResult } from "../exec.js";
 import { createExtensionRuntime, loadExtensionFromFactory } from "./loader.js";
 
-const spawnCommand = commands.spawnCommand;
-const nativeKill = process.kill.bind(process);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
-
-test.skipIf(process.platform !== "linux").for([false, true])(
-  "extension exec preserves real cleanup classification with denied forced stop=%s",
-  async (denyStop, { signal }) => {
-    const ready = createDeferredCore<{ rootPid: number; descendantPid: number }>();
-    const forcedStop = createDeferredCore();
-    let child: ChildProcess | undefined;
-    let apiResult: ExecResult | undefined;
-    let denied = 0;
-    vi.spyOn(commands, "spawnCommand").mockImplementation((argv, options) => {
-      const spawned = spawnCommand(argv, options);
-      child = spawned.nodeChildProcess;
-      let output = "";
-      child.stdout?.on("data", (data: Buffer) => {
-        output += data.toString("utf8");
-        const match = output.match(/NATIVE_EXEC_READY:(\d+)\n/);
-        if (match && child?.pid) {
-          ready.resolve({ rootPid: child.pid, descendantPid: Number(match[1]) });
+test.skipIf(process.platform === "win32").for(["normal", "uncertain", "rejected"] as const)(
+  "propagates owned-adapter cleanup classification after real cancellation (%s)",
+  async (cleanupReport, { signal }) => {
+    const launched = createDeferredCore<Awaited<ReturnType<typeof adapters.createChildAdapter>>>();
+    const createNativeAdapter = adapters.createChildAdapter;
+    const failure = new Error("synthetic native extinction failure");
+    let finishNativeCleanup: (() => Promise<unknown>) | undefined;
+    vi.spyOn(adapters, "createChildAdapter").mockImplementation(async (params) => {
+      const startup = await createNativeAdapter(params);
+      const nativeCleanup = expectDefined(
+        startup.adapter.waitForExtinction,
+        "native extinction",
+      ).bind(startup.adapter);
+      finishNativeCleanup = nativeCleanup;
+      // Real cancellation and extinction still run. Only the adapter's report is
+      // injected; native denied-signal behavior belongs to the subreaper tests.
+      vi.spyOn(startup.adapter, "waitForExtinction").mockImplementation(async () => {
+        const result = await nativeCleanup();
+        if (cleanupReport === "rejected") {
+          throw failure;
         }
+        return cleanupReport === "uncertain"
+          ? { status: "uncertain", reason: "job-unavailable" }
+          : result;
       });
-      return spawned;
+      launched.resolve(startup);
+      return startup;
     });
-    const descendant =
-      'process.on("SIGTERM", () => {}); process.stdout.write("ready"); setInterval(() => {}, 1000);';
-    const source = [
-      'const { spawn } = require("node:child_process");',
-      `const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: ["ignore", "pipe", "ignore"] });`,
-      'child.stdout.once("data", () => process.stdout.write("NATIVE_EXEC_READY:" + child.pid + "\\n"));',
-      'process.on("SIGTERM", () => process.exit(0));',
-      "setInterval(() => {}, 1000);",
-    ].join("\n");
+    const readyPath = join(tempDirs.make("extension-exec-cleanup-"), "ready.json");
+    const source = `const { spawn } = require("node:child_process");
+const child = spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); process.stdout.write("ready"); setInterval(() => {}, 1000);'], { stdio: ["ignore", "pipe", "ignore"] });
+child.stdout.once("data", () => {
+  process.stdout.write(child.pid + "\\n");
+  require("node:fs").writeFileSync(${JSON.stringify(readyPath)}, JSON.stringify([process.pid, child.pid]));
+});
+process.on("SIGTERM", () => process.exit(0));`;
     const controller = new AbortController();
-    const loading = loadExtensionFromFactory(
+    let apiResult: ExecResult | undefined;
+    const outcome = loadExtensionFromFactory(
       async (api) => {
         apiResult = await api.exec(process.execPath, ["-e", source], { signal: controller.signal });
       },
       process.cwd(),
       createEventBus(),
       createExtensionRuntime(),
-    );
-    const outcome = loading.then(
-      () => ({ ok: true as const, result: apiResult }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    let observed: Awaited<typeof outcome> | undefined;
+    )
+      .then(() => apiResult)
+      .catch((error: unknown) => error);
+    let startup: Awaited<typeof launched.promise> | undefined;
     try {
-      const identity = await withinTest(ready.promise, signal);
-      const command = expectDefined(child, "real command child");
-      expect(nativeKill(identity.descendantPid, 0)).toBe(true);
-      expect(isChildProcessTreeAlive(command)).toBe(true);
-      vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
-        if (pid === -identity.rootPid && requestedSignal === "SIGKILL") {
-          forcedStop.resolve();
-          if (denyStop) {
-            denied++;
-            throw Object.assign(new Error("fixture denies exact owned-group forced stop"), {
-              code: "EPERM",
-            });
-          }
-        }
-        return nativeKill(pid, requestedSignal);
-      });
-      const exited = once(command, "exit");
-      vi.useFakeTimers({ toFake: ["Date"] });
+      startup = await withinTest(launched.promise, signal);
+      await withinTest(startup.ready, signal);
+      const [rootPid, childPid]: [number, number] = await vi.waitFor(
+        () => JSON.parse(readFileSync(readyPath, "utf8")),
+        { timeout: 3_000, interval: 25 },
+      );
+      expect(isProcessAlive(rootPid)).toBe(true);
+      expect(isProcessAlive(childPid)).toBe(true);
       controller.abort();
-      await withinTest(exited, signal);
-      vi.setSystemTime(Date.now() + 5_000);
-      await withinTest(forcedStop.promise, signal);
-      vi.setSystemTime(Date.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
-      observed = await withinTest(outcome, signal);
-      expect(denied).toBe(denyStop ? 1 : 0);
-      if (denyStop) {
-        expect(nativeKill(identity.descendantPid, 0)).toBe(true);
-      }
-      expect(isChildProcessTreeAlive(command)).toBe(denyStop);
+      const observed = await withinTest(outcome, signal);
+      const result = { stdout: `${childPid}\n`, stderr: "", code: 0, killed: true };
+      expect(observed).toMatchObject(
+        cleanupReport === "normal"
+          ? result
+          : { code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN", cause: result },
+      );
+      expect(hasCommandProcessCleanupError(observed)).toBe(cleanupReport !== "normal");
+      expect(isProcessAlive(rootPid)).toBe(false);
+      expect(isProcessAlive(childPid)).toBe(false);
     } finally {
       vi.restoreAllMocks();
-      vi.useRealTimers();
-      if (child?.pid) {
-        const cleanup = createCommandTerminationController({
-          child,
-          cancelController: new AbortController(),
-          processTree: { mode: "force" },
-          killGraceMs: 0,
-          isChildExited: () => child?.exitCode != null || child?.signalCode != null,
-          isCommandSettled: () => true,
-        });
-        cleanup.terminate();
-        expect(await cleanup.settle()).not.toBe("uncertain");
-        expect(isChildProcessTreeAlive(child)).toBe(false);
-      }
+      controller.abort();
+      startup?.adapter.kill("SIGKILL");
+      await finishNativeCleanup?.();
       await withinTest(outcome, signal);
-    }
-    if (denyStop) {
-      expect(observed).toMatchObject({
-        ok: false,
-        error: {
-          code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN",
-          cause: {
-            stdout: expect.stringContaining("NATIVE_EXEC_READY:"),
-            stderr: "",
-            code: 0,
-            killed: true,
-          },
-        },
-      });
-      if (observed && !observed.ok) {
-        expect(hasCommandProcessCleanupError(observed.error)).toBe(true);
-      }
-    } else {
-      expect(observed).toMatchObject({
-        ok: true,
-        result: {
-          stdout: expect.stringContaining("NATIVE_EXEC_READY:"),
-          stderr: "",
-          code: 0,
-          killed: true,
-        },
-      });
     }
   },
 );

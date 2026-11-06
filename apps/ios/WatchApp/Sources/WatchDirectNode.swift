@@ -289,6 +289,9 @@ final class WatchDirectNode {
             role: "node",
             gatewayID: configuration.gatewayID,
             profile: .primary)?.token
+        let observedTokens = DeviceAuthStore.observeTokens(
+            deviceId: identity.deviceId,
+            gatewayID: configuration.gatewayID)
         var credential: ConnectCredential
         if let bootstrapToken = link.bootstrapToken {
             credential = .bootstrap(bootstrapToken)
@@ -321,7 +324,9 @@ final class WatchDirectNode {
                 token: response.deviceToken,
                 scopes: [],
                 gatewayID: configuration.gatewayID,
-                profile: .primary)
+                profile: .primary,
+                expectedToken: observedTokens["node"],
+                onlyIfUnchanged: true)
             else {
                 throw HTTPError(
                     status: 0,
@@ -334,7 +339,9 @@ final class WatchDirectNode {
                    token: voice.deviceToken,
                    scopes: voice.scopes,
                    gatewayID: configuration.gatewayID,
-                   profile: .primary)
+                   profile: .primary,
+                   expectedToken: observedTokens[voice.role],
+                   onlyIfUnchanged: true)
             {
                 throw HTTPError(
                     status: 0,

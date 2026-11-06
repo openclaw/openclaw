@@ -21,7 +21,7 @@ jobs:
   android:
     name: Critical Security (android)
     if: (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -30,7 +30,7 @@ jobs:
           submodules: false
 
       - name: Setup Java
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: "21"

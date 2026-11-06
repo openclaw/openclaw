@@ -1,4 +1,3 @@
-import type * as Lark from "@larksuiteoapi/node-sdk";
 import {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
@@ -6,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import type { RuntimeEnv } from "../runtime-api.js";
 
-export const wsClients = new Map<string, Lark.WSClient>();
 export const botOpenIds = new Map<string, string>();
 export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 5_000;

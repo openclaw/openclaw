@@ -11,7 +11,7 @@ import {
 } from "../session/tool-result-pairing.js";
 import type { SessionTreeEntry } from "../types.js";
 import {
-  formatPersistedSenderSuffix,
+  formatCompactionUserLabel,
   getCompactionContent,
   stringifyCompactionValue,
 } from "./utils.js";
@@ -64,8 +64,8 @@ export function estimateTokens(message: AgentMessage): number {
     }
     case "user": {
       chars = countContentChars(message.content);
-      // serializeConversation projects this exact persisted-sender suffix.
-      chars += estimateStringChars(formatPersistedSenderSuffix(message));
+      // User text is the baseline; charge the exact added source and sender label.
+      chars += estimateStringChars(formatCompactionUserLabel(message)) - "User".length;
       break;
     }
     case "custom":
@@ -120,27 +120,18 @@ export function findTurnStartIndex(
   return -1;
 }
 
-/** Cut point selected for compaction. */
-interface CutPointResult {
-  /** Index of the first entry retained after compaction. */
-  firstKeptEntryIndex: number;
-  /** Index of the turn-start entry when the cut splits a turn, otherwise -1. */
-  turnStartIndex: number;
-  /** Whether the selected cut point splits an in-progress turn. */
-  isSplitTurn: boolean;
-}
-
-/** Automatic callers supply the remaining foreground budget and its message estimator. */
-interface CompactionRetentionBudget {
-  maxTokens: number;
-  reserveTokens: number;
-  estimateTokens: (message: AgentMessage) => number;
-}
-
 export interface CompactionRetentionConstraints {
-  /** An admitted, unprocessed user remains intact even before its budget is prepared. */
-  preserveFromEntryId?: string;
-  budget?: CompactionRetentionBudget;
+  /** Identifies the active request and whether its unprocessed entry must remain verbatim. */
+  requestBoundary?: {
+    entryId: string;
+    preserve: boolean;
+  };
+  /** Automatic callers supply the remaining foreground budget and its message estimator. */
+  budget?: {
+    maxTokens: number;
+    reserveTokens: number;
+    estimateTokens: (message: AgentMessage) => number;
+  };
 }
 
 function createToolPairCutResolver(messages: AgentMessage[], entryIndexes: number[]) {
@@ -152,7 +143,7 @@ function createToolPairCutResolver(messages: AgentMessage[], entryIndexes: numbe
     }
     return entryIndex;
   };
-  for (const frame of classifyToolUseResultPairing(messages).frames) {
+  for (const frame of classifyToolUseResultPairing(messages)) {
     const start = entryIndexAt(frame.startIndex);
     let end = start;
     for (const occurrence of frame.occurrences) {
@@ -200,7 +191,14 @@ export function findCutPoint(
   endIndex: number,
   keepRecentTokens: number,
   constraints?: CompactionRetentionConstraints,
-): CutPointResult {
+): {
+  /** Index of the first entry retained after compaction. */
+  firstKeptEntryIndex: number;
+  /** Index of the turn-start entry when the cut splits a turn, otherwise -1. */
+  turnStartIndex: number;
+  /** Whether the selected cut point splits an in-progress turn. */
+  isSplitTurn: boolean;
+} {
   const retention = constraints?.budget;
   // Projection validates persisted custom/branch timestamps even outside the
   // retained tail. Keep that eager validation without storing every cut point.
@@ -211,7 +209,11 @@ export function findCutPoint(
   for (let i = startIndex; i < endIndex; i++) {
     const entry = entries[i];
     const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-    if (entry && entry.id === constraints?.preserveFromEntryId) {
+    if (
+      entry &&
+      constraints?.requestBoundary?.preserve &&
+      entry.id === constraints.requestBoundary.entryId
+    ) {
       lastAllowedCut = i;
     }
     if (message && isCutPointMessage(message)) {

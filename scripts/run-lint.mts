@@ -30,7 +30,13 @@ await runWithFailedTrailer("lint", async () => {
     process.exitCode = failure;
     return stopped;
   };
-  if (collect(runControllerGuard(process.cwd(), args.staged ? ["--staged"] : []))) {
+  const controllerArgs = args.staged ? ["--staged"] : [];
+  if (args.base) {
+    controllerArgs.push("--base", args.base);
+  } else if (!args.staged && process.env.CHECKOUT_BASE_SHA) {
+    controllerArgs.push("--base", process.env.CHECKOUT_BASE_SHA, "--no-merge-base");
+  }
+  if (collect(runControllerGuard(process.cwd(), controllerArgs))) {
     return;
   }
   const tsxPath = resolveRepoToolBinPath("tsx");

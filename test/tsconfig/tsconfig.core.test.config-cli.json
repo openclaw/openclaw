@@ -9,7 +9,9 @@
     "../../src/cli/**/*.test.ts",
     "../../src/cli/**/*.test.tsx",
     "../../src/hooks/**/*.test.ts",
-    "../../src/hooks/**/*.test.tsx"
+    "../../src/hooks/**/*.test.tsx",
+    "../../src/security/**/*.test.ts",
+    "../../src/security/**/*.test.tsx"
   ],
   "exclude": [
     "../../node_modules",

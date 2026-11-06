@@ -1,9 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  handleChatSelectionPointerUp,
-  removeChatSelectionPopup,
-  showChatAnnotationEditor,
-} from "./chat-selection-popup.tsx";
+import { showChatAnnotationEditor } from "./chat-annotation-editor.tsx";
+import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.tsx";
 
 // JSDOM ranges have no layout; give the popup a fixed anchor.
 beforeAll(() => {
@@ -38,10 +35,9 @@ function selectRange(node: Text, start: number, end: number) {
   selected?.addRange(range);
 }
 
-function pointerUp(
+async function pointerUp(
   thread: HTMLElement,
   options: Omit<Parameters<typeof handleChatSelectionPointerUp>[1], "paneId"> = {
-    onAddToChat: onAddToChatSpy,
     onAskSideChat: onAskSideChatSpy,
   },
   settle = true,
@@ -52,6 +48,7 @@ function pointerUp(
   });
   if (settle) {
     vi.runAllTimers();
+    await vi.dynamicImportSettled();
   }
 }
 
@@ -77,83 +74,60 @@ function key(
 }
 
 const onAskSideChatSpy = vi.fn();
-const onAddToChatSpy = vi.fn();
 
 afterEach(() => {
   removeChatSelectionPopup();
   window.getSelection()?.removeAllRanges();
   document.body.innerHTML = "";
   onAskSideChatSpy.mockReset();
-  onAddToChatSpy.mockReset();
   vi.useRealTimers();
 });
 
 describe("chat selection popup", () => {
   beforeEach(() => vi.useFakeTimers());
 
-  it("routes Add to chat to its own composer", () => {
-    const thread = selection("Let's Encrypt cert is valid", 18);
-    pointerUp(thread);
-    const toolbar = popup();
-    expect(toolbar).not.toBeNull();
-    expect(toolbar?.getAttribute("aria-label")).toBe("Selection actions");
-    const buttons = [...(toolbar?.querySelectorAll("button") ?? [])];
-    expect(buttons.map((button) => button.textContent)).toEqual([
-      "Add to chat",
-      "Ask in side chat",
-    ]);
-    expect(buttons[0]?.querySelector("svg")).toBeNull();
-
-    buttons[0]?.click();
-    expect(onAddToChatSpy).toHaveBeenCalledWith(
-      {
-        text: "Let's Encrypt cert",
-        start: 0,
-        end: 18,
-        messageId: "assistant-1",
-        entryId: "entry-1",
-      },
-      expect.objectContaining({ top: 100, left: 100 }),
-    );
-    expect(onAskSideChatSpy).not.toHaveBeenCalled();
-    expect(window.getSelection()?.isCollapsed).toBe(true);
-    expect(popup()).toBeNull();
-    expect(thread.isConnected).toBe(true);
-  });
-
-  it("ignores selections outside chat bubbles and collapsed selections", () => {
+  it("ignores outside, cross-message, and collapsed selections", async () => {
     const thread = selection("bubble text");
     const outside = document.createElement("p");
     outside.textContent = "outside text";
     document.body.appendChild(outside);
     selectRange(outside.firstChild as Text, 0, 7);
-    pointerUp(thread);
+    await pointerUp(thread);
     expect(popup()).toBeNull();
     window.getSelection()?.removeAllRanges();
-    pointerUp(thread);
+    await pointerUp(thread);
+    expect(popup()).toBeNull();
+    const sibling = thread.appendChild(document.createElement("div"));
+    sibling.className = "chat-bubble";
+    sibling.textContent = "Second message";
+    selectRange(thread.querySelector(".chat-text")!.firstChild as Text, 0, 6);
+    window.getSelection()!.getRangeAt(0).setEnd(sibling.firstChild!, 6);
+    await pointerUp(thread);
     expect(popup()).toBeNull();
   });
 
-  it("keeps only the latest pending selection popup", () => {
+  it("keeps only the latest pending selection popup", async () => {
     const thread = selection("replacement selection", 11);
     const firstAskSideChat = vi.fn();
     const secondAskSideChat = vi.fn();
-    const pendingTimerCount = vi.getTimerCount();
-    pointerUp(thread, { onAskSideChat: firstAskSideChat }, false);
-    pointerUp(thread, { onAskSideChat: secondAskSideChat }, false);
-    expect(vi.getTimerCount()).toBe(pendingTimerCount + 1);
+    void pointerUp(thread, { onAskSideChat: firstAskSideChat }, false);
+    void pointerUp(thread, { onAskSideChat: secondAskSideChat }, false);
     vi.advanceTimersToNextTimer();
+    await vi.dynamicImportSettled();
+    expect(popup()?.getAttribute("aria-label")).toBe("Selection actions");
     (document.body.querySelector(".chat-selection-popup button") as HTMLButtonElement).click();
     expect(firstAskSideChat).not.toHaveBeenCalled();
     expect(secondAskSideChat).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "replacement" }),
-      expect.anything(),
+      { text: "replacement", start: 0, end: 11, messageId: "assistant-1", entryId: "entry-1" },
+      expect.objectContaining({ top: 100, left: 100 }),
     );
+    expect(window.getSelection()?.isCollapsed).toBe(true);
+    expect(popup()).toBeNull();
   });
 
-  it.each(["scroll", "collapse"])("dismisses the toolbar on %s", (action) => {
+  it.each(["scroll", "collapse"])("dismisses the toolbar on %s", async (action) => {
     const thread = selection("dismiss me later", 7);
-    pointerUp(thread);
+    await pointerUp(thread);
     expect(popup()).not.toBeNull();
     if (action === "scroll") {
       scrollTranscript();
@@ -168,14 +142,16 @@ describe("chat selection popup", () => {
     ["pending", "pane-a", false],
     ["pending", "pane-b", true],
     ["mounted", "pane-b", true],
-  ] as const)("retiring %s selection owner %s leaves popup=%s", (phase, pane, retained) => {
+  ] as const)("retiring %s selection owner %s leaves popup=%s", async (phase, pane, retained) => {
     const thread = selection("Keep this selection", 4);
-    pointerUp(thread, { onAskSideChat: onAskSideChatSpy }, false);
+    void pointerUp(thread, { onAskSideChat: onAskSideChatSpy }, false);
     if (phase === "mounted") {
       vi.runAllTimers();
+      await vi.dynamicImportSettled();
     }
     removeChatSelectionPopup(pane);
     vi.runAllTimers();
+    await vi.dynamicImportSettled();
     expect(popup() !== null).toBe(retained);
     removeChatSelectionPopup("pane-a");
     expect(popup()).toBeNull();
@@ -225,29 +201,37 @@ describe("chat annotation editor", () => {
     expect(onSave).toHaveBeenCalledWith("日本語");
   });
 
-  it.each(["legacy IME Escape", "layout scroll"])("preserves unsaved comments on %s", (action) => {
-    const ime = action === "legacy IME Escape";
-    const { input, onSave, onCancel } = editor({ expanded: ime });
-    const text = ime ? "変換中のコメント" : "Short layout control.";
-    input.value = text;
-    if (ime) {
-      expect(key(input, "Escape", { cancelable: true, keyCode: 229 }).defaultPrevented).toBe(false);
-    } else {
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      scrollTranscript();
-      expect(document.querySelector(".chat-annotation-editor")).not.toBeNull();
-      expect(document.activeElement).toBe(input);
-    }
-    expect(dialog()).not.toBeNull();
-    expect(input.value).toBe(text);
-    expect(onSave).not.toHaveBeenCalled();
-    expect(onCancel).not.toHaveBeenCalled();
-    if (ime) {
-      key(input, "Escape");
-      expect(dialog()).toBeNull();
-      expect(onCancel).toHaveBeenCalledOnce();
-    }
-  });
+  it.each(["legacy IME Escape", "layout scroll", "viewport resize"])(
+    "preserves unsaved comments on %s",
+    (action) => {
+      const ime = action === "legacy IME Escape";
+      const { input, onSave, onCancel } = editor({ expanded: ime });
+      const text = ime ? "変換中のコメント" : "Short layout control.";
+      input.value = text;
+      if (ime) {
+        expect(key(input, "Escape", { cancelable: true, keyCode: 229 }).defaultPrevented).toBe(
+          false,
+        );
+      } else {
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        if (action === "layout scroll") {
+          scrollTranscript();
+        } else {
+          window.dispatchEvent(new Event("resize"));
+        }
+        expect(document.activeElement).toBe(input);
+      }
+      expect(dialog()).not.toBeNull();
+      expect(input.value).toBe(text);
+      expect(onSave).not.toHaveBeenCalled();
+      expect(onCancel).not.toHaveBeenCalled();
+      if (ime) {
+        key(input, "Escape");
+        expect(dialog()).toBeNull();
+        expect(onCancel).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("keeps rejected saves editable and retires a stale owner", () => {
     const controller = new AbortController();
@@ -267,18 +251,6 @@ describe("chat annotation editor", () => {
     expect(onDelete).toHaveBeenCalledOnce();
     expect(onSave).not.toHaveBeenCalled();
     expect(dialog()).toBeNull();
-  });
-
-  it("keeps an unsaved comment when resizing the viewport", () => {
-    const { input, onCancel } = editor();
-    input.value = "873 characters that must survive the resize.";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-
-    window.dispatchEvent(new Event("resize"));
-
-    expect(document.querySelector("[role=dialog]")).not.toBeNull();
-    expect(input.value).toBe("873 characters that must survive the resize.");
-    expect(onCancel).not.toHaveBeenCalled();
   });
 
   it.each([

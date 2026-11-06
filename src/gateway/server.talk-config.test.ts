@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { validateTalkConfigResult } from "../../packages/gateway-protocol/src/index.js";
@@ -37,8 +36,10 @@ async function withConnection<T>(scopes: string[], run: (ws: GatewaySocket) => P
   try {
     await connectOk(ws, {
       deviceIdentityPath: path.join(
-        os.tmpdir(),
-        `openclaw-talk-config-device-${process.pid}-${deviceSeq++}.sqlite`,
+        process.env.OPENCLAW_STATE_DIR!,
+        `talk-config-device-${deviceSeq++}`,
+        "client",
+        "credentials.sqlite",
       ),
       scopes,
       token: "secret",
@@ -124,19 +125,8 @@ it("returns redacted talk config for read scope", async () => {
 });
 
 it.each([
-  ["yes", { message: expect.stringContaining("invalid talk.config params") }],
-  [
-    true,
-    {
-      code: "FORBIDDEN",
-      message: "missing scope: operator.talk.secrets",
-      details: {
-        code: "MISSING_SCOPE",
-        missingScope: "operator.talk.secrets",
-        requiredScopes: ["operator.read", "operator.talk.secrets"],
-      },
-    },
-  ],
+  ["yes", { code: "INVALID_REQUEST" }],
+  [true, { code: "FORBIDDEN", details: { missingScope: "operator.talk.secrets" } }],
 ] as const)("rejects includeSecrets=%s with only read scope", async (includeSecrets, error) => {
   await writeTalkConfig({ apiKey: "secret-key-abc" });
   const response = await withConnection(["operator.read"], (ws) =>

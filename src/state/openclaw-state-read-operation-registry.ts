@@ -9,6 +9,26 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  durableProcess: () =>
+    import("../agents/bash-durable-process-store.js").then((m) => m.durableProcessReadOperations),
+  workerEnvironments: () =>
+    import("../gateway/worker-environments/store-row-codec.js").then(
+      (m) => m.workerEnvironmentReadOperations,
+    ),
+  workers: () =>
+    import("../gateway/worker-environments/placement-read-projection.js").then(
+      (m) => m.workerPlacementReadOperations,
+    ),
+  preparedPoolPresence: () =>
+    import("../gateway/worker-environments/prepared-pool-presence-store.worker.js").then(
+      (m) => m.preparedPoolPresenceReadOperations,
+    ),
+  sandboxPersistentExec: () =>
+    import("../agents/sandbox/persistent-exec-store.kernel.js").then(
+      (m) => m.sandboxPersistentExecReadOperations,
+    ),
+  sandboxRegistry: () =>
+    import("../agents/sandbox/registry.kernel.js").then((m) => m.sandboxRegistryReadOperations),
   worktrees: async () => {
     const [
       { worktreeReadOperations },
@@ -35,8 +55,8 @@ const loaders = {
     import("./github-publication.read.worker.js").then((m) => m.publicationReadOperations),
   userGitHubConnections: () =>
     import("./user-github-connections.worker.js").then((m) => m.userGitHubConnectionReadOperations),
-  deviceIdentity: () =>
-    import("../infra/device-identity.read.worker.js").then((m) => m.deviceIdentityReadOperations),
+  userProfiles: () =>
+    import("./user-profile-openclaw-id.read.js").then((m) => m.openClawIdUserProfileReadOperations),
   stateBootstrap: () =>
     import("./state-bootstrap-read.worker.js").then((m) => m.stateBootstrapReadOperations),
   machineState: () =>
@@ -89,6 +109,10 @@ const loaders = {
     ),
   // Session-state handlers also require this kernel in the read-worker graph.
   sessionUpstream: async () => sessionUpstreamReadOperations,
+  automationProactive: () =>
+    import("../cron/proactive-job-receipt.read.worker.js").then(
+      (m) => m.proactiveJobReceiptReadOperations,
+    ),
   // Schema readers already require this kernel in the read-worker graph.
   diagnostic: async () => diagnosticReadOperations,
   restartLifecycle: () =>

@@ -109,7 +109,7 @@ tokens in its auth store. Supervision honors explicit `appServer` connection set
 instead of replacing them with its local user-home default.
 
 New ChatGPT sign-ins offered by automatic setup use an isolated OpenClaw agent
-home. To switch a reused native login to a separate login, open **Model Setup**
+home. To switch a reused native login to a separate login, open **Models**
 and sign in with ChatGPT or enter an OpenAI API key. Completing sign-in selects
 `plugins.entries.codex.config.appServer.homeScope: "agent"` automatically.
 The separate login does not share native Codex threads or configuration.
@@ -667,8 +667,8 @@ For every supervision config field, see
 ## Troubleshooting
 
 **No sessions appear:** verify that `@openclaw/codex` is installed, both the
-plugin and `supervision.enabled` are true, the current plugin allowlist permits
-`codex`, and the sessions are not archived. Gateway activation changes hot-apply;
+plugin and native conversation discovery are enabled, the current plugin allowlist
+permits `codex`, and the sessions are not archived. Gateway activation changes hot-apply;
 refresh the catalog after they finish. Restart a node if its local activation
 change has not refreshed its advertised capabilities.
 
@@ -676,6 +676,9 @@ change has not refreshed its advertised capabilities.
 ineligible state, its host is offline, or another action is pending. For a
 paired-node row, also verify `operator.admin` and that all three continuation
 commands are advertised and permitted. Terminal access alone is insufficient.
+For a Gateway-local row, Continue also requires `supervision.enabled: true`;
+with it off the transcript stays readable and Chat links to the Codex plugin
+settings.
 Send from a Gateway-local stored or idle session viewer to create a separate
 branch. Continuing a source that already has a supervised Chat opens that Chat.
 

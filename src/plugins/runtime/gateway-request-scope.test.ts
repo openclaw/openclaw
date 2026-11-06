@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { AsyncResource } from "node:async_hooks";
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -48,6 +48,24 @@ describe("gateway request scope", () => {
   function expectGatewayScope(expected: PluginRuntimeGatewayRequestScope) {
     expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toEqual(expected);
   }
+
+  it("enters a repeated Gateway scope once in the same store", () => {
+    const entries = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
+    const runs = vi.spyOn(AsyncLocalStorage.prototype, "run");
+    try {
+      runtimeScope.withPluginRuntimeGatewayRequestScope(TEST_SCOPE, () =>
+        runtimeScope.withPluginRuntimeGatewayRequestScope(TEST_SCOPE, () =>
+          expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBe(TEST_SCOPE),
+        ),
+      );
+      expect(entries).toHaveBeenCalledTimes(1);
+      expect(runs).not.toHaveBeenCalled();
+    } finally {
+      entries.mockRestore();
+      runs.mockRestore();
+    }
+    expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+  });
 
   it("keeps Gateway routing bound to the exact owner across wrappers and cleanup", async () => {
     const owner = Object.freeze(prepareGatewayContextBindingOwner({}));
@@ -99,34 +117,6 @@ describe("gateway request scope", () => {
     expect(runtimeScope.getGatewayContextResolver(owner)).toBe(resolver);
   });
 
-  it("matches nested Gateway bindings without invoking execution resolvers", async () => {
-    const gateway = vi.fn(() => TEST_SCOPE.context);
-    const first = vi.fn(() => undefined);
-    const second = vi.fn(() => undefined);
-    const otherGateway = vi.fn(() => TEST_SCOPE.context);
-    runtimeScope.bindGatewayContextResolver(first, gateway);
-    runtimeScope.bindGatewayContextResolver(second, first);
-    const owner = {};
-    runtimeScope.bindGatewayContextResolver(owner, second);
-
-    expect(runtimeScope.hasGatewayContextOwner(owner, gateway)).toBe(true);
-    expect(runtimeScope.hasGatewayContextOwner(owner, otherGateway)).toBe(false);
-    for (const resolver of [gateway, first, second, otherGateway]) {
-      expect(resolver).not.toHaveBeenCalled();
-    }
-  });
-
-  it("retains terminal Gateway lifetime independently of another resolver", async () => {
-    const first = () => TEST_SCOPE.context;
-    const second = () => TEST_SCOPE.context;
-    const lifetime = runtimeScope.getGatewayContextLifetime(first);
-    lifetime.abort();
-
-    expect(runtimeScope.getGatewayContextLifetime(first)).toBe(lifetime);
-    expect(runtimeScope.getGatewayContextLifetime(first).signal.aborted).toBe(true);
-    expect(runtimeScope.getGatewayContextLifetime(second).signal.aborted).toBe(false);
-  });
-
   it("drops generation ownership for re-admission and restores the caller afterward", async () => {
     const generation = await import("./generation-scope.js");
     const { getCurrentPluginMetadataSnapshot } =
@@ -172,12 +162,26 @@ describe("gateway request scope", () => {
     const first = createEmptyPluginRegistry();
     const second = createEmptyPluginRegistry();
     const declaredProviderOwners = new Map([["fixture", new Set(["fixture-owner"])]]);
-    const caller = { ...TEST_SCOPE, pluginRegistry: first, declaredProviderOwners };
+    const marker = Symbol("request fact");
+    const hidden = Symbol("hidden fact");
+    const caller = {
+      ...TEST_SCOPE,
+      pluginRegistry: first,
+      declaredProviderOwners,
+      [marker]: "caller",
+    };
+    Object.defineProperties(caller, {
+      hidden: { get: () => assert.fail("non-enumerable field read") },
+      [hidden]: { get: () => assert.fail("non-enumerable symbol read") },
+    });
     runtimeScope.withPluginRuntimeGatewayRequestScope(caller, () => {
       expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBe(caller);
       runtimeScope.withPluginRuntimePluginScope({ pluginId: "fixture" }, () => {
         const child = runtimeScope.getPluginRuntimeGatewayRequestScope()!;
         expect(child).not.toBe(caller);
+        expect(Reflect.get(child, marker)).toBe("caller");
+        expect(Object.hasOwn(child, hidden)).toBe(false);
+        expect(Object.hasOwn(child, "hidden")).toBe(false);
         const copied = { ...child };
         child.pluginRegistry = second;
         expect(requireActivePluginRegistry()).toBe(second);

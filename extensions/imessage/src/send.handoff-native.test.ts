@@ -14,21 +14,10 @@ import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
 const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  const { withEffectPreparation } = await import("./test-support/authority.js");
   return {
     ...actual,
-    captureEffectAuthority: () => {
-      const authority = actual.captureEffectAuthority();
-      const prepare = effectGate.prepare;
-      return prepare
-        ? {
-            ...authority,
-            initiate: async <T>(effect: () => T | Promise<T>) => {
-              await prepare();
-              return authority.initiate(effect);
-            },
-          }
-        : authority;
-    },
+    captureEffectAuthority: withEffectPreparation(actual, effectGate).captureEffectAuthority,
   };
 });
 

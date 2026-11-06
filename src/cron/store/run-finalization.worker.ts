@@ -2,7 +2,12 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import {
+  CRON_ADMISSION_DEFERRED_RECEIPT_ERROR,
+  isDeferredCronAdmission,
+} from "../service/admission-deferred.js";
 import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js";
+import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { applyOutcomeToAuthoritativeJob } from "../service/timer-outcomes.js";
 import { recordCronRunInDatabase } from "./run-history.kernel.js";
@@ -43,12 +48,28 @@ export function finalizeCronRunsInWorker(
             deps: {
               nowMs: () => policy.nowMs,
               cronConfig: policy.cronConfig,
+              defaultAgentId: policy.defaultAgentId,
               failureRepairTimeoutMs: policy.failureRepairTimeoutMs,
               log: createCronMutationLogger(outcome.logs),
             },
           };
           for (const [outcomeIndex, completed] of policy.outcomes.entries()) {
             const receipt = completed.runReceipt;
+            // A timeout is accounted once while its active receipt still fences execution.
+            if (
+              receipt &&
+              completed.executionPending &&
+              findCronRunRecoveryInDatabase({
+                database: db,
+                storeKey: input.storeKey,
+                jobId: completed.jobId,
+                startedAt: completed.startedAt,
+                receiptId: receipt.receiptId,
+              }).finalized
+            ) {
+              continue;
+            }
+            const admissionDeferred = isDeferredCronAdmission(completed.job, completed);
             const storedJob = jobs.get(completed.jobId);
             const retryAfterRestart =
               completed.interruptedByRestart === true &&
@@ -74,15 +95,19 @@ export function finalizeCronRunsInWorker(
                 receiptSchema,
                 handle: receipt,
                 pendingReceiptId,
+                executionPending: completed.executionPending,
                 status: completed.interruptedByRestart
                   ? "interrupted"
                   : completed.status === "ok" && completed.triggerEval?.fired === false
                     ? "skipped"
                     : completed.status,
                 finishedAtMs: completed.endedAt,
-                error: completed.error,
+                error: admissionDeferred ? CRON_ADMISSION_DEFERRED_RECEIPT_ERROR : completed.error,
               })
             ) {
+              continue;
+            }
+            if (policy.receiptOnly) {
               continue;
             }
             const currentJob = completed.activeJobMarker?.jobRemoved ? undefined : storedJob;
@@ -92,6 +117,43 @@ export function finalizeCronRunsInWorker(
               currentJob.state.runningReceiptId === receipt.receiptId;
             const job =
               currentJob && ownsRunningMarker ? currentJob : structuredClone(completed.job);
+            if (admissionDeferred) {
+              if (currentJob && ownsRunningMarker) {
+                if (
+                  currentJob.schedule.kind !== "stream" &&
+                  !currentJob.state.runningScheduleChangeId
+                ) {
+                  const previous = currentJob.state.admissionDeferred;
+                  const attempts = (previous?.attempts ?? 0) + 1;
+                  currentJob.state.admissionDeferred = {
+                    reason:
+                      completed.summary ??
+                      completed.admissionDeferredReason ??
+                      "Admission unavailable",
+                    sinceMs: previous?.sinceMs ?? completed.endedAt,
+                    attempts,
+                    retryAtMs:
+                      completed.endedAt +
+                      Math.min(300_000, 30_000 * 2 ** Math.min(attempts - 1, 4)),
+                  };
+                  if (attempts === 5) {
+                    state.deps.log.warn(
+                      { jobId: currentJob.id, ...currentJob.state.admissionDeferred },
+                      "cron: admission remains deferred",
+                    );
+                  }
+                }
+                delete currentJob.state.queuedAtMs;
+                delete currentJob.state.runningAtMs;
+                delete currentJob.state.runningReceiptId;
+                delete currentJob.state.runningScheduleChangeId;
+                outcome.upsertedJobs.push(currentJob);
+              }
+              if (completed.request?.runId) {
+                outcome.eventPlans.push({ outcomeIndex, job });
+              }
+              continue;
+            }
             const shouldDelete = applyOutcomeToAuthoritativeJob(
               state,
               job,
@@ -116,9 +178,6 @@ export function finalizeCronRunsInWorker(
                     {
                       nowMs: policy.nowMs,
                       recomputeExpired: Boolean(completed.request),
-                      ...(completed.request?.preserveCadence
-                        ? { preserveExpiredPacedNextRunJobId: job.id }
-                        : {}),
                       deferredNotifications: outcome.notifications,
                     },
                     { reservations: new Map(), isJobActive: () => false },
@@ -141,6 +200,9 @@ export function finalizeCronRunsInWorker(
           };
         },
       });
+      if (policy.receiptOnly) {
+        return { outcome: committed.value };
+      }
       const settled = settleCronStartupBatchInWorker(database, input.storeKey, policy.nowMs);
       committed.value.upsertedJobs.push(...settled.jobs);
       committed.value.notifications.push(...settled.notifications);

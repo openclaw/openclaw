@@ -1,24 +1,62 @@
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { readFileWindowFully, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
 import { startsWithSvgRootElement } from "../../packages/gateway-protocol/src/svg-image.js";
 import { relativePathInsideSandboxRoot, resolveSandboxPathMapping } from "../agents/path-policy.js";
-import { openLocalFileSafely } from "../infra/fs-safe.js";
+import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveScratchFilePath } from "../infra/scratch-expiry.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
+import type { MediaProbeResult } from "../media/media-probe.js";
 import { resolveMediaReferenceLocalPathInfo } from "../media/media-reference.js";
-import { resolvePlaybackMetadataForSource } from "../media/playback-transcode.js";
-import { resolveUserPath } from "../utils.js";
 import {
-  classifyAssistantMediaError,
-  type AssistantMediaAvailability,
-} from "./assistant-media-errors.js";
+  PlaybackInspectionBusyError,
+  resolvePlaybackMetadataForSource,
+} from "../media/playback-transcode.js";
+import { SCRATCH_EXPIRED_MESSAGE } from "../shared/scratch-expiry.js";
+import { resolveUserPath } from "../utils.js";
 import {
   createAssistantMediaTicket,
   resolveAssistantMediaWorkspaceTicketKey,
   type resolveAssistantMediaPolicy,
   type AssistantMediaTicketPayload,
 } from "./assistant-media-policy.js";
+import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
+
+type AssistantMediaAvailability =
+  | ({
+      available: true;
+      mimeType?: string;
+      playback?: "native" | "transcode";
+      sizeBytes?: number;
+    } & MediaProbeResult)
+  | { available: false; reason: string; code: string; retryable?: boolean };
+
+export async function respondAssistantMediaReadFailure(
+  error: unknown,
+  source: string,
+  res: ServerResponse,
+  publishResponse: (publish: () => void) => Promise<void>,
+): Promise<void> {
+  if (res.destroyed || res.writableEnded) {
+    return;
+  }
+  if (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "not-found" &&
+    resolveScratchFilePath(source)
+  ) {
+    try {
+      await publishResponse(() => respondPlainText(res, 410, SCRATCH_EXPIRED_MESSAGE));
+      return;
+    } catch {
+      // Expiry disclosure still requires the current session and message authority.
+    }
+  }
+  respondNotFound(res);
+}
 
 export function normalizeAssistantMediaSource(source: string): string | null {
   const trimmed = source.trim();
@@ -118,9 +156,9 @@ export async function openAssistantMedia(
       if (!isPathInside(sandbox.hostRoot, opened.realPath)) {
         throw new LocalMediaAccessError("invalid-path", "Sandbox image backing is unavailable");
       }
-      const { prepareLocalWorkspaceImageRead } =
+      const { prepareLocalWorkspaceFileRead } =
         await import("../agents/sandbox/local-workspace-quiescence.js");
-      assertSourceCurrent = await prepareLocalWorkspaceImageRead({
+      assertSourceCurrent = await prepareLocalWorkspaceFileRead({
         workspaceDir,
         containerRoot: sandbox.containerRoot,
         targets: [
@@ -231,6 +269,58 @@ export async function resolveAssistantMediaAvailability(
       }),
     };
   } catch (error) {
-    return classifyAssistantMediaError(error);
+    if (error instanceof Error && "code" in error && error.code === "not-found") {
+      return resolveScratchFilePath(source)
+        ? {
+            available: false,
+            code: "artifact-file-expired",
+            reason: SCRATCH_EXPIRED_MESSAGE,
+            retryable: false,
+          }
+        : { available: false, code: "file-not-found", reason: "File not found" };
+    }
+    if (error instanceof PlaybackInspectionBusyError) {
+      return {
+        available: false,
+        code: "attachment-unavailable",
+        reason: error.message,
+        retryable: true,
+      };
+    }
+    if (error instanceof FsSafeError) {
+      switch (error.code) {
+        case "not-file":
+          return { available: false, code: "not-a-file", reason: "Not a file" };
+        case "invalid-path":
+        case "path-mismatch":
+        case "symlink":
+          return { available: false, code: "invalid-file", reason: "Invalid file" };
+        default:
+          break;
+      }
+    } else if (error instanceof Error && "code" in error) {
+      const errorCode = error.code;
+      switch (typeof errorCode === "string" ? errorCode : "") {
+        case "unsupported-media-type":
+          return { available: false, code: "unsupported-media-type", reason: "Not an image" };
+        case "path-not-allowed":
+          return {
+            available: false,
+            code: "outside-allowed-folders",
+            reason: "Outside allowed folders",
+          };
+        case "invalid-file-url":
+        case "invalid-path":
+        case "unsafe-bypass":
+        case "network-path-not-allowed":
+        case "invalid-root":
+          return { available: false, code: "blocked-local-file", reason: "Blocked local file" };
+        case "not-file":
+          return { available: false, code: "not-a-file", reason: "Not a file" };
+        default:
+          break;
+      }
+    }
+    return { available: false, code: "attachment-unavailable", reason: "Attachment unavailable" };
   }
 }

@@ -2,6 +2,7 @@ import { takeGraphemes } from "../lib/graphemes.ts";
 
 const PROVIDER_ICON_NAMES = new Set([
   "abacus",
+  "abliteration",
   "alibaba",
   "amp",
   "antigravity",
@@ -59,12 +60,14 @@ const PROVIDER_ICON_NAMES = new Set([
   "opencode",
   "opencodego",
   "openrouter",
+  "particle",
   "perplexity",
   "pi",
   "pixverse",
   "poe",
   "qianfan",
   "qoder",
+  "requesty",
   "runway",
   "sakana",
   "stepfun",
@@ -128,7 +131,7 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   anthropic: "Anthropic",
   "claude-cli": "Claude CLI",
   google: "Google",
-  "github-copilot": "GitHub",
+  "github-copilot": "GitHub Copilot",
   "llama-cpp": "llama.cpp",
   lmstudio: "LM Studio",
   longcat: "LongCat",
@@ -154,7 +157,18 @@ export function formatRawProviderLabel(provider: string): string {
 }
 
 /** Brand display name for a (normalized, lowercase) provider id. */
-export function providerDisplayLabel(provider: string): string {
+export type ProviderPresentation = {
+  providerName?: string;
+  providerIcon?: { source: "builtin"; name: string } | { source: "asset"; url: string };
+};
+
+export function providerDisplayLabel(
+  provider: string,
+  presentation?: Pick<ProviderPresentation, "providerName">,
+): string {
+  if (presentation?.providerName) {
+    return presentation.providerName;
+  }
   if (Object.hasOwn(PROVIDER_DISPLAY_LABELS, provider)) {
     return PROVIDER_DISPLAY_LABELS[provider]!;
   }
@@ -184,73 +198,6 @@ export function hasProviderBrandIcon(provider: string): boolean {
   return resolveProviderIconName(provider) !== null;
 }
 
-export type CloudProfileIdentity = { providerId: string; providerDisplayId?: string };
-
-// Cloud backends are a separate identity domain: Google Cloud is not Gemini,
-// and AWS is not Bedrock. Map lookup also keeps prototype keys on the fallback.
-const CLOUD_PROVIDERS = new Map<string, { label: string; brand?: string }>([
-  ["aws", { label: "AWS", brand: "aws" }],
-  ["azure", { label: "Azure", brand: "azure" }],
-  ["daytona", { label: "Daytona", brand: "daytona" }],
-  ["gcp", { label: "Google Cloud", brand: "gcp" }],
-  ["hetzner", { label: "Hetzner", brand: "hetzner" }],
-  ["machine0", { label: "Machine0" }],
-]);
-const CLOUD_ALIASES = new Map([
-  ["google", "gcp"],
-  ["google-cloud", "gcp"],
-  ["docker", "local-container"],
-  ["local-docker", "local-container"],
-  ["podman", "local-container"],
-  ["local-podman", "local-container"],
-]);
-
-function cloudProfileBackendId(profile?: CloudProfileIdentity): string {
-  const raw = (profile?.providerDisplayId ?? profile?.providerId ?? "").trim().toLowerCase();
-  return CLOUD_ALIASES.get(raw) ?? raw;
-}
-
-/** Known cloud services precede local/custom infrastructure, alphabetically within each group. */
-export function compareCloudProfiles(
-  left: CloudProfileIdentity & { id: string },
-  right: CloudProfileIdentity & { id: string },
-): number {
-  // Backend identity, not an editable profile name or the availability of a logo.
-  return (
-    Number(CLOUD_PROVIDERS.has(cloudProfileBackendId(right))) -
-      Number(CLOUD_PROVIDERS.has(cloudProfileBackendId(left))) || left.id.localeCompare(right.id)
-  );
-}
-
 export function providerFallbackLetter(label: string): string {
   return takeGraphemes(label.trim().toUpperCase(), 1) || "?";
-}
-
-/** Cloud identity is distinct from model-provider identity (Google Cloud versus Gemini). */
-type CloudProfileIconData = {
-  label: string;
-} & (
-  | { providerId: string; iconName?: never }
-  | { providerId?: never; iconName: "server" | "box" | "cloud" }
-);
-
-export function resolveCloudProfileIconData(profile?: CloudProfileIdentity): CloudProfileIconData {
-  const id = cloudProfileBackendId(profile);
-  const brand = CLOUD_PROVIDERS.get(id);
-  const label =
-    brand?.label ?? (profile?.providerDisplayId ?? profile?.providerId ?? "").trim().toLowerCase();
-  return brand?.brand
-    ? {
-        label,
-        providerId: brand.brand,
-      }
-    : {
-        label,
-        iconName:
-          id === "machine0" || id === "incus"
-            ? "server"
-            : id === "local-container"
-              ? "box"
-              : "cloud",
-      };
 }

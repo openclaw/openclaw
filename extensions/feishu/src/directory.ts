@@ -39,8 +39,10 @@ async function listFeishuDirectoryLive<TItem, TEntry extends DirectoryEntry>(
   try {
     const client = createFeishuClient(account);
     const entries: TEntry[] = [];
-    const limit = params.limit ?? 50;
-    const q = normalizeLowercaseStringOrEmpty(params.query);
+    const requestedLimit = params.limit ?? 50;
+    const limit = requestedLimit > 0 ? requestedLimit : Number.POSITIVE_INFINITY;
+    // Canonical forms compare equal here; directory entries keep their original spelling.
+    const q = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
     const peers = options.kind === "peer";
     const pageSize = peers && q ? 50 : Math.min(limit, peers ? 50 : 100);
     let pageToken: string | undefined;
@@ -55,8 +57,8 @@ async function listFeishuDirectoryLive<TItem, TEntry extends DirectoryEntry>(
         if (
           entry &&
           (!q ||
-            normalizeLowercaseStringOrEmpty(entry.id).includes(q) ||
-            normalizeLowercaseStringOrEmpty(entry.name).includes(q)) &&
+            normalizeLowercaseStringOrEmpty(entry.id).normalize("NFC").includes(q) ||
+            normalizeLowercaseStringOrEmpty(entry.name).normalize("NFC").includes(q)) &&
           (peers || !params.filter || params.filter(entry))
         ) {
           entries.push(entry);
@@ -71,7 +73,7 @@ async function listFeishuDirectoryLive<TItem, TEntry extends DirectoryEntry>(
         }
       }
       const nextPageToken = response.data?.has_more ? response.data.page_token : undefined;
-      if (peers && response.data?.has_more && !nextPageToken) {
+      if (response.data?.has_more && !nextPageToken) {
         throw new Error(`${label} directory returned an empty page token`);
       }
       if (nextPageToken && seenPageTokens.has(nextPageToken)) {

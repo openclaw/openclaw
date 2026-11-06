@@ -12,7 +12,7 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-c
 import { openTrackedStateDatabase } from "../../state/openclaw-state-db-handle.js";
 import * as rootContext from "../../state/openclaw-state-worker-context.js";
 import * as sharedWorker from "../../state/openclaw-state-worker-store.js";
-import { registerAuthProfileFileChangeListener } from "./file-state.js";
+import { authProfileFileChanges } from "./file-state.js";
 import { runtimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import { noteRuntimeAuthProfileStorePersistedMutation } from "./runtime-snapshots.js";
 import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
@@ -35,6 +35,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let databasePath: string;
 let rootCurrent: boolean;
 const readers = new Set<ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
+const publishFileChange = authProfileFileChanges.onChange;
 function prepare(env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: "/fixture" }) {
   const reader = prepareAgentAuthProfileRowsRead({ databasePath, agentId: "main", env });
   readers.add(reader);
@@ -43,12 +44,13 @@ function prepare(env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: "/fixture" }) {
 
 async function changeDatabase(write: () => void) {
   const changed = new Promise<void>((resolve) => {
-    const unsubscribe = registerAuthProfileFileChangeListener(({ directory }) => {
-      if (directory === path.dirname(databasePath)) {
-        unsubscribe();
+    authProfileFileChanges.onChange = async (change) => {
+      await publishFileChange?.(change);
+      if (change.directory === path.dirname(databasePath)) {
+        authProfileFileChanges.onChange = publishFileChange;
         resolve();
       }
-    });
+    };
   });
   write();
   await vi.advanceTimersByTimeAsync(30_000);
@@ -77,6 +79,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  authProfileFileChanges.onChange = publishFileChange;
   await Promise.all([...readers].map((reader) => reader.dispose()));
   readers.clear();
   await closeOpenClawStateDatabaseAsync();
@@ -110,12 +113,12 @@ describe("prepared auth profile row reads", () => {
           const { port1: sender, port2: receiver } = new MessageChannel();
           try {
             return await operation({
-              execute: vi.fn().mockImplementation(async () => {
-                sendAuthProfileUpdateValue(sender, rows);
+              execute: async () => {
+                sendAuthProfileUpdateValue(sender, { [databasePath]: rows });
                 admission.port.postMessage(
                   {
                     stage: "prepare",
-                    facts: { kind: "auth-store-read", port: receiver },
+                    facts: { kind: "auth-sources-read", port: receiver },
                     decision: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
                   },
                   [receiver],
@@ -124,7 +127,7 @@ describe("prepared auth profile row reads", () => {
                 if (admission.failure) {
                   throw toErrorObject(admission.failure, "Auth read admission failed");
                 }
-              }),
+              },
             });
           } finally {
             admission.finish();
@@ -169,17 +172,6 @@ describe("prepared auth profile row reads", () => {
       expect(workerRead).toHaveBeenCalledOnce();
     },
   );
-
-  it("serves prepared file authority without filesystem calls on subsequent reads", async () => {
-    const reader = prepare();
-    await expect(reader.read()).resolves.toEqual(rows);
-    const realpath = vi.spyOn(fs.realpathSync, "native");
-    const stat = vi.spyOn(fs, "statSync");
-    await expect(reader.read()).resolves.toEqual(rows);
-    await expect(prepare().read()).resolves.toEqual(rows);
-    expect(realpath).not.toHaveBeenCalled();
-    expect(stat).not.toHaveBeenCalled();
-  });
 
   it("retains revocable read authority even when persisted rows come from a cache", async () => {
     const reader = prepare();

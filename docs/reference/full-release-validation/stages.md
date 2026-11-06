@@ -9,6 +9,12 @@ read_when:
 
 ## Top-level stages
 
+Candidate Q=C runs the selected tests. Admitted P supplies
+`full-release-validation-state.mjs` for Release Decision, Diagnostic Drain,
+manifest writing, and final validation. Its
+[checked-in waiver policy](/reference/full-release-validation/evidence#release-tooling-waivers)
+is applied there; publication still requires FRV itself to conclude success.
+
 For `rerun_group=all`, a `Check for reusable validation evidence` job runs
 first. It looks for the newest prior green full validation with the same release
 profile, coverage policy, effective soak setting, and validation inputs. Exact-target reruns use
@@ -79,6 +85,15 @@ before passing. Prepared publication adopts those exact artifact IDs, digests,
 producer run, and attempt; it does not repack plugin npm candidates after Full
 Release Validation. Source-only files and fixtures therefore cannot trigger the
 artifact checks unless npm actually includes them in a shipped tarball.
+
+Normal publication instead repacks plugins with the admitted publisher tooling
+P and scans them with P's reviewed inventory. When P differs from this run's
+tooling, `Prepare exact plugin npm artifacts` does the same while the child runs:
+it packs every selected plugin with reviewed findings using P's packer and scans
+with P's scanner. A reviewed hash, path, or count that P's toolchain changes
+fails that job minutes into the run, not at publish. The failure names the
+package, packed file, and new `contentSha256`. Review that file before you record
+the new value in `scripts/plugin-npm-security-scan.mts` on `main`.
 
 For directly dispatched `OpenClaw NPM Release` preflight-only runs, if qualification
 fails after source checks and package preparation succeed, rerun the failed
@@ -154,7 +169,7 @@ mandatory Docker image preparation on both native architectures.
 | Target resolution       | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Publication preparation | **Jobs:** `Prepare release npm artifacts`, `Qualify release npm artifacts`, `Prepare plugin npm artifacts`, and `Prepare release Docker artifacts`<br />**Child workflow:** separate core npm, plugin npm, and Docker producer runs<br />**Proves:** qualifies the exact root/core and selected plugin npm tarballs plus both native Docker architectures before publication. Parent retries recover the original producer records and receipts.<br />**Rerun:** retry failed npm qualification jobs on their original producer run, preserve successful preparation, and let the parent collect the verified receipt. |
 | Shared candidate        | **Job:** `Acquire full release candidate`<br />**Child workflow:** `Full Release Artifacts` calls `Full Release Candidate`, which reuses a trusted candidate or prepares one on a proven miss<br />**Proves:** validates the exact npm tarball, registry, functional image, and producer/publisher binding. Preparation starts after raw npm bytes are ready, before qualification finishes.<br />**Rerun:** rerun the affected package, plugin-prerelease, cross-OS, or live/E2E group using the same candidate.                                                                                                      |
-| Vitest and normal CI    | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** the selected CI graph against the target ref. `npm-beta-v1` and `npm-stable-v1` retain Linux/macOS/Windows Node, plugin and channel contracts, Node compatibility, checks, built-artifact smoke, docs, Python skills, and Control UI; they defer macOS Swift/OpenClawKit, iOS, Android, and native i18n. Other coverage policies use full CI.<br />**Rerun:** `rerun_group=ci`.                                                                                                                                                           |
+| Vitest and normal CI    | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** the selected CI graph against the target ref. `npm-beta-v1` and `npm-stable-v1` retain Linux/macOS/Windows Node, plugin and channel contracts, Node compatibility, checks, built-artifact smoke, docs, Python skills, and Control UI; they defer iOS, Android, and native i18n. `npm-beta-v1` also defers macOS Swift/OpenClawKit; `npm-stable-v1` retains the regular macOS Swift `tests` and `packages` phases because the stable tag also ships the macOS app. Other coverage policies use full CI.<br />**Rerun:** `rerun_group=ci`.  |
 | Plugin prerelease       | **Jobs:** `Run plugin prerelease independent validation` and `Run plugin prerelease candidate validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** independent static and agentic coverage can start before acquisition, while candidate-dependent Docker lanes consume the sealed package and plugin registry identities.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                                                                                                                                       |
 | Release checks          | **Jobs:** `Run release checks independent validation` and `Run release checks candidate validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** independent install, QA, and live coverage can start before acquisition, while package, cross-OS, and candidate-dependent Docker lanes consume the sealed candidate. Stable and full profiles retain exhaustive live/E2E and release-path coverage.<br />**Rerun:** classify the failed surface and select one concrete release-check group.                                                                                                   |
 | Package Telegram        | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** a focused published-package Telegram E2E when `release_package_spec` or `npm_telegram_package_spec` is set. `npm-beta-v1` defers this child; explicit `npm-telegram` and soak retain it. Package Acceptance owns Telegram proof for unpublished candidates when selected.<br />**Rerun:** `rerun_group=npm-telegram` with `release_package_spec` or `npm_telegram_package_spec`.                                                                                                                                 |

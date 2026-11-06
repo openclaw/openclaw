@@ -3,6 +3,7 @@ import { constants, lstatSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
+import { ignoreMissingPath } from "./errno.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { repairPackagePermissions } from "./package-update-activation-paths.js";
@@ -297,12 +298,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     return children.toSorted();
   }
 
-  async function hashFile(
-    file: string,
-    stat: BigIntStats,
-    remainingBytes: number,
-    readBuffer?: Buffer,
-  ) {
+  async function hashFile(file: string, stat: BigIntStats, remainingBytes: number) {
     if (!stat.isFile()) {
       throw new Error("Package rollback verification byte limit exceeded");
     }
@@ -318,7 +314,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         throw new Error("Package rollback file changed before reading");
       }
       const hash = createHash("sha256");
-      const buffer = readBuffer ?? Buffer.allocUnsafe(64 * 1024);
+      const buffer = Buffer.allocUnsafe(64 * 1024);
       const size = Number(stat.size);
       let position = 0;
       // The final stat detects growth; an extra EOF read costs one OS call per file.
@@ -580,14 +576,18 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       if (!version) {
         throw new Error("Package rollback version is unavailable");
       }
-      for (const entry of observed) {
-        if (
-          !packageStatUnchanged(
-            entry.stat,
-            await read(() => fs.lstat(entry.file, { bigint: true })),
-          )
-        ) {
-          throw new Error("Package rollback tree changed during verification");
+      for (let start = 0; start < observed.length; start += 32) {
+        const results = await Promise.allSettled(
+          observed.slice(start, start + 32).map(async ({ file, stat }) => {
+            if (!packageStatUnchanged(stat, await read(() => fs.lstat(file, { bigint: true })))) {
+              throw new Error("Package rollback tree changed during verification");
+            }
+          }),
+        );
+        // Preserve traversal-order refusals, even when a later read times out first.
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure) {
+          throw failure.reason;
         }
       }
       if (legacy) {
@@ -702,10 +702,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       await read(() => fs.lstat(file));
       return true;
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return false;
-      }
-      throw error;
+      return ignoreMissingPath(error) ?? false;
     }
   }
 

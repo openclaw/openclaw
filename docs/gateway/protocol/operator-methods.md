@@ -16,6 +16,11 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
 - `commands.list` (`operator.read`) fetches the runtime command inventory for
   an agent.
   - `agentId` is optional; omit it to read the default agent workspace.
+  - `projectId` is optional and only valid without `sessionKey`. It previews
+    the skills of a registered project selected before a session exists. The
+    Gateway reads that project's `skills/` and `.agents/skills/` only when the
+    client could create a session there for the agent, including sandbox
+    containment; otherwise the agent catalog is returned unchanged.
   - `scope` controls which surface the primary `name` targets: `text` returns
     the primary text command token without the leading `/`; `native` and the
     default `both` path return provider-aware native names when available.
@@ -30,6 +35,11 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `source`: `core` or `plugin`
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
+
+  Plugin discovery yields between registrations so other Gateway requests can
+  progress while the catalog loads. An individual synchronous plugin callback
+  still blocks for its own duration.
+
 - `tools.effective` (`operator.read`) fetches a prospective tool preview for a
   session.
   - `sessionKey` is required.
@@ -41,11 +51,27 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
     authority, credentials, discovery, and final run policy can change which
     tools are offered. Absence from this preview does not establish that a tool
     is disabled, and inclusion does not guarantee execution access.
+    See [Codex pre-turn verification](/plugins/codex-harness/commands#verify-tool-access-before-a-codex-turn)
+    for supported checks and their limits.
   - The projection can use cached inventory while refreshing it. Unsaved UI
     edits are not inputs, and saved or runtime changes may not appear immediately.
+  - Managed sessions using an OpenClaw tool runtime can include the GitHub
+    identity and publication tools when saved tool policy permits, without
+    waiting for credential discovery. ACP and unsupported runtimes do not
+    acquire them. GitHub action descriptions mark
+    sandbox-dependent actions as conditional: the preview does not prepare a
+    workspace, inspect credentials, or grant publication or merge authority.
+    Codex-specific exclusions apply when Codex is the selected runtime; switching
+    runtimes selects the matching GitHub preview instead of reusing the other one.
+    Older Codex plugins without preview metadata omit these two rows with an
+    update notice; other tools remain visible and execution access is unchanged.
   - A saved `toolOverrides.webSearch=false` excludes core `web_search`. Changing
     this override selects the matching preview instead of reusing the other
     state's cached inventory.
+  - Saved sandbox policy filters both core tools and warm MCP catalogs. A session
+    that requires a sandbox keeps that policy even when local sandbox mode is
+    off. A matching active remote-exec placement also applies sandbox policy.
+    Previewing tools does not provision a sandbox or grant execution authority.
   - `tools.effective` is read-only for MCP: it may project a warm session MCP
     catalog through the final tool policy, but does not create MCP runtimes,
     connect transports, or issue `tools/list`. If no matching warm catalog
@@ -62,6 +88,9 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - Owner-only core wrappers such as `cron`, `gateway`, and `nodes` require
     owner/admin identity (`operator.admin`) even though `tools.invoke` itself
     is `operator.write`.
+  - Configured MCP tools are invocable by their `<server>__<tool>` name on a
+    private per-call MCP runtime, with `source="mcp"` in the response; see
+    [Configured MCP tools](/gateway/tools-invoke-http-api#configured-mcp-tools).
   - The response is an SDK-facing envelope with `ok`, `toolName`, optional
     `output`, and typed `error` fields. Approval or policy refusals return
     `ok:false` in the payload rather than bypassing the gateway tool policy
@@ -175,9 +204,21 @@ catalog consumers, retaining cancellation and any explicit request deadline.
   aliases. Unknown provider IDs return `INVALID_REQUEST` with the rejected ID.
   Omit the filter or run `openclaw models list --all` to list models and their
   provider IDs.
-- `includeDetails: true` includes available input modalities, effective
-  `contextTokens`, and a `local` endpoint classification. It does not expose
-  endpoint URLs, headers, credentials, costs or runtime request parameters.
+- Rows include `contextWindow` (the model's maximum) and the effective
+  `contextTokens` budget when those values are known, so pickers can show the
+  active budget without session metadata.
+- `includeDetails: true` also includes available input modalities and a `local`
+  endpoint classification. It does not expose endpoint URLs, headers,
+  credentials, costs or runtime request parameters.
+
+An unchanged catalog renewal emits `chat.metadata.changed` with
+`modelCatalogChanged: false` and `modelCatalogStatusChanged: true`. The Control UI
+refreshes only cached receipts that still contain `pendingProviders`; settled
+catalogs remain reusable. Inventory, availability, and account changes still
+invalidate affected catalogs. Agent-specific metadata publications include
+`agentId`, so other agents retain their catalog and auth receipts. Configuration,
+plugin, and owner replacement changes still invalidate all agents. Discovery
+settlements can accompany scoped changes as a separate pending-only notification.
 
 The Control UI shares the initial `models.snapshot` with matching configured
 catalog readers. If bootstrap does not deliver it within one second, readers

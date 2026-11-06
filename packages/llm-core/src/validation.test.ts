@@ -1,240 +1,174 @@
 import { Type, type TSchema } from "typebox";
-import { describe, expect, it } from "vitest";
+import { Settings } from "typebox/system";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeExecutionProfile } from "../../../standalone-runtime-profile.mjs";
 import type { Tool } from "./types.js";
-import { validateToolArguments } from "./validation.js";
 
-function validator(name: string, parameters: Tool["parameters"]) {
+let validateToolArguments: (typeof import("./validation.js"))["validateToolArguments"];
+
+const runtimeProfile = vi.hoisted((): { value: RuntimeExecutionProfile } => ({
+  value: "dynamic-execution",
+}));
+vi.mock("../../../standalone-runtime-profile.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../standalone-runtime-profile.mjs")>()),
+  getRuntimeExecutionProfile: () => runtimeProfile.value,
+}));
+
+function validator(parameters: Tool["parameters"], name = "refs") {
   const tool: Tool = { name, description: "", parameters };
   return (args: Record<string, unknown>) =>
     validateToolArguments(tool, { type: "toolCall", id: "call", name, arguments: args });
 }
 
-const validateDecimal = validator("decimal-tool", {
-  type: "object",
-  properties: { amount: { type: "number" }, count: { type: "integer" } },
-  required: ["amount", "count"],
-  additionalProperties: false,
-});
+function objectSchema(properties: Record<string, TSchema>, options: TSchema = {}): TSchema {
+  return { type: "object", properties, ...options };
+}
 
-describe("validateToolArguments", () => {
+const requiredObject = (properties: Record<string, TSchema>, options: TSchema = {}) =>
+  objectSchema(properties, { required: Object.keys(properties), ...options });
+const closedObject = (properties: Record<string, TSchema>) =>
+  requiredObject(properties, { additionalProperties: false });
+
+function valueValidator(value: TSchema, options: TSchema = {}, name = "refs") {
+  const validate = validator(objectSchema({ value }, options), name);
+  return {
+    accepts: (input: unknown, expected: unknown) =>
+      expect(validate({ value: input })).toEqual({ value: expected }),
+    rejects: (input: unknown, message: string | RegExp = /Validation failed/) =>
+      expect(() => validate({ value: input })).toThrow(message),
+  };
+}
+
+const rootValidator = (value: TSchema, $defs: Record<string, TSchema>) =>
+  valueValidator(value, { $defs });
+const ref = (name: string) => ({ $ref: `#/$defs/${name}` });
+
+const number = { type: "number" };
+const integer = { type: "integer" };
+const string = { type: "string" };
+const boolean = { type: "boolean" };
+const nil = { type: "null" };
+const positiveInteger = { ...integer, minimum: 1 };
+const optionalLimit = Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]));
+
+const profiles = ["dynamic-execution", "embedded-aot"] as const;
+describe.each(profiles)("validateToolArguments (%s)", (profile) => {
+  const settings = Settings.Get();
+  beforeEach(async () => {
+    runtimeProfile.value = profile;
+    Settings.Set({ useAcceleration: profile === "dynamic-execution" });
+    vi.resetModules();
+    ({ validateToolArguments } = await import("./validation.js"));
+  });
+  afterEach(() => Settings.Set(settings));
+
+  it("does not retain evaluated properties between tool calls", () => {
+    const validate = validator({
+      anyOf: [objectSchema({ a: number }), objectSchema({ b: number })],
+      unevaluatedProperties: false,
+    });
+    expect(validate({ a: 1 })).toEqual({ a: 1 });
+    expect(() => validate({ a: "invalid" })).toThrow(/Validation failed/);
+    expect(validate({ b: 2 })).toEqual({ b: 2 });
+    expect(() => validate({ b: "invalid" })).toThrow(/Validation failed/);
+  });
   it.each([
     { label: "a missing required field", value: {} },
     { label: "an invalid field type", value: { leaf: "invalid" } },
   ])("formats escaped container names for $label", ({ value }) => {
-    const tool: Tool = {
-      name: "diagnostic-path",
-      description: "test tool",
-      parameters: Type.Object({
-        "room/~1%2F": Type.Object({ leaf: Type.Number() }),
-      }),
-    };
-
-    expect(() =>
-      validateToolArguments(tool, {
-        type: "toolCall",
-        id: "diagnostic-path-call",
-        name: tool.name,
-        arguments: { "room/~1%2F": value },
-      }),
-    ).toThrow("  - room.~1%2F.leaf:");
+    const validate = validator(Type.Object({ "room/~1%2F": Type.Object({ leaf: Type.Number() }) }));
+    expect(() => validate({ "room/~1%2F": value })).toThrow("  - room.~1%2F.leaf:");
   });
 
-  it.each(["anyOf", "oneOf"])(
-    "preserves accepted %s values before coercing other branches or sibling fields",
-    (form) => {
-      const cases: { branches: TSchema[]; value: unknown }[] = [
-        { branches: [Type.Number(), Type.String()], value: "00123" },
-        { branches: [Type.String(), Type.Number()], value: 42 },
-        { branches: [Type.String(), Type.Boolean()], value: false },
-        { branches: [Type.Array(Type.Integer()), Type.String()], value: '["2"]' },
-        {
-          branches: [Type.Object({ id: Type.Integer() }), Type.Object({ id: Type.String() })],
-          value: { id: "00123" },
-        },
-      ];
-      for (const { branches, value } of cases) {
-        for (const alternatives of [branches, branches.toReversed()]) {
-          const schema = { [form]: alternatives };
-          const validate = validator("union-value", {
-            type: "object",
-            properties: { value: schema, count: { type: "integer" } },
-            required: ["value", "count"],
-          });
-          const input = { value: structuredClone(value), count: "2" };
-          expect(validate(input)).toEqual({ value, count: 2 });
-          expect(input).toEqual({ value, count: "2" });
-        }
-      }
-    },
-  );
+  it.each(["anyOf", "oneOf"])("recovers %s branches and preserves nested values", (keyword) => {
+    const item = requiredObject({
+      id: { [keyword]: [number, string] },
+      payload: { [keyword]: [requiredObject({ id: integer }), requiredObject({ id: string })] },
+      count: integer,
+    });
+    const validate = valueValidator({ [keyword]: [{ type: "array", items: item }, boolean] });
+    const input = { id: "00123", payload: { id: "00123" }, count: "2" };
+    const original = structuredClone(input);
+    validate.accepts([input], [{ ...input, count: 2 }]);
+    expect(input).toEqual(original);
+    validate.accepts("true", true);
+    validate.rejects([{ ...input, count: "invalid" }]);
+  });
 
-  it.each(["anyOf", "oneOf"])(
-    "recovers unmatched %s branches while preserving accepted nested values",
-    (keyword) => {
-      const validate = validator("nested-union", {
-        type: "object",
-        properties: {
-          value: {
-            [keyword]: [
-              {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: {
-                    id: { [keyword]: [{ type: "number" }, { type: "string" }] },
-                    count: { type: "integer" },
-                  },
-                  required: ["id", "count"],
-                },
-              },
-              { type: "boolean" },
-            ],
-          },
-        },
-      });
-      expect(validate({ value: [{ id: "00123", count: "2" }] })).toEqual({
-        value: [{ id: "00123", count: 2 }],
-      });
-      expect(validate({ value: "true" })).toEqual({ value: true });
-      expect(() => validate({ value: [{ id: "00123", count: "invalid" }] })).toThrow(
-        /Validation failed/,
-      );
-    },
-  );
-
-  it("keeps invalid non-null values out of nullable integer schemas", () => {
-    for (const union of [
-      "anyOf",
-      "oneOf",
-      "TypeBox",
-      "type-array integer/null",
-      "type-array null/integer",
-    ]) {
-      const validateArgs = validator(
-        "nullable-limit",
-        union === "TypeBox"
-          ? Type.Object({
-              limit: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
-            })
-          : {
-              type: "object",
-              properties: {
-                limit:
-                  union === "type-array integer/null"
-                    ? { type: ["integer", "null"], minimum: 1 }
-                    : union === "type-array null/integer"
-                      ? { type: ["null", "integer"], minimum: 1 }
-                      : { [union]: [{ type: "integer", minimum: 1 }, { type: "null" }] },
-              },
-            },
-      );
-      const validate = (limit: unknown) => validateArgs({ limit });
-      expect(validate(null)).toEqual({ limit: null });
-      expect(validate(1)).toEqual({ limit: 1 });
-      expect(validate("2")).toEqual({ limit: 2 });
-      for (const limit of [0, false, "", -1, "invalid"]) {
-        expect(() => validate(limit)).toThrow(/Validation failed for tool "nullable-limit"/);
-      }
-      // TypeBox recovers fractional integers by truncating; JSON Schema rejects them.
-      if (union === "TypeBox") {
-        expect(validate(1.5)).toEqual({ limit: 1 });
-      } else {
-        expect(() => validate(1.5)).toThrow(/Validation failed for tool "nullable-limit"/);
-      }
+  it.each([
+    optionalLimit,
+    { type: ["integer", "null"], minimum: 1 },
+    { type: ["null", "integer"], minimum: 1 },
+    ...["anyOf", "oneOf"].flatMap((keyword) => [
+      { [keyword]: [positiveInteger, nil] },
+      { [keyword]: [ref("positive"), ref("absent")] },
+    ]),
+  ])("validates nullable integers and root-context alternatives: %j", (schema) => {
+    const $defs = {
+      positive: ref("limit~1value~0"),
+      "limit/value~": positiveInteger,
+      absent: nil,
+    };
+    const validate = valueValidator(schema, { $defs }, "nullable-limit");
+    validate.accepts(null, null);
+    validate.accepts(1, 1);
+    validate.accepts("2", 2);
+    for (const limit of [0, false, "", -1, "invalid"]) {
+      validate.rejects(limit, /Validation failed for tool "nullable-limit"/);
     }
+    validate.rejects(1.5, /Validation failed for tool "nullable-limit"/);
   });
 
   it.each([
     { name: "object/null", types: ["object", "null"] },
     { name: "null/object", types: ["null", "object"] },
   ])("keeps invalid non-null values out of a $name type array", ({ types }) => {
-    const validateArgs = validator("nullable-parent", {
-      type: "object",
-      properties: {
-        parent: {
-          type: types,
-          properties: {
-            kind: { type: "string", enum: ["page"] },
-            count: { type: "integer", minimum: 1 },
-          },
-          required: ["kind", "count"],
-          additionalProperties: false,
-        },
-      },
-      required: ["parent"],
-      additionalProperties: false,
-    });
-    const validate = (parent: unknown) => validateArgs({ parent });
-    expect(validate(null)).toEqual({ parent: null });
+    const parentSchema = {
+      ...closedObject({ kind: { ...string, enum: ["page"] }, count: positiveInteger }),
+      type: types,
+    };
+    const validate = valueValidator(parentSchema, {}, "nullable-parent");
+    validate.accepts(null, null);
     const parent = { kind: "page", count: "2" };
     for (const input of [parent, JSON.stringify(parent)]) {
-      expect(validate(input)).toEqual({ parent: { kind: "page", count: 2 } });
+      validate.accepts(input, { kind: "page", count: 2 });
     }
     for (const input of [false, 0, "", [], { kind: "wrong", count: 2 }]) {
-      expect(() => validate(input)).toThrow(/Validation failed for tool "nullable-parent"/);
+      validate.rejects(input, /Validation failed for tool "nullable-parent"/);
     }
   });
 
-  it("preserves nullable scalar values and null-only coercions", () => {
-    const numbers = [
-      ["2.5", 2.5],
-      [false, 0],
-      [0, 0],
-    ] as const;
-    const strings = [
-      [false, "false"],
-      [0, "0"],
-      ["", ""],
-      ["existing", "existing"],
-    ] as const;
-    const nulls = [
-      [false, null],
-      [0, null],
-      ["", null],
-    ] as const;
-    const cases: [Tool["parameters"], readonly (readonly [unknown, unknown])[]][] = [
-      [{ type: ["number", "null"] }, numbers],
-      [{ type: ["null", "number"] }, numbers],
-      [{ type: ["string", "null"] }, strings],
-      [{ type: ["null", "string"] }, strings],
-      [{ type: "null" }, nulls],
-      [{ type: ["null"] }, nulls],
-    ];
-    for (const [schema, conversions] of cases) {
-      const validate = validator("nullable-value", {
-        type: "object",
-        properties: { value: schema },
-        required: ["value"],
-      });
-      expect(validate({ value: null })).toEqual({ value: null });
-      for (const [input, output] of conversions) {
-        expect(validate({ value: input })).toEqual({ value: output });
+  it.each([
+    [number, "1e3", 1000, ["0x10"], false],
+    [integer, "+3", 3, ["0b10"], false],
+    [Type.Number(), "1e3", 1000, [], false],
+    [Type.Integer(), "+3", 3, [], false],
+    [{ oneOf: [number, integer] }, 1.5, 1.5, [1], false],
+    [{ type: ["number", "null"] }, false, 0, [], true],
+    [{ type: ["null", "string"] }, false, "false", [], true],
+    [{ type: ["string", "null"] }, 0, "0", [], true],
+    [{ anyOf: [string, nil] }, "existing", "existing", [], true],
+    [{ type: "null" }, false, null, [], true],
+    [{ type: "null" }, 0, null, [], true],
+    [{ type: ["null"] }, "", null, [], true],
+  ] as const)(
+    "coerces scalars and preserves nullable values (#96716): %j",
+    (schema, input, output, rejected, nullable) => {
+      const validate = valueValidator(schema, {}, "decimal-tool");
+      validate.accepts(input, output);
+      if (nullable) {
+        validate.accepts(null, null);
       }
-    }
-  });
-
-  it("coerces strict decimal strings and rejects non-decimal JSON-schema numbers", () => {
-    for (const validate of [
-      validateDecimal,
-      validator("decimal-tool", Type.Object({ amount: Type.Number(), count: Type.Integer() })),
-    ]) {
-      expect(validate({ amount: "1e3", count: "+3" })).toEqual({ amount: 1000, count: 3 });
-    }
-    for (const input of [
-      { amount: "0x10", count: 3 },
-      { amount: 16, count: "0b10" },
-    ]) {
-      expect(() => validateDecimal(input)).toThrow(/Validation failed for tool "decimal-tool"/);
-    }
-  });
+      for (const invalid of rejected) {
+        validate.rejects(invalid, /Validation failed for tool "decimal-tool"/);
+      }
+    },
+  );
 
   it("coerces additional properties without changing declared string fields", () => {
-    const validate = validator("additional-integers", {
-      type: "object",
-      properties: { label: { type: "string" }, count: { type: "integer" } },
-      required: ["label", "count"],
-      additionalProperties: { type: "integer" },
-    });
+    const validate = validator(
+      requiredObject({ label: string, count: integer }, { additionalProperties: integer }),
+    );
     const input = { label: "1e2", count: "1", extra: "2" };
     expect(validate(input)).toEqual({ label: "1e2", count: 1, extra: 2 });
     expect(input).toEqual({ label: "1e2", count: "1", extra: "2" });
@@ -242,259 +176,136 @@ describe("validateToolArguments", () => {
 
   it("retains TypeBox-specific record and numeric enum coercion", () => {
     const validate = validator(
-      "typed-record",
       Type.Object({
         counts: Type.Record(Type.String(), Type.Integer()),
         choice: Type.Enum([1, 2]),
         value: Type.Union([Type.Number(), Type.String()]),
-        limit: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
+        limit: optionalLimit,
       }),
+      "typed-record",
     );
-    expect(validate({ counts: { first: "1" }, choice: "2", value: "00123", limit: null })).toEqual({
-      counts: { first: 1 },
-      choice: 2,
-      value: "00123",
-      limit: null,
-    });
-    expect(() =>
-      validate({ counts: { first: "1" }, choice: "2", value: "00123", limit: 0 }),
-    ).toThrow(/Validation failed for tool "typed-record"/);
+    const input = { counts: { first: "1" }, choice: "2", value: "00123", limit: null };
+    const expected = { ...input, counts: { first: 1 }, choice: 2 };
+    expect(validate(input)).toEqual(expected);
+    // A TypeBox root retains its fractional integer conversion contract.
+    expect(validate({ ...input, limit: 1.5 })).toEqual({ ...expected, limit: 1 });
+    const invalid = { ...input, limit: 0 };
+    expect(() => validate(invalid)).toThrow(/Validation failed for tool "typed-record"/);
   });
-
-  it("still rejects values accepted by multiple oneOf branches", () => {
-    const tool: Tool = {
-      name: "exclusive-union",
-      description: "Require exactly one matching branch",
-      parameters: {
-        type: "object",
-        properties: { value: { oneOf: [{ type: "number" }, { type: "integer" }] } },
-      },
-    };
-    expect(() =>
-      validateToolArguments(tool, {
-        type: "toolCall",
-        id: "exclusive-call",
-        name: tool.name,
-        arguments: { value: 1 },
-      }),
-    ).toThrow(/Validation failed/);
-  });
-
-  it("preserves null in anyOf [{type: string}, {type: null}] without coercing to empty string (#96716)", () => {
-    const validate = validator("nullable-tool", {
-      type: "object",
-      properties: {
-        insight_id: { anyOf: [{ type: "string" }, { type: "null" }] },
-        cluster_name: { type: "string" },
-      },
-      required: ["cluster_name"],
-      additionalProperties: false,
-    });
-    expect(validate({ insight_id: null, cluster_name: "testenv" })).toEqual({
-      insight_id: null,
-      cluster_name: "testenv",
-    });
-  });
-});
-
-describe("validateToolArguments — root references", () => {
-  function validate(parameters: Tool["parameters"], value: unknown) {
-    return validator("refs", parameters)({ value });
-  }
 
   it.each(["anyOf", "oneOf"])("preserves values accepted by a referenced %s branch", (keyword) => {
-    const parameters = {
-      type: "object",
-      properties: {
-        value: { [keyword]: [{ $ref: "#/$defs/number" }, { $ref: "#/$defs/text" }] },
-      },
-      $defs: { number: { type: "number" }, text: { type: "string" } },
-    };
-    expect(validate(parameters, "00123")).toEqual({ value: "00123" });
+    const validate = rootValidator(
+      { [keyword]: [{ $ref: "#/$defs/number" }, { $ref: "#/$defs/text" }] },
+      { number, text: string },
+    );
+    validate.accepts("00123", "00123");
   });
-
-  it.each(["anyOf", "oneOf"])("checks %s alternatives in their root context", (keyword) => {
-    const parameters = {
-      type: "object",
-      properties: {
-        value: { [keyword]: [{ $ref: "#/$defs/positive" }, { $ref: "#/$defs/absent" }] },
-      },
-      $defs: {
-        positive: { $ref: "#/$defs/limit~1value~0" },
-        "limit/value~": { type: "integer", minimum: 1 },
-        absent: { type: "null" },
-      },
-    };
-    expect(validate(parameters, null)).toEqual({ value: null });
-    expect(validate(parameters, "2")).toEqual({ value: 2 });
-    for (const invalid of [0, false, "", -1, "invalid"]) {
-      expect(() => validate(parameters, invalid)).toThrow(/Validation failed/);
-    }
-  });
-
   it("preserves TypeBox refinements when choosing a coercion alternative", () => {
-    const value = Type.Union([Type.Refine(Type.Number(), (number) => number >= 10), Type.String()]);
+    const refined = Type.Refine(Type.Number(), (candidate) => candidate >= 10);
+    const value = Type.Union([refined, Type.String()]);
     for (const options of [{}, { $defs: { unused: { type: "string" } } }]) {
-      const parameters = Type.Object({ value }, options);
-      expect(validate(parameters, "02")).toEqual({ value: "02" });
-      const recoverable = Type.Object(
-        {
-          value: Type.Union([Type.Refine(Type.Number(), (number) => number >= 10), Type.Boolean()]),
-        },
-        options,
+      const validate = validator(Type.Object({ value }, options));
+      expect(validate({ value: "02" })).toEqual({ value: "02" });
+      const recoverable = validator(
+        Type.Object({ value: Type.Union([refined, Type.Boolean()]) }, options),
       );
-      expect(() => validate(recoverable, "02")).toThrow(/Validation failed/);
-      expect(validate(recoverable, "12")).toEqual({ value: 12 });
+      expect(() => recoverable({ value: "02" })).toThrow(/Validation failed/);
+      expect(recoverable({ value: "12" })).toEqual({ value: 12 });
     }
   });
 
   it("coerces URI-fragment and JSON-pointer encoded definitions", () => {
-    for (const [name, ref] of [
+    for (const [name, pointer] of [
       ["Partial<Filter>", "#/definitions/Partial<Filter>"],
       ["Partial<Filter>", "#/definitions/Partial%3CFilter%3E"],
       ["Partial<Filter>", "#%2Fdefinitions%2FPartial%3CFilter%3E"],
       ["Filter/value~", "#%2Fdefinitions%2FFilter%7E1value%7E0"],
       ["Filter%2Fvalue", "#/definitions/Filter%252Fvalue"],
     ] as const) {
-      const parameters = {
-        type: "object",
-        properties: { value: { $ref: ref } },
-        definitions: {
-          [name]: { type: "object", properties: { limit: { type: "number" } } },
-        },
-      };
-      expect(validate(parameters, { limit: "5" }), ref).toEqual({ value: { limit: 5 } });
-      expect(() => validate(parameters, { limit: "invalid" })).toThrow(/Validation failed/);
+      const definitions = { [name]: objectSchema({ limit: number }) };
+      const validate = valueValidator({ $ref: pointer }, { definitions });
+      validate.accepts({ limit: "5" }, { limit: 5 });
+      validate.rejects({ limit: "invalid" });
     }
   });
 
   it("keeps union branch validators bound to each tool's root", () => {
-    const branch = { anyOf: [{ $ref: "#/$defs/value" }, { type: "null" }] };
+    const branch = { anyOf: [ref("value"), nil] };
     for (const type of ["array", "object", "array"]) {
       const definition =
-        type === "array"
-          ? { type, items: { type: "integer" } }
-          : { type, properties: { count: { type: "integer" } } };
-      const parameters = {
-        type: "object",
-        properties: { value: branch },
-        $defs: { value: definition },
-      };
-      expect(validate(parameters, type === "array" ? '["2"]' : '{"count":"2"}')).toEqual({
-        value: type === "array" ? [2] : { count: 2 },
-      });
+        type === "array" ? { type, items: integer } : objectSchema({ count: integer });
+      const validate = rootValidator(branch, { value: definition });
+      validate.accepts(
+        type === "array" ? '["2"]' : '{"count":"2"}',
+        type === "array" ? [2] : { count: 2 },
+      );
     }
   });
 
-  it("coerces recursive definitions at distinct data locations and preserves siblings", () => {
-    const node = { $ref: "#/$defs/node" };
-    const parameters = {
-      type: "object",
-      properties: { value: { ...node, maxProperties: 2 } },
-      $defs: {
-        node: {
-          type: "object",
-          properties: {
-            count: { type: "integer" },
-            next: node,
-            children: { type: "array", items: node },
-            named: { type: "object", additionalProperties: node },
-          },
-          required: ["count"],
-          additionalProperties: false,
-        },
+  it("coerces recursive references, tuple compositions, and reference siblings", () => {
+    const node = ref("node");
+    const definition = objectSchema(
+      {
+        count: integer,
+        next: node,
+        children: { type: "array", items: node },
+        named: { type: "object", additionalProperties: node },
+        enabled: {},
+        tuple: {},
       },
-    };
-    const input = {
-      count: "1",
-      children: [
-        '{"count":"2","next":{"count":"3"}}',
-        { count: "4", named: { last: '{"count":"5"}' } },
-      ],
-    };
-    expect(validate(parameters, JSON.stringify(input))).toEqual({
-      value: {
-        count: 1,
-        children: [
-          { count: 2, next: { count: 3 } },
-          { count: 4, named: { last: { count: 5 } } },
-        ],
-      },
-    });
-    expect(() => validate(parameters, { count: "1", next: { count: "2" }, children: [] })).toThrow(
-      /must NOT have more than|must not have more than/i,
+      { required: ["count"], additionalProperties: false },
     );
-  });
-
-  it("applies reference siblings without dropping their coercion or validation", () => {
-    const parameters = {
-      type: "object",
-      properties: {
-        value: {
-          $ref: "#/$defs/base",
-          properties: { enabled: { type: "boolean" } },
-          required: ["enabled"],
-        },
+    const validate = rootValidator(
+      {
+        ...node,
+        maxProperties: 4,
+        properties: { enabled: boolean, tuple: { allOf: [ref("tuple")] } },
+        required: ["enabled"],
       },
-      $defs: {
-        base: { type: "object", properties: { count: { type: "integer" } }, required: ["count"] },
+      {
+        node: definition,
+        tuple: { type: "array", items: [ref("count"), ref("tags")] },
+        count: integer,
+        tags: { type: "array", items: string },
       },
-    };
-    expect(validate(parameters, '{"enabled":"true","count":"2"}')).toEqual({
-      value: { enabled: true, count: 2 },
-    });
-    expect(() => validate(parameters, '{"count":"2"}')).toThrow(/enabled/);
+    );
+    const input =
+      '{"count":"1","children":["{\\"count\\":\\"2\\",\\"next\\":{\\"count\\":\\"3\\"}}",{"count":"4","named":{"last":"{\\"count\\":\\"5\\"}"}}],"enabled":"true","tuple":["2","[\\"a\\",\\"b\\"]"]}';
+    const expected: Record<string, unknown> = JSON.parse(
+      '{"count":1,"children":[{"count":2,"next":{"count":3}},{"count":4,"named":{"last":{"count":5}}}],"enabled":true,"tuple":[2,["a","b"]]}',
+    );
+    validate.accepts(input, expected);
+    validate.rejects({ ...expected, next: { count: "2" } }, /must not have more than/i);
+    validate.rejects('{"count":"2"}', /enabled/);
   });
 
   it("does not resolve scoped references against an outer definition table", () => {
-    const parameters = {
-      type: "object",
-      properties: {
-        value: {
-          $id: "https://example.invalid/scoped",
-          type: "object",
-          properties: { text: { $ref: "#/$defs/item" }, free: true },
-          $defs: { item: { type: "string" } },
-        },
+    const validate = rootValidator(
+      {
+        $id: "https://example.invalid/scoped",
+        type: "object",
+        properties: { text: ref("item"), free: true },
+        $defs: { item: string },
       },
-      $defs: { item: { type: "array", items: { type: "integer" } } },
-    };
-    expect(validate(parameters, { text: "[1]", free: "[2]" })).toEqual({
-      value: { text: "[1]", free: "[2]" },
-    });
-  });
-
-  it("coerces references inside tuple and allOf schemas", () => {
-    const parameters = {
-      type: "object",
-      properties: { value: { allOf: [{ $ref: "#/$defs/tuple" }] } },
-      $defs: {
-        tuple: { type: "array", items: [{ $ref: "#/$defs/count" }, { $ref: "#/$defs/tags" }] },
-        count: { type: "integer" },
-        tags: { type: "array", items: { type: "string" } },
-      },
-    };
-    expect(validate(parameters, ["2", '["a","b"]'])).toEqual({ value: [2, ["a", "b"]] });
+      { item: { type: "array", items: integer } },
+    );
+    validate.accepts({ text: "[1]", free: "[2]" }, { text: "[1]", free: "[2]" });
   });
 
   it("keeps invalid and oversized strings out of referenced containers", () => {
-    for (const definition of [
-      { type: "array", items: { type: "integer" } },
-      { type: "object", properties: { count: { type: "integer" } }, required: ["count"] },
-    ]) {
-      const parameters = {
-        type: "object",
-        properties: { value: { $ref: "#/$defs/value" } },
-        $defs: { value: definition },
-      };
+    for (const [definition, kind] of [
+      [{ type: "array", items: integer }, "array"],
+      [requiredObject({ count: integer }), "object"],
+    ] as const) {
+      const validate = rootValidator(ref("value"), { value: definition });
       for (const invalid of [
         "not-json",
         "false",
         "null",
-        definition.type === "array" ? '{"not":"array"}' : "[]",
-        " ".repeat(64 * 1024) + (definition.type === "array" ? "[1]" : '{"count":1}'),
+        kind === "array" ? '{"not":"array"}' : "[]",
+        " ".repeat(64 * 1024) + (kind === "array" ? "[1]" : '{"count":1}'),
       ]) {
-        expect(() => validate(parameters, invalid)).toThrow(/Validation failed/);
+        validate.rejects(invalid);
       }
     }
   });

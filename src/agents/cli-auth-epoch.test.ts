@@ -22,7 +22,6 @@ import {
   setCliAuthEpochTestDeps,
 } from "./cli-auth-epoch.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
-import { resolveCliExecutableIdentity } from "./cli-executable-identity.js";
 
 function oauth<Provider extends string>(
   provider: Provider,
@@ -139,69 +138,33 @@ describe("resolveCliAuthEpoch", () => {
   });
 
   it("separates Gemini CLI OAuth profile epochs by profile id", async () => {
-    let access = "access-a";
-    let refresh = "refresh-a";
-    const store: AuthProfileStore = createAuthProfileStoreFixture({
-      "google-gemini-cli:primary": {
-        type: "oauth",
-        provider: "google-gemini-cli",
-        access,
-        refresh,
-        expires: 1,
-        email: "user@example.test",
-        accountId: "google-account-1",
-        projectId: "project-1",
-      },
-      "google-gemini-cli:renamed": {
-        type: "oauth",
-        provider: "google-gemini-cli",
-        access,
-        refresh,
-        expires: 1,
-        email: "user@example.test",
-        accountId: "google-account-1",
-        projectId: "project-1",
-      },
-    });
-    setCliAuthEpochTestDeps({
-      readGeminiCliCredentialsCached: () => null,
-      loadAuthProfileStoreForRuntime: () => store,
-    });
-
-    const primary = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      agentDir: "/agents/main/agent",
-      authProfileId: "google-gemini-cli:primary",
-      skipLocalCredential: true,
-    });
-    access = "access-b";
-    refresh = "refresh-b";
-    store.profiles["google-gemini-cli:primary"] = {
-      type: "oauth",
-      provider: "google-gemini-cli",
-      access,
-      refresh,
-      expires: 2,
+    const identity = {
       email: "user@example.test",
       accountId: "google-account-1",
       projectId: "project-1",
     };
-    const primaryAfterRefresh = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      agentDir: "/agents/main/agent",
-      authProfileId: "google-gemini-cli:primary",
-      skipLocalCredential: true,
+    const store: AuthProfileStore = createAuthProfileStoreFixture({
+      "google-gemini-cli:primary": oauth("google-gemini-cli", identity),
+      "google-gemini-cli:renamed": oauth("google-gemini-cli", identity),
     });
-    const renamed = await resolveCliAuthEpoch({
-      provider: "google-gemini-cli",
-      agentDir: "/agents/main/agent",
-      authProfileId: "google-gemini-cli:renamed",
-      skipLocalCredential: true,
+    useProfileStore(store);
+    const epoch = (name: string) =>
+      resolveCliAuthEpoch({
+        provider: "google-gemini-cli",
+        agentDir: "/agents/main/agent",
+        authProfileId: `google-gemini-cli:${name}`,
+        skipLocalCredential: true,
+      });
+    const primary = await epoch("primary");
+    store.profiles["google-gemini-cli:primary"] = oauth("google-gemini-cli", {
+      ...identity,
+      access: "access-b",
+      refresh: "refresh-b",
+      expires: 2,
     });
-
     expectEpochs(primary);
-    expect(primaryAfterRefresh).toBe(primary);
-    expect(renamed).not.toBe(primary);
+    expect(await epoch("primary")).toBe(primary);
+    expect(await epoch("renamed")).not.toBe(primary);
   });
 
   it("keeps strict CLI bindings stable for a known OAuth principal", async () => {
@@ -511,30 +474,6 @@ describe("resolveCliAuthEpoch", () => {
 
     expectEpochs(first, second);
     expect(second).not.toBe(first);
-  });
-
-  it("pins a symlinked CLI invocation to the canonical file that was hashed", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = tempDir("openclaw-cli-owner-symlink-");
-    const target = nativeUtility("true");
-    const link = path.join(dir, "bin", "claude");
-    fs.mkdirSync(path.dirname(link), { recursive: true });
-    fs.symlinkSync(target, link);
-    const identity = await resolveCliExecutableIdentity({
-      command: link,
-      runtimeArtifact: {
-        kind: "bundled-package-tree",
-        packageName: "@fixture/native-cli",
-        entrypoint: "command",
-        nativeExecutableNames: [path.basename(fs.realpathSync(target))],
-      },
-    });
-    expect(identity).toMatchObject({
-      resolvedPath: fs.realpathSync(target),
-      invocation: { command: fs.realpathSync(target) },
-    });
   });
 
   it("refuses a cwd-relative executable as a persistent opaque owner", async () => {

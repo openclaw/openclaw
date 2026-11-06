@@ -129,6 +129,7 @@ function applyRecordedAllowlistMetadata(params: {
   keys: ReadonlySet<string>;
   command: string;
   resolvedPath?: string;
+  matches: ExecAuthorizationCommitInput["matches"];
 }): ExecApprovalsFile | null {
   const { keys } = params;
   if (keys.size === 0) {
@@ -137,6 +138,11 @@ function applyRecordedAllowlistMetadata(params: {
   if (!params.agentId) {
     throw new Error("Exec allowlist metadata update requires an explicit agent id.");
   }
+  const matchedPaths = new Map(
+    params.matches
+      .filter((match) => match.resolvedPath !== undefined)
+      .map((match) => [buildAllowlistEntryMatchKey(match), match.resolvedPath]),
+  );
   const target = params.agentId;
   const agents = params.file.agents ?? {};
   let changed = false;
@@ -157,7 +163,8 @@ function applyRecordedAllowlistMetadata(params: {
         id: entry.id ?? crypto.randomUUID(),
         lastUsedAt: Date.now(),
         lastUsedCommand: isGeneratedHashedArgPattern(entry.argPattern) ? undefined : params.command,
-        lastResolvedPath: params.resolvedPath,
+        lastResolvedPath:
+          matchedPaths.get(buildAllowlistEntryMatchKey(entry)) ?? params.resolvedPath,
       });
     });
     if (entryChanged) {

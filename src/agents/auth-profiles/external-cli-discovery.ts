@@ -61,13 +61,12 @@ export function externalCliDiscoveryForProviderAuth(params: {
 
 export function externalCliDiscoveryForConfigStatus(params: {
   cfg: OpenClawConfig;
-  allowKeychainPrompt?: false;
 }): ExternalCliAuthDiscovery {
   const scope = resolveExternalCliAuthScopeFromConfig(params.cfg);
   return scope
     ? externalCliDiscoveryScoped({
         config: params.cfg,
-        allowKeychainPrompt: params.allowKeychainPrompt ?? false,
+        allowKeychainPrompt: false,
         providerIds: scope.providerIds,
         profileIds: scope.profileIds,
       })
@@ -77,7 +76,6 @@ export function externalCliDiscoveryForConfigStatus(params: {
 export function externalCliDiscoveryForProviders(params: {
   cfg?: OpenClawConfig;
   providers: Iterable<string>;
-  allowKeychainPrompt?: false;
 }): ExternalCliAuthDiscovery {
   const providers = normalizeTrimmedStringList([...params.providers]);
   if (providers.length === 0) {
@@ -85,7 +83,7 @@ export function externalCliDiscoveryForProviders(params: {
   }
   return externalCliDiscoveryScoped({
     config: params.cfg,
-    allowKeychainPrompt: params.allowKeychainPrompt ?? false,
+    allowKeychainPrompt: false,
     providerIds: providers,
   });
 }

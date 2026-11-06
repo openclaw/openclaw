@@ -3,10 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
-import {
-  captureSessionActorStorageOwner,
-  readCapturedSessionActorEntry,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindInProcessSessionRun } from "../../gateway/in-process-session-run.js";
 import {
@@ -16,7 +13,7 @@ import {
 import { requestSessionCommunicationApproval } from "../../gateway/session-communication-approval.js";
 import { withSessionSendDelivery } from "../../gateway/session-send-delivery.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../../gateway/session-subagent-resume.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
+import { resolveSessionChildController } from "../../gateway/session-utils-core.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   communicationEndpointBinding,
@@ -48,42 +45,13 @@ import {
   resolveSandboxedSessionToolContext,
   resolveSessionToolAccess,
 } from "./sessions-access.js";
+import {
+  readSessionCommunicationLineage,
+  readSessionCommunicationEndpoint,
+} from "./sessions-send-communication-endpoint.js";
 
 /** A current permission decision rejected delivery, rather than an unavailable dependency. */
-export class SessionCommunicationDeniedError extends Error {}
-
-/** Read through the selected storage owner, including private in-memory sessions. */
-export async function readSessionCommunicationEndpoint(params: {
-  config: OpenClawConfig;
-  endpoint: Pick<CommunicationEndpoint, "agentId" | "sessionKey" | "storePath">;
-  assertCurrent: () => void;
-}): Promise<CommunicationEndpoint> {
-  const source = captureSessionActorStorageOwner(params.endpoint, {
-    assertCurrent: params.assertCurrent,
-    authorize() {},
-  });
-  if (source) {
-    return {
-      agentId: source.agentId,
-      sessionKey: params.endpoint.sessionKey,
-      storePath: source.path,
-      entry: readCapturedSessionActorEntry(source, params.endpoint.sessionKey),
-    };
-  }
-  const loaded = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: params.config,
-    key: params.endpoint.sessionKey,
-    agentId: params.endpoint.agentId,
-    assertActive: params.assertCurrent,
-    projection: "full",
-  });
-  return {
-    agentId: loaded.agentId,
-    sessionKey: loaded.canonicalKey,
-    storePath: loaded.readSource?.path ?? loaded.storePath,
-    entry: loaded.store[loaded.canonicalKey],
-  };
-}
+class SessionCommunicationDeniedError extends Error {}
 
 /** A host-held return route minted only after the original request was accepted. */
 export type SessionSendReplyAdmission = (
@@ -106,10 +74,12 @@ export async function prepareSessionsSendCommunication(params: {
     requesterOwned?: boolean;
     authorizationTargetSessionKey?: string;
     expectedSessionId?: string;
+    controllerOnly?: boolean;
   };
   /** Creates empty metadata through the caller's existing creation owner, never model input. */
   ensureTarget?: (assertCurrent: () => void) => Promise<CommunicationEndpoint>;
   signal?: AbortSignal;
+  expectedTask?: import("./sessions-send-tool.types.js").SessionsSendToolOptions["expectedTargetRun"];
   /** Recovery cannot ask for fresh consent on behalf of an ended sender turn. */
   allowApproval?: boolean;
   assertSourceCurrent?: () => void;
@@ -157,6 +127,9 @@ export async function prepareSessionsSendCommunication(params: {
   let acceptedRunId: string | undefined;
   let closed = false;
   let dirty = false;
+  // Only the compaction owner can clear a matching committed binding change.
+  const changedBindings = new Map<CommunicationEndpoint, string>();
+  let currentTarget = params.target;
   let creatingTarget = false;
   let endpoints: CommunicationEndpoint[] = [params.source, params.target];
   const assertSource = () => {
@@ -167,7 +140,16 @@ export async function prepareSessionsSendCommunication(params: {
     assertCaller?.();
     params.assertSourceCurrent?.();
     params.assertAccessCurrent?.();
-    params.acceptedReply?.(params.source, params.target);
+    const targetEntry = currentTarget.entry;
+    const controller =
+      targetEntry &&
+      resolveSessionChildController(targetSessionKey, targetEntry, params.source.sessionKey);
+    if (controller && controller !== params.source.sessionKey) {
+      throw new SessionCommunicationDeniedError(
+        "Child is controlled by another active session; wait for that work to finish before continuing it.",
+      );
+    }
+    params.acceptedReply?.(params.source, currentTarget);
     if (currentPolicyConfig() !== currentConfig) {
       throw new Error("Communication policy changed; send the message again for a new decision.");
     }
@@ -232,9 +214,15 @@ export async function prepareSessionsSendCommunication(params: {
       (facts?.kind === "entry" || facts?.kind === "replacement") &&
       facts.communicationBinding !== undefined
     ) {
-      dirty ||= selected.some(
-        (endpoint) => communicationEntryBinding(endpoint.entry) !== facts.communicationBinding,
-      );
+      for (const endpoint of selected) {
+        if (communicationEntryBinding(endpoint.entry) !== facts.communicationBinding) {
+          const previous = changedBindings.get(endpoint);
+          if (previous !== undefined && previous !== facts.communicationBinding) {
+            dirty = true;
+          }
+          changedBindings.set(endpoint, facts.communicationBinding);
+        }
+      }
     } else {
       dirty = true;
     }
@@ -245,30 +233,6 @@ export async function prepareSessionsSendCommunication(params: {
       endpoint,
       assertCurrent: assertSource,
     });
-  const lineage = async (endpoint: CommunicationEndpoint) => {
-    const chain = [endpoint];
-    while (chain.at(-1)?.entry?.spawnedBy) {
-      const child = chain.at(-1)!;
-      const key = child.entry!.spawnedBy!;
-      if (chain.length >= 32 || chain.some((entry) => entry.sessionKey === key)) {
-        throw new Error("Session communication ancestry is invalid.");
-      }
-      const parent = await read({
-        agentId: parseAgentSessionKey(key)?.agentId ?? child.agentId,
-        sessionKey: key,
-        storePath: "",
-        entry: undefined,
-      });
-      if (
-        !parent.entry ||
-        (child.entry?.parentSessionId && child.entry.parentSessionId !== parent.entry.sessionId)
-      ) {
-        throw new Error("The communication policy's parent session is no longer current.");
-      }
-      chain.push(parent);
-    }
-    return chain;
-  };
   const task = getLatestLiveSubagentRunByChildSessionKey(
     params.target.sessionKey,
     undefined,
@@ -288,9 +252,21 @@ export async function prepareSessionsSendCommunication(params: {
     params.target.entry.parentSessionId === params.source.entry?.sessionId &&
     !task.killIntent &&
     !task.killReconciliation &&
-    !task.terminalOwner &&
     task.cleanupCompletedAt === undefined,
   );
+  if (
+    params.expectedTask !== undefined &&
+    (params.expectedTask === null
+      ? task !== null
+      : !task ||
+        task.runId !== params.expectedTask.runId ||
+        task.taskRunId !== params.expectedTask.taskRunId ||
+        task.generation !== params.expectedTask.generation ||
+        task.createdAt !== params.expectedTask.createdAt)
+  ) {
+    unsubscribe();
+    throw new Error("Retained send target task changed before admission.");
+  }
   const taskRunId = task?.runId;
   const taskGeneration = task?.generation;
   let resumedTask:
@@ -298,7 +274,15 @@ export async function prepareSessionsSendCommunication(params: {
     | undefined;
   const assertTask = () => {
     if (
-      ownedTask &&
+      params.access?.controllerOnly &&
+      (!currentTarget.entry ||
+        resolveSessionChildController(targetSessionKey, currentTarget.entry) !==
+          params.source.sessionKey)
+    ) {
+      throw new SessionCommunicationDeniedError("Child controller access changed before delivery.");
+    }
+    if (
+      (ownedTask || params.expectedTask !== undefined) &&
       (getLatestLiveSubagentRunByChildSessionKey(
         params.target.sessionKey,
         undefined,
@@ -309,8 +293,7 @@ export async function prepareSessionsSendCommunication(params: {
         (task?.controllerSessionKey && task.controllerSessionKey !== params.source.sessionKey) ||
         task?.killIntent ||
         task?.killReconciliation ||
-        task?.terminalOwner ||
-        task?.cleanupCompletedAt !== undefined)
+        (ownedTask && task?.cleanupCompletedAt !== undefined))
     ) {
       if (resumedTask) {
         assertParentSubagentResumeSuccessorCurrent(resumedTask.resume, resumedTask.runId);
@@ -327,8 +310,8 @@ export async function prepareSessionsSendCommunication(params: {
   };
   try {
     assertSource();
-    let source = await lineage(params.source);
-    let target = await lineage(params.target);
+    let source = await readSessionCommunicationLineage(params.source, read, assertSource);
+    let target = await readSessionCommunicationLineage(params.target, read, assertSource);
     endpoints = [...source, ...target];
     let bindings = endpoints.map(communicationEndpointBinding);
     const assertAccess = async () => {
@@ -377,7 +360,7 @@ export async function prepareSessionsSendCommunication(params: {
     const refresh = async () => {
       assertSource();
       assertTask();
-      if (dirty) {
+      if (dirty || changedBindings.size > 0) {
         throw new Error(
           "Session communication changed before delivery; send again for a new decision.",
         );
@@ -386,6 +369,7 @@ export async function prepareSessionsSendCommunication(params: {
       await assertAccess();
       if (
         dirty ||
+        changedBindings.size > 0 ||
         current.some(
           (endpoint, index) => communicationEndpointBinding(endpoint) !== bindings[index],
         )
@@ -445,7 +429,7 @@ export async function prepareSessionsSendCommunication(params: {
         assertCurrent: () => {
           assertSource();
           assertTask();
-          if (dirty) {
+          if (dirty || changedBindings.size > 0) {
             throw new Error("Session communication state changed before approval.");
           }
         },
@@ -472,7 +456,7 @@ export async function prepareSessionsSendCommunication(params: {
       try {
         created = await params.ensureTarget(() => {
           assertSource();
-          if (dirty) {
+          if (dirty || changedBindings.size > 0) {
             throw new Error("Session communication state changed before creation.");
           }
         });
@@ -487,7 +471,7 @@ export async function prepareSessionsSendCommunication(params: {
       ) {
         throw new Error("Created target differs from the approved communication operation.");
       }
-      target = await lineage(created);
+      target = await readSessionCommunicationLineage(created, read, assertSource);
       // An initially absent main alias can name both sides of this creation.
       if (
         !source[0]!.entry &&
@@ -506,17 +490,55 @@ export async function prepareSessionsSendCommunication(params: {
     for (const approval of plan().approvals.filter((item) => item.direction === "receive")) {
       await approve(approval);
     }
-    const assertCurrent = () => {
+    const assertCurrent: SessionSourceAssertion = () => {
       assertSource();
       assertTask();
-      if (dirty) {
+      if (dirty || changedBindings.size > 0) {
         throw new Error("Session communication state changed before admission.");
       }
     };
+    assertCurrent.onSessionCompactionCommitted = (transition, entry) => {
+      const previous = target[0]!;
+      const expected = previous.entry;
+      if (
+        !expected ||
+        entry.sessionId !== transition.current.sessionId ||
+        entry.lifecycleRevision !== transition.current.lifecycleRevision ||
+        entry.lifecycleRevision !== expected.lifecycleRevision ||
+        communicationEntryBinding({
+          ...entry,
+          sessionId: expected.sessionId,
+          previousSessionId: expected.previousSessionId,
+        }) !== communicationEntryBinding(expected) ||
+        (expected.sessionId !== entry.sessionId &&
+          (transition.previous?.sessionId !== expected.sessionId ||
+            transition.previous.lifecycleRevision !== expected.lifecycleRevision))
+      ) {
+        throw new Error("Compaction no longer names the admitted communication target.");
+      }
+      const previousBinding = communicationEndpointBinding(previous);
+      const committedBinding = communicationEntryBinding(entry);
+      const advance = (endpoint: CommunicationEndpoint) => {
+        if (communicationEndpointBinding(endpoint) !== previousBinding) {
+          return endpoint;
+        }
+        // Only compaction can advance this identity and its predecessor; policy changes stay sticky.
+        if (changedBindings.get(endpoint) === committedBinding) {
+          changedBindings.delete(endpoint);
+        }
+        return { ...endpoint, entry };
+      };
+      source = source.map(advance);
+      target = target.map(advance);
+      currentTarget = target[0]!;
+      endpoints = [...source, ...target];
+      bindings = endpoints.map(communicationEndpointBinding);
+    };
     await refresh();
-    const callGateway: AgentToolGatewayRequestCaller = async <T>(
+    const callGateway = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
-    ) => {
+      requireDurableDelivery = false,
+    ): Promise<T> => {
       if (request.method !== "agent") {
         return params.callGateway<T>(request);
       }
@@ -534,7 +556,9 @@ export async function prepareSessionsSendCommunication(params: {
       const runId = request.params.idempotencyKey;
       const hasRunId = typeof runId === "string";
       const resume = readInProcessSubagentResume(request);
-      if (ownedTask && resume && hasRunId) {
+      // A retained pin also fences tasks whose parent-lineage convenience flag is false.
+      // Only the private resume binding can advance that pin to this exact admitted successor.
+      if ((ownedTask || params.expectedTask !== undefined) && resume && hasRunId) {
         if (
           resume.childSessionKey !== targetSessionKey ||
           resume.childSessionId !== target[0]!.entry?.sessionId ||
@@ -603,11 +627,11 @@ export async function prepareSessionsSendCommunication(params: {
         return result;
       };
       const sender = source[0]!;
-      // Task continuations keep their existing task owner. Ordinary peer input
-      // transfers to the Gateway pending-input owner, independent of the sender turn.
+      // A safely refused volatile steer needs pending-input recovery even for an
+      // owned task. Resume keeps its existing task owner and never uses this path.
       if (
         context &&
-        !ownedTask &&
+        (!ownedTask || requireDurableDelivery) &&
         !resume &&
         sender.entry &&
         hasRunId &&
@@ -645,6 +669,9 @@ export async function prepareSessionsSendCommunication(params: {
           dispatch,
         );
       }
+      if (requireDurableDelivery) {
+        throw new Error("Durable steering fallback requires an in-process delivery owner.");
+      }
       return dispatch();
     };
     return {
@@ -652,6 +679,8 @@ export async function prepareSessionsSendCommunication(params: {
       assertCurrent,
       refresh,
       callGateway,
+      callDurableGateway: <T>(request: Parameters<AgentToolGatewayRequestCaller>[0]) =>
+        callGateway<T>(request, true),
       ownedTask,
       sourceSandboxed: sandboxed,
       captureReplyAdmission: (runId: string): SessionSendReplyAdmission => {

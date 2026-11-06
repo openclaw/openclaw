@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
 import { filterLocalModelLeanTools } from "./local-model-lean.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
-import { registerHeadlessToolSearchCatalog } from "./tool-search-catalog.js";
+import {
+  addClientToolsToToolCatalog,
+  registerHeadlessToolSearchCatalog,
+} from "./tool-search-catalog.js";
+import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { buildToolSchemaDirectoryPrompt } from "./tool-search-directory.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
 
 const optionalNames = [
@@ -94,5 +100,49 @@ describe("lean Tool Search directory", () => {
       catalogPrompt: { config, agentId: "full" },
     });
     expect(policy.apply().toolSchemaDirectoryPrompt).toBe(full);
+  });
+});
+
+describe("Tool Search directory omission count", () => {
+  it.each([1, 8])("ignores %i unlisted MCP/client tools without hiding search", async (count) => {
+    const native = createStubTool("local_directory_tool");
+    const baseline = catalogRef([native]);
+    const mcpTools = Array.from({ length: count - 1 }, (_, index) => {
+      const tool = createStubTool(`external_mcp_${index}`);
+      setPluginToolMeta(tool, { pluginId: "bundle-mcp", optional: true });
+      return tool;
+    });
+    const expanded = catalogRef([native, ...mcpTools]);
+    addClientToolsToToolCatalog({
+      enabled: true,
+      tools: [createStubTool("external_client")],
+      catalogRef: expanded,
+    });
+
+    const baselineText = buildToolSchemaDirectoryPrompt({ catalogRef: baseline });
+    const expandedText = buildToolSchemaDirectoryPrompt({ catalogRef: expanded });
+    expect(expandedText).toBe(baselineText);
+    expect(expandedText).not.toContain("additional tools omitted");
+    expect(expandedText).not.toContain("external_client");
+    const runtime = new ToolSearchRuntime({ catalogRef: expanded }, resolveToolSearchConfig());
+    expect(await runtime.search("external_client", { limit: 1 })).toMatchObject([
+      { name: "external_client", source: "client" },
+    ]);
+  });
+
+  it("counts only genuinely truncated OpenClaw rows", () => {
+    const tools = Array.from({ length: 40 }, (_, index) =>
+      createStubTool(`local_directory_${String(index).padStart(2, "0")}`),
+    );
+    const directory = buildToolSchemaDirectoryPrompt(
+      { catalogRef: catalogRef(tools) },
+      { contextTokenBudget: 7_680 },
+    );
+    const renderedRows = directory
+      .split("\n")
+      .filter((line) => line.startsWith("- local_directory_"));
+    expect(renderedRows.length).toBeGreaterThan(0);
+    expect(renderedRows.length).toBeLessThan(tools.length);
+    expect(directory).toContain(`${tools.length - renderedRows.length} additional tools omitted.`);
   });
 });

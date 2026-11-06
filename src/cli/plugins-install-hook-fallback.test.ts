@@ -2,14 +2,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { loadConfigForInstall } from "../plugins/install-config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { pinConfigDir } from "../utils.js";
-import { installPluginWithHookFallback } from "./plugins-install-hook-fallback.js";
+import { runPluginInstallCommand } from "./plugins-install-command.js";
 
 let state: OpenClawTestState;
 
@@ -58,22 +57,19 @@ it.each([
     const sourceDir = state.path("sources", "candidate");
     await fs.mkdir(sourceDir, { recursive: true });
     await fs.writeFile(path.join(sourceDir, "package.json"), packageJson, "utf-8");
-    const snapshot = await loadConfigForInstall({ rawSpec: sourceDir });
-    const pluginMutation = snapshot.pluginMutation;
-    if (pluginMutation.mode !== "blocked") {
-      throw new Error("expected the plugins include shape to block plugin config writes");
-    }
-    expect(snapshot.hookMutation.mode).not.toBe("blocked");
     const { logs, runtime } = captureRuntime();
 
-    const result = await installPluginWithHookFallback({
-      request: { source: "local", path: sourceDir, mode: "install" },
-      snapshot,
-      safetyOverrides: { config: snapshot.config },
-      runtime,
-    });
-
-    expect(result).toMatchObject({ ok: false, error: pluginMutation.reason });
+    await expect(
+      runPluginInstallCommand({
+        raw: sourceDir,
+        opts: { force: true, acceptCapabilities: true },
+        allowInstallPolicyWarningPrompt: false,
+        runtime,
+      }),
+    ).rejects.toThrow("unexpected exit 1");
+    expect(logs).toContain(
+      "Config plugins are stored through an unsupported $include shape; edit the included file directly or move plugins to a single-file top-level include before installing.",
+    );
     const probeWarnings = logs.filter((line) => line.includes("Hook-pack fallback"));
     if (surfaced) {
       expect(probeWarnings).toHaveLength(1);

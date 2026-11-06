@@ -19,6 +19,12 @@ extension SettingsProTab {
     var offlineDeviceSection: some View {
         Section {
             self.settingsListRow(
+                icon: "cpu",
+                iconColor: .orange,
+                title: "ESP device setup",
+                route: .espSetup)
+                .accessibilityIdentifier("settings-esp-setup-row")
+            self.settingsListRow(
                 icon: "applewatch",
                 iconColor: .green,
                 title: "Apple Watch",
@@ -64,20 +70,28 @@ extension SettingsProTab {
     }
 
     func destination(for route: SettingsRoute) -> some View {
-        List {
-            switch route {
-            case .gateway:
-                self.gatewayDestination
-            case .appleWatch:
-                self.appleWatchDestination
-            case .approvals:
-                self.approvalsDestination
-            case .diagnostics:
-                self.diagnosticsDestination
-            case .about:
-                self.aboutDestination
-            case .licenses:
-                self.licensesDestination
+        Group {
+            if route == .espSetup {
+                ESPDeviceSetupScreen()
+            } else {
+                List {
+                    switch route {
+                    case .gateway:
+                        self.gatewayDestination
+                    case .appleWatch:
+                        self.appleWatchDestination
+                    case .espSetup:
+                        EmptyView()
+                    case .approvals:
+                        self.approvalsDestination
+                    case .diagnostics:
+                        self.diagnosticsDestination
+                    case .about:
+                        self.aboutDestination
+                    case .licenses:
+                        self.licensesDestination
+                    }
+                }
             }
         }
         .font(OpenClawType.body)
@@ -601,6 +615,11 @@ extension SettingsProTab {
 
             Section {
                 self.aboutLinkRow(
+                    title: "Support",
+                    icon: "questionmark.circle",
+                    color: .blue,
+                    url: URL(string: "https://community.openclaw.ai/")!)
+                self.aboutLinkRow(
                     title: "Website",
                     icon: "globe",
                     color: .blue,
@@ -619,7 +638,7 @@ extension SettingsProTab {
                     title: "Discord",
                     icon: "bubble.left.and.bubble.right.fill",
                     color: .indigo,
-                    url: URL(string: "https://discord.gg/clawd")!)
+                    url: URL(string: "https://openclaw.ai/discord?from=openclaw-app-ios-settings")!)
             } footer: {
                 Text("© 2026 OpenClaw Foundation — MIT License.")
                     .font(OpenClawType.footnote)
@@ -869,6 +888,11 @@ extension SettingsProTab {
                 .font(OpenClawType.body)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+            if let hostIssue = self.manualGatewayHostIssue {
+                Text(hostIssue)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(OpenClawBrand.warn)
+            }
             TextField("Port", text: self.manualPortBinding)
                 .font(OpenClawType.body)
                 .keyboardType(.numberPad)
@@ -881,12 +905,17 @@ extension SettingsProTab {
                 color: OpenClawBrand.accent,
                 isBusy: self.connectingGateway == .manual,
                 isDisabled: self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || self.manualGatewayHostIssue != nil
                     || !self.manualPortIsValid)
             {
                 Task { await self.connectManual() }
             }
         }
         .disabled(self.setupAttemptID != nil)
+    }
+
+    private var manualGatewayHostIssue: String? {
+        GatewayConnectionController.manualHostValidationMessage(host: self.manualGatewayHost)
     }
 
     private var manualGatewayTransport: GatewayManualTransportPresentation {

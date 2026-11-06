@@ -1,17 +1,8 @@
 // Vendor-private wire contract. This is not an OpenClaw model or inference API.
-export type SageReasoning = "auto" | "off" | "on";
-export type SageGrounding = {
-  trigger?: "never" | "low_confidence" | "always";
-  confidence_floor?: number;
-  max_results?: number;
-  max_context_tokens?: number;
-  return_sources?: boolean;
-};
-export type SageText = string | { kind: "text"; value: string };
-export type SageList = { kind: "list"; value: { id: string; content: SageText | SageList }[] };
+type SageReasoning = "auto" | "off" | "on";
 export type SageContent =
-  | SageText
-  | SageList
+  | string
+  | { kind: "list"; value: { id: string; content: string }[] }
   | { kind: "image"; media: string; text?: string | null };
 type QuestionBase = { id: string; instructions: string };
 export type SageQuestion =
@@ -23,28 +14,26 @@ export type SageQuestion =
       id: string;
       kind: "tags";
       instructions?: string | null;
-      tags: { id: string; name?: string | null; threshold?: number | null }[];
+      tags: { id: string; name?: string | null }[];
     };
-export type SageBatchQuestion = SageQuestion & { grounding?: SageGrounding | null };
 export type SageRequest = {
   content: SageContent;
   question: SageQuestion;
   reasoning?: SageReasoning;
-  grounding?: SageGrounding | null;
 };
 export type SageBatchRequest = {
-  requests: { content: SageContent; questions: SageBatchQuestion[] }[];
+  requests: { content: SageContent; questions: SageQuestion[] }[];
   reasoning?: SageReasoning;
 };
-export type SageJson = null | boolean | number | string | SageJson[] | { [key: string]: SageJson };
-export type SageMetadata = { [key: string]: SageJson };
-export type SageUsage = SageMetadata & {
+type SageJson = null | boolean | number | string | SageJson[] | { [key: string]: SageJson };
+type SageMetadata = { [key: string]: SageJson };
+type SageUsage = SageMetadata & {
   input_tokens: number;
   output_tokens: number;
   image_count?: number;
   image_tokens?: number;
 };
-export type SageMeta = SageMetadata & {
+type SageMeta = SageMetadata & {
   model?: string;
   latency_ms?: number | null;
   question_count?: number | null;

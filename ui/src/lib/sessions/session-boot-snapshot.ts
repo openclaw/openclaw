@@ -2,6 +2,7 @@ import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { readOfflineStorageScope, type BootRecord } from "../../app/boot-record.ts";
 import {
   sidebarSnapshotInvalidationMatches,
+  sidebarSnapshotDeletedSessionKey,
   subscribeSnapshotInvalidation,
 } from "../../pages/chat/session-snapshot-invalidation-events.ts";
 import {
@@ -11,7 +12,7 @@ import {
   subscribeSidebarBootRetirement,
 } from "../../pages/chat/session-snapshot-prewarm.ts";
 import { listen } from "../reactive/listener.ts";
-import type { SessionGateway, SessionState } from "./session-capability.ts";
+import type { SessionGateway, SessionState } from "./session-types.ts";
 
 export function createSessionBootSnapshot(
   gateway: SessionGateway,
@@ -61,9 +62,26 @@ export function createSessionBootSnapshot(
   };
   const stopRetirement = subscribeSidebarBootRetirement(() => scope, retire);
   const stopInvalidation = subscribeSnapshotInvalidation((event) => {
-    if (scope && sidebarSnapshotInvalidationMatches(sidebarSnapshotScopeKey(scope), event)) {
+    if (!scope) {
+      return undefined;
+    }
+    if (sidebarSnapshotDeletedSessionKey(sidebarSnapshotScopeKey(scope), event)) {
+      return readSidebarBootSnapshot(gateway).then((snapshot) => {
+        const state = host.readState();
+        if (
+          current() &&
+          state.resultCached &&
+          snapshot?.roster &&
+          state.result !== snapshot.roster.result
+        ) {
+          host.publish({ ...state, ...snapshot.roster });
+        }
+      });
+    }
+    if (sidebarSnapshotInvalidationMatches(sidebarSnapshotScopeKey(scope), event)) {
       retire();
     }
+    return undefined;
   });
   let routingDefaults = bootRecord
     ? { mainKey: bootRecord.agents.mainKey, scope: bootRecord.agents.scope }

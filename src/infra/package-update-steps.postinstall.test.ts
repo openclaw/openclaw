@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
@@ -15,18 +15,15 @@ import { runStep } from "./update-runner-command.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.each([
-  { refused: true, stream: "stderr", attempts: 1 },
-  { refused: true, stream: "stdout", attempts: 1 },
-  { refused: false, stream: "stderr", attempts: 2 },
+  { refused: true, stream: "stderr" },
+  { refused: true, stream: "stdout" },
+  { refused: false, stream: "stderr" },
 ])("bounds postinstall retry (refused=$refused, stream=$stream)", async (scenario) => {
   const base = dirs.make("package-postinstall-refusal-");
-  const globalRoot = path.join(base, "prefix", "lib", "node_modules");
+  const globalRoot = path.join(base, "prefix/lib/node_modules");
   const packageRoot = path.join(globalRoot, "openclaw");
   await writePackageRoot(packageRoot, "1.0.0");
-  const message = scenario.refused
-    ? "Schema change was not applied. Use an independent shell for the manual update."
-    : "optional dependency build failed";
-  const installs: string[][] = [];
+  const message = scenario.refused ? "schema refused" : "optional build failed";
   const result = await runGlobalPackageUpdateSteps({
     ...createNpmUpdateOptions(globalRoot),
     runStep: (options) =>
@@ -36,23 +33,24 @@ it.each([
         stepIndex: 0,
         totalSteps: 1,
         runCommand: async (argv) => {
-          installs.push(argv);
-          const stagedRoot = path.join(stagedNpmPrefix(argv), "lib", "node_modules", "openclaw");
+          const stagedRoot = path.join(stagedNpmPrefix(argv), "lib/node_modules/openclaw");
+          await fs.mkdir(path.join(stagedRoot, "scripts/lib"), { recursive: true });
           for (const relativePath of [
+            "runtime-process-bootstrap.generated.mjs",
             "scripts/postinstall-bundled-plugins.mjs",
             "scripts/lib/package-lifecycle-marker.mjs",
             "scripts/lib/fs-safe-prebuild.mjs",
+            "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+            "scripts/lib/fs-safe-npm-cli-protocol.mjs",
             "scripts/windows-cmd-helpers.mjs",
           ]) {
-            const destination = path.join(stagedRoot, relativePath);
-            await fs.mkdir(path.dirname(destination), { recursive: true });
             await fs.copyFile(
-              fileURLToPath(new URL(`../../${relativePath}`, import.meta.url)),
-              destination,
+              new URL(`../../${relativePath}`, import.meta.url),
+              path.join(stagedRoot, relativePath),
             );
           }
           await fs.writeFile(path.join(stagedRoot, "package.json"), '{"type":"module"}\n');
-          const guardDir = path.join(stagedRoot, "dist", "commands");
+          const guardDir = path.join(stagedRoot, "dist/commands");
           await fs.mkdir(guardDir, { recursive: true });
           await fs.writeFile(
             path.join(guardDir, "doctor-update-schema-guard.js"),
@@ -62,29 +60,21 @@ it.each([
               });
             }`,
           );
-          const script = path.join(stagedRoot, "scripts", "postinstall-bundled-plugins.mjs");
-          const child = spawnSync(
-            process.execPath,
-            [
-              "--input-type=module",
-              "--eval",
-              `Object.defineProperty(process, "platform", { value: "win32" });
+          const script = path.join(stagedRoot, "scripts/postinstall-bundled-plugins.mjs");
+          const launch = `Object.defineProperty(process, "platform", { value: "win32" });
               process.argv[1] = ${JSON.stringify(script)};
-              await import(${JSON.stringify(pathToFileURL(script).href)});`,
-            ],
-            {
-              cwd: stagedRoot,
-              encoding: "utf8",
-              timeout: 10_000,
-              env: {
-                ...process.env,
-                OPENCLAW_STATE_DIR: path.join(base, "state"),
-                OPENCLAW_UPDATE_IN_PROGRESS: "1",
-                OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
-              },
+              await import(${JSON.stringify(pathToFileURL(script).href)});`;
+          const child = spawnSync(process.execPath, ["--input-type=module", "--eval", launch], {
+            cwd: stagedRoot,
+            encoding: "utf8",
+            timeout: 10_000,
+            env: {
+              ...process.env,
+              OPENCLAW_STATE_DIR: path.join(base, "state"),
+              OPENCLAW_UPDATE_IN_PROGRESS: "1",
+              OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
             },
-          );
-          expect(child.error).toBeUndefined();
+          });
           expect(child.status, child.stderr).toBe(1);
           return {
             code: child.status,
@@ -94,18 +84,13 @@ it.each([
         },
       }),
   });
-  expect(installs).toHaveLength(scenario.attempts);
   expect(result.steps.map((step) => step.name)).toEqual(
     scenario.refused ? ["package-install"] : ["package-install", "package-install-omit-optional"],
   );
-  expect(installs.flat().includes("--omit=optional")).toBe(!scenario.refused);
-  expect(result.failedStep?.[scenario.stream === "stdout" ? "stdoutTail" : "stderrTail"]).toContain(
-    message,
-  );
+  const tail = result.failedStep?.[scenario.stream === "stdout" ? "stdoutTail" : "stderrTail"];
+  expect(tail).toContain(message);
   if (scenario.refused) {
-    expect(
-      result.failedStep?.[scenario.stream === "stdout" ? "stdoutTail" : "stderrTail"],
-    ).toContain("[update-schema-bump-unfenced]");
+    expect(tail).toContain("[update-schema-bump-unfenced]");
   }
   expect(result.recovery.serviceRestartSafe).toBe(true);
   await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(

@@ -1,26 +1,35 @@
 import { Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 
-/** Shared by branch and PR views; absent Git facts are not zero-line changes. */
-export function SessionGitDiff(props: {
+type GitDiffValuesProps = {
   item: { additions?: number; deletions?: number };
   classPrefix: "session-hovercard" | "chat-pr" | "activity-feed";
-  onOpen?: () => void;
-}) {
-  const values = () => (
+  locale?: string;
+  spaced?: boolean;
+};
+
+/** Absent Git facts are not zero-line changes. Callers retain their layout and locale. */
+export function GitDiffValues(props: GitDiffValuesProps) {
+  return (
     <>
       <Show when={props.item.additions !== undefined}>
         <span class={props.classPrefix + "__additions"}>
-          +{props.item.additions?.toLocaleString()}
+          +{props.item.additions?.toLocaleString(props.locale)}
         </span>
       </Show>
+      {props.spaced ? " " : null}
       <Show when={props.item.deletions !== undefined}>
         <span class={props.classPrefix + "__deletions"}>
-          −{props.item.deletions?.toLocaleString()}
+          −{props.item.deletions?.toLocaleString(props.locale)}
         </span>
       </Show>
     </>
   );
+}
+
+/** Shared by branch and PR views, with optional navigation owned by the caller. */
+export function SessionGitDiff(props: GitDiffValuesProps & { onOpen?: () => void }) {
+  const values = () => <GitDiffValues {...props} />;
   return (
     <Show when={props.item.additions !== undefined || props.item.deletions !== undefined}>
       <Show

@@ -18,7 +18,6 @@ import {
   setTestEnvValue,
   withEnvAsync,
 } from "../../test-utils/env.js";
-import { getFreePort } from "../../test-utils/ports.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { VERSION } from "../../version.js";
@@ -29,9 +28,13 @@ import {
 } from "./run-cleanup-receipt.test-support.js";
 import {
   failedGatewayRunConfigSnapshot,
+  completeGatewayRunSnapshot as completeSnapshot,
+  registerInvalidConfigResetTests,
   gatewayRunReadFailures,
   type RuntimeDotEnvLoadResult,
 } from "./run-config.test-support.js";
+import { registerGatewayLockFailureTests } from "./run-lock-failure.test-support.js";
+import { registerGatewayRunStartupRecoveryTests } from "./run-startup-recovery.test-support.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -189,7 +192,7 @@ vi.mock("../../config/paths.js", async (importOriginal) => ({
   normalizeStateDirEnv: mocks.normalizeStateDirEnv,
   pinRuntimePaths: mocks.pinRuntimePaths,
   resolveConfigPath: () => "/tmp/openclaw-test-missing-config.json",
-  resolveStateDir: () => "/tmp",
+  resolveStateDir: (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_STATE_DIR ?? "/tmp",
   resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
 
@@ -279,6 +282,9 @@ vi.mock("../../gateway/net.js", async (importOriginal) => {
 // mock-isolation: Record stale-process recovery without signaling processes.
 vi.mock("../../infra/restart-stale-pids.js", () => ({
   cleanStaleGatewayProcessesSync: mocks.cleanStaleGatewayProcessesSync,
+  cleanStaleGatewayProcesses: async (
+    ...args: Parameters<typeof mocks.cleanStaleGatewayProcessesSync>
+  ) => mocks.cleanStaleGatewayProcessesSync(...args),
 }));
 
 // mock-isolation: Control restart decisions without reading service history.
@@ -289,6 +295,9 @@ vi.mock("../../daemon/restart-storm.js", () => ({
 // mock-isolation: Prevent real Gateway process discovery.
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: mocks.findVerifiedGatewayListenerPidsOnPortSync,
+  findVerifiedGatewayListenerPidsOnPort: async (
+    ...args: Parameters<typeof mocks.findVerifiedGatewayListenerPidsOnPortSync>
+  ) => mocks.findVerifiedGatewayListenerPidsOnPortSync(...args),
   formatGatewayPidList: (pids: number[]) => pids.join(", "),
 }));
 
@@ -308,8 +317,9 @@ vi.mock("../../gateway/ws-logging.js", () => ({
 // mock-isolation: Keep verbose-mode changes local to the CLI fixture.
 vi.mock("../../globals.js", () => ({ setVerbose: (_enabled: boolean) => undefined }));
 
-vi.mock("../../infra/ports-inspect.js", () => ({
-  inspectPortUsage: async () => ({ status: "free" }),
+vi.mock("../../infra/ports-inspect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/ports-inspect.js")>()),
+  inspectPortUsage: vi.fn(async () => ({ status: "free" })),
 }));
 
 vi.mock("../../infra/ports-format.js", () => ({ formatPortDiagnostics: () => [] }));
@@ -435,8 +445,8 @@ describe("gateway run option collisions", () => {
     shouldEnableShellEnvFallback.mockReset().mockReturnValue(false);
   });
 
-  function configSnapshot(
-    config: Record<string, unknown>,
+  function runtimeSnapshot(
+    config: Record<string, unknown> = {},
     overrides: Record<string, unknown> = {},
   ) {
     return {
@@ -444,27 +454,17 @@ describe("gateway run option collisions", () => {
       sourceConfig: config,
       exists: true,
       valid: true,
-      path: "/tmp/openclaw.json",
       ...overrides,
     };
   }
 
-  function completeSnapshot(config: OpenClawConfig, overrides: Partial<ConfigFileSnapshot> = {}) {
-    return {
-      path: "/tmp/openclaw.json",
-      exists: true,
-      valid: true,
-      parsed: config,
-      raw: JSON.stringify(config),
-      runtimeConfig: config,
-      resolved: config,
-      sourceConfig: config,
-      config,
-      issues: [],
-      legacyIssues: [],
-      warnings: [],
-      ...overrides,
-    } satisfies ConfigFileSnapshot;
+  const configSnapshot = (
+    config: Record<string, unknown>,
+    overrides: Record<string, unknown> = {},
+  ) => runtimeSnapshot(config, { path: "/tmp/openclaw.json", ...overrides });
+
+  function localConfig(envVars?: Record<string, string>) {
+    return { gateway: { mode: "local" }, ...(envVars ? { env: { vars: envVars } } : {}) };
   }
 
   const bootstrapParams = { opts: {}, runtime: defaultRuntime };
@@ -489,6 +489,7 @@ describe("gateway run option collisions", () => {
     return await prepareGatewayRunBootstrap({ opts: { reset: true }, runtime: defaultRuntime });
   }
 
+  registerInvalidConfigResetTests(configState);
   function callArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
     const call = mock.mock.calls[index];
     if (!call) {
@@ -560,7 +561,6 @@ describe("gateway run option collisions", () => {
       }
 
       expect(loadShellEnvFallback).toHaveBeenCalledWith({
-        enabled: true,
         env: process.env,
         expectedKeys: ["OPENCLAW_GATEWAY_TOKEN"],
         logger: expect.any(Object),
@@ -593,15 +593,11 @@ describe("gateway run option collisions", () => {
           env: { vars: { OPENCLAW_DEFER_SHELL_ENV_FALLBACK: "1" } },
           gateway: { mode: "local" },
         };
-        configState.snapshot = {
-          config: invalidConfig,
-          exists: true,
+        configState.snapshot = configSnapshot(invalidConfig, {
           issues: [{ path: "gateway", message: "invalid" }],
           parsed: invalidConfig,
-          path: "/tmp/openclaw.json",
-          sourceConfig: invalidConfig,
           valid: false,
-        };
+        });
         shouldEnableShellEnvFallback.mockImplementation(
           (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_LOAD_SHELL_ENV === "1",
         );
@@ -664,10 +660,7 @@ describe("gateway run option collisions", () => {
   it("rejects an invalid final config after a prepared config selected runtime paths", async () => {
     const selectedStateDir = "/tmp/openclaw-prepared-selected-state";
     await withEnvAsync({ OPENCLAW_STATE_DIR: undefined }, async () => {
-      const selectedConfig = {
-        env: { vars: { OPENCLAW_STATE_DIR: selectedStateDir } },
-        gateway: { mode: "local" },
-      };
+      const selectedConfig = localConfig({ OPENCLAW_STATE_DIR: selectedStateDir });
       configState.snapshot = configSnapshot(selectedConfig, { parsed: selectedConfig });
       const { applyFinalGatewayRunConfigEnv } = await import("./pre-bootstrap.js");
       await selectAndPrepareConfig();
@@ -698,20 +691,12 @@ describe("gateway run option collisions", () => {
         OPENCLAW_RAW_STREAM: undefined,
       },
       async () => {
-        const oldConfig = {
-          env: {
-            vars: {
-              OPENCLAW_GATEWAY_TOKEN: "old-token",
-              OPENCLAW_PROXY_URL: "http://127.0.0.1:19876",
-              OPENCLAW_RAW_STREAM: "1",
-            },
-          },
-          gateway: { mode: "local" },
-        };
-        const newConfig = {
-          env: { vars: { OPENCLAW_GATEWAY_TOKEN: "new-token" } },
-          gateway: { mode: "local" },
-        };
+        const oldConfig = localConfig({
+          OPENCLAW_GATEWAY_TOKEN: "old-token",
+          OPENCLAW_PROXY_URL: "http://127.0.0.1:19876",
+          OPENCLAW_RAW_STREAM: "1",
+        });
+        const newConfig = localConfig({ OPENCLAW_GATEWAY_TOKEN: "new-token" });
         configState.snapshot = configSnapshot(oldConfig, { hash: "old" });
         await selectAndPrepareConfig();
         expect(pinRuntimePaths).toHaveBeenCalledWith(process.env);
@@ -832,12 +817,7 @@ describe("gateway run option collisions", () => {
     ["--force", 1, "force-kill gateway port listeners"],
     ["service", 78, "start the gateway service"],
   ] as const)("blocks %s from an older binary with newer config", async (mode, code, action) => {
-    configState.snapshot = {
-      exists: true,
-      valid: true,
-      config: { meta: { lastTouchedVersion: "9999.1.1" } },
-      sourceConfig: { meta: { lastTouchedVersion: "9999.1.1" } },
-    };
+    configState.snapshot = runtimeSnapshot({ meta: { lastTouchedVersion: "9999.1.1" } });
 
     await withEnvAsync(
       { OPENCLAW_SERVICE_MARKER: mode === "service" ? "gateway" : undefined },
@@ -879,22 +859,14 @@ describe("gateway run option collisions", () => {
         OPENCLAW_WORKSPACE_DIR: undefined,
       },
       async () => {
-        configState.snapshot = {
-          exists: true,
-          valid: true,
-          config: { gateway: { mode: "local" } },
-          sourceConfig: {
-            env: {
-              vars: {
-                OPENCLAW_CONFIG_PATH: "/tmp/openclaw-reset/openclaw.json",
-                OPENCLAW_GATEWAY_TOKEN: "old-token",
-                OPENCLAW_HOME: "/tmp/openclaw-reset-home",
-                OPENCLAW_STATE_DIR: "/tmp/openclaw-reset",
-              },
-            },
-            gateway: { mode: "local" },
-          },
-        };
+        configState.snapshot = runtimeSnapshot(localConfig(), {
+          sourceConfig: localConfig({
+            OPENCLAW_CONFIG_PATH: "/tmp/openclaw-reset/openclaw.json",
+            OPENCLAW_GATEWAY_TOKEN: "old-token",
+            OPENCLAW_HOME: "/tmp/openclaw-reset-home",
+            OPENCLAW_STATE_DIR: "/tmp/openclaw-reset",
+          }),
+        });
         ensureDevGatewayConfig.mockImplementationOnce(async () => {
           expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
           expect(process.env.OPENCLAW_HOME).toBeUndefined();
@@ -902,12 +874,7 @@ describe("gateway run option collisions", () => {
           expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
           expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
           expect(process.env.OPENCLAW_WORKSPACE_DIR).toBe("/tmp/openclaw-reset-workspace");
-          configState.snapshot = {
-            exists: true,
-            valid: true,
-            config: { gateway: { mode: "local" } },
-            sourceConfig: { gateway: { mode: "local" } },
-          };
+          configState.snapshot = runtimeSnapshot(localConfig());
         });
         loadGlobalRuntimeDotEnvFiles.mockImplementation(() => {
           process.env.OPENCLAW_GATEWAY_TOKEN ??= "trusted-token";
@@ -975,32 +942,19 @@ describe("gateway run option collisions", () => {
     async (selected) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: undefined }, async () => {
         if (selected) {
-          const guardedConfig = {
-            env: { vars: { OPENCLAW_STATE_DIR: "/tmp/openclaw-guarded-state" } },
-            gateway: { mode: "local" },
-          };
+          const guardedConfig = localConfig({ OPENCLAW_STATE_DIR: "/tmp/openclaw-guarded-state" });
           configState.snapshot = configSnapshot(guardedConfig, { hash: "guarded" });
           await selectAndPrepareConfig();
           expect(process.env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-guarded-state");
         }
-        const finalConfig = {
-          env: {
-            vars: {
-              OPENCLAW_STATE_DIR: selected
-                ? "/tmp/openclaw-final-state"
-                : "/tmp/openclaw-late-selection",
-            },
-          },
-          gateway: { mode: "local" },
-        };
+        const finalConfig = localConfig({
+          OPENCLAW_STATE_DIR: selected
+            ? "/tmp/openclaw-final-state"
+            : "/tmp/openclaw-late-selection",
+        });
         configState.snapshot = selected
           ? configSnapshot(finalConfig, { hash: "final" })
-          : {
-              exists: true,
-              valid: true,
-              config: { gateway: { mode: "local" } },
-              sourceConfig: finalConfig,
-            };
+          : runtimeSnapshot(localConfig(), { sourceConfig: finalConfig });
         await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:1");
         expect(process.env.OPENCLAW_STATE_DIR).toBe(
           selected ? "/tmp/openclaw-guarded-state" : undefined,
@@ -1032,92 +986,24 @@ describe("gateway run option collisions", () => {
     expect(startGatewayServer).not.toHaveBeenCalled();
   });
 
-  it("refreshes config and crash-loop state for each boot iteration", async () => {
-    let firstBootRecovery: GatewayServerOptions["tryRecoverChannelAutostartSuppression"];
-    bootLifecycle.nextBootId.mockReturnValueOnce("boot-1").mockReturnValueOnce("boot-2");
-    runGatewayLoop.mockImplementationOnce(async ({ beginBoot, start }: GatewayLoopParams) => {
-      await beginBoot?.(1000);
-      await start({ startupStartedAt: 1000 });
-      firstBootRecovery = gatewayStartOptions(0).tryRecoverChannelAutostartSuppression;
-      await beginBoot?.(2000);
-      await start({ startupStartedAt: 2000 });
-    });
-    bootLifecycle.decisions.push(bootDecision(true), bootDecision(false, true));
-
-    await runUnconfigured();
-
-    expect(bootLifecycle.inspect).toHaveBeenCalledTimes(2);
-    expect(bootLifecycle.inspect.mock.calls.map((call) => call[1])).toEqual([1000, 2000]);
-    expect(bootLifecycle.begin.mock.calls.map((call) => call[1])).toEqual([1000, 2000]);
-    expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledTimes(1);
-    expect(gatewayStartOptions(0).channelAutostartSuppression).toMatchObject({
-      reason: "crash-loop-breaker",
-    });
-    expect(gatewayStartOptions(0).channelAutostartSuppression?.message).toContain(
-      bootLifecycle.manualChannelStartHint,
-    );
-    expect(gatewayStartOptions(1).channelAutostartSuppression).toBeUndefined();
-    expect(startGatewayServer).toHaveBeenCalledTimes(2);
-    expect(gatewayStartOptions(0).startupStartedAt).toBe(1000);
-    expect(gatewayStartOptions(0).startupConfigSnapshotRead).toEqual({
-      snapshot: configState.snapshot,
-    });
-    expect(gatewayStartOptions(1).startupConfigSnapshotRead).toBeUndefined();
-    expect(gatewayStartOptions(1).startupStartedAt).toBe(2000);
-    bootLifecycle.decisions.push(bootDecision(false, true));
-    await expect(firstBootRecovery?.(new AbortController().signal)).rejects.toThrow(
-      "replaced boot",
-    );
-    expect(bootLifecycle.inspect).toHaveBeenCalledTimes(2);
-    expect(bootLifecycle.recover).not.toHaveBeenCalled();
-    expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
+  registerGatewayRunStartupRecoveryTests({
+    startGatewayServer,
+    configState,
+    bootLifecycle,
+    bootDecision,
+    runGatewayLoop,
+    gatewayStartOptions,
+    runUnconfigured,
+    writeDiagnosticStabilityBundleForFailureSync,
+    gatewayLogMessages,
+    triageAfterFailure,
+    detectRespawnSupervisor,
+    expectExit,
+    defaultRuntime,
+    runtimeErrors,
+    runGatewayCli,
+    withoutSupervisorEnv,
   });
-
-  it.each([
-    { supervised: false, transition: false, recorded: true, attempts: 1 },
-    { supervised: true, transition: false, recorded: true, attempts: 0 },
-    { supervised: true, transition: true, recorded: true, attempts: 0, cleanupFailure: "wrapped" },
-  ])(
-    "triages failed starts once with supervisor transition gating: %j",
-    async ({ supervised, transition, recorded, attempts, cleanupFailure }) => {
-      triageAfterFailure.mockClear();
-      detectRespawnSupervisor.mockReturnValue(supervised ? "systemd" : null);
-      bootLifecycle.nextBootId.mockReturnValueOnce(recorded ? "boot-id" : undefined);
-      bootLifecycle.decisions.push(bootDecision(transition));
-      let failure: Error = new Error("configured plugin crashed during startup");
-      if (cleanupFailure) {
-        const { GatewayStartupCleanupError } = await import("../../gateway/server-shutdown.js");
-        failure = new GatewayStartupCleanupError(
-          failure,
-          new Error("required cleanup unconfirmed"),
-        );
-        if (cleanupFailure === "wrapped") {
-          failure = new Error("startup wrapper failed", { cause: failure });
-        }
-      }
-      runGatewayLoop.mockImplementationOnce(async (params: GatewayLoopParams) => {
-        await params.beginBoot?.(1000);
-        // Repeated in-process failures and the terminal catch share one handoff.
-        await params.onRestartStartupFailure?.(failure, new AbortController().signal);
-        await params.onRestartStartupFailure?.(failure, new AbortController().signal);
-        throw failure;
-      });
-      await expectExit(1);
-      expect(triageAfterFailure).toHaveBeenCalledTimes(attempts);
-      if (attempts) {
-        expect(triageAfterFailure).toHaveBeenCalledWith(
-          defaultRuntime,
-          expect.objectContaining({
-            kind: "gateway-startup",
-            error: failure.message,
-            gateway: "verify-running",
-          }),
-          expect.any(AbortSignal),
-        );
-      }
-      expect(runtimeErrors.join("\n")).toContain(failure.message);
-    },
-  );
 
   it("retains the actual legacy-session refusal without triage on restart", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-legacy-refusal-"));
@@ -1156,28 +1042,13 @@ describe("gateway run option collisions", () => {
     }
   });
 
-  it("skips failure bundles but exits nonzero for unconfirmed gateway lock conflicts", async () => {
-    const port = await getFreePort();
-    configState.snapshot = {
-      config: { gateway: { port } },
-      exists: false,
-      sourceConfig: {},
-      valid: true,
-    };
-    const err = Object.assign(new Error(`gateway already running on port ${port}`), {
-      name: "GatewayLockError",
-    });
-    startGatewayServer.mockRejectedValueOnce(err);
-
-    await withEnvAsync(withoutSupervisorEnv, async () => {
-      await expectExit(1);
-    });
-
-    expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
-    expect(startGatewayServer).toHaveBeenCalledWith(port, expect.any(Object));
-    expect(runtimeErrors.join("\n")).toContain(`gateway already running on port ${port}`);
-    expect(runtimeErrors.join("\n")).toContain("gateway stop");
-    expect(triageAfterFailure).not.toHaveBeenCalled();
+  registerGatewayLockFailureTests({
+    ...mocks,
+    expectExit,
+    configState,
+    withoutSupervisorEnv,
+    runtimeErrors,
+    writeDiagnosticStabilityBundleForFailureSync,
   });
 
   it("exits 78 and parks launchd for a repairable shared-state schema", async () => {
@@ -1186,7 +1057,7 @@ describe("gateway run option collisions", () => {
       try {
         await start();
       } catch (error) {
-        completeBoot?.({ outcome: "startup_failed", reason: "schema migration required" });
+        await completeBoot?.({ outcome: "startup_failed", reason: "schema migration required" });
         throw error;
       }
     });
@@ -1233,7 +1104,7 @@ describe("gateway run option collisions", () => {
               path: "/tmp/newer.sqlite",
               foundVersion: 999,
               supportedVersion: 998,
-              writerAppVersion: "2026.9.4",
+              writerAppVersion: "9999.1.1",
             },
           ])
         : readerError;
@@ -1254,8 +1125,8 @@ describe("gateway run option collisions", () => {
     expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
     if (error instanceof OpenClawDatabaseSchemaPreflightError) {
       expect(gatewayErrorMessages).toEqual([`${error.message} Parked the managed LaunchAgent.`]);
-      expect(gatewayErrorMessages[0]).toContain(
-        "uses schema 999; this build supports 998; writer build 2026.9.4",
+      expect(gatewayErrorMessages[0]).toMatch(
+        /schema 999;.*was written by OpenClaw 9999\.1\.1;.*openclaw update/s,
       );
       expect(runtimeErrors).toEqual([`Gateway failed to start: ${error.message}`]);
     } else {
@@ -1284,7 +1155,7 @@ describe("gateway run option collisions", () => {
   it.each(gatewayRunReadFailures())("preserves $label", async (fixture) => {
     if (fixture.stage === "runtime") {
       const config: OpenClawConfig = { gateway: { mode: "local", auth: { mode: "none" } } };
-      configState.snapshot = { config, exists: true, sourceConfig: config, valid: true };
+      configState.snapshot = runtimeSnapshot(config);
       runGatewayLoop.mockImplementationOnce(async ({ start }: GatewayLoopParams) => {
         await start();
         await start();

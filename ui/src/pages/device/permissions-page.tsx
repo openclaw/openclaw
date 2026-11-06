@@ -12,6 +12,7 @@ import {
   SettingsSegmented,
   SettingsStatus,
   SettingsToggleRow,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -121,7 +122,7 @@ export function DevicePermissionsPage() {
                     value,
                     label: t(`configPage.deviceSettings.locationModes.${value}`),
                   }))}
-                  onChange={(value) => capability?.set("permissions.location.mode", value)}
+                  onChange={(value) => void capability?.set("permissions.location.mode", value)}
                 />
               }
             />
@@ -161,7 +162,7 @@ export function DevicePermissionsPage() {
                 description={t("configPage.deviceSettings.preciseLocationHint")}
                 checked={location()!.precise}
                 disabled={location()!.mode === "off"}
-                onChange={(value) => capability?.set("permissions.location.precise", value)}
+                onChange={(value) => void capability?.set("permissions.location.precise", value)}
               />
             </Show>
           </SettingsSection>
@@ -173,7 +174,7 @@ export function DevicePermissionsPage() {
               description={t("configPage.deviceSettings.activePresenceHint")}
               checked={props.snapshot.capabilities?.activeComputerPresenceEnabled ?? false}
               onChange={(value) =>
-                capability?.set("capabilities.activeComputerPresenceEnabled", value)
+                void capability?.set("capabilities.activeComputerPresenceEnabled", value)
               }
             />
           </SettingsSection>
@@ -202,7 +203,11 @@ export function DevicePermissionsPage() {
         <SettingsPage>
           <Show
             when={capability}
-            fallback={<SettingsEmpty message={t("configPage.deviceSettings.appOnly")} />}
+            fallback={
+              <SettingsSection>
+                <SettingsUnavailable message={t("configPage.deviceSettings.appOnly")} />
+              </SettingsSection>
+            }
           >
             <Show
               when={Boolean(snapshot())}

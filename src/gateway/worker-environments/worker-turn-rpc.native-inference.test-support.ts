@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -24,8 +25,6 @@ export function registerWorkerNativeInferenceRpcTests(): void {
         "session-local-proxy-denial",
         { executeInference },
       );
-      // Seed immutable profile facts through the same transaction/publication owner
-      // as the other placement fixtures; do not mutate live config or mock the gate.
       runOpenClawStateWriteTransaction(
         ({ db }) => {
           executeSqliteQuerySync(
@@ -34,13 +33,6 @@ export function registerWorkerNativeInferenceRpcTests(): void {
               .updateTable("worker_environments")
               .set({
                 provider_id: providerId,
-                node_device_id: "paired-inference-node",
-                shared_host: 1,
-                ssh_host: null,
-                ssh_port: null,
-                ssh_user: null,
-                ssh_host_key: null,
-                ssh_key_ref_json: null,
                 profile_snapshot_json: JSON.stringify({ settings: { inference } }),
               })
               .where("environment_id", "=", identity.environmentId),
@@ -57,40 +49,29 @@ export function registerWorkerNativeInferenceRpcTests(): void {
       const request = support.inferenceRequest(identity);
       const send = vi.fn();
       const sink = { connectionId: "worker-local-proxy-attempt", send };
+      const start = (overrides: Partial<typeof request> = {}) =>
+        workerService.startInference(identity, { ...request, ...overrides }, sink);
 
-      expect(
-        await workerService.startInference(
-          identity,
-          { ...request, sessionId: "session-other" },
-          sink,
-        ),
-      ).toEqual({ ok: false, reason: "session-not-attached" });
-      expect(
-        await workerService.startInference(identity, { ...request, runId: "run-other" }, sink),
-      ).toEqual({ ok: false, reason: "session-not-attached" });
-      expect(
-        await workerService.startInference(
-          identity,
-          { ...request, runEpoch: request.runEpoch + 1 },
-          sink,
-        ),
-      ).toEqual({ ok: false, reason: "epoch-mismatch" });
+      for (const [overrides, reason] of [
+        [{ sessionId: "session-other" }, "session-not-attached"],
+        [{ runId: "run-other" }, "session-not-attached"],
+        [{ runEpoch: request.runEpoch + 1 }, "epoch-mismatch"],
+      ] as const) {
+        expect(await start(overrides)).toEqual({ ok: false, reason });
+      }
       placementStore.validateWorkerTurn.mockReturnValue(false);
-      expect(await workerService.startInference(identity, request, sink)).toEqual({
+      expect(await start()).toEqual({
         ok: false,
         closeReason: "placement-mismatch",
       });
       placementStore.validateWorkerTurn.mockReturnValue(true);
-      const started = await workerService.startInference(identity, request, sink);
+      const started = await start();
       expect(executeInference).not.toHaveBeenCalled();
       expect(send).not.toHaveBeenCalled();
       if (providerId === "device") {
         expect(started).toEqual({ ok: false, reason: "model-not-approved" });
       } else {
-        expect(started.ok).toBe(true);
-        if (!started.ok) {
-          throw new Error("opaque provider inference was refused");
-        }
+        assert(started.ok, "opaque provider inference was refused");
         started.launch();
         await support.waitForFast(() => expect(send).toHaveBeenCalledOnce());
         expect(executeInference).toHaveBeenCalledOnce();

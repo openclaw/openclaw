@@ -2,9 +2,14 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
-import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveSafeInteger,
+  floorPositiveFiniteNumber as readPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
+import { resolveDefaultModelMaxTokens } from "../agents/defaults.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
@@ -17,7 +22,6 @@ import {
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
-  SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -29,6 +33,7 @@ import {
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { readParsedField } from "../utils/string-readers.js";
 import { recordLiveServingContextLimit } from "./provider-catalog-expiry.js";
 import type { ProviderCatalogContext } from "./types.js";
 
@@ -61,13 +66,6 @@ type DiscoveryResponse =
   | { kind: "unreachable"; error: unknown }
   | { kind: "invalid-response"; error: unknown };
 
-function readPositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.trunc(value);
-}
-
 const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
   "context_length",
   "context_window",
@@ -75,16 +73,8 @@ const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
   "max_model_len",
 ] as const;
 
-function readOpenAICompatibleContextWindow(
-  model: Record<string, unknown> | undefined,
-): number | undefined {
-  for (const field of OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS) {
-    const contextWindow = readPositiveInteger(model?.[field]);
-    if (contextWindow !== undefined) {
-      return contextWindow;
-    }
-  }
-  return undefined;
+function readOpenAICompatibleContextWindow(model: Record<string, unknown>): number | undefined {
+  return readParsedField(model, OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS, readPositiveInteger);
 }
 
 function buildSelfHostedDiscoveryHeaders(params: {
@@ -120,9 +110,11 @@ async function fetchSelfHostedDiscoveryJson(params: {
     const request = {
       url: params.url,
       init: {
-        headers: params.acceptJson
-          ? { Accept: "application/json", ...params.requestPolicy.headers }
-          : params.requestPolicy.headers,
+        headers: omitNullRequestHeaders(
+          params.acceptJson
+            ? { Accept: "application/json", ...params.requestPolicy.headers }
+            : params.requestPolicy.headers,
+        ),
       },
       policy: resolveProviderTransportSsrFPolicy({ ...params.requestPolicy, url: params.url }),
       dispatcherPolicy,
@@ -448,12 +440,8 @@ export async function discoverOpenAICompatibleLocalModels(
     }
     // max_model_len describes the serving instance, not the model training window.
     // Do not promote defaults, generic metadata, or malformed values to live ceilings.
-    const servingTokens = model.max_model_len;
-    if (
-      typeof servingTokens === "number" &&
-      Number.isSafeInteger(servingTokens) &&
-      servingTokens > 0
-    ) {
+    const servingTokens = asPositiveSafeInteger(model.max_model_len);
+    if (servingTokens !== undefined) {
       recordLiveServingContextLimit({
         id: modelId,
         api: "openai-completions",
@@ -469,6 +457,12 @@ export async function discoverOpenAICompatibleLocalModels(
     const runtimeContextTokens =
       readPositiveInteger(generationSettings?.n_ctx) ?? readPositiveInteger(props?.n_ctx);
     const parameterCount = asPositiveSafeInteger(model.parameterCount);
+    const contextWindow =
+      params.contextWindow ??
+      readPositiveInteger(meta?.n_ctx_train) ??
+      readOpenAICompatibleContextWindow(model) ??
+      parentContextWindow ??
+      SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
     const modelConfig: ModelDefinitionConfig = {
       id: modelId,
       name:
@@ -482,13 +476,17 @@ export async function discoverOpenAICompatibleLocalModels(
       ),
       input: ["text"],
       cost: SELF_HOSTED_DEFAULT_COST,
-      contextWindow:
-        params.contextWindow ??
-        readPositiveInteger(meta?.n_ctx_train) ??
-        readOpenAICompatibleContextWindow(model) ??
-        parentContextWindow ??
-        SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-      maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
+      contextWindow,
+      // The serving window (n_ctx, max_model_len) bounds prompt plus output on these servers.
+      maxTokens:
+        params.maxTokens ??
+        resolveDefaultModelMaxTokens(
+          Math.min(
+            contextWindow,
+            runtimeContextTokens ?? contextWindow,
+            servingTokens ?? contextWindow,
+          ),
+        ),
       ...(runtimeContextTokens ? { contextTokens: runtimeContextTokens } : {}),
     };
     return [modelConfig];

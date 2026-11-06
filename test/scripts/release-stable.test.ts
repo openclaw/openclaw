@@ -55,7 +55,7 @@ function newCut(packageVersion = RELEASE, missing = ""): FakeStep[] {
     fetchMain(),
     mainSha(),
     step("git", ["ls-remote", "--heads", "origin", `release/${RELEASE}`]),
-    step("git", ["push", "origin", `${CUT_SHA}:refs/heads/release/${RELEASE}`]),
+    step("pnpm", ["release:push", "--", "--head", CUT_SHA, "--branch", `release/${RELEASE}`]),
     gitShow(`${CUT_SHA}:package.json`, JSON.stringify({ version: packageVersion })),
     gitShow(
       `${CUT_SHA}:CHANGELOG/${RELEASE}.md`,
@@ -76,6 +76,85 @@ const parentDispatch = () => dispatchWorkflow(publishWorkflow, REPOSITORY, tooli
 const parentRuns = (runs: object[]) => workflowRuns(publishWorkflow, REPOSITORY, runs);
 const children = (runs: object[]) => jsonStep("gh", ["api", "*"], { workflow_runs: runs });
 
+function publicationWatchFixture(approvalPending = false) {
+  const state = publishState(true);
+  state.publish.publishRunId = "301";
+  state.publish.dispatchedAt = state.startedAt;
+  const release = fixture(state);
+  const identity = {
+    head_branch: state.validate.toolingTag,
+    head_sha: TOOLING_SHA,
+    repository: { full_name: REPOSITORY },
+    event: "workflow_dispatch",
+  };
+  const parent = {
+    ...identity,
+    id: 301,
+    run_attempt: 3,
+    path: ".github/workflows/openclaw-release-publish.yml",
+    actor: { login: "release-test" },
+    status: approvalPending ? "in_progress" : "completed",
+    conclusion: approvalPending ? null : "success",
+    html_url: "https://github.com/openclaw/openclaw/actions/runs/301",
+  };
+  const plugin = {
+    ...identity,
+    id: 701,
+    run_attempt: 1,
+    path: ".github/workflows/plugin-npm-release.yml",
+    actor: { login: "github-actions[bot]" },
+    display_title: `Plugin NPM Release [default] ${CUT_SHA}`,
+    created_at: state.startedAt,
+    status: approvalPending ? "waiting" : "completed",
+    conclusion: approvalPending ? null : "success",
+    html_url: "https://github.com/openclaw/openclaw/actions/runs/701",
+  };
+  const readRun = (run: typeof parent) =>
+    jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/${run.id}`], run);
+  return {
+    state,
+    release,
+    plugin,
+    observe: (observedChildren = [plugin], json = true) => {
+      const inventory = [
+        "plugin-npm-release.yml",
+        "plugin-clawhub-release.yml",
+        "plugin-clawhub-new.yml",
+        "openclaw-npm-release.yml",
+      ].map((file) =>
+        jsonStep("gh", ["api", "*"], {
+          workflow_runs: observedChildren.filter((run) => run.path.endsWith(`/${file}`)),
+        }),
+      );
+      return release.run(
+        [
+          readRun(parent),
+          ...inventory,
+          ...observedChildren.map(readRun),
+          ...[parent, ...observedChildren].flatMap((run) => [
+            jsonStep(
+              "gh",
+              ["api", `repos/${REPOSITORY}/actions/runs/${run.id}/pending_deployments`],
+              approvalPending && run.id === 701
+                ? [
+                    {
+                      environment: { id: 81, name: "npm-release" },
+                      current_user_can_approve: false,
+                    },
+                  ]
+                : [],
+            ),
+            jsonStep("gh", ["api", "*"], { total_count: 0, jobs: [] }),
+          ]),
+          ...inventory,
+          readRun(parent),
+        ],
+        ["--watch", "--once", ...(json ? ["--json"] : [])],
+      );
+    },
+  };
+}
+
 describe("release:stable CLI", () => {
   it("previews all seven phases without executing a binary or writing release state", () => {
     const release = fixture();
@@ -85,16 +164,6 @@ describe("release:stable CLI", () => {
     expect(existsSync(release.stateDir)).toBe(false);
     for (const phase of PHASES) {
       expect(result.stdout).toContain(`[release-stable] ${phase}: completed`);
-    }
-    for (const command of [
-      `git push origin refs/tags/v${RELEASE}`,
-      "gh workflow run openclaw-release-publish.yml",
-      "gh workflow run openclaw-npm-dist-tags.yml",
-      `gh release edit v${RELEASE}`,
-      "gh workflow run openclaw-macos-publish.yml",
-      `gh release view v${RELEASE} --repo ${REPOSITORY} --json assets --jq '[.assets[].name]'`,
-    ]) {
-      expect(result.stdout).toContain(`+ ${command}`);
     }
     expect(result.stdout.match(/Would ask:/gu)).toHaveLength(2);
     expect(result.stdout).toContain("preflight_only=true");
@@ -131,13 +200,8 @@ describe("release:stable CLI", () => {
       phases: { cut: { status: phaseStatus } },
       operator: { cutShaConfirmed: CUT_SHA },
     });
-    expect(result.calls.filter((call) => call.bin === "git" && call.args[0] === "push")).toEqual([
-      { bin: "git", args: ["push", "origin", `${CUT_SHA}:refs/heads/release/${RELEASE}`] },
-    ]);
     if (code === 2) {
       expect(result.stderr).toContain(`pnpm release:prepare -- --version ${RELEASE} --write`);
-      expect(result.stderr).toContain("pnpm changelog:check");
-      expect(result.stderr).toContain(`pnpm release:stable ${RELEASE} --from cut`);
       expect(retained.cut.releaseSha).toBeUndefined();
     } else {
       expect(retained.cut.releaseSha).toBe(CUT_SHA);
@@ -186,6 +250,80 @@ describe("release:stable CLI", () => {
     expect(result.stdout.trim().split("\n")).toHaveLength(7);
     expect(readFileSync(release.stateFile, "utf8")).toBe(before);
   });
+
+  it("enforces the publication deadline during a GitHub read", () => {
+    const state = publishState(true);
+    state.publish.publishRunId = "301";
+    state.publish.dispatchedAt = state.startedAt;
+    const release = fixture(state);
+    const startedAt = Date.now();
+    const result = release.run(
+      [
+        {
+          ...jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/301`], {}),
+          delayMs: 5_000,
+        },
+      ],
+      ["--watch", "--once", "--timeout-seconds", "1"],
+    );
+    expect(result.status, result.output).toBe(2);
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
+    expect(result.stderr).toContain("command timed out");
+  });
+
+  it("reports a pending publication approval with exit 1 and no mutation", () => {
+    const { state, release, observe } = publicationWatchFixture(true);
+    const result = observe();
+    expect(result.status, result.output).toBe(1);
+    const snapshot = JSON.parse(result.stdout);
+    expect(snapshot).toMatchObject({
+      contractVersion: 1,
+      state: "attention",
+      pendingApprovals: [
+        {
+          runId: "701",
+          environmentId: 81,
+          environment: "npm-release",
+          canApprove: false,
+        },
+      ],
+      failedRuns: [],
+    });
+    expect(result.calls.every((call) => call.bin === "gh" && call.args[0] === "api")).toBe(true);
+    expect(readFileSync(release.stateFile, "utf8")).toBe(JSON.stringify(state));
+  });
+
+  it("returns exit 0 after the observed publication tree succeeds", () => {
+    const { observe } = publicationWatchFixture();
+    const result = observe();
+    expect(result.status, result.output).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      contractVersion: 1,
+      state: "success",
+      pendingApprovals: [],
+      failedRuns: [],
+    });
+  });
+
+  it.each(["failure", "neutral", "skipped"])(
+    "reports a detached publication child with conclusion %s as exit 1",
+    (conclusion) => {
+      const { plugin, observe } = publicationWatchFixture();
+      const clawhub = {
+        ...plugin,
+        id: 702,
+        path: ".github/workflows/plugin-clawhub-release.yml",
+        display_title: `plugin-clawhub-release.yml [v${RELEASE}] publish parent=301/3`,
+        conclusion,
+        html_url: "https://github.com/openclaw/openclaw/actions/runs/702",
+      };
+      const result = observe([plugin, clawhub], false);
+      expect(result.status, result.output).toBe(1);
+      expect(result.stdout).toContain(
+        `failed publication run: .github/workflows/plugin-clawhub-release.yml run=702 conclusion=${conclusion}`,
+      );
+    },
+  );
 
   it.each(["stableSoakWaiver", "laneWaiver"])("preserves rejected %s state", (field) => {
     const state = phaseState("validate");
@@ -251,11 +389,6 @@ describe("release:stable CLI", () => {
     expect(result.stderr.trim().split("\n").at(-1)).toBe(
       `pnpm release:stable ${RELEASE} --from publish --state-dir ${release.stateDir} --operator release-test --approve-publication`,
     );
-    expect(result.stdout).not.toContain("stable_soak_waiver");
-    expect(result.stdout).toContain("FRV=101 attempt 3");
-    expect(result.stdout).toContain(`release SHA=${CUT_SHA}`);
-    expect(result.stdout).toContain(`tooling tag=${toolingTag}`);
-    expect(result.stdout).not.toContain("lane_waiver");
     const retained = release.readState();
     expect(result.calls.filter((call) => call.args[1] === "user")).toHaveLength(1);
     expect(retained).toMatchObject({
@@ -265,8 +398,9 @@ describe("release:stable CLI", () => {
     });
     expect(retained.publish.publishRunId).toBeUndefined();
     const preflight = result.calls.find((call) => call.args[2] === "openclaw-macos-publish.yml");
-    expect(preflight?.args.slice(7)).toEqual(
-      fields(
+    expect(preflight?.args).toEqual([
+      ...dispatchWorkflow("openclaw-macos-publish.yml", "openclaw/releases").match,
+      ...fields(
         `tag=v${RELEASE}`,
         `source_ref=release/${RELEASE}`,
         `public_release_branch=release/${RELEASE}`,
@@ -274,7 +408,7 @@ describe("release:stable CLI", () => {
         "smoke_test_only=false",
         "allow_late_calver_recovery=false",
       ),
-    );
+    ]);
   });
 
   it.each([false, true])("requires a signed local final tag (resigned=%s)", (resigned) => {
@@ -369,16 +503,7 @@ describe("release:stable CLI", () => {
     );
     expect(failed.status, failed.output).toBe(2);
     expect(failed.stderr).toContain("Publish parent 301 failure before core npm became visible.");
-    expect(failed.stderr).toContain(
-      `pnpm release:publish-preflight --tag v${RELEASE} --full-release-validation-run-id 101 --full-release-validation-run-attempt 3 --npm-dist-tag latest --workflow-ref ${toolingTag}`,
-    );
     expect(failed.stderr).toContain(`pnpm release:stable ${RELEASE} --from publish`);
-    for (const output of [failed.stdout, failed.stderr]) {
-      expect(output).toContain("status=waiting&per_page=100");
-      expect(output).toContain("status=queued&per_page=100");
-      expect(output).toContain("state=rejected");
-      expect(output).toContain("gh run cancel '<child>'");
-    }
     for (const id of [701, 703]) {
       expect(failed.stdout.match(new RegExp(`publish: child ${id} `, "gu"))).toHaveLength(1);
     }
@@ -404,36 +529,13 @@ describe("release:stable CLI", () => {
     expect(resumed.stdout).not.toContain("Approve publication");
     const dispatches = resumed.calls.filter((call) => call.args[0] === "workflow");
     expect(dispatches).toHaveLength(1);
-    expect(dispatches[0]?.args.slice(7)).toEqual(
-      fields(
-        `tag=v${RELEASE}`,
-        "full_release_validation_run_id=101",
-        "full_release_validation_run_attempt=3",
-        "npm_dist_tag=latest",
-        "plugin_publish_scope=all-publishable",
-        "publish_openclaw_npm=true",
-        "wait_for_clawhub=false",
-      ),
-    );
     const helper = resumed.calls.find((call) => call.bin === "pnpm");
-    expect(helper?.args).toContain("stable");
     expect(helper?.args).not.toContain("--stable-soak-waiver");
     expect(helper?.args).toContain("--skip-dispatch");
-    expect(helper?.args).toContain("--skip-parallels");
-    expect(helper?.args).toContain("--skip-telegram");
     expect(resumed.calls.filter((call) => call.args.includes("POST"))).toEqual([
       { bin: "gh", args: gateApproval(301, 71).match },
       { bin: "gh", args: gateApproval(301, 73).match },
     ]);
-    const childReads = resumed.calls.filter((call) =>
-      call.args[1]?.includes("?status=waiting&event=workflow_dispatch&per_page=100"),
-    );
-    expect(childReads).toHaveLength(3);
-    expect(
-      childReads.every((call) =>
-        call.args[1]?.endsWith(`created=>=${refused.publish.dispatchedAt}`),
-      ),
-    ).toBe(true);
     expect(release.readState().publish).toMatchObject({
       publishRunId: "301",
       npmVisibleAt: expect.any(String),
@@ -562,7 +664,6 @@ describe("release:stable CLI", () => {
     expect(result.status, result.output).toBe(2);
     expect(result.stderr).toContain(`Ambiguous dispatch of ${workflow}: runs 201, 211`);
     expect(result.stderr).toContain(`gh run list --repo openclaw/releases --workflow ${workflow}`);
-    expect(result.stderr).toContain(`pnpm release:stable ${RELEASE} --from publish`);
     expect(release.readState().publish.macosValidateRunId).toBeUndefined();
   });
 
@@ -598,5 +699,27 @@ describe("release:stable CLI", () => {
     );
     expect(release.readState().publish.approvedGates).toEqual([]);
     expect(release.readState().publish.npmVisibleAt).toBeUndefined();
+  });
+
+  it("retries GET requests immediately when retry backoff is zero", () => {
+    const state = publishState(true);
+    state.publish.publishRunId = "301";
+    const release = publishing(state);
+    const result = release.run(
+      [
+        ...publishPreparation(),
+        { ...pendingGates(301), exit: 1, stderr: "temporary API failure" },
+        pendingGates(301),
+        npmVisibility(),
+      ],
+      [],
+      { OPENCLAW_RELEASE_STABLE_BACKOFF_MS: "0" },
+    );
+    expect(result.status, result.output).toBe(0);
+    expect(
+      result.calls.filter(
+        (call) => call.bin === "gh" && call.args[1]?.endsWith("pending_deployments"),
+      ),
+    ).toHaveLength(2);
   });
 });

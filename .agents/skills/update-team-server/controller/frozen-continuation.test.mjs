@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
@@ -170,7 +170,7 @@ const args=process.argv.slice(2),command=args[0],journal=${JSON.stringify(f.jour
 const event=value=>fs.appendFileSync(${JSON.stringify(f.eventlog)},value+'\\n');
 if(command==='journal-create'&&${JSON.stringify(fault)}==='before-journal') {event('fixture.before-journal');process.exit(73);}
 // Non-consuming generation checks must leave a piped verification payload for its actual proof.
-const result=cp.spawnSync(process.execPath,[${JSON.stringify(f.library)},...args],{stdio:['inherit','pipe','pipe'],encoding:'utf8',env:process.env});
+const result=cp.spawnSync(process.execPath,[${JSON.stringify(f.library)},...args],{stdio:['inherit','pipe','pipe','ignore','ignore','ignore','ignore','ignore','ignore',9],encoding:'utf8',env:process.env});
 if(result.error)throw result.error;
 if(result.status===0&&((command==='compatibility'&&${JSON.stringify(fault)}==='manifest-at-compatibility')||
   (command==='journal-create'&&${JSON.stringify(fault)}==='manifest-after-journal'))) {
@@ -186,12 +186,19 @@ if(command==='journal-create'&&result.status===0) {
   event('fixture.ordinary-journal-created');
   if(${JSON.stringify(fault)}==='after-journal')process.exit(73);
 }
+if(command==='compatibility'&&result.status===0&&${JSON.stringify(fault)}==='generation-at-compatibility') {
+  const file=${JSON.stringify(join(f.root, "proc", String(f.pid), "stat"))};
+  const stat=fs.readFileSync(file,'utf8'),split=stat.lastIndexOf(') ')+2;
+  const fields=stat.slice(split).trim().split(/\\s+/);
+  fields[19]='2220';fs.writeFileSync(file,stat.slice(0,split)+fields.join(' ')+'\\n');
+  event('fixture.generation-changed-after-compatibility');
+}
 if(command==='session-preservation-witness'&&result.status===0&&${JSON.stringify(fault)}==='instance-before-preparation')
   fs.writeFileSync(${JSON.stringify(join(f.state, "frozen-replacement-instance"))},'1');
 process.stdout.write(result.stdout);process.stderr.write(result.stderr);process.exit(result.status??1);
 `);
   f.env.OPENCLAW_TEAM_RELEASE_LIB = proxy;
-  if (fault === "instance" || fault === "instance-at-journal") {
+  if (fault === "instance") {
     const cli = join(f.initial, "dist/index.js");
     const source = readFileSync(cli, "utf8");
     const original = 'const pid=Number(read("pid"));emit({pid,processInstanceId:"fixture-instance-"+pid});';
@@ -199,7 +206,7 @@ process.stdout.write(result.stdout);process.stderr.write(result.stderr);process.
     replaceSealedFile(cli, source.replace(original, `
 const pid=Number(read("pid")),count=present("instance-reads")?Number(read("instance-reads")):0;
 put("instance-reads",count+1);
-emit({pid,processInstanceId:count>=${fault === "instance" ? 1 : 3}?'changed-with-identical-pid-and-ticks':'fixture-instance-'+pid});`));
+emit({pid,processInstanceId:count>=1?'changed-with-identical-pid-and-ticks':'fixture-instance-'+pid});`));
   }
   if (fault === "instance-before-preparation") {
     const cli = join(f.initial, "dist/index.js"), source = readFileSync(cli, "utf8");
@@ -228,6 +235,10 @@ for (const [sourceState, targetState, sourceAgent, targetAgent, offlineDoctor = 
 ]) test(`continues the sealed cut through native update (${sourceState}/${sourceAgent} → ${targetState}/${targetAgent}${offlineDoctor ? "; offline Doctor repair" : ""})`, t => {
   const f = fixture(t, "", sourceState, targetState, sourceAgent, targetAgent, offlineDoctor);
   if (offlineDoctor) f.args.push("--offline-doctor-repair", "--interrupt-after-drain");
+  // An earlier rolled-back transaction is settled; this deployment keeps only its own root.
+  const earlier = join(f.runtime, ".openclaw-update", `update-${f.sha}-${randomUUID()}`);
+  mkdirSync(join(earlier, "native.databases"), { recursive: true });
+  writeFileSync(join(earlier, "native.receipt.json"), JSON.stringify({ schemaVersion: 1, status: "restored" }));
   const result = runOwner(f, f.args);
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
@@ -342,12 +353,15 @@ for (const fault of ["timer", "ancestry", "instance", "manifest-swap"]) test(`re
   unchanged(f, runOwner(f, f.args), fault === "timer" ? /disabled inactive/ : fault === "ancestry" ? /official main history/ : fault === "manifest-swap" ? /frozen release identity changed/ : /process instance changed/);
 });
 
-test("does not recapture a replacement process instance while constructing the journal", t => {
-  const f = fixture(t, "instance-at-journal"), result = runOwner(f, f.args);
+test("refuses a replacement process generation after compatibility without publishing the journal", t => {
+  const f = fixture(t, "generation-at-compatibility"), result = runOwner(f, f.args);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /process instance changed/);
+  assert.match(result.stderr, /process generation changed/);
+  assert.match(events(f), /fixture\.generation-changed-after-compatibility/);
   assert.equal(existsSync(f.journal), false);
   assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)\n|fixture\.ordinary-journal-created/);
+  assert.equal(readlinkSync(join(f.serving, "current")), f.initial);
+  assert.deepEqual(readFileSync(f.config), f.before.config);
   assert.deepEqual(readFileSync(f.databasePath), f.before.database);
 });
 

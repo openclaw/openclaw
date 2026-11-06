@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { t } from "../../i18n/index.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 import { chatItemStartsDisplayTurn, chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
+import { projectSystemNoticeSummary } from "./system-notice-kinds.ts";
 
 const clients = [{ id: "cli", mode: "cli", displayName: "Release helper" }];
 const baseMessage = {
@@ -50,16 +52,10 @@ afterEach(() => resetChatThreadState());
 
 describe("system notices through pending-to-history promotion", () => {
   it.each([
-    ["main_session_restart_recovery", "System · restart recovery", "", false],
-    [
-      "cron_failure_repair",
-      "System · automation recovery",
-      "An automation failed — asked the agent to investigate and continue if needed.",
-      false,
-    ],
+    ["cron_failure_repair", "System · automation recovery: Automation failed.", "", false],
     [
       "restart-sentinel",
-      "System · gateway restarted",
+      "System · Gateway restarted",
       "Gateway restarted during update 2026.8.2 -> 2026.8.3.",
       false,
     ],
@@ -85,11 +81,9 @@ describe("system notices through pending-to-history promotion", () => {
       const message = {
         ...baseMessage,
         content:
-          sourceTool === "main_session_restart_recovery"
-            ? baseMessage.content
-            : sourceTool === "cron_failure_repair"
-              ? "Automation repair request from the scheduler.\n<untrusted-text>Private task payload and last error</untrusted-text>"
-              : (midTurn ? "" : "[System] ") + text,
+          sourceTool === "cron_failure_repair"
+            ? "Automation repair request from the scheduler.\n<untrusted-text>Private task payload and last error</untrusted-text>"
+            : (midTurn ? "" : "[System] ") + text,
         provenance: { kind: "internal_system", sourceTool },
         __openclaw: imported
           ? {
@@ -101,27 +95,6 @@ describe("system notices through pending-to-history promotion", () => {
             }
           : baseMessage["__openclaw"],
       };
-      if (sourceTool === "main_session_restart_recovery") {
-        expect(render([], pending(message))).toMatchObject([{ kind: "notice", label }]);
-        for (const state of ["interrupted", "cancelled"] as const) {
-          expect(render([], pending(message, state))).toMatchObject([
-            {
-              kind: "notice",
-              label,
-              text: `The Gateway restarted. Automatic recovery was ${state} before the agent could resume. Send a message to continue.`,
-              startsTurn: true,
-            },
-          ]);
-          expect(render([message], pending(message, state))).toMatchObject([
-            {
-              kind: "notice",
-              label,
-              text,
-              boundaryId: "send:run",
-            },
-          ]);
-        }
-      }
       const inputs = pending(message);
       const before = { role: "user", content: "before", timestamp: 999 };
       const after = {
@@ -207,6 +180,49 @@ describe("system notices through pending-to-history promotion", () => {
         },
       ]);
     }
+  });
+});
+
+describe("visible system status contract", () => {
+  it("keeps authored status copy within the single-line total budget", () => {
+    const copy = `${t("chat.systemNotice.automationRecovery.label")}: ${t("chat.systemNotice.automationRecovery.summary")}`;
+    expect(copy).not.toMatch(/[\r\n\u2028\u2029]/u);
+    expect(copy.length).toBeLessThanOrEqual(64);
+  });
+  it.each([56, 57])(
+    "bounds the complete %i-character status body and retains details",
+    (length) => {
+      const text = "x".repeat(length);
+      const result = projectSystemNoticeSummary({
+        label: "System",
+        text,
+        detailed: false,
+        statusOnly: true,
+      });
+      if (length === 56) {
+        expect(result).toEqual({ label: "System: " + text, text: "", collapsedBody: false });
+      } else {
+        expect(result).toEqual({ label: "System", text, collapsedBody: true });
+      }
+      expect(result.label.length).toBeLessThanOrEqual(64);
+      expect(result.label).not.toMatch(/[\r\n]/u);
+    },
+  );
+  it("keeps arbitrary instructions out of owned status copy and preserves ordinary user text", () => {
+    const text = "Workflow instructions.\n".repeat(10);
+    const result = projectSystemNoticeSummary({
+      label: "System",
+      text,
+      detailed: false,
+      statusOnly: true,
+    });
+    expect(result).toEqual({ label: "System", text, collapsedBody: true });
+    const ordinary = {
+      kind: "message" as const,
+      key: "user",
+      message: { ...baseMessage, content: text },
+    };
+    expect(projectChatSystemNotice(ordinary)).toEqual([ordinary]);
   });
 });
 
@@ -296,10 +312,14 @@ describe("skill review notices", () => {
     model: "delivery-mirror",
     timestamp: 2000,
     openclawDeliveryMirror: {
-      kind: "skill-workshop-change",
-      agentId: "main",
-      runId: "skill-workshop-review:r1",
-      skills,
+      kind: "plugin-notice",
+      pluginId: "skill-workshop",
+      type: "skills-changed",
+      data: {
+        agentId: "main",
+        runId: "skill-workshop-review:r1",
+        skills,
+      },
     },
     __openclaw: { id: "notice-1", seq: 3 },
   });
@@ -311,6 +331,47 @@ describe("skill review notices", () => {
     __openclaw: { runId: "run" },
   };
 
+  it.each([
+    [{ idempotencyKey: "skill-workshop-notice:review" }, true],
+    [{ __openclaw: { idempotencyKey: "skill-workshop-notice:review" } }, true],
+    [{ idempotencyKey: "ordinary-delivery" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:review", provider: "model-provider" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:review", model: "model-output" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:review", role: "user" }, false],
+    // A row written by 2026.10.10 betas, before the plugin-notice marker, stays a text notice.
+    [
+      {
+        idempotencyKey: "skill-workshop-notice:review",
+        openclawDeliveryMirror: {
+          kind: "skill-workshop-change",
+          agentId: "main",
+          runId: "review",
+          skills: [{ name: "deploy-staging", action: "updated" }],
+        },
+      },
+      true,
+    ],
+  ])("uses legacy notice provenance, not Learned text: %j", (fields, projected) => {
+    const item = {
+      kind: "message" as const,
+      key: "legacy-notice",
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: "💾 Learned: updated deploy-staging.",
+        timestamp: 2000,
+        ...fields,
+      },
+    };
+    expect(projectChatSystemNotice(item)).toEqual(
+      projected
+        ? [{ kind: "notice", key: item.key, text: item.message.content, timestamp: 2000 }]
+        : [item],
+    );
+  });
+
   it("renders a marked review notice natively and keeps malformed markers as text", () => {
     const skills = [{ name: "deploy-staging", action: "updated", summary: "rollback" }];
     expect(render([question, answer, notice(skills)], [])).toMatchObject([
@@ -321,7 +382,6 @@ describe("skill review notices", () => {
         text: "",
         timestamp: 2000,
         skillChanges: {
-          kind: "skill-workshop-change",
           agentId: "main",
           runId: "skill-workshop-review:r1",
           skills,
@@ -337,4 +397,62 @@ describe("skill review notices", () => {
       { kind: "group", role: "assistant", messages: [{ message: malformed }] },
     ]);
   });
+});
+
+it("records only submitted model transitions and coalesces repeated queued selections", () => {
+  const submitted = (id: string, model: string, previous = "a") => ({
+    role: "user",
+    content: id,
+    timestamp: Number(id),
+    __openclaw: {
+      id,
+      modelSelection: {
+        provider: "fixture",
+        model,
+        previous: { provider: "fixture", model: previous },
+      },
+    },
+  });
+  const labels = (messages: unknown[]) =>
+    render(messages, []).flatMap((item) =>
+      item.kind === "notice" && item.icon === "brain" ? [item.label] : [],
+    );
+
+  // Changing the picker and returning to A leaves the submitted selection unchanged.
+  expect(labels([submitted("1", "a")])).toEqual([]);
+  // Draft B is absent: only the final selection C belongs to the sent message.
+  const before = {
+    role: "assistant",
+    provider: "fixture",
+    model: "a",
+    content: "Previous answer",
+    timestamp: 0,
+  };
+  const first = submitted("2", "c");
+  expect(labels([before, first])).toEqual(["Model changed from fixture/a to fixture/c."]);
+  expect(labels([{ ...before, model: "fallback-b" }, submitted("2", "a")])).toEqual([]);
+  // The last-run fallback can still be A while several user messages are queued.
+  const lateMedia = submitted("3", "a");
+  const history = [
+    before,
+    first,
+    { ...lateMedia, __openclaw: { ...lateMedia["__openclaw"], lateMedia: true } },
+    submitted("5", "c"),
+    submitted("6", "b"),
+  ];
+  expect(labels(history)).toEqual([
+    "Model changed from fixture/a to fixture/c.",
+    "Model changed from fixture/c to fixture/b.",
+  ]);
+  expect(labels([submitted("3", "c"), submitted("4", "c")])).toEqual([]);
+});
+
+it("does not invent a model change without a previous selection", () => {
+  const first = {
+    role: "user",
+    content: "First input",
+    timestamp: 1,
+    __openclaw: { id: "first", modelSelection: { provider: "fixture", model: "a" } },
+  };
+  expect(render([first], []).some((item) => item.kind === "notice")).toBe(false);
 });

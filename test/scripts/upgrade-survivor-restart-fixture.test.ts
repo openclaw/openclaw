@@ -5,17 +5,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { writePluginInstallIndexForE2E } from "../../scripts/e2e/lib/plugin-index-sqlite.mjs";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readJson } from "./upgrade-survivor-io.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+// Extracted functions omit the runner’s Darwin Bash 5.3 heredoc fallback.
+const testBashExecPath = process.platform === "darwin" ? "/bin/bash" : "bash";
 const version = "2026.10.5";
 const futureVersion = "2026.10.6-first-hop.0";
 const sourceSha = "a".repeat(40);
 const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 const source = fs.readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
 const prepare = source.slice(
-  source.indexOf("prepare_restart_fixture() {"),
+  source.indexOf("prepare_restart_plugin_release_selectors() {"),
   source.indexOf("repair_update_restart_auth() {"),
 );
 
@@ -24,30 +28,31 @@ function json(file: string, value: unknown) {
   fs.writeFileSync(file, JSON.stringify(value));
 }
 
-function fixture() {
+const pluginManifest = (name: string, packageVersion: string) => ({
+  name,
+  version: packageVersion,
+  dependencies: { "fixture-dependency": "1.0.0" },
+  openclaw: {
+    build: { openclawVersion: packageVersion, bundledDist: false },
+    compat: { pluginApi: ">=2026.10.5" },
+    schemaVersions: { state: 1, agent: 1 },
+  },
+});
+
+async function fixture() {
   const root = dirs.make("survivor-restart-cohort-");
   const registry = path.join(root, "sealed");
   fs.mkdirSync(registry);
-  const packages = [
+  const packages = [];
+  for (const name of [
     "@openclaw/codex",
     "@openclaw/discord",
     "@openclaw/matrix",
     "@openclaw/whatsapp",
     "openclaw",
-  ].map((name) => {
-    const build = { openclawVersion: version, bundledDist: false };
-    const manifest = {
-      name,
-      version,
-      dependencies: { "fixture-dependency": "1.0.0" },
-      openclaw: {
-        build,
-        compat: { pluginApi: ">=2026.10.5" },
-        schemaVersions: { state: 1, agent: 1 },
-      },
-    };
+  ]) {
     const unpacked = path.join(root, name.replace("/", "-"));
-    json(path.join(unpacked, "package/package.json"), manifest);
+    json(path.join(unpacked, "package/package.json"), pluginManifest(name, version));
     fs.writeFileSync(
       path.join(unpacked, "package/index.js"),
       "export const payload = 'unchanged';\n",
@@ -63,9 +68,13 @@ function fixture() {
     }
     const tarball = name.replace("@", "").replace("/", "-") + ".tgz";
     const file = path.join(registry, tarball);
-    execFileSync("tar", ["-czf", file, "-C", unpacked, "package"]);
-    return { name, version, tarball, sha256: hash(file) };
-  });
+    await packToArchive({
+      pkgDir: path.join(unpacked, "package"),
+      outDir: registry,
+      outName: tarball,
+    });
+    packages.push({ name, version, tarball, sha256: hash(file) });
+  }
   const manifest = path.join(registry, "prepublish-plugin-registry.json");
   json(manifest, {
     schema: "openclaw.prepublish-plugin-registry/v1",
@@ -86,6 +95,7 @@ function fixture() {
           id,
           {
             source: "npm",
+            spec: `@openclaw/${id}@${version}`,
             resolvedName: "@openclaw/" + id,
             resolvedVersion: version,
           },
@@ -100,7 +110,7 @@ function fixture() {
 it.skipIf(process.platform === "win32")(
   "serves the active synthetic cohort without changing sealed candidates or filling missing controls",
   async ({ signal }) => {
-    const { root, registry, manifest, config, packages } = fixture();
+    const { root, registry, manifest, config, packages } = await fixture();
     const sealed = new Map(
       [manifest, ...packages.map((entry) => path.join(registry, entry.tarball))].map((file) => [
         file,
@@ -137,12 +147,15 @@ source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/lib/openclaw-e2e-instance.sh
 phase() { shift; "$@"; }
 prepare_candidate_tarball() { :; }
+openclaw_e2e_fixture_plugin_command() { printf '%s\n' "$*" >>"$ARTIFACT_ROOT/restart-plugin-selectors.log"; }
 COMMAND_TIMEOUT=10s
 candidate_version=${version}
 candidate_tarball="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/openclaw.tgz"
 restart_registry_pid=""
 trap 'kill "$restart_registry_pid" 2>/dev/null || true; wait 2>/dev/null || true' EXIT
 ${prepare}
+OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL=beta
+prepare_restart_plugin_release_selectors
 prepare_restart_fixture
 node --input-type=module - "$NPM_CONFIG_REGISTRY" "$ARTIFACT_ROOT" <<'NODE'
 import assert from "node:assert/strict";
@@ -150,6 +163,11 @@ import fs from "node:fs";
 import path from "node:path";
 const [registry, root] = process.argv.slice(2);
 for (const name of ["@openclaw/codex", "@openclaw/discord", "@openclaw/whatsapp"]) {
+  const packageResponse = await fetch(registry + "/" + encodeURIComponent(name));
+  assert.equal(packageResponse.status, 200, name + " metadata must be available");
+  const packageMetadata = await packageResponse.json();
+  assert.equal(packageMetadata["dist-tags"].beta, "2026.10.6-first-hop.0");
+  assert.equal(packageMetadata["dist-tags"].latest, "2026.10.6-first-hop.0");
   for (const version of ["2026.10.5", "2026.10.6-first-hop.0"]) {
     const response = await fetch(registry + "/" + encodeURIComponent(name) + "/" + version);
     assert.equal(response.status, 200, name + "@" + version + " must converge");
@@ -162,6 +180,11 @@ for (const name of ["@openclaw/codex", "@openclaw/discord", "@openclaw/whatsapp"
     fs.writeFileSync(file, Buffer.from(await archive.arrayBuffer()));
   }
 }
+const redirected = await fetch(
+  "https://registry.npmjs.org/%40openclaw%2Fdiscord/2026.10.6-first-hop.0",
+);
+assert.equal(redirected.status, 200, "public npm diagnostics must use the synthetic cohort");
+assert.equal((await redirected.json()).version, "2026.10.6-first-hop.0");
 for (const name of ["@openclaw/matrix", "@openclaw/missing-control"]) {
   const response = await fetch(registry + "/" + encodeURIComponent(name) + "/2026.10.6-first-hop.0");
   assert.equal(response.status, 404, "inactive/missing packages must stay unavailable");
@@ -169,7 +192,7 @@ for (const name of ["@openclaw/matrix", "@openclaw/missing-control"]) {
 }
 NODE
 `;
-      const result = spawnSync("bash", ["-c", script], {
+      const result = spawnSync(testBashExecPath, ["-c", script], {
         encoding: "utf8",
         timeout: 15_000,
         env: {
@@ -184,9 +207,19 @@ NODE
           OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registry,
           OPENCLAW_DOCKER_E2E_SELECTED_SHA: sourceSha,
           OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: hash(manifest),
+          NODE_OPTIONS:
+            "--import=" +
+            path.resolve("scripts/e2e/lib/upgrade-survivor/plugin-registry-redirect.mjs"),
+          OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY: "http://127.0.0.1:" + port,
         },
       });
       expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(
+        fs.readFileSync(path.join(root, "restart-plugin-selectors.log"), "utf8").trim().split("\n"),
+      ).toEqual([
+        "openclaw -- plugins update @openclaw/discord@beta",
+        "openclaw -- plugins update @openclaw/whatsapp@beta",
+      ]);
       for (const [file, digest] of sealed) {
         expect(hash(file)).toBe(digest);
       }
@@ -197,8 +230,7 @@ NODE
           root,
           "restart-" + (id === "codex" ? "runtime" : id) + "-fixture.json",
         );
-        const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
-        expect(receipt).toMatchObject({
+        expect(readJson(receiptPath)).toMatchObject({
           name: "@openclaw/" + id,
           sourceVersion: version,
           targetVersion: futureVersion,
@@ -210,17 +242,9 @@ NODE
             ],
           },
         });
-        const pluginManifest = JSON.parse(member("package.json").toString());
-        expect(pluginManifest).toEqual({
-          name: "@openclaw/" + id,
-          version: futureVersion,
-          dependencies: { "fixture-dependency": "1.0.0" },
-          openclaw: {
-            build: { openclawVersion: futureVersion, bundledDist: false },
-            compat: { pluginApi: ">=2026.10.5" },
-            schemaVersions: { state: 1, agent: 1 },
-          },
-        });
+        expect(JSON.parse(member("package.json").toString())).toEqual(
+          pluginManifest("@openclaw/" + id, futureVersion),
+        );
         expect(member("index.js").toString()).toBe("export const payload = 'unchanged';\n");
       }
     } finally {
@@ -232,8 +256,8 @@ NODE
 
 it.skipIf(process.platform === "win32")(
   "retains the frozen extended-stable runtime CLI and its Codex-only source contract",
-  () => {
-    const { root, registry } = fixture();
+  async () => {
+    const { root, registry } = await fixture();
     const run = (id: string, output: string) =>
       spawnSync(
         process.execPath,

@@ -34,6 +34,7 @@ import {
 
 export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
 export { createCodexDynamicToolBridge };
+export type { JsonObject };
 
 /** Keeps host integration tests on the plugin's test boundary without exposing runtime internals. */
 export async function createCodexSessionInitializationFixtureForTest(params: {
@@ -49,9 +50,6 @@ export async function createCodexSessionInitializationFixtureForTest(params: {
 // Host finalizer fixtures opt into Vitest hooks without affecting snapshot consumers.
 export const loadCodexSettledFinalizerTestFixture = () =>
   import("./src/app-server/settled-turn-finalizer.test-support.js");
-
-export const loadCodexNativeSubagentMonitorTestFixture = () =>
-  import("./src/app-server/native-subagent-monitor.test-support.js");
 
 export const loadCodexAbortTranscriptTestFixture = () =>
   import("./src/app-server/transcript-abort.test-support.js");
@@ -163,3 +161,14 @@ export const loadCodexDynamicToolBuildTestFixture = () =>
   import("./src/app-server/dynamic-tool-build.test-support.js");
 
 export const loadCodexNativeWebSearchTestFixture = () => import("./native-web-search.test-api.js");
+
+export const loadCodexNativeSearchAuthorityTestFixture = () =>
+  import("./src/app-server/native-search-authority.test-support.js");
+
+export const loadCodexAccountUsageTestFixture = () => import("./src/account-usage.test-support.js");
+
+export const loadCodexSubscriptionRoutingTestFixture = () =>
+  import("./src/app-server/subscription-routing.test-support.js");
+
+export const loadNativeCommandGatewayTestFixture = () =>
+  import("./src/app-server/native-command-auth.test-support.js");

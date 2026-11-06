@@ -1,0 +1,2 @@
+# Retire the pet fixture's persisted state before the next shared-worker file.
+1

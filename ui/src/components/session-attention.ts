@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { compactApprovalCommand } from "../app/approval-presentation.ts";
@@ -17,7 +17,7 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { projectGateway, projectOverlays } from "../lib/reactive/application.ts";
 import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { activeSessionAgentStatus, sessionRowAttention } from "../lib/session-attention.ts";
 import { uiConversationMatches } from "../lib/sessions/session-key.ts";
 import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
@@ -45,11 +45,7 @@ export function createSessionAttention(
   const agents = projectAgents(context.agents);
   const hello = createMemo(() => gateway.read().snapshot.hello);
   const agentsList = createMemo(() => agents.read().agentsList);
-  const prompts = projectSource(questions, {
-    read: (state) => state.revision,
-    subscribe: (state, notify) => state.subscribe(notify),
-    equality: "revision",
-  });
+  const prompts = projectOwner(questions, (state) => state.revision);
   const [clock, setClock] = createSignal(0);
   const presentationClock = createParkedProjection(clock, presented);
   let resolverMemo = new SidebarProjectionMemo<SessionAttentionResolver>();
@@ -92,6 +88,7 @@ export function createSessionAttention(
         );
       }
     };
+    // Retire the old question client before replacement-connection events arrive.
     const stopGateway = context.gateway.subscribe(synchronize);
     const stopEvents = context.gateway.subscribeEvents((event) => {
       if (host.isConnected) {
@@ -103,11 +100,9 @@ export function createSessionAttention(
       stopGateway();
       stopEvents();
       disposeQuestionPromptState(questions);
+      globalThis.clearTimeout(agentStatusExpiryTimer);
+      globalThis.clearTimeout(snoozeWakeTimer);
     };
-  });
-  onCleanup(() => {
-    globalThis.clearTimeout(agentStatusExpiryTimer);
-    globalThis.clearTimeout(snoozeWakeTimer);
   });
 
   function resolveSessionAgentStatus(

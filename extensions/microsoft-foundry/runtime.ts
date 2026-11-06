@@ -1,7 +1,7 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   ProviderPreparedRuntimeAuth,
-  ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
 } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
@@ -55,7 +55,7 @@ async function refreshEntraToken(params?: {
 }
 
 export async function prepareFoundryRuntimeAuth(
-  ctx: ProviderPrepareRuntimeAuthContext,
+  ctx: Omit<ProviderPrepareRuntimeAuthContextV2, "capability">,
 ): Promise<ProviderPreparedRuntimeAuth> {
   if (ctx.apiKey !== "__entra_id_dynamic__") {
     return {
@@ -79,11 +79,7 @@ export async function prepareFoundryRuntimeAuth(
     const metadataModelId = normalizeOptionalString(metadata?.modelId);
     const modelId = requestedModelId ?? metadataModelId ?? ctx.modelId;
     const activeModelUsesMetadata = !requestedModelId || requestedModelId === metadataModelId;
-    const activeModelNameHint = activeModelUsesMetadata ? metadata?.modelName : undefined;
-    const modelNameHint = resolveConfiguredModelNameHint(
-      modelId,
-      ctx.model.name ?? activeModelNameHint,
-    );
+    const modelNameHint = resolveConfiguredModelNameHint(modelId, ctx.model.name);
     const configuredApi = isFoundryProviderApi(ctx.model.api)
       ? ctx.model.api
       : activeModelUsesMetadata &&

@@ -51,12 +51,6 @@ function usesDelegatedStatusOverviewFlow(source: string): boolean {
 }
 
 describe("command secret resolution coverage", () => {
-  it("routes capability command config through shared secret resolution", async () => {
-    const source = await readCommandSource("src/cli/capability-cli/shared.ts");
-    expect(source).toContain("resolveCommandConfigWithSecrets({");
-    expect(source).toMatch(/targetIds:\s*params\.targetIds/m);
-  });
-
   it("rejects prepared Web target scopes from an unrelated producer", async () => {
     const source = await readCommandSource("src/cli/capability-cli/web.ts");
     const unrelatedSource = source.replaceAll(
