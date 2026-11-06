@@ -14,6 +14,7 @@ import {
 import {
   listRepositoryGitHubPublicationsInDatabase,
   readPendingRepositoryGitHubPublicationInDatabase,
+  readRepositoryGitHubPublicationInputInDatabase,
 } from "../gateway/github-repository-publication-read.worker.js";
 import {
   readRepositoryGitHubPublicationBranchInDatabase,
@@ -90,6 +91,13 @@ export const publicationReadOperations = {
   ) => ({
     type: "githubPublications.repositoryList" as const,
     rows: listRepositoryGitHubPublicationsInDatabase(db, input),
+  }),
+  "githubPublications.repositoryInput": (
+    input: Parameters<typeof readRepositoryGitHubPublicationInputInDatabase>[1],
+    db,
+  ) => ({
+    type: "githubPublications.repositoryInput" as const,
+    row: readRepositoryGitHubPublicationInputInDatabase(db, input),
   }),
   "githubPublications.repositoryRead": ({ requestId }: { requestId: string }, db) => ({
     type: "githubPublications.repositoryRead" as const,

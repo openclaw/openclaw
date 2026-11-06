@@ -1,4 +1,5 @@
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import type { GitHubCredentialReader } from "../agents/github-credential-reader.js";
 import {
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
@@ -30,6 +31,7 @@ import {
   resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { repositoryDispatchCredentialReader } from "./repository-dispatch.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
@@ -88,6 +90,12 @@ export type GitHubPublicationRequester = GitHubPublicationRequesterPolicy &
 export type GitHubPublicationRequesterPolicyV2 = GitHubPublicationRequesterPolicy &
   Readonly<{
     version: 2;
+    /** Live invocation only; durable requester snapshots cannot recreate repository admission. */
+    prepareDispatchCredential?(input: {
+      sessionId: string;
+      requestDigest: string;
+      assertCurrent: () => void;
+    }): GitHubCredentialReader | undefined;
     signal: AbortSignal;
     prepareSource(
       selector: GitHubPublicationSourceSelector,
@@ -379,6 +387,23 @@ export async function prepareGitHubPublicationRequesterV2(
     };
     const requester: GitHubPublicationRequesterV2 = Object.freeze({
       version: 2 as const,
+      prepareDispatchCredential: (input: {
+        sessionId: string;
+        requestDigest: string;
+        assertCurrent: () => void;
+      }) =>
+        repositoryDispatchCredentialReader({
+          client: options.client,
+          agentId: session.agentId,
+          sessionKey: session.sessionKey,
+          sessionId: input.sessionId,
+          requestDigest: input.requestDigest,
+          hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+          assertCurrent: () => {
+            requester.assertCurrent();
+            input.assertCurrent();
+          },
+        }),
       signal,
       snapshot,
       assertInvocationCurrent,

@@ -16,6 +16,8 @@ import {
   persistPublicationTestSession,
   root,
 } from "./github-publication.test-support.js";
+import { readGitHubRepositoryPublicationMetadata } from "./github-repository-publication-snapshot.js";
+import type { PrepareRepositoryPublicationIntegration } from "./repository-publication-integration.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { SessionRepositoryCheckpointPayload } from "./worker-environments/session-repository-checkpoints.js";
 
@@ -208,7 +210,28 @@ export async function createRepositoryPublicationFixture(
     { sha: string; tree: { sha: string }; parents: Array<{ sha: string }>; message: string }
   >();
   const casRequests: Array<{ beforeOid: string; afterOid: string; force: boolean }> = [];
+  // These receipt/permission tests supply a worker result; native merge semantics have their own transport proof.
+  mocks.prepareRepositoryIntegration.mockImplementation(
+    async (
+      _identity: Parameters<PrepareRepositoryPublicationIntegration>[0],
+      input: Parameters<PrepareRepositoryPublicationIntegration>[1],
+    ) => {
+      const { snapshot } = await readGitHubRepositoryPublicationMetadata(
+        input.snapshotRoot,
+        input.snapshotDigest,
+      );
+      input.assertCurrent();
+      return {
+        snapshot: { ...snapshot, baseCommit: input.targetCommit },
+        snapshotRoot: input.snapshotRoot,
+        release: async () => {},
+      };
+    },
+  );
   mocks.runCommand.mockImplementation(async (args: string[], options: { input?: string } = {}) => {
+    if (args[0] === "gh" && args[1] === "auth" && args[2] === "token") {
+      return commandResult("synthetic-publication-token");
+    }
     // The whole broker path must work with no Git repository on the Gateway.
     if (args[0] !== "gh") {
       throw new Error("Publication attempted a Gateway Git command");
@@ -296,12 +319,14 @@ export async function createRepositoryPublicationFixture(
       return jsonResult({ sha, tree, truncated: false });
     }
     if (endpoint.endsWith("/git/trees")) {
-      expect(body.base_tree).toBe(baseTree);
-      const sha = writeTree(baseTree, body.tree);
+      const sha = writeTree(body.base_tree, body.tree);
       return jsonResult({ sha });
     }
     if (endpoint.endsWith("/git/commits")) {
-      const sha = git(["commit-tree", body.tree, "-p", body.parents[0]], body.message);
+      const sha = git(
+        ["commit-tree", body.tree, ...body.parents.flatMap((parent: string) => ["-p", parent])],
+        body.message,
+      );
       const commit = {
         sha,
         tree: { sha: body.tree },
@@ -335,6 +360,21 @@ export async function createRepositoryPublicationFixture(
       }
       return jsonResult({
         data: { updateRefs: { clientMutationId: body.variables.input.clientMutationId } },
+      });
+    }
+    if (endpoint === "repos/owner/repository/pulls/1" && runtime.pr) {
+      return jsonResult({
+        html_url: runtime.pr.url,
+        number: 1,
+        user: { id: runtime.pr.userId },
+        state: runtime.pr.state,
+        body: runtime.pr.body,
+        head: {
+          sha: runtime.pr.headSha,
+          ref: runtime.pr.headRef,
+          repo: { full_name: "owner/repository" },
+        },
+        base: { ref: runtime.pr.baseRef, repo: { full_name: "owner/repository" } },
       });
     }
     if (endpoint.endsWith("/pulls") && args.includes("state=all")) {

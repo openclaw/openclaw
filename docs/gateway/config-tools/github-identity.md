@@ -408,6 +408,34 @@ Automatic shared-publication recovery waits one minute after the first failed at
 
 During cooldown, publication status includes the remaining wait and the latest failure. Base-fetch failures identify the failed stage and native reason, including timeouts, with bounded, redacted Git diagnostics in status and the recovery warning. Inspect the original branch and PR, repair the reported access, connectivity, or Git-object problem, and let recovery reconcile the existing request. A failed observation does not establish that a push or PR creation failed; do not request a replacement publication to recover it.
 
+Repository-backed cloud publications target the authenticated repository's default
+branch (the parent repository for a fork). A continuation keeps its recorded PR
+repository and base branch. Source branches, tags, and commits select input, not
+the destination. After activation, a background fetch refreshes `origin/main`
+without delaying turns or changing the editing index; failures are advisory.
+
+Publication merges the accepted checkpoint with one observed target tip in private
+worker Git state. It preserves the saved input and any later editing changes. When
+retained history has exactly the checkpoint's tree, the merge uses its original
+ancestry. Conflicts preserve the checkpoint and appear in the receipt. Recovery
+uses the recorded worker destination or required profile without starting a model
+turn; unknown custody is not replaced. Retained compute and runtime reconnects
+require normal dispatch admission. If current startup authorization is needed,
+retry the same request from the original signed-in account. New requests still
+require the exact authoritative disk to be attached for capture; a stored mirror
+cannot replace an unknown disk owner.
+
+An explicit retry with the same idempotency key and unchanged content can reopen
+an unavailable shared request before any publication commit or external write.
+The original requester, selected publisher, and current session authority are
+checked again. A branch rejection can also reconcile a later managed publication
+of the exact saved input by the same requester and account: the recorded commit,
+remote head, and original open PR must match. Recovery extends that commit without
+force-pushing or changing the existing PR metadata. Other branch changes remain
+rejected, and recorded or uncertain effects retain their reconciliation rules.
+API failures report bounded exit, signal, timeout, and HTTP status facts without
+command output.
+
 During publication, an accepted PR response still completes its owned receipt if the requesting connection closes or publication permission ends. A successful local branch update likewise finishes its matching index transaction while the execution retains workspace ownership. This settlement does not authorize another push or PR creation; unconfirmed outcomes retain their existing recovery or personal-confirmation requirements.
 
 If an update reached an existing PR before that PR closed, recovery recognizes

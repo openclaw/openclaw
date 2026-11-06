@@ -11,15 +11,18 @@ import {
 import {
   SESSION_ID,
   SESSION_KEY,
+  commandResult,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   root,
 } from "./github-publication.test-support.js";
+import { readGitHubRepositoryPublicationMetadata } from "./github-repository-publication-snapshot.js";
 import { readRepositoryGitHubPublicationInDatabase } from "./github-repository-publication-store.worker.js";
 import {
   createRepositoryPublicationFixture,
   repositoryPublicationTestUrl as url,
 } from "./github-repository-publication.test-support.js";
+import type { PrepareRepositoryPublicationIntegration } from "./repository-publication-integration.js";
 
 const readRepositoryGitHubPublication = (requestId: string) =>
   readRepositoryGitHubPublicationInDatabase(openOpenClawStateDatabase().db, requestId);
@@ -196,3 +199,110 @@ it.each(["reset", "move", "held", "store-busy", "retired-owner"] as const)(
     expect(f.runtime.uploaded.size).toBe(1);
   },
 );
+
+it.each(["error", "api"] as const)(
+  "retries the same accepted shared checkpoint after a pre-effect %s outage",
+  async (kind) => {
+    const f = await createRepositoryPublicationFixture(checkpoint);
+    const transport = mocks.runCommand.getMockImplementation()!;
+    let unavailable = true;
+    mocks.runCommand.mockImplementation(async (args: string[], options) => {
+      if (unavailable && args.some((arg) => arg.endsWith("/git/blobs"))) {
+        if (kind === "error") {
+          throw new Error("Temporary fixture outage");
+        }
+        return {
+          ...commandResult("", 1),
+          stderr: Buffer.from("private credential output (HTTP 503)"),
+        };
+      }
+      return transport(args, options);
+    });
+    const failed = await f.publish("retry-original", { title: "Original request" });
+    expect(failed).toMatchObject({ status: "failed", code: "unavailable" });
+    expect(f.runtime.effects).toEqual([]);
+    if (kind === "api") {
+      expect(failed).toMatchObject({ nextAction: expect.stringContaining("HTTP 503") });
+      expect(JSON.stringify(failed)).not.toContain("private credential output");
+    }
+    const accepted = readRepositoryGitHubPublication(failed.requestId)!;
+    expect(accepted.checkpoint_ref).toBe(f.first.ref);
+    unavailable = false;
+    await expect(f.publish("retry-original", { title: "Different request" })).rejects.toThrow(
+      "idempotency key was reused",
+    );
+    const result = await f.publish("retry-original", { title: "Original request" });
+    expect(result).toMatchObject({ status: "published", requestId: failed.requestId, url });
+    expect(readRepositoryGitHubPublication(failed.requestId)).toMatchObject({
+      request_digest: accepted.request_digest,
+      checkpoint_ref: accepted.checkpoint_ref,
+      checkpoint_digest: accepted.checkpoint_digest,
+      previous_head_commit: accepted.previous_head_commit,
+    });
+    expect(f.runtime.effects).toEqual(["push", "pull_request"]);
+  },
+);
+
+it("reconciles an integrated managed head without replacing the original checkpoint or PR", async () => {
+  const f = await createRepositoryPublicationFixture(checkpoint);
+  const transport = mocks.runCommand.getMockImplementation()!;
+  let first = true;
+  mocks.runCommand.mockImplementation(async (args: string[], options) => {
+    if (first && args.some((arg) => arg.endsWith("/git/blobs"))) {
+      first = false;
+      throw new Error("Temporary fixture outage");
+    }
+    return transport(args, options);
+  });
+  const failed = await f.publish("original-integrated", { body: "Original description" });
+  expect(failed.status).toBe("failed");
+  const accepted = readRepositoryGitHubPublication(failed.requestId)!;
+  const upstream = f.git(["hash-object", "-w", "--stdin"], "upstream change\n");
+  f.git(["read-tree", f.baseTree]);
+  f.git(["update-index", "--add", "--cacheinfo", `100644,${upstream},upstream.txt`]);
+  f.runtime.baseHeadTree = f.git(["write-tree"]);
+  f.runtime.baseHead = f.git(
+    ["commit-tree", f.runtime.baseHeadTree, "-p", f.baseCommit],
+    "Advance main\n",
+  );
+  f.git(["update-index", "--add", "--cacheinfo", `100644,${f.first.sha},counter.txt`]);
+  const integratedTree = f.git(["write-tree"]);
+  expect(integratedTree).not.toBe(accepted.workspace_tree);
+  // The worker response includes an independent upstream file, not just the saved input tree.
+  const integrate: PrepareRepositoryPublicationIntegration = async (_identity, input) => {
+    const { snapshot } = await readGitHubRepositoryPublicationMetadata(
+      input.snapshotRoot,
+      input.snapshotDigest,
+    );
+    input.assertCurrent();
+    return {
+      snapshot: {
+        ...snapshot,
+        baseCommit: input.targetCommit,
+        baseTree: f.runtime.baseHeadTree,
+        workspaceTree: integratedTree,
+      },
+      snapshotRoot: input.snapshotRoot,
+      release: async () => {},
+    };
+  };
+  mocks.prepareRepositoryIntegration.mockImplementation(integrate);
+  expect(
+    (await f.publish("later-integrated", { body: "Keep the published description" })).status,
+  ).toBe("published");
+  const previousHead = f.runtime.head!;
+  const previousBody = f.runtime.pr!.body;
+  f.runtime.interruptPush = true;
+  const retry = await f.publish("original-integrated", { body: "Original description" });
+  expect(retry).toMatchObject({ status: "requested", requestId: failed.requestId });
+  await f.coordinator.resumeSessionRequests();
+  expect(readRepositoryGitHubPublication(failed.requestId)).toMatchObject({
+    status: "published",
+    checkpoint_digest: accepted.checkpoint_digest,
+    workspace_tree: accepted.workspace_tree,
+    previous_head_commit: accepted.previous_head_commit,
+  });
+  expect(f.runtime.pr!.body).toBe(previousBody);
+  expect(f.git(["rev-parse", `${f.runtime.head}^1`])).toBe(previousHead);
+  expect(f.runtime.effects).toEqual(["push", "pull_request", "push"]);
+});

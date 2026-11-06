@@ -38,6 +38,7 @@ import {
 export function createRepositoryGitHubPublicationExecution(params: {
   instanceId: string;
   disk?: RepositoryDiskPublicationSource;
+  prepareIntegration?: import("./repository-publication-integration.js").PrepareRepositoryPublicationIntegration;
   active: Map<string, string>;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent: () => void;
@@ -55,6 +56,7 @@ export function createRepositoryGitHubPublicationExecution(params: {
       action?: PersonalGitHubSessionActionV2;
       requester?: GitHubPublicationRequesterPolicyV2;
       recoveryResult?: SessionGitHubPublicationResult;
+      captureOnly?: boolean;
       captureRequestIds?: readonly string[];
     },
   ) => {
@@ -182,6 +184,9 @@ export function createRepositoryGitHubPublicationExecution(params: {
             );
           }
           assertExecution();
+          if (context.captureOnly) {
+            return projectGitHubPublicationResult(row);
+          }
           const actor = action ? undefined : getRequester().snapshot.actor;
           return await executeRepositoryGitHubPublication({
             execution: await claimExecution(),
@@ -189,6 +194,13 @@ export function createRepositoryGitHubPublicationExecution(params: {
               action?.owner ?? (actor?.kind === "operator" ? actor.profileId : undefined),
             snapshot: prepared.snapshot,
             snapshotRoot: prepared.snapshotRoot,
+            history: prepared.history,
+            prepareIntegration: params.prepareIntegration,
+            readDispatchCredential: (action ?? getRequester()).prepareDispatchCredential?.({
+              sessionId: row.session_id,
+              requestDigest: row.request_digest,
+              assertCurrent: assertExecution,
+            }),
             storePath: loaded.storePath,
             readCurrentEntry: () => assertReceiptOwner(row, preparedOwner).loaded.entry,
             assertWorkflowChangesAllowed: bound

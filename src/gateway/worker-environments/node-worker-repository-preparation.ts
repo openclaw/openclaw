@@ -44,7 +44,7 @@ type RepositoryIdentity = {
   gitToken?: string;
 };
 
-const AUTHENTICATED_GIT_JS = String.raw`const fs = require("node:fs");
+export const AUTHENTICATED_GIT_JS = String.raw`const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const { origin, token, disableLazyFetch } = JSON.parse(fs.readFileSync(0, "utf8"));
 const env = { ...process.env };

@@ -37,6 +37,7 @@ import {
 import {
   nodeWorkspaceTransferBlobPath,
   NodeWorkerWorkspaceTransferError,
+  NodeWorkerPublicationConflictError,
   nodeWorkspaceTransferManifestPath,
   nodeWorkspaceTransferPackPath,
   nodeWorkspaceTransferReconcilePath,
@@ -48,6 +49,7 @@ import {
   prepareNodeWorkerWorkspaceOverlay,
   type NodeWorkerPreparedWorkspaceTransfer,
 } from "./node-worker-prepared-workspace-transfer.js";
+import { transferNodeRepositoryPublication } from "./node-worker-publication-merge.js";
 import {
   applyNodeRepositoryCheckpoint,
   readNodeRepositoryCheckpointBase,
@@ -95,20 +97,22 @@ type WorkspaceTransferContext = {
   workspaceDir: string;
   manifestHome: string;
   transfer: NodeWorkerWorkspaceTransferInput;
+  assertCurrent?: () => void;
   prepared?: NodeWorkerPreparedWorkspaceTransfer;
   hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
 };
 
-type WorkspaceTransferOperation<Direction extends NodeWorkerWorkspaceTransferInput["direction"]> =
-  Omit<WorkspaceTransferContext, "transfer"> & {
-    transfer: Extract<NodeWorkerWorkspaceTransferInput, { direction: Direction }>;
-    request: Pick<
-      NodeWorkerTransferHttpRequest,
-      "gatewayUrl" | "tlsFingerprint" | "cloudflareAccess" | "token" | "signal"
-    >;
-    setStage: (stage: NodeWorkerWorkspaceTransferStage) => void;
-  };
+export type WorkspaceTransferOperation<
+  Direction extends NodeWorkerWorkspaceTransferInput["direction"],
+> = Omit<WorkspaceTransferContext, "transfer"> & {
+  transfer: Extract<NodeWorkerWorkspaceTransferInput, { direction: Direction }>;
+  request: Pick<
+    NodeWorkerTransferHttpRequest,
+    "gatewayUrl" | "tlsFingerprint" | "cloudflareAccess" | "token" | "signal"
+  >;
+  setStage: (stage: NodeWorkerWorkspaceTransferStage) => void;
+};
 
 async function downloadBuffer(params: NodeWorkerTransferHttpRequest, maxBytes: number) {
   return await withNodeWorkerTransferHttpRequest(
@@ -624,7 +628,7 @@ export async function runNodeWorkerWorkspaceTransfer(
     stage = next;
   };
   try {
-    if (!params.prepared) {
+    if (!params.prepared && params.transfer.direction !== "publication") {
       await recoverWorkspaceReplacement(params.workspaceDir);
     }
     const request = {
@@ -634,6 +638,12 @@ export async function runNodeWorkerWorkspaceTransfer(
       token: params.transfer.token,
       signal: params.signal,
     };
+    if (params.transfer.direction === "publication") {
+      return await transferNodeRepositoryPublication(
+        { ...params, transfer: params.transfer, request, setStage },
+        { download: downloadWorkspace, upload: uploadWorkspace },
+      );
+    }
     return params.transfer.direction === "download"
       ? await downloadWorkspace({
           ...params,
@@ -648,7 +658,10 @@ export async function runNodeWorkerWorkspaceTransfer(
           setStage,
         });
   } catch (error) {
-    if (error instanceof NodeWorkerWorkspaceTransferError) {
+    if (
+      error instanceof NodeWorkerWorkspaceTransferError ||
+      error instanceof NodeWorkerPublicationConflictError
+    ) {
       throw error;
     }
     if (error instanceof NodeWorkerTransferHttpError) {

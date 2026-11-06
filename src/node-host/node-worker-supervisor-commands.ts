@@ -57,6 +57,8 @@ import {
 } from "../worker/node-workspace-retain-protocol.js";
 import {
   NODE_WORKSPACE_TRANSFER_ERROR_CODE,
+  NODE_WORKSPACE_PUBLICATION_CONFLICT_CODE,
+  NodeWorkerPublicationConflictError,
   NodeWorkerWorkspaceTransferError,
 } from "../worker/node-workspace-transfer-protocol.js";
 import { decodeWorkerRequest } from "../worker/protocol-record.js";
@@ -362,9 +364,11 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
         ? NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE
         : capacityFailure
           ? NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
-          : transferFailure
-            ? NODE_WORKSPACE_TRANSFER_ERROR_CODE
-            : ("UNAVAILABLE" as const);
+          : error instanceof NodeWorkerPublicationConflictError
+            ? NODE_WORKSPACE_PUBLICATION_CONFLICT_CODE
+            : transferFailure
+              ? NODE_WORKSPACE_TRANSFER_ERROR_CODE
+              : ("UNAVAILABLE" as const);
     const message = transferFailure
       ? workspaceTransferDiagnostic(error)
       : workspaceCommand
