@@ -1,6 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { readRuntimeConfig as getRuntimeConfig } from "../config/runtime-snapshot.js";
+import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -181,7 +181,7 @@ export function isGatewayAuthPolicyCurrent(
   if (!policy) {
     return true;
   }
-  const current = config === undefined ? getRuntimeConfig() : config;
+  const current = config === undefined ? readRuntimeConfig() : config;
   if (current === null) {
     return false;
   }
@@ -200,7 +200,7 @@ export function isGatewayAuthGrantCurrent(
   if (!policy) {
     return true;
   }
-  const current = config === undefined ? getRuntimeConfig() : config;
+  const current = config === undefined ? readRuntimeConfig() : config;
   return (
     current !== null &&
     areGatewayAuthGrantsEquivalent(

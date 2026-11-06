@@ -8,7 +8,7 @@ import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
-import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { createClientToolDefinition, createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 import { listPersistedRuntimeToolSchemaQuarantines } from "../../tool-schema-quarantine-health.js";
 import { withRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
@@ -95,13 +95,6 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     mocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools, dispose });
   }
 
-  function clientTools(...names: string[]) {
-    return names.map((name) => ({
-      type: "function" as const,
-      function: { name, parameters: { type: "object" as const } },
-    }));
-  }
-
   function setAllow(input: ReturnType<typeof createInput>, allow: string[]) {
     input.attempt.toolsAllow = allow;
     input.preparedToolBase.effectiveToolsAllow = allow;
@@ -135,7 +128,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         input.attempt.trigger = "memory";
         input.attempt.memoryFlushWritePath = "memory/2026-10-08.md";
       }
-      input.attempt.clientTools = clientTools("client_canary");
+      input.attempt.clientTools = [createClientToolDefinition("client_canary")];
       mockMcp([createStubTool("canary__write")]);
       mocks.createBundleLspToolRuntime.mockResolvedValue({
         tools: [createStubTool("lsp_canary")],
@@ -200,7 +193,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     "applies %s client capabilities before tool reservation",
     async (_name, allow, expected, reserves) => {
       const input = createInput([], [{ name: "message" }]);
-      input.attempt.clientTools = clientTools(...clients);
+      input.attempt.clientTools = clients.map(createClientToolDefinition);
       setAllow(input, allow);
       mockMcp();
       mocks.createBundleLspToolRuntime.mockResolvedValue({
