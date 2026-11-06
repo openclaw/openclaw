@@ -1,201 +1,36 @@
 name: iOS Store Release
 
-run-name: iOS ${{ github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1' && 'Store release (weekly)' || (((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'testflight') && 'TestFlight distribution' || format('Store {0}', inputs.operation)) }}
+run-name: iOS production CAS transport proof ${{ inputs.producer_run_id == '' && 'cold producer' || 'warm consumer' }}
 
+# Temporary, nonmergeable diagnostic replacement. Archives and exports only;
+# no Apple API credentials, uploads, release notes, screenshots, or staging.
 on:
-  schedule:
-    - cron: "0 7 * * *"
-      timezone: America/Los_Angeles
-    - cron: "0 11 * * 1"
-      timezone: America/Los_Angeles
   workflow_dispatch:
     inputs:
-      operation:
-        description: Stage an App Store release, distribute TestFlight, or capture screenshots
-        required: true
-        default: release
-        type: choice
-        options:
-          - release
-          - testflight
-          - screenshots
-      resource_diagnostics:
-        description: Collect the temporary resource timeline (screenshots operation only)
-        type: boolean
-        default: true
-      startup_probe:
-        description: Observe idle host and iPhone simulator before screenshots (temporary, no upload)
-        type: boolean
-        default: false
+      producer_run_id:
+        description: Empty for a cold producer; successful producer run ID for a fresh-runner consumer
+        type: string
+        required: false
+        default: ""
 
-permissions: {}
+permissions:
+  actions: read
+  contents: read
 
 concurrency:
-  group: ios-release
+  group: ios-production-cas-transport
   cancel-in-progress: false
-  queue: max
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.22.1"
 
 jobs:
-  screenshots:
-    name: Capture release screenshots without uploading
-    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'screenshots' && github.repository == 'openclaw/openclaw'
-    permissions:
-      contents: read
+  archive-cache-transport:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'openclaw/openclaw'
     runs-on: xcode-27-xlarge
-    timeout-minutes: 90
-    steps:
-      - name: Reserve host CPU for screenshots
-        if: ${{ !inputs.startup_probe }}
-        timeout-minutes: 2
-        run: sudo -n /usr/bin/mdutil -i off /System/Volumes/Data
-
-      - name: Checkout screenshot source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Verify screenshot source
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: off
-          install-bun: "false"
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
-        with:
-          ruby-version: "4.0.7"
-          bundler: "4.0.23"
-          bundler-cache: false
-          working-directory: apps/ios
-
-      - name: Install locked Fastlane bundle
-        working-directory: apps/ios
-        run: |
-          set -euo pipefail
-          bundle _4.0.23_ install --jobs 4 --retry 3
-          bundle _4.0.23_ check
-          test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.2"
-
-      - name: Select Xcode and install pinned native tools
-        run: |
-          set -euo pipefail
-          source scripts/lib/swift-toolchain.sh
-          select_xcode_toolchain
-          swift_tools_dir="$RUNNER_TEMP/ios-screenshot-tools"
-          ./scripts/install-xcodegen.sh "$swift_tools_dir"
-          ./scripts/install-swift-tools.sh "$swift_tools_dir"
-          echo "$swift_tools_dir" >> "$GITHUB_PATH"
-          export PATH="$HOME/.cargo/bin:$PATH"
-          watch_toolchain="$(awk -F '\"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
-          test -n "$watch_toolchain"
-          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-      - name: Identify iOS native cache inputs
-        id: ios-cache-inputs
-        run: |
-          echo "xcode=$(xcodebuild -version | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-          echo "OPENCLAW_WATCH_RTC_CACHE_DIR=$RUNNER_TEMP/openclaw-watch-rtc-libraries" >> "$GITHUB_ENV"
-
-      # Match main CI's archive paths and keys; validation never publishes caches.
-      - name: Restore Watch RTC build inputs
-        continue-on-error: true
-        timeout-minutes: 3
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ${{ runner.temp }}/openclaw-watch-rtc-libraries
-          key: watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
-          # The build phase verifies each slice fingerprint and checksum before reuse.
-          restore-keys: |
-            watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-
-
-      - name: Restore screenshot source packages
-        continue-on-error: true
-        timeout-minutes: 3
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: apps/ios/build/SourcePackages
-          key: ios-source-packages-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/ios/**/Package.resolved', 'apps/ios/project.yml', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}
-
-      - name: Capture iPhone, iPad, and Watch screenshots
-        env:
-          OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
-          OPENCLAW_IOS_RESOURCE_DIAGNOSTICS: ${{ (inputs.resource_diagnostics || inputs.startup_probe) && '1' || '0' }}
-          OPENCLAW_SNAPSHOT_STARTUP_PROBE: ${{ inputs.startup_probe && '1' || '0' }}
-          OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ inputs.startup_probe && 'iphone' || '' }}
-          OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ inputs.startup_probe && '1' || '0' }}
-        run: |
-          node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
-            pnpm ios:screenshots &&
-          awk '/Watch RTC: verified cache hit / { hits++ } END { printf "Watch RTC verified cache hits: %d\n", hits }' \
-            apps/ios/build/SnapshotLogs/build.log
-
-      - name: Compare Spotlight eligibility of build products
-        if: inputs.startup_probe
-        run: |
-          node scripts/ios-spotlight-probe.mjs \
-            --source apps/ios/build/SnapshotDerivedData \
-            --output "$RUNNER_TEMP/ios-spotlight-probe.json"
-
-      - name: Retain screenshots and XCTest diagnostics
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ios-screenshots-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            apps/ios/fastlane/screenshots/en-US/*.png
-            apps/ios/build/SnapshotTestResults/capture-attempts.json
-            apps/ios/build/SnapshotTestResults/*.xcresult
-            apps/ios/build/SnapshotLogs/*.log
-            apps/ios/build/screenshot-diagnostics.json
-            ${{ runner.temp }}/ios-resource-timeline.jsonl
-            ${{ runner.temp }}/ios-spotlight-probe.json
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-
-  qualify:
-    if: >-
-      github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
-      ((github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1') ||
-      (github.event_name == 'workflow_dispatch' && inputs.operation == 'release'))
-    permissions:
-      actions: read
-      contents: read
-    # Keep native qualification products and disposable Gateway state separate
-    # from the clean checkout that admits the release.
-    uses: ./.github/workflows/ios-release-e2e.yml
-    with:
-      target_sha: ${{ github.sha }}
-      mode: stock
-
-  release:
-    name: Prepare and upload iOS release
-    needs: qualify
-    if: >-
-      !cancelled() &&
-      github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
-      ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *' && vars.IOS_TESTFLIGHT_ENABLED == 'true') ||
-      (github.event_name == 'workflow_dispatch' && inputs.operation == 'testflight') ||
-      (needs.qualify.result == 'success' &&
-      ((github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1') ||
-      (github.event_name == 'workflow_dispatch' && inputs.operation == 'release'))))
-    permissions:
-      contents: write
-    runs-on: xcode-27-xlarge
-    timeout-minutes: 360
-    environment: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'testflight') && 'ios-testflight' || 'ios-store-release' }}
+    timeout-minutes: 45
+    environment: ios-store-release
     steps:
       - name: Reserve host CPU for release capture
         timeout-minutes: 2
@@ -205,7 +40,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 1
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Verify release source
@@ -271,6 +106,12 @@ jobs:
           echo "xcode=$(xcodebuild -version | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
           echo "OPENCLAW_WATCH_RTC_CACHE_DIR=$RUNNER_TEMP/openclaw-watch-rtc-release-libraries" >> "$GITHUB_ENV"
 
+      - name: Verify immutable production source and transport contract
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+        run: node scripts/ios-archive-cache-transport.mjs prepare
+
       - name: Restore Watch RTC release libraries
         id: watch-rtc-cache
         continue-on-error: true
@@ -285,6 +126,7 @@ jobs:
 
       # Release sources use a different project path from ordinary CI. Keep the
       # default DerivedData package directory in its own cache namespace.
+
       - name: Restore iOS release source packages
         id: ios-packages-cache
         continue-on-error: true
@@ -343,28 +185,14 @@ jobs:
           (cd apps/ios && run_ios_fastlane ios signing_check)
           node .github/actions/ios-signing-keychain/keychain.mjs probe
 
-      - name: Prepare and upload iOS release
-        id: release
+      - name: Archive and export through the unchanged production wrapper
         env:
-          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          APP_STORE_CONNECT_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_KEY_CONTENT }}
-          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          GH_TOKEN: ${{ github.token }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-          IOS_RELEASE_DESTINATION: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'testflight') && 'testflight' || 'app-store' }}
-          OPENCLAW_TESTFLIGHT_GROUP_ID: ${{ vars.OPENCLAW_TESTFLIGHT_GROUP_ID }}
           OPENCLAW_IOS_COMPILATION_CACHE_DIR: ${{ runner.temp }}/openclaw-ios-release-cas
-          SCAN_APP_NAME: OpenClaw
-          SCAN_DEPLOYMENT_TARGET_VERSION: "18.0"
-          OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
-        run: |
-          set -euo pipefail
-          gh auth setup-git
-          node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
-            pnpm ios:release:upload -- \
-            --destination "$IOS_RELEASE_DESTINATION" \
-            --recovery-dir "$RUNNER_TEMP/ios-release-recovery"
+          CACHE_PRIMARY_KEY: ${{ steps.ios-compilation-cache.outputs.cache-primary-key }}
+          CACHE_MATCHED_KEY: ${{ steps.ios-compilation-cache.outputs.cache-matched-key }}
+          CACHE_HIT: ${{ steps.ios-compilation-cache.outputs.cache-hit }}
+        run: node scripts/ios-archive-cache-transport.mjs archive
 
       - name: Save iOS release compilation cache
         if: steps.ios-compilation-cache.outputs.cache-hit != 'true'
@@ -393,47 +221,26 @@ jobs:
           path: *ios_release_packages_cache_path
           key: ${{ steps.ios-packages-cache.outputs.cache-primary-key }}
 
-      - name: Retain release plan and notes
-        if: always() && steps.release.outcome != 'skipped'
+      - name: Download only the producer comparison evidence
+        if: inputs.producer_run_id != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ios-cas-transport-${{ inputs.producer_run_id }}
+          path: ${{ runner.temp }}/ios-cas-producer
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.producer_run_id }}
+
+      - name: Compare exports and account for completed cache transfers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ios-archive-cache-transport.mjs report
+
+      - name: Retain transport proof evidence
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ios-release-recovery-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/ios-release-recovery/ios-plan.json
-            ${{ runner.temp }}/ios-release-recovery/release-notes.json
-            ${{ runner.temp }}/ios-release-recovery/testflight-result.json
+          name: ios-cas-transport-${{ github.run_id }}
+          path: ${{ runner.temp }}/ios-cas-transport
           if-no-files-found: error
-          retention-days: 30
-
-      - name: Retain signed release artifacts
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ios-release-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/ios-release-recovery/artifacts/*.ipa
-            ${{ runner.temp }}/ios-release-recovery/artifacts/*.sha256
-            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/app-store/*.ipa
-            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/app-store/*.sha256
-          if-no-files-found: ignore
-          compression-level: 0
-          retention-days: 30
-
-      - name: Retain sanitized screenshot diagnostics
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ios-release-screenshot-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/ios-release-recovery/screenshot-diagnostics/screenshots/*.png
-            ${{ runner.temp }}/ios-release-recovery/screenshot-diagnostics/capture-attempts.json
-            ${{ runner.temp }}/ios-release-recovery/screenshot-diagnostics/screenshot-diagnostics.json
-            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/fastlane/screenshots/en-US/*.png
-            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/SnapshotTestResults/capture-attempts.json
-            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/screenshot-diagnostics.json
-            ${{ runner.temp }}/ios-resource-timeline.jsonl
-          if-no-files-found: ignore
-          compression-level: 0
-          retention-days: 30
+          compression-level: 6
+          retention-days: 7
