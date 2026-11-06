@@ -1,7 +1,7 @@
 // Owner device key D for this browser origin: a non-extractable Ed25519 key
 // kept in IndexedDB (structured clone keeps it non-extractable), one per claw.
 import type { StatementSigner } from "../../../../packages/openclaw-id-protocol/src/index.ts";
-import { requestResult } from "../chat/control-ui-database.runtime.ts";
+import { requestResult, transactionComplete } from "../chat/control-ui-database.runtime.ts";
 import { listen } from "../reactive/listener.ts";
 
 const DB_NAME = "openclaw-id";
@@ -24,11 +24,17 @@ function openDatabase(): Promise<IDBDatabase> {
   return requestResult(request);
 }
 
-// Runs one request in its own transaction.
+// Runs one request in its own transaction and resolves once the transaction commits:
+// a request can succeed and its transaction still abort.
 async function run<T>(mode: IDBTransactionMode, operate: (store: IDBObjectStore) => IDBRequest<T>) {
   const db = await openDatabase();
   try {
-    return await requestResult(operate(db.transaction(STORE, mode).objectStore(STORE)));
+    const transaction = db.transaction(STORE, mode);
+    const [result] = await Promise.all([
+      requestResult(operate(transaction.objectStore(STORE))),
+      transactionComplete(transaction),
+    ]);
+    return result;
   } finally {
     db.close();
   }
