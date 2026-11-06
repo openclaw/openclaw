@@ -2049,7 +2049,7 @@ describe("chat slash menu accessibility", () => {
         name: "status-report",
         description: "Prepare a status report.",
         source: "skill",
-        skillModelVisible: true,
+        skillReferenceable: true,
       },
       {
         key: "status-check",

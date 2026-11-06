@@ -42,7 +42,7 @@ it("verifies transferred objects once and reuses completed worker objects with p
   for (const [project, expectedFscks] of [
     [f.project, 1],
     [f.project, 0],
-    [await advanceProject(f.repository), 1],
+    [await advanceProject(f.repository), 0],
   ] as const) {
     fscks = 0;
     const operation = await f.preparedOperation(undefined, { project });

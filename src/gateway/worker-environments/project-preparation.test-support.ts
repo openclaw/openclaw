@@ -22,6 +22,7 @@ export async function runProjectScriptWithGitProbe(
     args: string[],
     options: cp.SpawnSyncOptionsWithStringEncoding,
   ) => cp.SpawnSyncReturns<string> | undefined,
+  manifestProbe?: typeof probe,
 ): Promise<string> {
   let stdout = "";
   let stderr = "";
@@ -42,7 +43,11 @@ export async function runProjectScriptWithGitProbe(
       {
         ...cp,
         spawnSync: (command: string, ...args: Parameters<typeof probe>) =>
-          (command === "git" ? probe(...args) : undefined) ?? cp.spawnSync(command, ...args),
+          (command === "git"
+            ? probe(...args)
+            : command === process.execPath && args[0][0] === "-e"
+              ? manifestProbe?.(...args)
+              : undefined) ?? cp.spawnSync(command, ...args),
       },
     ],
   ]);

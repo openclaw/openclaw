@@ -49,11 +49,12 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Sharing Markdown's parked-block helper removes 441–449 KB gzip from non-Chat routes.
-  // Chat pays 429 B in changed compression; measured 1,294,543 B + 192 B headroom.
-  chatBootJsGzipBytes: 1_294_735,
-  // New Session retains its measured 801,486 B + 192 B headroom.
-  newBootJsGzipBytes: 801_678,
+  // CPU-backed theme readback cuts Appearance latency 7–20% across both engines.
+  // Preserve its approved growth and this branch's 75 B tighter Chat ceiling.
+  // Inline Template references retain Patrick's approved +239 B allowance (2026-11-05).
+  chatBootJsGzipBytes: 1_295_979,
+  // Theme readback also affects New Session's shared bundle; retain main's ceiling.
+  newBootJsGzipBytes: 802_543,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -68,10 +69,12 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Separately indexed field selectors cut Usage style CPU by 20–24%.
-  // Measured total CSS is 323,426 B gzip / 1,670,773 B raw; retain 64 B headroom.
-  totalCssGzipBytes: 323_490,
-  totalCssRawBytes: 1_670_837,
+  // Separately indexed class lists avoid universal selector buckets.
+  // Main's 323,552 B gzip / 1,672,385 B raw measurement retains 64 B headroom.
+  // Patrick approved compact Template preview growth (2026-11-05):
+  // +1,386 B gzip / +4,379 B raw; preserve existing headroom.
+  totalCssGzipBytes: 325_002,
+  totalCssRawBytes: 1_676_828,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
