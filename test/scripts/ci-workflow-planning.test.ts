@@ -13929,7 +13929,7 @@ it.each([
     expected: ["skills"],
   },
   { paths: ["skills/model-usage/scripts/model_usage.py"], expected: ["skills"], full: true },
-  { paths: null, expected: ["skills"] },
+  { paths: null, expected: ["skills"], full: true },
 ])("routes Python checks to $expected", ({ paths, expected, full = false, missing = false }) => {
   const result = runCiManifestFixture({
     bundledPlanner: true,
