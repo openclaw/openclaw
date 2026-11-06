@@ -44,7 +44,6 @@ const suite = createControlUiE2eSuite({
       baseUrl,
       apiKey: "sk-synthetic-revoked",
       models: [{ id: "current", name: "Fixture model" }],
-      entrypoint: ["dist/index.js"],
       config: { update: { checkOnStart: false }, browser: { enabled: false } },
     });
     const close = async () => {
