@@ -88,11 +88,13 @@ it("retries an unavailable watch on elapsed time even when the wall clock rolls 
   const unavailable: observation.WatchSubscription = {
     health: () => ({ state: "unavailable", mode: "poll", directories: 0 }),
     ready: Promise.resolve(),
+    setScopes: async () => {},
     reconcile: async () => {},
     close: async () => {},
+    [Symbol.asyncDispose]: async () => {},
   };
   const attach = vi.spyOn(observation, "watch").mockImplementation((authority, options) => {
-    options.onHealth?.({ state: "unavailable" });
+    options.onHealth?.({ state: "unavailable", mode: "poll", directories: 0 });
     return unavailable;
   });
   const home = temp.make("claude-watch-rollback-");
