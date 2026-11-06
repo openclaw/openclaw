@@ -60,7 +60,7 @@ type ReportInput = Pick<
   | "repair"
   | "downtimeMs"
 > &
-  Partial<Pick<UpdateRunRecord, "target">>;
+  Partial<Pick<UpdateRunRecord, "target" | "createdAtMs" | "finishedAtMs">>;
 const PHASES = new Set<string>(UPDATE_RUN_PHASES);
 
 type UpdateRunIdentity =
@@ -408,7 +408,8 @@ export function renderUpdateRunReport(
           : 0),
       0,
     );
-    const totalMs = run.finishedAtMs == null ? 0 : run.finishedAtMs - run.createdAtMs;
+    const totalMs =
+      run.createdAtMs == null || run.finishedAtMs == null ? 0 : run.finishedAtMs - run.createdAtMs;
     // Capture and terminal cleanup run outside these phases; large state makes them long.
     if (totalMs - phaseMs >= 1_000) {
       lines.push(`Total: ${formatDurationPrecise(totalMs)}, including work outside these phases.`);
@@ -587,6 +588,8 @@ export function updateRunReportInputFromResult(
         : (result.reason ?? recorded?.reason ?? null),
     origin: recorded?.origin ?? {},
     target: recorded?.target,
+    createdAtMs: recorded?.createdAtMs,
+    finishedAtMs: recorded?.finishedAtMs,
     before: recordedOutcome?.before ?? result.before ?? recorded?.before ?? {},
     after: recordedOutcome?.after ?? result.after ?? recorded?.after ?? {},
     repair: recorded?.repair ?? [],
