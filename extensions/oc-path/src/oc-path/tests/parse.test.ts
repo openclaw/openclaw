@@ -56,6 +56,28 @@ describe("parseMd — frontmatter", () => {
     ]);
     expect(ast.raw).toBe(raw);
   });
+
+  it("keeps cross-key aliases readable instead of failing the whole file", () => {
+    const raw = "---\nprimary: &person alice\nauthors:\n  - *person\ntitle: keep\n---\n";
+    const ast = parseMd(raw);
+    expect(ast.frontmatter).toEqual([
+      { key: "primary", value: "alice", line: 2 },
+      { key: "authors", value: "- *person", line: 3 },
+      { key: "title", value: "keep", line: 5 },
+    ]);
+    expect(ast.raw).toBe(raw);
+  });
+
+  it("keeps aliases readable when malformed siblings force the tolerant reader", () => {
+    const raw = "---\nprimary: &person alice\nauthors:\n  - *person\nbroken: [unclosed\n---\n";
+    const ast = parseMd(raw);
+    expect(ast.frontmatter).toEqual([
+      { key: "primary", value: "alice", line: 2 },
+      { key: "authors", value: "- *person", line: 3 },
+      { key: "broken", value: "[unclosed", line: 5 },
+    ]);
+    expect(ast.raw).toBe(raw);
+  });
 });
 
 describe("parseMd — byte-fidelity", () => {

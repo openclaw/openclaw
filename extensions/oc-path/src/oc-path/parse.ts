@@ -100,9 +100,9 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
           value:
             isScalar(value) && typeof value.value === "string"
               ? value.value
-              : // block collections start below the key line, so this capture is empty
+              : // capture is empty (block value starts below); out-of-scope anchors stay alias text
                 capture === "" && !isScalar(value)
-                ? stringify(value).trimEnd()
+                ? stringify(value, { verifyAliasOrder: false }).trimEnd()
                 : unquote(capture),
           line: keyLine + 1,
         });
@@ -140,7 +140,10 @@ function readIndentedValue(lines: readonly string[], keyIndex: number): string |
   if (isScalar(value)) {
     return typeof value.value === "string" ? value.value : "";
   }
-  return value === null || value === undefined ? undefined : stringify(value).trimEnd();
+  // The reparsed slice cannot see anchors on sibling keys; keep alias text.
+  return value === null || value === undefined
+    ? undefined
+    : stringify(value, { verifyAliasOrder: false }).trimEnd();
 }
 
 function unquote(value: string): string {

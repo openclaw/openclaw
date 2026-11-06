@@ -1,2 +1,3 @@
-# Block-style frontmatter values must read as their content, not an empty string.
-23
+# Block-style frontmatter values read as their content (not ""), and cross-key
+# aliases render as alias text instead of failing the whole file parse.
+45
