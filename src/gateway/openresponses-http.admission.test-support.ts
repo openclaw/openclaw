@@ -1,13 +1,13 @@
-import OpenAI from "openai";
 import { expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
+  nextEventLoopTurn,
   withinTest,
 } from "../../test/helpers/promise.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { parseSseEvents } from "./http-stream.test-support.js";
+import { createOpenAiHttpTestClient, parseSseEvents } from "./http-stream.test-support.js";
 import { agentCommandMock } from "./test-helpers.js";
 
 export function registerOpenResponsesHttpAdmissionTests(getPort: () => number) {
@@ -20,7 +20,7 @@ export function registerOpenResponsesHttpAdmissionTests(getPort: () => number) {
     async ([_label, name, failed, providerTerminal, reject], { signal }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
       const entered = createDeferred();
-      const terminalAdmission = createDeferred<{ active: number }>();
+      const terminalAdmission = createDeferred<number>();
       const wireResponse = createDeferred<string>();
       const continueAgent = createDeferred();
       const lifecycleTerminals: string[] = [];
@@ -36,10 +36,7 @@ export function registerOpenResponsesHttpAdmissionTests(getPort: () => number) {
         lifecycleTerminals.push(phase);
         // Restart drains run before the next-turn SSE finalizer, so inspect the real
         // root owner at that boundary instead of observing eventual client delivery.
-        queueMicrotask(() => {
-          const active = getActiveGatewayRootWorkCount();
-          terminalAdmission.resolve({ active });
-        });
+        queueMicrotask(() => terminalAdmission.resolve(getActiveGatewayRootWorkCount()));
       });
 
       agentCommandMock.mockClear();
@@ -67,11 +64,7 @@ export function registerOpenResponsesHttpAdmissionTests(getPort: () => number) {
         };
       }) as never);
 
-      const client = new OpenAI({
-        apiKey: "test",
-        baseURL: `http://127.0.0.1:${getPort()}/v1`,
-        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-        maxRetries: 0,
+      const client = createOpenAiHttpTestClient(getPort()).withOptions({
         fetch: async (input, init) => {
           const response = await fetch(input, init);
           void response.clone().text().then(wireResponse.resolve, wireResponse.reject);
@@ -96,9 +89,7 @@ export function registerOpenResponsesHttpAdmissionTests(getPort: () => number) {
           signal,
         );
         expect(agentCommandMock).toHaveBeenCalledTimes(1);
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
         continueAgent.resolve();
 
         const [admission, [response, wire]] = await withinTest(
@@ -106,7 +97,7 @@ export function registerOpenResponsesHttpAdmissionTests(getPort: () => number) {
           signal,
         );
 
-        expect(admission.active).toBe(idleRootCount + 1);
+        expect(admission).toBe(idleRootCount + 1);
         expect(response.status).toBe(name);
         expect(terminalEvents).toEqual([`response.${name}`]);
         expect(lifecycleTerminals).toEqual([failed ? "error" : "end"]);
