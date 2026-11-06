@@ -9,7 +9,7 @@ describe.skipIf(process.platform === "win32")("command reservation census", () =
     // Orphaned by its shell, like a command whose killed spawner never bound it.
     const shell = spawn(
       "/bin/sh",
-      ["-c", `${process.execPath} -e "setInterval(() => {}, 1000)" & echo $!`],
+      ["-c", `${process.execPath} -e "setInterval(() => {}, 1000)" >/dev/null 2>&1 & echo $!`],
       { stdio: ["ignore", "pipe", "ignore"] },
     );
     const [output] = (await once(shell.stdout, "data")) as [Buffer];
