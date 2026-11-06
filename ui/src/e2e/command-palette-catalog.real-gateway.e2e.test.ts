@@ -12,6 +12,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
@@ -149,6 +150,7 @@ suite.define(() => {
     const frames: unknown[] = [];
     const requests: Array<{ id: string; params: Record<string, unknown> }> = [];
     const replies = new Map<string, Record<string, unknown>>();
+    let catalogPublicationPending = false;
     const stages: unknown[] = [];
     const assets: Array<{ path: string; sha256: string }> = [];
     const acquisitions = () => providerTraffic.filter((entry) => entry.path === "/api/tags").length;
@@ -206,6 +208,7 @@ suite.define(() => {
             // Idle assertions track the current connection's request lifetime.
             requests.length = 0;
             replies.clear();
+            catalogPublicationPending = false;
             socket.on("framesent", ({ payload }) => {
               const frame = requireRecord(JSON.parse(payload.toString()));
               if (
@@ -213,12 +216,24 @@ suite.define(() => {
                 frame.method === "models.list" &&
                 typeof frame.id === "string"
               ) {
+                catalogPublicationPending = false;
                 requests.push({ id: frame.id, params: requireRecord(frame.params) });
                 frames.push({ direction: "sent", frame });
               }
             });
             socket.on("framereceived", ({ payload }) => {
               const frame = requireRecord(JSON.parse(payload.toString()));
+              if (
+                frame.type === "event" &&
+                typeof frame.event === "string" &&
+                modelCatalogEventInvalidation(
+                  { event: frame.event, payload: frame.payload },
+                  { agentId: "main" },
+                )
+              ) {
+                // Publication reloads are coalesced before their request starts.
+                catalogPublicationPending = true;
+              }
               if (
                 frame.type === "res" &&
                 typeof frame.id === "string" &&
@@ -271,6 +286,7 @@ suite.define(() => {
             return requireRecord(replies.get(request.id)?.payload);
           };
           const catalogIdle = async () =>
+            !catalogPublicationPending &&
             (await refreshButton.isEnabled()) &&
             (await catalogProgress.count()) === 0 &&
             requests.every(({ id }) => replies.has(id));
