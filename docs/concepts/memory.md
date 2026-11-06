@@ -105,6 +105,10 @@ workspace. They are indexed for `memory_search` and available through
 `memory_get`; they are not merged into the agent's bootstrap `MEMORY.md`. The
 source files are left unchanged.
 
+From a terminal, use [`openclaw migrate`](/cli/migrate) (`plan` / `apply`) to
+preview or run provider imports outside the Control UI; stop any running
+Gateway first because CLI migrations require exclusive local state ownership.
+
 The preview marks destination conflicts. Enable **Replace existing imports** to
 replace those files; apply creates a verified pre-import backup and preserves
 item-level copies of overwritten files in the migration report.
