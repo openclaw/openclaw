@@ -148,6 +148,25 @@ describe("sidebar projection memo", () => {
     expect(row(second.key)?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
   });
 
+  it("updates a selected descriptor outside the held list", async () => {
+    const outside = session("outside");
+    const { sidebar, row } = await mount([session("held")]);
+    const owner = getAppSidebarOwner(sidebar.hostElement)!;
+    await update(sidebar, () => {
+      owner.sessionData.activeSessionLineageSelectedRow = outside;
+      sidebar.activeRouteId = "chat";
+      sidebar.sessionKey = outside.key;
+      owner.invalidate();
+    });
+    expect(row(outside.key)?.textContent).toContain("outside");
+    await update(sidebar, () => {
+      owner.sessionData.activeSessionLineageSelectedRow = { ...outside, label: "Updated detail" };
+      owner.invalidate();
+    });
+    expect(row(outside.key)?.textContent).toContain("Updated detail");
+    expect(row(outside.key)?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
+  });
+
   it("keeps a saved group collapsed when opening its top-level session", async () => {
     const storageKey = "openclaw:sidebar:sessions:collapsed-sections";
     const saved = JSON.stringify(["category:Alpha"]);

@@ -299,8 +299,10 @@ export function sidebarRowsInputs(
     host.sessionOwnerFilterId,
     host.sessionInvolvingMeFilterActive,
     host.sessionDataContext?.gateway.snapshot.selfUser,
-    // Slot equality also covers fresh arrays with unchanged membership and order.
-    ...navigationState.visibleSessionRows,
+    // Off-window selection is prepended, or appended in roster mode.
+    // Held rows are already covered by the source identities above.
+    navigationState.visibleSessionRows[0],
+    navigationState.visibleSessionRows.at(-1),
   ];
 }
 
