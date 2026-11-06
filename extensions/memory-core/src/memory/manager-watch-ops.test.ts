@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { registerAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import {
   listMemoryFiles,
@@ -10,6 +9,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const managers = await import("./index.js");
+const unexpectedAccess = () => {
+  throw new Error("Unexpected document access");
+};
 
 describe("memory workspace watcher lifecycle", () => {
   const fixture = createManagerIndexFixture(managers);
@@ -28,18 +30,14 @@ describe("memory workspace watcher lifecycle", () => {
     await managers.closeAllMemorySearchManagers();
   });
 
-  /**
-   * Registers a workspace whose subscription retires on its own (no abort) for the
-   * first `selfEndingSubscriptions` claims, then stays live until closed.
-   */
-  async function registerSelfEndingWatch(selfEndingSubscriptions: number) {
+  // The first `selfEnding` subscriptions retire without an abort from this owner.
+  async function registerSelfEndingWatch(selfEnding: number) {
     const gateway = fixture.paths.workspace;
-    const remote = (file: string) => path.join(gateway, file);
     let subscriptions = 0;
     const files: MemoryWorkspaceFiles = {
       assertCurrent() {},
       async listFiles() {
-        return await listMemoryFiles(remote("."), [], undefined, undefined);
+        return await listMemoryFiles(gateway, [], undefined, undefined);
       },
       async inspectFile() {
         return null;
@@ -51,8 +49,7 @@ describe("memory workspace watcher lifecycle", () => {
       buildMultimodalChunk: async () => null,
       async watch(_request, _onChange, signal) {
         subscriptions += 1;
-        if (subscriptions <= selfEndingSubscriptions) {
-          // The transport retires without a cancellation request from this owner.
+        if (subscriptions <= selfEnding) {
           return;
         }
         await new Promise<void>((resolve) => {
@@ -62,17 +59,7 @@ describe("memory workspace watcher lifecycle", () => {
     };
     release = registerAgentWorkspaceAccess(gateway, {
       memoryFiles: files,
-      bridge: {
-        readFile: () => {
-          throw new Error("Unexpected document access");
-        },
-        writeFile: () => {
-          throw new Error("Unexpected document access");
-        },
-        stat: () => {
-          throw new Error("Unexpected document access");
-        },
-      },
+      bridge: { readFile: unexpectedAccess, writeFile: unexpectedAccess, stat: unexpectedAccess },
     });
     return { subscriptions: () => subscriptions };
   }

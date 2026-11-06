@@ -1,0 +1,3 @@
+89
+# Regression coverage for the memory workspace watcher: a remote subscription that
+# retires without an abort must re-subscribe once, then keep the search fallback.
