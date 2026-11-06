@@ -127,7 +127,7 @@ suite.define(() => {
           phase: "preparing_context",
           seq: 1,
         });
-        await expect.poll(() => working.textContent()).toContain("Preparing this turn");
+        await expect.poll(() => working.textContent()).toContain("Preparing reply…");
         await gateway.emitGatewayEvent("chat", {
           sessionKey,
           runId,

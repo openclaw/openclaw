@@ -49,6 +49,7 @@ import {
 } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { acceptsPresenceDeltas, createPresenceReset } from "../presence-delivery.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
@@ -93,12 +94,12 @@ async function collectSystemInfo(
   if (
     !stateDiskSnapshot ||
     stateDiskSnapshot.stateDir !== stateDir ||
-    Date.now() >= stateDiskSnapshot.expiresAt
+    monotonicNow() >= stateDiskSnapshot.expiresAt
   ) {
     stateDiskSnapshot = {
       stateDir,
       disk: tryReadDiskSpace(stateDir),
-      expiresAt: Date.now() + 30_000,
+      expiresAt: monotonicNow() + 30_000,
     };
   }
   const { disk } = stateDiskSnapshot;

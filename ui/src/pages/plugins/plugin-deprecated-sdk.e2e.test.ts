@@ -39,7 +39,7 @@ describeControlUiE2e("Plugin SDK compatibility notice", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
 
-  it("shows a calm retirement notice and details without changing plugin state", async () => {
+  it("keeps retirement notices in inventory but not plugin details without changing state", async () => {
     const context = await newContext();
     onTestFinished(() => context.close());
     const page = await context.newPage();
@@ -90,10 +90,10 @@ describeControlUiE2e("Plugin SDK compatibility notice", () => {
     await row.getByRole("link", { name: /SDK Demo/ }).click();
     await page.getByRole("heading", { name: "SDK Demo", exact: true }).waitFor();
     await gateway.waitForRequest("plugins.inspect");
-    const apis = page.locator(".plugin-compatibility-apis");
-    await apis.waitFor();
-    expect(await apis.locator("dt").allTextContents()).toEqual([notice.apis[0].displayName]);
-    expect(await apis.locator("dd").allTextContents()).toEqual([notice.apis[0].replacement]);
+    expect(await page.locator(".plugin-compatibility-apis").count()).toBe(0);
+    expect(await page.locator(".plugin-catalog-detail").textContent()).not.toContain(
+      notice.message,
+    );
     await capture("plugin-detail.png", page.locator(".plugin-catalog-detail"));
     expect(await page.getByRole("button", { name: "Disable SDK Demo", exact: true }).count()).toBe(
       1,

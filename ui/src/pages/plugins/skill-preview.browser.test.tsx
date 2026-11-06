@@ -69,10 +69,9 @@ it("keeps a pending preview modal dismissible and localizes unavailable files wh
   moduleGate.resolve();
   await expect
     .element(
-      page.getByText(
-        "This file could not be read safely or is unavailable. Close and reopen the skill to try again.",
-        { exact: true },
-      ),
+      page.getByText("Couldn’t read this file. Close and reopen the skill to try again.", {
+        exact: true,
+      }),
     )
     .toBeVisible();
   await waitForSolid(() => {

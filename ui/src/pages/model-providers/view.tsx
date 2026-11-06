@@ -77,25 +77,47 @@ function AddProvider(props: ModelProvidersViewProps) {
             </div>
           </div>
           <div class="oc-dialog__body model-setup-wizard__body">
-            <ApiKeyInput
-              value={props.addProviderKey}
-              disabled={disabled()}
-              labelOnly
-              onInput={props.onAddProviderKeyChange}
-            />
+            <Show when={!props.addStartChat}>
+              <ApiKeyInput
+                value={props.addProviderKey}
+                disabled={disabled()}
+                labelOnly
+                onInput={props.onAddProviderKeyChange}
+              />
+            </Show>
             {renderMutationMessage(props.messages.add)}
           </div>
           <openclaw-modal-actions class="oc-dialog__footer model-setup-wizard__footer">
             <button class="btn" disabled={busy()} onClick={() => props.onAddProviderToggle()}>
-              {t("common.cancel")}
+              {t(props.addStartChat ? "common.close" : "common.cancel")}
             </button>
-            <button
-              class="btn primary"
-              disabled={disabled() || !props.addProviderId || !props.addProviderKey.trim()}
-              onClick={() => props.onAddProvider()}
+            <Show
+              when={props.addStartChat}
+              fallback={
+                <button
+                  class="btn primary"
+                  disabled={disabled() || !props.addProviderId || !props.addProviderKey.trim()}
+                  // With no usable model yet, saving also makes this key the agent's model.
+                  onClick={() => props.onAddProvider(needsModelSetup(props))}
+                >
+                  {props.busy["check:add"]
+                    ? t("modelProviders.apiKey.checking")
+                    : busy()
+                      ? t("modelProviders.saving")
+                      : t("modelProviders.add.save")}
+                </button>
+              }
             >
-              {busy() ? t("modelProviders.saving") : t("modelProviders.add.save")}
-            </button>
+              {(model) => (
+                <button
+                  class="btn primary"
+                  disabled={busy()}
+                  onClick={() => props.onAddStartChat()}
+                >
+                  {t("modelProviders.login.startChat", { model: model().name })}
+                </button>
+              )}
+            </Show>
           </openclaw-modal-actions>
         </div>
       </openclaw-modal-dialog>
@@ -146,11 +168,14 @@ function ModelReadiness(props: ModelProvidersViewProps) {
   );
 }
 
-function renderProviderNoticeRow(text: string) {
+function renderProviderNoticeRow(text: string, detail?: string) {
   return (
     <div class="settings-row" role="alert">
       <div class="settings-row__text">
         <span class="settings-row__desc provider-usage__error">{text}</span>
+        <Show when={detail && detail !== text}>
+          <span class="settings-row__desc">{detail}</span>
+        </Show>
       </div>
     </div>
   );
@@ -248,7 +273,7 @@ function ProviderAccess(props: ModelProvidersViewProps) {
         <Show when={props.error}>
           {(error) => (
             <SettingsGroup>
-              {renderProviderNoticeRow(error())}
+              {renderProviderNoticeRow(t("modelProviders.configUnavailable"), error())}
               <button
                 type="button"
                 class="btn btn--sm"

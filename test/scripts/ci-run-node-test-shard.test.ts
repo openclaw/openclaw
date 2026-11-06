@@ -38,7 +38,7 @@ import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js"
 const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
 
 const nativeQualificationFixtures = vi.hoisted(() => ({
-  first: "packages/markdown-core/src/chunk-text.test.ts",
+  first: "src/utils/string-readers.test.ts",
   second: "src/utils/chunk-items.test.ts",
   helperTest: "src/agents/embedded-agent-runner/run/compaction-timeout.test.ts",
   helper: "src/agents/test-helpers/agent-message-fixtures.ts",
@@ -589,7 +589,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   it("keeps changed qualification inputs on Vitest without dropping their coverage", () => {
     const cwd = makeScratchDir();
     const { helperTest, helper, setup } = nativeQualificationFixtures;
-    const files = [bunTarget, helperTest, nativeBunTarget];
+    const files = [bunTarget, helperTest, nativeBunTarget].toSorted();
     const copyInput = (file: string) => {
       mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
       writeFileSync(path.join(cwd, file), readFileSync(file));
@@ -605,7 +605,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(resolveCiTestRuntimeSelections(selection, "dual-all", cwd)).toEqual([
       { runtime: "node" },
       { runtime: "bun", includePatterns: [nativeBunTarget] },
-      { runtime: "bun", engine: "bun-test", files: [bunTarget, helperTest] },
+      { runtime: "bun", engine: "bun-test", files: [bunTarget, helperTest].toSorted() },
     ]);
     writeFileSync(path.join(cwd, helper), "// changed fixture helper\n");
     expect(resolveCiTestRuntimeSelections(selection, "dual-all", cwd)).toEqual([

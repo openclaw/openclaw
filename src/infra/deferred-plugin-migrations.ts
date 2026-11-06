@@ -619,14 +619,17 @@ export function recordDeferredPluginMigrationsInTransaction(
   return { deferred, resolved, pending: pendingMigrationRecords(readPendingMigrationRows(db)) };
 }
 
-/** Reopen only this updater's exact obligations; later Doctor decisions stay authoritative. */
+/**
+ * Reopen only this updater's exact obligations. Later Doctor decisions stay
+ * authoritative; their plugin IDs are returned instead of refusing the rest.
+ */
 export async function restorePluginCohortMigrationPublications(
   publications: readonly PluginCohortMigrationPublication[],
   authority: { env: NodeJS.ProcessEnv; assertCurrent: () => void },
-): Promise<void> {
+): Promise<string[]> {
   authority.assertCurrent();
   if (publications.length === 0) {
-    return;
+    return [];
   }
   const rows = foldPluginCohortMigrationPublications(publications);
   const present = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
@@ -635,31 +638,25 @@ export async function restorePluginCohortMigrationPublications(
   );
   authority.assertCurrent();
   if (!present) {
-    if ([...rows.values()].some((row) => row.before !== undefined)) {
-      throw new Error(
-        "Plugin migration recovery is missing its original obligations; recovery preserved the database.",
-      );
-    }
-    // A pre-migration backup can predate this obligation table. Original absence
-    // is already restored; settlement must not initialize the candidate schema.
-    return;
+    // A pre-migration backup can predate this obligation table. Settlement must not
+    // initialize the candidate schema, so any original obligations stay as restored.
+    return [...rows.values()].flatMap((row) => (row.before ? [row.pluginId] : []));
   }
   const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
-  await withPluginLifecycleLease(
+  return await withPluginLifecycleLease(
     { env: authority.env, schemaPolicy: "existing", assertCurrent: authority.assertCurrent },
     async (lease) => {
       const assertCurrent = () => {
         authority.assertCurrent();
         lease.assertOwned();
       };
-      runExistingOpenClawStateWriteTransaction(
-        ({ db }) => {
+      return runExistingOpenClawStateWriteTransaction(
+        ({ db }) =>
           restorePluginCohortMigrationRowsInDatabase(db, rows, assertCurrent, (database) => {
             invalidatePinnedMigrationReads();
             invalidateSuccessfulMigrationCheckpointsInTransaction(database);
             publishSqliteDatabaseAdmission(database, migrationReceipt, {});
-          });
-        },
+          }),
         { env: authority.env },
         {
           operationLabel: "state.plugin-migration-cohort-rollback",

@@ -14,12 +14,13 @@ export function repaintTerminalSession(tab: TerminalPanelSessionTab | undefined)
 export async function focusTerminalSession(
   tab: TerminalPanelSessionTab | undefined,
   rendered: Promise<unknown>,
+  focus = true,
 ): Promise<void> {
   // Refit and repaint after the container becomes visible. A same-size tab
   // switch otherwise leaves the newly shown canvas without dirty rows.
   await rendered;
   repaintTerminalSession(tab);
-  if (tab) {
+  if (tab && focus) {
     tab.controller.terminal.focus();
   }
 }

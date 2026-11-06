@@ -312,7 +312,7 @@ extension DashboardManager {
         // A saved renewal may reach the catalog before its serialized cookie
         // write finishes. The existing account lease remains valid throughout.
         controller.documentHost.tlsParams != configuration.tlsParams ||
-            controller.auth != configuration.auth ||
+            !controller.auth.hasSameDocumentIdentity(as: configuration.auth) ||
             !controller.documentHost.hasCurrentBrowserSession ||
             controller.documentHost.browserSession?.browserDataPrincipal != configuration.browserSession?
             .browserDataPrincipal ||

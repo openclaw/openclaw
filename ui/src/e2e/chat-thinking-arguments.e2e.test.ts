@@ -64,7 +64,7 @@ suite.define(() => {
       await expect.poll(() => composer.inputValue()).toBe("/think ");
       await composer.press("Enter");
       const log = page.getByRole("log");
-      await expect.poll(() => log.textContent()).toContain("Current thinking level: Unknown.");
+      await expect.poll(() => log.textContent()).toContain("Current effort: Unknown.");
       expect(await log.textContent()).toContain("Options: Unknown.");
       expect(await page.locator('[data-chat-thinking-option="high"]').count()).toBe(0);
       expect(await page.locator('[data-chat-thinking-slider="true"]').count()).toBe(0);

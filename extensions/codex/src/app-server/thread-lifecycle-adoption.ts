@@ -307,6 +307,13 @@ function isCodexThreadNonRunning(
   return status?.type === "idle" || status?.type === "notLoaded" || status?.type === "systemError";
 }
 
+/**
+ * Codex emits thread/closed only after the unloaded thread's shutdown_and_wait finishes,
+ * and treats shutdown as slow only after 10s (app-server thread_lifecycle.rs,
+ * unload_thread_without_subscribers). Live teardown with MCP servers takes about 2s.
+ */
+const CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS = 10_000;
+
 function observeCodexThreadConfiguration(
   params: CodexStartOrResumeThreadParams,
   thread: CodexThread,
@@ -356,7 +363,7 @@ function observeCodexThreadConfiguration(
       timer ??= setTimeout(() => {
         expired = true;
         onUnload?.();
-      }, 2_000);
+      }, CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS);
       if (!(requireClosed ? closed : unloaded) && !expired) {
         await new Promise<void>((resolve) => {
           const finish = () => {

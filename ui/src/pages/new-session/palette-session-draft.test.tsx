@@ -304,7 +304,7 @@ describe("PaletteSessionDraft", () => {
     await firstSubmission;
     const notice = showToast.mock.calls.at(-1)?.[0];
     expect(notice).toMatchObject({
-      message: "Session didn't start: Gateway refused the session",
+      message: "Couldn’t start the session. Try again. Gateway refused the session",
       actionLabel: "Try again",
     });
     create.mockResolvedValueOnce({

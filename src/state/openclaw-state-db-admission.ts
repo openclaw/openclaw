@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import {
   requireNativeDatabaseFile,
   getPostgresPhysicalFacts,
@@ -18,6 +19,7 @@ import {
   isSqliteSchemaAdmissionCold,
 } from "../infra/sqlite-schema-facts.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 
 function getStateSchemaFacts(database: EngineConnection) {
   return isPostgresSqlConnection(database)
@@ -217,6 +219,28 @@ export function publishStateSchemaVersionAdmission(
   } else {
     rememberConnectionVersion(database);
   }
+}
+
+/**
+ * A peer process (the Gateway's update-run watcher) may publish the deferred
+ * 2026.9.2 schema version after this connection admitted its floor. Adopt it
+ * only when the header and metadata both read current inside this connection.
+ */
+export function adoptPeerPublishedStateSchemaVersion(
+  database: DatabaseSync,
+  metadata: { schema_version?: unknown } | undefined,
+): boolean {
+  if (
+    metadata?.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION ||
+    readSqliteUserVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION
+  ) {
+    return false;
+  }
+  publishStateSchemaVersionAdmission(database, {
+    userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+    contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
+  return true;
 }
 
 /** Runtime shape and integrity are physical-file facts, independent of live write authority. */

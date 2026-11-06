@@ -9,6 +9,7 @@ import type {
   SqliteReadOnlyOperationCommand,
   SqliteReadOnlyOperationResult,
 } from "./sqlite-readonly-operation-types.js";
+import { SqliteSnapshotCapacityError } from "./sqlite-snapshot-capacity-error.js";
 import type { SqliteSnapshotReclamation } from "./sqlite-snapshot-reclamation.js";
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
@@ -59,6 +60,7 @@ export class SqliteReadOnlyInspectionContentionError extends Error {}
 export const SQLITE_INSPECTION_CONTENTION_PREFIX = "Retryable SQLite inspection contention: ";
 export const SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX =
   "SQLite snapshot directory creation refused: ";
+export const SQLITE_SNAPSHOT_CAPACITY_PREFIX = "SQLite snapshot capacity unavailable: ";
 
 export type SqliteAuthProfileRows = { store: unknown; state: unknown; cacheable: boolean };
 export type SqliteAuthProfileReadOptions = {
@@ -260,12 +262,19 @@ export function readSqliteReadOnlyWorkerValue(
     throw error;
   }
   if (params.status !== 0 || params.failure || !result.ok) {
-    const contention = !result.ok && result.message.startsWith(SQLITE_INSPECTION_CONTENTION_PREFIX);
-    const message = !result.ok
-      ? contention
-        ? result.message.slice(SQLITE_INSPECTION_CONTENTION_PREFIX.length)
+    const capacity =
+      !result.ok &&
+      (params.status === 0 || params.status === 1) &&
+      result.message.startsWith(SQLITE_SNAPSHOT_CAPACITY_PREFIX);
+    const failureMessage = !result.ok
+      ? capacity
+        ? result.message.slice(SQLITE_SNAPSHOT_CAPACITY_PREFIX.length)
         : result.message
       : (params.failure ?? `exited with code ${params.status}`);
+    const contention = !result.ok && failureMessage.startsWith(SQLITE_INSPECTION_CONTENTION_PREFIX);
+    const message = contention
+      ? failureMessage.slice(SQLITE_INSPECTION_CONTENTION_PREFIX.length)
+      : failureMessage;
     const allocationRefused =
       params.failure === undefined &&
       !result.ok &&
@@ -276,6 +285,9 @@ export function readSqliteReadOnlyWorkerValue(
       params.stderr,
       { cause: params.cause },
     );
+    if (capacity) {
+      throw new SqliteSnapshotCapacityError(error.message, { cause: params.cause });
+    }
     if (contention) {
       const failure = new SqliteReadOnlyInspectionContentionError(error.message);
       throw allocationRefused ? markPrivateDirectoryCreationRefused(failure) : failure;

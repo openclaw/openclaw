@@ -541,7 +541,7 @@ suite.define(() => {
       .poll(() => composer.evaluate((element) => element === document.activeElement))
       .toBe(true);
 
-    await page.getByRole("button", { name: "Command palette" }).click();
+    await page.getByRole("button", { name: "Search", exact: true }).click();
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
     await expect
@@ -575,8 +575,8 @@ suite.define(() => {
     await composer.fill("");
 
     // The background hydrate must not take the shared sessions loading
-    // flag, which would disable New conversation for the whole request.
-    const newThread = page.getByRole("link", { name: "New conversation" }).first();
+    // flag, which would disable New session for the whole request.
+    const newThread = page.getByRole("link", { name: "New session" }).first();
     expect(await newThread.isEnabled()).toBe(true);
 
     await gateway.resolveDeferred("sessions.list");

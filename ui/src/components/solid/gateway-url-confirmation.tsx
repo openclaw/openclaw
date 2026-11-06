@@ -39,7 +39,9 @@ function renderConfirmation(props: () => ConfirmationProps) {
   const summary = () => t("connection.switchGateway.summary");
   const notes = () =>
     [
-      t("connection.switchGateway.note"),
+      t("connection.switchGateway.note", {
+        host: formatGatewayHost(props().pendingGatewayUrl ?? ""),
+      }),
       props().linkCarriesToken ? t("connection.switchGateway.noteToken") : null,
       // Tokens are origin-scoped: a different origin never receives the saved one.
       props().currentGatewayUrl.trim() &&

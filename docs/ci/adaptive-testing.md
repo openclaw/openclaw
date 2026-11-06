@@ -81,7 +81,13 @@ and context. Changes to configuration or include files during execution cannot
 rewrite that frozen identity. A missing or invalid terminal receipt leaves the
 incomplete snapshot available if the artifact upload runs.
 
-If expanded dependency paths exceed the export limit, the capture retains
+If expanded dependency paths exceed the export limit, the capture first uses a
+version-2 observation payload: one shared `dependencyPaths` table with integer
+references in each file's `dependencies` array. Readers resolve those references
+before graph selection or model scoring; missing edges remain `null`. Small
+exports and frozen pre-execution snapshots keep version 1. Both versions remain
+readable, including retained historical artifacts. The outer export stays version 1.
+If the compact payload still exceeds the limit, the capture retains
 terminal outcomes and the frozen snapshot with all dependencies set to `null`,
 and emits a warning. Missing graph data still requires conservative selection.
 If that smaller export also exceeds the limit, the incomplete snapshot remains.
@@ -148,14 +154,20 @@ history or unavailable APIs produce an empty bundle and preserve full execution.
 
 The bundle is shared through a same-run artifact. Test jobs download it without
 additional token permissions. Each bundle binds the current workflow run,
-attempt and actual checkout commit; the reporter also freezes the bundle hash.
-At the native inventory callback, the reporter selects the newest compatible
-prior and computes the complete prior-to-current Git diff, including both ends
-of renames. It does not substitute the launch record's comparison base.
+attempt and actual checkout commit/tree; the reporter also freezes the bundle
+hash. Preflight obtains the exact prior-to-current comparison from GitHub once
+per prior revision, including removed paths and both ends of renames. It verifies
+the prior is an ancestor. When GitHub's comparison reaches its 300-file cap,
+preflight compares one recursive prior tree with the checked-out current tree.
+The tree response must be complete and fit within 32 MiB; comparisons with 600 or
+more changed paths remain ineligible. This uses the same ten-second restore
+deadline and includes removed paths, rename endpoints, and file-mode changes.
+The native inventory callback consumes this
+bound comparison; it does not substitute the launch record's comparison base.
 
 Exact configuration, lock, environment and runtime identities must match. The
-prior commit must be locally available and an ancestor; no test process fetches
-history. Unknown source, dirty checkout, stale bundle or incompatible inputs
+test checkout can remain shallow; no test process fetches history or calls GitHub.
+Unknown source, dirty checkout, stale bundle or incompatible inputs
 produce an explicit fallback. Different shard membership can still prevent a
 match; graph-input comparability alone does not relax the selector.
 
@@ -205,8 +217,48 @@ enables collection only for the sampled `unit-fast` invocations described above.
 Other configs and native Bun-test execution do not emit these pilot exports.
 Missing observations must never be interpreted as passing or irrelevant tests.
 
-Keep rollout in shadow mode until representative full-run audits establish
+Keep historical graph and learned selection in shadow mode until representative full-run audits establish
 failure recall, graph completeness, and net savings including collection cost.
+
+### Qualified Markdown skipping pilot
+
+Canonical pull requests in aggressive selection mode can omit nine qualified
+Markdown tests from the conventional directory fallback. This applies only when
+the change includes a Markdown source module and otherwise contains only test
+budget allocations, regular JavaScript/TypeScript production sources under
+`src`, `extensions` or `packages`, or companion tests with a verified separate CI process.
+Companion tests must have one explicit, complete canonical owner outside the
+shared Markdown worker. Same-worker tests, unknown owners, helpers, fixtures,
+missing or symlinked companion sources, and tooling/configuration changes retain
+full coverage. A changed production companion that affects a qualified test's
+input fingerprint retains that test. Independently checked docs
+keep their existing selection rules. Explicit owners, changed tests,
+import consumers, policy checks and smoke tests retain their existing selection.
+The stateful table test is outside this pilot. Scheduled, main and release runs
+retain their existing full coverage.
+
+Ten pure Markdown test files run in the dedicated `core-markdown` owner. It
+shares Node worker policy, hermetic environment setup, output redaction and
+resource controls with other lanes, without their application transforms or
+custom cleanup runner. The table test keeps its existing unit owner. New tests
+keep the ordinary ownership rules until explicitly moved into this lane.
+
+`config/ci-adaptive-markdown.json` records reviewed input fingerprints. The
+selector uses its existing import graph to hash each test's current transitive
+workspace inputs, plus the shared test configuration and dependency lock inputs.
+Missing, changed or symlinked inputs retain the test. A new import changes the
+importing module's fingerprint; an unqualified test is never omitted. This is
+unchanged-input reuse, not a learned prediction or historical graph fallback.
+
+The PR summary lists actual omissions after all selection rules are combined.
+Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to disable the pilot
+along with aggressive selection. Refresh fingerprints only after reviewing the
+changed input closure and repeating full-versus-selected Node/Bun proof, including
+an injected regression. A successful provider call does not qualify a test.
+
+The Markdown worker reads Node execution flags independently of the test watchdog
+and its other-lane inventories. Updating an unrelated lane's test list does not
+invalidate Markdown qualification. Changes to the Node flag policy still do.
 
 ## Plan in shadow mode
 
@@ -248,6 +300,28 @@ The caller owns inventory completeness, diff construction, provenance, and any
 external model invocation. The command does not call a model or send source to a
 service. Historical graphs cannot prove dynamic filesystem or generated-input
 coverage; full-run comparison remains necessary before enabling actual skips.
+
+## Evaluate recorded decisions
+
+Compare an exported capture's frozen graph and model scores with its later
+outcomes:
+
+```bash
+node scripts/ci-adaptive-evaluate.mjs \
+  --input observations.json \
+  --output evaluation.json
+```
+
+This command performs no inference or test execution. It joins files by their
+project, pool and path, including when ranking rows have a different order.
+Missing predictions remain unavailable, and incomplete files remain unknown.
+The report identifies failed files proposed for omission, recorded score
+buckets and summed complete-file durations. Failures remain unattributed;
+they are not automatically causal regression labels or independent episodes.
+
+The evaluator rejects inconsistent source/inventory identities and recording
+times. The caller must independently verify source and prior artifact
+provenance. Summed file durations are not elapsed time, CPU time or savings.
 
 ## Estimate cost and compute savings
 
@@ -296,3 +370,36 @@ scenario inputs, not invoice predictions; credits, discounts, minimums and
 storage charges need separate accounting. Workflow critical-path savings stay
 unknown until a dependency timeline is available. Do not label summed job time
 as developer wait time.
+
+## Declared file inputs
+
+Prefer module imports for JSON fixtures so Vitest records their dependencies
+without additional rules. Binary fixtures read through `node:fs` use the exact
+test-to-input mapping in `test/vitest/vitest.declared-inputs.ts`. The shared Vite
+plugin registers these inputs with native dependency recording and related-test
+selection. It does not intercept file reads or change the scheduled inventory.
+Undeclared file reads remain a graph coverage gap.
+
+## Optional Jev ranking experiment
+
+`node scripts/ci-adaptive-jev.mjs --request selection-request.json --output jev-ranking.json`
+accepts the existing selector request fields `version`, `context`, `files`, and
+`changedFiles`. Supply `TYPESAFE_API_KEY` only to this trusted command. Without
+it, the command writes null scores and keeps every scheduled file without making
+a request. Ordinary CI does not invoke this command or receive this credential.
+
+With a key, the command sends only changed paths and test identities to the
+[TypeSafe System One endpoint](https://docs.typesafe.ai/api/system-one), using
+the pinned `jev-1.14.0` model. It does not send source, outcomes, logs, environment
+values or conversation history. Each batch contains at most 25 opaque question
+IDs; requests and streamed responses are limited to 64 KiB, with a single
+ten-second deadline and no retries or redirects. At most 1,000 tests and 600
+changed paths are accepted. Invalid or incomplete responses discard all scores
+and preserve the full inventory.
+
+These are path-only experimental scores, not calibrated regression probabilities.
+The artifact records its actual inference time, input hash and reported token
+usage. A failed request can leave total usage unknown; `usage.complete` makes
+that explicit. Keep this artifact separate from frozen pre-execution decisions:
+a later replay must never be presented as a prospective prediction. Live model
+quality and billing need a key-backed experiment before any scheduling decision.

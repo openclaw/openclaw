@@ -192,7 +192,9 @@ describe("OpenClaw shell context lifecycle", () => {
       await settleShell(shell);
       const toast = shell.toastElement as HTMLElementTagNameMap["openclaw-toast-host"];
       expect(toast.parentElement).toBe(shell.navDrawerElement);
-      expect(showToast({ message: "Drawer result", durationMs: 60_000 })).toBe(true);
+      expect(showToast({ severity: undefined, message: "Drawer result", durationMs: 60_000 })).toBe(
+        true,
+      );
       await toast.updateComplete;
       await vi.dynamicImportSettled();
       flush();
@@ -200,7 +202,9 @@ describe("OpenClaw shell context lifecycle", () => {
       modal = document.createElement("openclaw-modal-dialog");
       document.body.append(modal);
       await modal.updateComplete;
-      expect(showToast({ message: "Modal result", durationMs: 60_000 })).toBe(true);
+      expect(showToast({ severity: undefined, message: "Modal result", durationMs: 60_000 })).toBe(
+        true,
+      );
       await toast.updateComplete;
       expect(toast.parentElement).toBe(modal.getOverlayContainer());
 
