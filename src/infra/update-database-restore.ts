@@ -10,7 +10,6 @@ import { drainAgentDatabaseResources } from "../state/openclaw-agent-db-resource
 import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { formatErrorMessage } from "./errors.js";
 import {
   getPublishFileExclusiveFailureDetails,
   publishFileExclusive,
@@ -117,22 +116,12 @@ async function withDatabaseExclusion<T>(
     throw cleanupError;
   }
   if ("error" in outcome) {
-    throw displaced.length === 0 && !retainPreparedCopy
-      ? new UpdateDatabaseRestoreNotStartedError(outcome.error)
-      : outcome.error;
+    throw outcome.error;
   }
   return outcome.value;
 }
 
 /** The caller owns a settled failed candidate that has never admitted user work. */
-/** The live databases were never touched; the caller keeps them and refuses rollback. */
-export class UpdateDatabaseRestoreNotStartedError extends Error {
-  constructor(cause: unknown) {
-    super(formatErrorMessage(cause), { cause });
-    this.name = "UpdateDatabaseRestoreNotStartedError";
-  }
-}
-
 export async function restoreUpdateDatabaseBackup(params: {
   backup: UpdateDatabaseBackup;
   runId: string;
@@ -140,6 +129,8 @@ export async function restoreUpdateDatabaseBackup(params: {
   assertCurrent: () => void;
   expectedGenerations?: UpdateDatabaseGenerations;
   pluginCohortRecovery?: PluginCohortRecoveryBinding;
+  /** Fires before the first live database changes; a failure before it left them untouched. */
+  onLiveMutation?: () => void;
 }): Promise<string[] | null> {
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
     throw new Error("Database rollback requires its original update run identity.");
@@ -216,6 +207,7 @@ export async function restoreUpdateDatabaseBackup(params: {
             pluginValidation: "core-only",
             shellEnvFallback: "defer",
           }).readConfigFileSnapshot();
+          params.onLiveMutation?.();
           const { preparePostgresRestore } = await import("../snapshot/database-backup.js");
           // Keep prior recovery preparations intact without occupying a retry's fresh target.
           const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}-${randomUUID()}`;
@@ -322,6 +314,7 @@ export async function restoreUpdateDatabaseBackup(params: {
           );
           assertOwned();
         }
+        params.onLiveMutation?.();
         for (const move of moves) {
           assertOwned();
           try {

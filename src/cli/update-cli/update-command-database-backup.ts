@@ -12,10 +12,7 @@ import {
   createUpdateDatabaseBackup,
   type UpdateDatabaseBackup,
 } from "../../infra/update-database-backup.js";
-import {
-  restoreUpdateDatabaseBackup,
-  UpdateDatabaseRestoreNotStartedError,
-} from "../../infra/update-database-restore.js";
+import { restoreUpdateDatabaseBackup } from "../../infra/update-database-restore.js";
 import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
@@ -275,6 +272,7 @@ export async function restoreFailedUpdateDatabases(params: {
   if (params.backup.migration && params.backup.migration.backup !== params.backup.directory) {
     return await refuse("Migration receipt belongs to a different database backup");
   }
+  let liveMutationStarted = false;
   try {
     // Every restore path, including a settled Doctor failure before finalization,
     // must retain this run's matching recovery pair in the restored database.
@@ -288,6 +286,9 @@ export async function restoreFailedUpdateDatabases(params: {
         ? { runId: pair.cohort.runId, transactionId: pair.cohort.transactionId }
         : undefined,
       expectedGenerations: params.backup.migration?.to ?? params.backup.sourceGenerations,
+      onLiveMutation: () => {
+        liveMutationStarted = true;
+      },
     });
     if (migratedPaths === null) {
       return await refuse(
@@ -313,8 +314,9 @@ export async function restoreFailedUpdateDatabases(params: {
     assertCurrent();
     return true;
   } catch (cause) {
-    if (cause instanceof UpdateDatabaseRestoreNotStartedError) {
-      return await refuse(`Database rollback could not start: ${cause.message}`);
+    // Lock contention or a changed snapshot left the live databases as they were.
+    if (!liveMutationStarted && !hasCommandProcessCleanupError(cause)) {
+      return await refuse(`Database rollback could not start: ${formatErrorMessage(cause)}`);
     }
     // A partly restored shared ledger must never be reopened by candidate
     // finalization: that would migrate the recovery image again.
