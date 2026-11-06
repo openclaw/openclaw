@@ -944,7 +944,8 @@ try {
                 await installChatActionObservation(
                   page,
                   values.trace,
-                  scenario.id === "chat-actions-fork",
+                  scenario.id === "chat-actions-fork" ||
+                    scenario.id.startsWith("chat-actions-split-"),
                 );
               }
               const actionTiming =
