@@ -251,8 +251,8 @@ describe("authenticated Talk permission parity", () => {
       source.release();
     }
   });
-  it("does not manufacture reply authority when the authenticated caller is missing", () => {
-    expect(() =>
+  it("does not manufacture reply authority when the authenticated caller is missing", async () => {
+    await expect(
       prepareTalkClientControlAuthority({
         config,
         sessionTarget,
@@ -260,6 +260,6 @@ describe("authenticated Talk permission parity", () => {
         authority: { senderIsOwner: false },
         agentRuntime: createPluginRuntime().agent,
       }),
-    ).toThrow("Talk chat caller authority is unavailable");
+    ).rejects.toThrow("Talk chat caller authority is unavailable");
   });
 });

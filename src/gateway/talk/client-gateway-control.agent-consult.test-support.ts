@@ -24,7 +24,7 @@ export const mocks = {
   })),
   prepareAgentRunAdmission: vi.fn(),
   runEmbeddedAgentCore: vi.fn(),
-  controlRealtimeVoiceAgentRun: vi.fn(),
+  controlTalkAgentRun: vi.fn(),
 };
 
 export const config = {} as OpenClawConfig;

@@ -2,9 +2,17 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { threadId } from "node:worker_threads";
 import pg from "pg";
+import {
+  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
+import { prepareTalkClientControlAuthority } from "../gateway/talk/client-agent-consult.js";
+import { resolveTalkAgentConsultAuthority } from "../gateway/talk/client-tool-authority.js";
+import { prepareTalkSessionTarget } from "../gateway/talk/session-target.js";
 import {
   installDatabaseProcessRole,
   withEngineStoreAdmission,
@@ -13,6 +21,9 @@ import { installDatabaseEngineSelection } from "../infra/database-engine/context
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -22,6 +33,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
+import { controlTalkAgentRun } from "./agent-run-control.js";
 import { assertClientVoiceSessionOpen } from "./client-voice-session-read.js";
 import { ensureClientVoiceAgentSessionEntry } from "./client-voice-session-write.js";
 import { createOrResumeClientVoiceSession } from "./client-voice-session.js";
@@ -92,12 +104,63 @@ try {
       "client",
     );
     const runs: Array<{ sessionId: string; sessionKey?: string }> = [];
-    const result = await consultRealtimeVoiceAgent({
+    const sessionTarget = await prepareTalkSessionTarget(config, sessionKey);
+    const started = createDeferredCore<{ runId: string; operation: ReplyOperation }>();
+    const finish = createDeferredCore();
+    const steered: string[] = [];
+    const consult = consultRealtimeVoiceAgent({
       cfg: config,
       agentRuntime: {
         ...createPluginRuntime().agent,
         runEmbeddedAgent: async (request) => {
           runs.push({ sessionId: request.sessionId, sessionKey: request.sessionKey });
+          // Hold the consult's run open so a second utterance can steer it.
+          await withSessionTurn(
+            { sessionKey, sessionId, agentId, storePath: sessionTarget.storePath },
+            async (operation) => {
+              assert(operation);
+              await operation.bindToolAuthoritySnapshotAsync({
+                fingerprint: () => "voice-policy",
+                fingerprintAsync: async () => "voice-policy",
+                project: () => "voice-policy",
+                projectAsync: async () => "voice-policy",
+              });
+              await operation.bindToolAuthorityRouteAsync({ provider: "synthetic", model: "test" });
+              const handle = {
+                ...createEmbeddedRunHandle({
+                  runId: request.runId,
+                  guarded: true,
+                  queueMessage: async (text) => {
+                    steered.push(text);
+                  },
+                }),
+                kind: "embedded" as const,
+                cancel: () => {},
+              };
+              const attachment = attachActiveEmbeddedRun(
+                sessionId,
+                handle,
+                sessionKey,
+                undefined,
+                agentId,
+                operation,
+              );
+              operation.setPhase("running");
+              started.resolve({ runId: request.runId, operation });
+              try {
+                await finish.promise;
+              } finally {
+                detachActiveEmbeddedRun(
+                  sessionId,
+                  handle,
+                  undefined,
+                  undefined,
+                  undefined,
+                  attachment,
+                );
+              }
+            },
+          );
           return { payloads: [{ text: "Consult answered." }], meta: { durationMs: 1 } };
         },
       },
@@ -112,7 +175,42 @@ try {
       surface: "a browser Talk session",
       userLabel: "User",
     });
-    assert.deepEqual(result, { text: "Consult answered." });
+    try {
+      const { runId, operation } = await Promise.race([
+        started.promise,
+        consult.then(() => assert.fail("consult settled before its run started")),
+      ]);
+      let authorityReads = 0;
+      const steer = await controlTalkAgentRun({
+        sessionKey: sessionTarget.canonicalKey,
+        runTarget: {
+          runId,
+          signal: operation.abortSignal,
+          isCurrent: (resolvedSessionId) =>
+            !operation.abortSignal.aborted &&
+            (resolvedSessionId === undefined || resolvedSessionId === sessionId),
+        },
+        getToolAuthorityOverlayAsync: () => {
+          authorityReads += 1;
+          return prepareTalkClientControlAuthority({
+            config,
+            agentRuntime: createPluginRuntime().agent,
+            sessionTarget,
+            authority: resolveTalkAgentConsultAuthority(undefined),
+          });
+        },
+        text: "Use the release branch instead.",
+        mode: "steer",
+      });
+      assert.equal(steer.ok, true, steer.message);
+      assert.equal(steer.queued, true);
+      assert.deepEqual(steered, ["Use the release branch instead."]);
+      // The injection's admission rereads caller policy instead of reusing the selection read.
+      assert(authorityReads > 1);
+    } finally {
+      finish.resolve();
+    }
+    assert.deepEqual(await consult, { text: "Consult answered." });
     assert.deepEqual(runs, [{ sessionId, sessionKey }]);
     assertSqlBoundary();
   }

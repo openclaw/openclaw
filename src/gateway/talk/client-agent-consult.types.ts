@@ -2,7 +2,7 @@ import type {
   ReplyToolAuthorityOverlay,
   SessionControllerInput,
 } from "../../sessions/session-controller.contracts.js";
-import type { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import type { controlTalkAgentRun } from "../../talk/agent-run-control.js";
 import type {
   RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceGatewayControl,
@@ -93,6 +93,6 @@ export type TalkClientGatewayControlOptions = {
   flushTranscript: () => Promise<void>;
   closeLogicalSession: () => Promise<void>;
   withCloseSettlement?: (run: () => Promise<void>) => Promise<void>;
-  controlAgentRun?: typeof controlRealtimeVoiceAgentRun;
-  getToolAuthorityOverlay?: (source?: "reply" | "attempt") => ReplyToolAuthorityOverlay;
+  controlAgentRun?: typeof controlTalkAgentRun;
+  getToolAuthorityOverlay?: (source?: "reply" | "attempt") => Promise<ReplyToolAuthorityOverlay>;
 };
