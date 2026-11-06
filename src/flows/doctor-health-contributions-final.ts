@@ -248,6 +248,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       [
         ["model-references", "Model references", "agent"],
         ["acp-agent-model", "ACP agent model", "agent"],
+        ["legacy-output-cap", "Saved model output caps", "run"],
         ["provider-catalog-projection", "Provider catalog projection", "run"],
         ["local-audio-acceleration", "Local audio acceleration", "run"],
         ["runtime-tool-schemas", "Runtime tool schemas", "agent"],
