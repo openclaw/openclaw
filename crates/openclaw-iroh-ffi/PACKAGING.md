@@ -23,9 +23,14 @@ Targets:
 - `aarch64-apple-ios-sim` + `x86_64-apple-ios`: universal simulator slice.
 
 `OPENCLAW_IROH_APPLE_PLATFORMS=macos scripts/build-apple.sh` builds only the macOS slice.
-The iOS slices currently fail to build: `netdev` 0.46 (via iroh's `netwatch` 0.19.3) uses
-`libc::in6_ifreq`, which `libc` 0.2.191 defines only for macOS. Resolving that requires a
-dependency change and awaits a maintainer decision.
+
+`Cargo.lock` pins `libc` at 0.2.189 so the iOS slices build. `netdev` 0.46 (via iroh's
+`netwatch` 0.19.3) uses `libc::in6_ifreq` on every Apple target, and `libc` 0.2.190
+limited that type to macOS. On iOS, `netdev` falls back to default IPv6 address flags if
+the system rejects that query. `scripts/check-pins.sh` fails CI if the pin drifts while
+`netdev` 0.46.0–0.46.3 is locked. Lift the pin once the lockfile carries a `netdev` that
+skips that code on iOS (0.47 already does). The `iroh native binding audit` workflow
+checks the locked dependencies against RustSec weekly and on lockfile changes.
 
 Output: `dist/apple/OpenClawIrohFFI.xcframework`, created by `xcodebuild
 -create-xcframework`. Minimum deployment targets are macOS 15 and iOS 18, matching
