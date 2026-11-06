@@ -1,10 +1,12 @@
 import { once } from "node:events";
 import fs from "node:fs";
+import { createServer } from "node:http";
 import path from "node:path";
 import { MessagePort } from "node:worker_threads";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import {
   createCatalogFixture,
@@ -27,6 +29,28 @@ it.each([false, true])(
   async (aliased) => {
     const fixture = await createCatalogFixture(makeTempDir, 0);
     const syntheticProvider = `${PROVIDER_ID}-synthetic`;
+    const requests: Array<string | undefined> = [];
+    let expectedAuth: string | null = null;
+    const server = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((request, response) => {
+          // Count rejected requests too: an HTTP 401 does not prove denial before egress.
+          requests.push(request.headers.authorization);
+          const accepted =
+            expectedAuth !== null && request.headers.authorization === `Bearer ${expectedAuth}`;
+          response.writeHead(accepted ? 200 : 401);
+          response.end(accepted ? "catalog-auth-ok" : "unexpected-credential");
+        }),
+    });
+    onTestFinished(async () => {
+      server.listener.closeAllConnections();
+      try {
+        await server.releaseListener();
+      } finally {
+        await server.claim.release();
+      }
+    });
     writeFixtureFiles(path.join(fixture.root, "plugin"), {
       "index.cjs": `
 const fs = require("node:fs");
@@ -52,8 +76,20 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
       return null;
     }
   };
-  const registrationAuth = resolveAuth(api.config, api.config.agents.defaults.workspace)
-    .then(auth => ({ auth }), error => ({ error: error.message }));
+  const requestCapturedAuth = async workspaceDir => {
+    const { apiKey } = await api.runtime.modelAuth.resolveApiKeyForProvider({
+      cfg: api.config, workspaceDir, provider: ${JSON.stringify(syntheticProvider)}
+    });
+    const response = await fetch("http://127.0.0.1:${server.claim.port}/models", {
+      headers: { authorization: "Bearer " + apiKey }
+    });
+    const marker = await response.text();
+    if (!response.ok) throw new Error("Provider HTTP rejected: " + response.status);
+    return { auth: apiKey, marker };
+  };
+  const observeCapturedAuth = workspaceDir => requestCapturedAuth(workspaceDir)
+    .catch(error => ({ error: error.message, code: error.code ?? null }));
+  const registrationAuth = observeCapturedAuth(api.config.agents.defaults.workspace);
   api.registerProvider({ id: ${JSON.stringify(PROVIDER_ID)}, label: "Config fixture", auth: [],
     catalog: { async run(context) {
       const current = api.runtime.config.current();
@@ -64,8 +100,11 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
       const runtimeAuth = await resolveAuth(current, context.workspaceDir);
       const capturedAuth = await resolveAuth(api.config, context.workspaceDir)
         .catch(error => ({ error: error.message }));
+      const capturedHttp = await observeCapturedAuth(context.workspaceDir);
+      const neighboringHttp = await observeCapturedAuth(context.workspaceDir + "/neighbor");
       fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, JSON.stringify({
         runtimeId: id(current), registrations: state.registrations,
+        callbackId: id(requestCapturedAuth), capturedHttp, neighboringHttp,
         runtimeAuth, capturedAuth, registrationAuth: await registrationAuth, probes: state.probes,
         requestAuth: context.resolveProviderApiKey(${JSON.stringify(syntheticProvider)}).discoveryApiKey ?? null,
         frozen: Object.isFrozen(current) && Object.isFrozen(current.models.providers),
@@ -157,12 +196,15 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
         },
       };
     };
+    let registrations = 0;
     const run = async (value: PreparedModelCatalogWorkerInput, omitMetadata = false) => {
       const task = catalogTask(value);
       const authKey =
         value.remoteCatalog!.generatedAt === 3
           ? null
           : `synthetic-${value.remoteCatalog!.revision}`;
+      expectedAuth = authKey;
+      const requestsBefore = requests.length;
       task.request = {
         ...task.request,
         kind: "catalog",
@@ -188,6 +230,24 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
         .split("\n");
       expect(records).toHaveLength(1);
       const observed = JSON.parse(records[0]!);
+      const registrationMatchesWorkspace =
+        value.input.config.agents?.defaults?.workspace === value.input.workspaceDir;
+      const expectedRequests = authKey
+        ? 1 + Number(observed.registrations > registrations && registrationMatchesWorkspace)
+        : 0;
+      expect(requests.slice(requestsBefore)).toEqual(
+        Array.from({ length: expectedRequests }, () => `Bearer ${authKey}`),
+      );
+      expect(observed.capturedHttp).toEqual(
+        authKey
+          ? { auth: authKey, marker: "catalog-auth-ok" }
+          : expect.objectContaining({ code: "missing-provider-auth" }),
+      );
+      expect(observed.neighboringHttp).toEqual({
+        error: "Prepared synthetic auth environment or workspace does not match",
+        code: null,
+      });
+      registrations = observed.registrations;
       if (result.status === "ok" && result.kind === "catalog") {
         expect(result.runtimeModels.get(PROVIDER_ID)).toContainEqual(
           expect.objectContaining({
@@ -220,8 +280,12 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
     try {
       const first = await run(input("one", 1));
       const second = await run(input("two", 1));
-      expect(first.observed.registrationAuth).toEqual({ auth: "synthetic-remote-1" });
-      expect(second.observed.registrationAuth).toEqual({ auth: "synthetic-remote-1" });
+      for (const initial of [first, second]) {
+        expect(initial.observed.registrationAuth).toEqual({
+          auth: "synthetic-remote-1",
+          marker: "catalog-auth-ok",
+        });
+      }
       for (const revision of [2, 3]) {
         for (const [workspace, initial] of [
           ["one", first],
@@ -238,6 +302,7 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
             }
             expect(current.observed).toMatchObject({
               runtimeId: initial.observed.runtimeId,
+              callbackId: initial.observed.callbackId,
               registrations: 2,
               frozen: true,
             });
@@ -256,11 +321,13 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
       // The authored default workspace is deliberately different from this request's scope.
       expect(deduplicated.observed.registrationAuth).toEqual({
         error: "Prepared synthetic auth environment or workspace does not match",
+        code: null,
       });
       for (const revision of [2, 3]) {
         const repeated = await run(input("three", revision, "changed-fixture-key", "one"));
         expect(repeated.observed.runtimeId).toBe(replacement.observed.runtimeId);
         expect(repeated.observed.registrations).toBe(4);
+        expect(repeated.observed.callbackId).toBe(deduplicated.observed.callbackId);
         expect(repeated.census).toEqual(deduplicated.census);
       }
       // Equal config values with different source provenance still replace the registration.

@@ -6,7 +6,6 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { FixtureReceiptChannel } from "../../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { captureClawInstallSchemaVersionFacts } from "../../claws/provenance-runtime-read.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
@@ -17,6 +16,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { captureTemplateInstallSchemaVersionFacts } from "../../templates/provenance-runtime-read.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
 import { closeAuthProfileReadPool } from "../auth-profiles/sqlite-read-pool.js";
@@ -469,7 +469,9 @@ export function catalogTask(
     request: {
       kind: "catalog",
       syntheticAuth: [],
-      clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: value.input.env }),
+      templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({
+        env: value.input.env,
+      }),
     },
   };
 }

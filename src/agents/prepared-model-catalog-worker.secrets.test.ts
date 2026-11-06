@@ -144,7 +144,7 @@ it.each([false, true])(
           request: {
             kind: "catalog",
             syntheticAuth: [],
-            clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
+            templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({ env }),
           },
           inspection: {
             observeConfigSnapshots: true,

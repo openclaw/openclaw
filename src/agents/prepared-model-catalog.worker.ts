@@ -595,42 +595,44 @@ if (parentPort) {
                 try {
                   const work = new AsyncWorkScope();
                   const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
-                    withTemplateInstallSchemaVersionFacts(request.templateInstallSchemaVersions, () =>
-                      // Never select a Codex binary here; report the parent's decision.
-                      withHandedOffCodexClientVersion(request.codexClientVersion, () =>
-                        work.run(() =>
-                          runCatalogRequest(
-                            value,
-                            config,
-                            request,
-                            work,
-                            async () => {
-                              if (previous?.fingerprint === fingerprint) {
-                                return previous.prepared;
-                              }
-                              replacing =
-                                previous?.registrationFingerprint !== registrationFingerprint;
-                              return (attempted = await prepareWorkerGeneration(
-                                value,
-                                config,
-                                replacing ? undefined : previous?.prepared,
-                              ));
-                            },
-                            async () => {
-                              // Admission can outlast a refresh on slow filesystems; only completed
-                              // generation preparation starts the provider-discovery deadline.
-                              stopProgress();
-                              const response = await channel?.request(null);
-                              response?.consumed();
-                              if (response && response.input !== true) {
-                                throw new Error(
-                                  "prepared model catalog request retired before discovery",
-                                );
-                              }
-                            },
+                    withTemplateInstallSchemaVersionFacts(
+                      request.templateInstallSchemaVersions,
+                      () =>
+                        // Never select a Codex binary here; report the parent's decision.
+                        withHandedOffCodexClientVersion(request.codexClientVersion, () =>
+                          work.run(() =>
+                            runCatalogRequest(
+                              value,
+                              config,
+                              request,
+                              work,
+                              async () => {
+                                if (previous?.fingerprint === fingerprint) {
+                                  return previous.prepared;
+                                }
+                                replacing =
+                                  previous?.registrationFingerprint !== registrationFingerprint;
+                                return (attempted = await prepareWorkerGeneration(
+                                  value,
+                                  config,
+                                  replacing ? undefined : previous?.prepared,
+                                ));
+                              },
+                              async () => {
+                                // Admission can outlast a refresh on slow filesystems; only completed
+                                // generation preparation starts the provider-discovery deadline.
+                                stopProgress();
+                                const response = await channel?.request(null);
+                                response?.consumed();
+                                if (response && response.input !== true) {
+                                  throw new Error(
+                                    "prepared model catalog request retired before discovery",
+                                  );
+                                }
+                              },
+                            ),
                           ),
                         ),
-                      ),
                     ),
                   );
                   if (attempted && result.status === "ok") {
