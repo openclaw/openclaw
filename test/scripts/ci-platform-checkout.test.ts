@@ -440,6 +440,10 @@ it.concurrent.for([
       "scripts/ci-static-step.sh": "workflow static-step script\n",
       "scripts/ci-collect-checks.sh": "workflow collect-checks script\n",
       "scripts/macos-native-runtime-artifact.mjs": "workflow native runtime artifact script\n",
+      ...readFiles([
+        "scripts/lib/process-memory.mts",
+        "packages/normalization-core/src/mountinfo-path.ts",
+      ]),
     };
     const nodeSetupScripts = readFiles(["scripts/lib/pnpm-lockfile-documents.mjs"]);
     const platformScripts = {

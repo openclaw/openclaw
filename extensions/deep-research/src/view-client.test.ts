@@ -1,3 +1,4 @@
+/* @vitest-environment jsdom */
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createResearchClient } from "../browser/client.js";
@@ -6,7 +7,7 @@ beforeEach(() => {
   sessionStorage.clear();
 });
 
-function fixture(retainStarts = true) {
+function fixture(retainStarts = true, recoveryScope = "account-a") {
   const connection = {
     connected: true,
     canRead: true,
@@ -36,6 +37,14 @@ function fixture(retainStarts = true) {
   // SAFETY: This view only consumes the five host capabilities below; no renderer is mocked here.
   const host = {
     connection,
+    recoveryStorage: {
+      version: 1,
+      assertCurrent() {},
+      getItem: (key: string) => sessionStorage.getItem(`${recoveryScope}:${key}`),
+      setItem: (key: string, value: string) =>
+        sessionStorage.setItem(`${recoveryScope}:${key}`, value),
+      removeItem: (key: string) => sessionStorage.removeItem(`${recoveryScope}:${key}`),
+    },
     request: async (method: string, params?: Record<string, unknown>) => {
       const action = method.split(".").at(-1)!;
       requests.push({ action, params });
@@ -92,6 +101,28 @@ function fixture(retainStarts = true) {
     },
   };
 }
+it("restores an uncertain start only for the same authenticated recovery owner", async () => {
+  const first = fixture();
+  await first.client.refresh();
+  await first.client.mutate("start", "Account A private question");
+  const original = first.client.pending();
+  expect(original).toBeDefined();
+  first.client.dispose();
+  const same = fixture();
+  const other = fixture(true, "account-b");
+  try {
+    await same.client.refresh();
+    expect(same.client.pending()).toEqual(original);
+    expect(same.requests.some((request) => request.action === "start")).toBe(false);
+    await other.client.refresh();
+    expect(other.client.pending()).toBeUndefined();
+    expect(JSON.stringify(other.client.read())).not.toContain("Account A private question");
+    expect(other.requests.some((request) => request.action === "start")).toBe(false);
+  } finally {
+    same.client.dispose();
+    other.client.dispose();
+  }
+});
 it("reuses the exact idempotency key after an uncertain response, suppresses double clicks and does not start on reconnect", async () => {
   const f = fixture();
   try {

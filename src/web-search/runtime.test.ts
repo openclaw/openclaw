@@ -498,34 +498,48 @@ describe("web search runtime", () => {
       'Unknown web_search provider "missing-id".',
     );
   });
-  it.each([false, true])(
-    "only permits automatic search fallback without a pinned model profile (%s)",
-    async (pinned) => {
-      runtimeProvidersMock.mockReturnValue([
+  it.each(
+    [false, true].flatMap((pinned) =>
+      [
+        { preceding: false, failure: "throw" },
+        { preceding: true, failure: "throw" },
+        { preceding: true, failure: "missing" },
+        { preceding: true, failure: "unavailable" },
+      ].map(({ preceding, failure }) => ({ preceding, failure, pinned })),
+    ),
+  )(
+    "honors a model profile pin at each fallback candidate: %j",
+    async ({ pinned, preceding, failure }) => {
+      const backup = vi.fn(async () => ({ provider: "backup" }));
+      const missing = { error: "missing_google_api_key" };
+      useProviders(
+        ...(preceding
+          ? [
+              searchProvider("primary", {
+                autoDetectOrder: 0,
+                createTool: () =>
+                  tool(async () => {
+                    throw new Error("primary failed");
+                  }),
+              }),
+            ]
+          : []),
         searchProvider("google", {
           authProviderId: "google",
-          createTool: () => ({
-            description: "google",
-            parameters: {},
-            execute: async () => {
-              throw new Error("google aborted");
-            },
-          }),
+          createTool: () =>
+            failure === "unavailable"
+              ? null
+              : tool(async () => {
+                  if (failure === "missing") {
+                    return missing;
+                  }
+                  throw new Error("google aborted");
+                }),
         }),
-        createWebSearchTestProvider({
-          pluginId: "backup-search",
-          id: "backup",
-          credentialPath: "tools.web.search.backup.apiKey",
-          autoDetectOrder: 2,
-          getConfiguredCredentialValue: () => "backup-configured",
-          getCredentialValue: () => "backup-configured",
-        }),
-      ]);
-
-      const result = runWebSearch({
-        config: {},
-        args: { query: "fallback" },
-        ...(pinned
+        searchProvider("backup", { autoDetectOrder: 2, createTool: () => tool(backup) }),
+      );
+      const result = search(
+        pinned
           ? {
               modelSelection: {
                 provider: "google",
@@ -533,15 +547,26 @@ describe("web search runtime", () => {
                 authProfileId: "google:research",
               },
             }
-          : {}),
-      });
-      if (pinned) {
-        await expect(result).rejects.toThrow("google aborted");
-      } else {
+          : {},
+      );
+      if (!pinned) {
         await expect(result).resolves.toEqual({
           provider: "backup",
-          result: { query: "fallback", provider: "backup" },
+          result: { provider: "backup" },
         });
+        expect(backup).toHaveBeenCalledOnce();
+      } else if (failure === "missing") {
+        await expect(result).resolves.toEqual({ provider: "google", result: missing });
+        expect(backup).not.toHaveBeenCalled();
+      } else {
+        await expect(result).rejects.toMatchObject({
+          provider: "google",
+          message:
+            failure === "unavailable"
+              ? 'web_search provider "google" is not available.'
+              : "google aborted",
+        });
+        expect(backup).not.toHaveBeenCalled();
       }
     },
   );

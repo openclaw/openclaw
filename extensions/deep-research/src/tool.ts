@@ -51,6 +51,9 @@ export function createResearchTool(
             ? await jobs.start(input.request, input.idempotencyKey, current, signal, progress)
             : await jobs.get(input.jobId, current);
         if (input.action === "resume") {
+          if (job.state === "paused" && !job.cancelRequested) {
+            job = await jobs.requestResume(job, current);
+          }
           job = await jobs.run(job, current, signal, progress);
         }
         if (input.action === "cancel") {

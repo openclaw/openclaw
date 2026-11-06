@@ -223,9 +223,11 @@ it("allows a configured bundled adapter to link before its channel runtime is re
   expect(await listCanonicalUserChannelIdentities(owner(alice))).toHaveLength(1);
 });
 
-it("links through the real Discord adapter, rejects replay and conflicts, and disconnects through the canonical store", async () => {
+it("links through the real Discord adapter, rejects replay and conflicts, and disconnects through the canonical store", async ({
+  signal,
+}) => {
   const requests: string[] = [];
-  let userResponse = Promise.withResolvers<void>();
+  let completed = createDeferred();
   const server = createServer((req, res) => {
     requests.push(`${req.method} ${req.url}`);
     const body =
@@ -235,11 +237,7 @@ it("links through the real Discord adapter, rejects replay and conflicts, and di
           ? { id: "123456789012345678" }
           : undefined;
     res.writeHead(body ? 200 : 404, { "content-type": "application/json" });
-    res.end(JSON.stringify(body ?? {}), () => {
-      if (req.method === "GET" && req.url === "/api/v10/users/@me") {
-        userResponse.resolve();
-      }
-    });
+    res.end(JSON.stringify(body ?? {}));
   });
   onTestFinished(() => server[Symbol.asyncDispose]());
   await once(server.listen(0, "127.0.0.1"), "listening");
@@ -260,6 +258,22 @@ it("links through the real Discord adapter, rejects replay and conflicts, and di
     pluginId: "discord",
     artifactBasename: "api.js",
   });
+  const identityLink = discordPlugin.identityLink!;
+  const prepare = identityLink.prepare;
+  const observedPrepare = vi.spyOn(identityLink, "prepare").mockImplementation(async (...args) => {
+    const adapter = await prepare(...args);
+    return (
+      adapter && {
+        ...adapter,
+        exchange(params) {
+          // Session close follows terminal publication, including the canonical store write.
+          completed.resolve(waitForAbortSignal(params.signal));
+          return adapter.exchange(params);
+        },
+      }
+    );
+  });
+  onTestFinished(() => observedPrepare.mockRestore());
   setActivePluginRegistry(
     createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
   );
@@ -271,7 +285,7 @@ it("links through the real Discord adapter, rejects replay and conflicts, and di
   expect(requests).toEqual([]);
   expect(callback(flow, cookie)).toBe(200);
   expect(callback(flow, cookie)).toBe(410);
-  await userResponse.promise;
+  await withinTest(completed.promise, signal);
   expect((await terminal(flow)).status).toBe("linked");
   expect(requests).toEqual(["POST /api/v10/oauth2/token", "GET /api/v10/users/@me"]);
   expect(await listCanonicalUserChannelIdentities(owner(alice))).toEqual([
@@ -281,10 +295,10 @@ it("links through the real Discord adapter, rejects replay and conflicts, and di
     },
   ]);
   expect(await listCanonicalUserChannelIdentities(owner(bob))).toEqual([]);
-  userResponse = Promise.withResolvers<void>();
+  completed = createDeferred();
   const other = await start(bob);
   expect(callback(other, cookie)).toBe(200);
-  await userResponse.promise;
+  await withinTest(completed.promise, signal);
   expect(await terminal(other, bob)).toMatchObject({
     status: "failed",
     message: expect.stringContaining("another profile"),

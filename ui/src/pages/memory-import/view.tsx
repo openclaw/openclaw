@@ -9,7 +9,6 @@ import "../../components/agent-select-registration.ts";
 import "../../components/modal-dialog.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
@@ -24,6 +23,7 @@ import { registerMemoryImportEnglish } from "../../i18n/locales/en-memory-import
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import type { MemoryImportViewProps } from "./view-types.ts";
 import "../../styles/memory-import.css";
 
@@ -250,7 +250,7 @@ function Provider(props: { view: MemoryImportViewProps; provider: MemoryMigratio
       <SettingsSection
         title={
           <span class="memory-import__provider-title">
-            <ProviderBrandIcon
+            <ModelProviderIcon
               provider={props.provider.providerId}
               class="memory-import__provider-icon"
             />

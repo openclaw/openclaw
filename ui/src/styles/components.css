@@ -11,7 +11,6 @@ openclaw-session-progress-hovercard-provider {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100vh;
   height: 100dvh;
   max-height: 100%;
   background: var(--bg);
@@ -1841,7 +1840,8 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   align-self: center;
 }
 
-.code-block-wrapper--long :is(.code-block-copy, .code-block-wrap) {
+.code-block-wrapper--long .code-block-copy,
+.code-block-wrapper--long .code-block-wrap {
   position: sticky;
   top: 4px;
   z-index: 1;
@@ -3176,9 +3176,14 @@ select.data-table-pagination__size {
 }
 
 .session-glyph__ring--queued,
-.session-run-indicator--offscreen,
 .session-glyph__trace--queued .session-glyph__trace-run {
   animation-play-state: paused;
+}
+
+/* A paused transform still promotes offscreen rows and their overlapping labels.
+   Restart when the row returns instead of retaining those compositor layers. */
+.session-run-indicator--offscreen {
+  animation: none;
 }
 
 .session-glyph__ring--background,
@@ -3389,7 +3394,7 @@ select.data-table-pagination__size {
   background: var(--card);
 }
 
-.provider-brand-icon:not(.provider-brand-icon--fallback) {
+.provider-brand-icon[data-provider-icon] {
   background: currentColor;
   mask: var(--provider-icon-url) center / contain no-repeat;
 }

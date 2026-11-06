@@ -284,7 +284,6 @@ type EnglishCatalog = TranslationMap & {
       | "snoozeTomorrow"
       | "user"
       | "assistant"
-      | "opensAsDashboard"
       | "approvalNeeded"
       | "messageNeedsAttention"
       | "messagesNeedAttention"
@@ -323,7 +322,6 @@ type EnglishCatalog = TranslationMap & {
       | "showMoreChildren"
       | "archived"
       | "unread"
-      | "automationAttached"
       | "incognito"
       | "incognitoLabel"
       | "incognitoDescription"
@@ -612,22 +610,14 @@ const startupEnglish = {
       commitBehind: "{count} commit behind",
       commitsBehind: "{count} commits behind",
     },
-    sidebar: {
-      waitingForIdle: "Waiting for active work",
-    },
+    sidebar: {},
     dialog: {},
     channel: {},
     installKind: {},
     page: {},
-    coalescedRestart:
-      "Update installed. A Gateway restart is already in progress; status will refresh after it reconnects.",
     error: "Couldn’t update OpenClaw. {error}",
     checkError: "Couldn’t check for updates. {error}",
     status: "Update {status}: {reason}. {guidance}",
-    verificationFailedWithIdentity:
-      "Couldn’t verify the update. Expected {expected}, running {actual}. Run `openclaw triage` on the computer running OpenClaw before retrying.",
-    handoffTimeout:
-      "Couldn’t confirm the update finished. Run `openclaw triage` on the computer running OpenClaw and inspect the result before retrying.",
     outcomeUnknown:
       "Couldn’t confirm the update outcome. Run `openclaw triage` on the computer running OpenClaw and inspect the result before retrying.",
     triage: {
@@ -676,9 +666,6 @@ const startupEnglish = {
       default: "See the Gateway logs for the exact failure and retry once the cause is fixed.",
     },
     failedAtStep: "Couldn’t complete {step}: {cause}.",
-    succeededVersion: "Gateway updated to v{version}.",
-    succeededCommit: "Gateway updated · now on {sha}.",
-    succeeded: "Gateway updated and restarted.",
   },
   devices: {
     readOnly: {},
@@ -736,7 +723,6 @@ const startupEnglish = {
     snoozeTomorrow: "Tomorrow",
     user: "User",
     assistant: "Assistant",
-    opensAsDashboard: "Opens as dashboard",
     approvalNeeded: "Approval needed",
     messageNeedsAttention: "{count} message needs attention",
     messagesNeedAttention: "{count} messages need attention",
@@ -776,7 +762,6 @@ const startupEnglish = {
     showMoreChildren: "Show {count} more",
     archived: "Archived",
     unread: "Unread",
-    automationAttached: "Automation attached",
     incognito: "Incognito session",
     incognitoLabel: "Incognito",
     incognitoDescription:
@@ -913,9 +898,6 @@ const startupEnglish = {
       externalPost: "Posts externally to {target}",
     },
 
-    agentPendingOne: "{count} pending approval",
-    agentPending: "{count} pending approvals",
-
     reviewOnly: "You need approval access to approve.",
 
     labels: {},
@@ -969,8 +951,6 @@ const startupEnglish = {
     pin: "Pin",
     unpin: "Unpin",
     customize: "Edit pinned items",
-    customizeReset: "Reset pinned items",
-    workboardGroup: "WorkBoard",
   },
   terminal: {
     title: "Terminal",
@@ -1155,8 +1135,6 @@ const startupEnglish = {
     resize: "Resize assistant sidebar",
     dockBottom: "Dock assistant sidebar at bottom",
     dockRight: "Dock assistant sidebar at right",
-
-    contextOff: "Work context off",
   },
   custodian: {
     title: {},
@@ -1204,8 +1182,6 @@ const startupEnglish = {
 
     swarm: {
       title: "Swarm",
-
-      defaultPhase: "Unphased",
     },
     toolSearch: {},
 
@@ -1256,9 +1232,6 @@ const startupEnglish = {
     sessions: {
       openCount: "{count}\u00a0open",
       runningCount: "{count}\u00a0running",
-      openHint:
-        "Owned, unarchived conversations you can access across agents. Excludes hidden subagents, automation, and system sessions.",
-      runningHint: "Open sessions actively executing an agent turn. Queued work is not running.",
       counts: "{open} open sessions, {running} running",
       unavailable: "Session counts unavailable",
       retry: "Counts may be out of date. Retry",
@@ -1275,9 +1248,7 @@ const startupEnglish = {
       notObserved: "Activity unavailable",
       viewingNow: "Viewing now",
       recentSessions: "Recent sessions",
-      noVisibleSessions: "No visible sessions being viewed.",
       noRecentSessions: "No recent visible sessions.",
-      sessionUpdated: "Session updated",
       ago: "ago",
       viewActivity: "View activity",
       web: "Web app",
@@ -1557,6 +1528,9 @@ const startupEnglish = {
       retryingIn: "Retrying in {seconds}s",
       tryingFallback: "Trying fallback model…",
       failedTitle: "Couldn’t finish this reply",
+      credentialsRejected: "{provider} didn’t accept the saved credentials",
+      billingProblem: "{provider} reports a billing problem",
+      openModels: "Open Models",
       failedRepeatCount: "{count} times",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
@@ -1611,7 +1585,6 @@ const startupEnglish = {
       preparingCloudEnvironment: "Preparing cloud environment…",
       savingSnapshot: "Saving snapshot…",
       preparingContext: "Preparing reply…",
-      waitingForTurn: "Waiting for turn to start",
       memoryFlushing: "Saving conversation memory…",
       startingModel: "Waiting for a response",
       waitingForLocalModel: "Waiting for the local model to respond",
@@ -1628,10 +1601,6 @@ const startupEnglish = {
     parentSessionUnavailable: "Parent session information is unavailable.",
     sessionRoute: {},
     commandResults: {
-      startingNewThread: "Starting new session…",
-      resettingThread: "Resetting session…",
-      stoppingCurrentRun: "Stopping reply…",
-      chatHistoryCleared: "Conversation cleared.",
       emptyExport: "No messages to export yet.",
       exportPathUnsupported:
         "Control UI exports Markdown through your browser. Run /export without a file path.",
@@ -1690,7 +1659,6 @@ const startupEnglish = {
     actions: {
       copyAsMarkdown: "Copy as markdown",
       dismissError: "Dismiss error",
-      exitFocusMode: "Exit focus mode",
       scrollToLatest: "Scroll to latest",
       skipToComposer: "Skip to message composer",
     },
@@ -1701,7 +1669,6 @@ const startupEnglish = {
     codeBlock: {},
     workspaceConflict: {},
     compaction: {
-      label: "Compacted history",
       savedTokens: "saved {count} tokens",
     },
     sessionReset: {
@@ -1794,10 +1761,8 @@ const startupEnglish = {
       sortCreated: "Created",
       menuFilters: "Filters",
       menuDisplay: "Display",
-      hideEmpty: "Hide empty",
       sortSessions: "Filter & sort",
       sessionSources: "Session sources",
-      showAllSessions: "Show all sessions",
       noActiveSessionsForFilter: "No active sessions match this filter",
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
@@ -1810,8 +1775,6 @@ const startupEnglish = {
     welcome: { suggestions: { whatCanYouDo: "What can you do?" } },
     runControls: {
       newSession: "New session",
-      newSessionWorktree: "New session in worktree",
-      exportChat: "Export conversation",
       queue: "Queue",
       queueMessage: "Queue message",
       stop: "Stop",
@@ -1865,7 +1828,6 @@ const startupEnglish = {
       closeAllTabs: "Close all tabs",
       closeOtherTabs: "Close other tabs",
       closeFileChanges: "Save changes to {file} before closing?",
-      reviewFileChanges: "Open the file to review its unsaved changes before closing.",
       expand: "Focus",
       expandPanel: "Expand {panel}",
       restore: "Restore split",

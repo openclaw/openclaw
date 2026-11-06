@@ -1,12 +1,14 @@
 /* Keep shadow-hosted resets, with separate ancestors for selector fast rejection. */
-:is(.oc-overlay, .oc-modal-dialog),
+.oc-overlay,
+.oc-modal-dialog,
 .oc-overlay *,
 .oc-modal-dialog * {
   box-sizing: border-box;
   scrollbar-width: thin;
 }
 
-:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar,
+.oc-overlay::-webkit-scrollbar,
+.oc-modal-dialog::-webkit-scrollbar,
 .oc-overlay ::-webkit-scrollbar,
 .oc-modal-dialog ::-webkit-scrollbar {
   width: var(--scrollbar-size);
@@ -308,9 +310,8 @@
   margin-block-start: var(--menu-item-gap);
 }
 
-:where(.oc-menu)
-  :where(.oc-menu-item, [data-menu-row-end])
-  + :where(.oc-menu-item, [data-menu-row-start]) {
+:where(.oc-menu) :where(.oc-menu-item, [data-menu-row-end]) + :where(.oc-menu-item),
+:where(.oc-menu) :where(.oc-menu-item, [data-menu-row-end]) + :where([data-menu-row-start]) {
   margin-block-start: var(--menu-item-gap);
 }
 
@@ -504,8 +505,9 @@ a.oc-menu-item[href] {
   transform: scaleX(-1);
 }
 
-.oc-menu:popover-open:where(:not([data-phase="closing"])),
-.oc-popover:popover-open:where(:not([data-phase="closing"])) {
+/* Single-arm wrappers keep Lightning CSS from merging these back into an unindexed list. */
+:is(.oc-menu:popover-open:where(:not([data-phase="closing"]))),
+:is(.oc-popover:popover-open:where(:not([data-phase="closing"]))) {
   opacity: 1;
   scale: 1;
   transition-duration: var(--oc-overlay-show-duration, var(--menu-enter-duration));
@@ -519,20 +521,14 @@ a.oc-menu-item[href] {
 }
 
 @starting-style {
-  .oc-menu:popover-open,
-  .oc-popover:popover-open {
+  :is(.oc-menu:popover-open),
+  :is(.oc-popover:popover-open) {
     scale: 0.95;
     opacity: 0;
   }
 }
 
-/* Translucency needs a blur behind it to stay legible, and users can opt out of it. */
-@supports not (backdrop-filter: blur(8px)) {
-  :root {
-    --menu-surface: var(--popover);
-  }
-}
-
+/* Users can opt out of translucent surfaces. */
 @media (prefers-reduced-transparency: reduce) {
   :root {
     --menu-surface: var(--popover);

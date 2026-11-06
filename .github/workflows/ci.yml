@@ -778,7 +778,7 @@ jobs:
               action = ".github/actions/setup-node-env/action.yml"
               node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
               security_scripts = (".github/zizmor.yml", "scripts/detect-private-keys.mts", "scripts/ci-production-audit.mjs", "scripts/ci-collect-checks.sh")
-              evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/ios-test-results.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh", "scripts/macos-native-runtime-artifact.mjs")
+              evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/ios-test-results.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh", "scripts/macos-native-runtime-artifact.mjs", "scripts/lib/process-memory.mts", "packages/normalization-core/src/mountinfo-path.ts")
               platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py", "scripts/swift-build-cache-metadata.py")
               upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs", "scripts/lib/canonical-json.mjs", "scripts/lib/upgrade-survivor-policy.mjs", "scripts/lib/upgrade-survivor-scenarios.json")
               # Preflight imports these siblings by file-relative paths.
@@ -2708,6 +2708,7 @@ jobs:
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
             resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
             resolve("ui/src/e2e/chat-history-reading-stability.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-loading-animation-retention.e2e.test.ts"),
           ].filter(existsSync));
           const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
           let requiresWebkit = false;
@@ -2748,6 +2749,7 @@ jobs:
           echo "Control UI Gateway runtime preparation: $((SECONDS - preparation_started))s"
 
       - name: Test Control UI end-to-end
+        id: ui_e2e_tests
         if: matrix.task == 'control-ui'
         # Fail the step before the job deadline so progress diagnostics can upload.
         timeout-minutes: 20
@@ -2769,6 +2771,46 @@ jobs:
         with:
           name: control-ui-e2e-timeout-${{ matrix.shard }}-${{ github.run_attempt }}
           path: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}/failure-*/failure.public.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Collect synthetic Control UI failure evidence
+        if: failure() && steps.ui_e2e_tests.outcome == 'failure'
+        env:
+          DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          EVIDENCE_DIR: .artifacts/control-ui-e2e-failures/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import shutil
+
+          source = Path(os.environ["DIAGNOSTIC_DIR"])
+          destination = Path(os.environ["EVIDENCE_DIR"])
+          remaining = 64 * 1024 * 1024
+          # Only this mocked-Gateway job exports raw browser state and screenshots.
+          # The JSON includes the final URL and bounded timestamped browser event ring.
+          for name in ("failure.private.json", "failure.private.png"):
+              for capture in sorted(source.glob("failure-*")):
+                  artifact = capture / name
+                  if not artifact.is_file():
+                      continue
+                  size = artifact.stat().st_size
+                  if size > remaining:
+                      print(f"::warning::Failure evidence budget exceeded; omitted {capture.name}/{name}")
+                      continue
+                  target = destination / capture.name / name
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(artifact, target)
+                  remaining -= size
+
+      - name: Upload synthetic Control UI failure evidence
+        if: failure() && steps.ui_e2e_tests.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: control-ui-e2e-failure-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: .artifacts/control-ui-e2e-failures/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
 
@@ -3929,9 +3971,20 @@ jobs:
         if: always()
         shell: bash
         run: |
-          # This includes setup and every child process, not just the test step.
-          if peak_memory="$(cat /sys/fs/cgroup/memory.peak 2>/dev/null)"; then
-            echo "runner cgroup peak memory bytes=$peak_memory"
+          # Absolute high-water mark for the runner cgroup and its descendants, including setup.
+          if ! node --input-type=module <<'NODE'
+          try {
+            const { readProcessCgroupV2Snapshot } = await import("./.ci-harness/scripts/lib/process-memory.mts");
+            const peak = readProcessCgroupV2Snapshot()?.[0]?.counters["memory.peak"]?.trim();
+            console.log(/^\d+$/.test(peak ?? "")
+              ? `runner cgroup peak memory bytes=${peak}`
+              : "runner cgroup peak memory unavailable");
+          } catch {
+            console.log("runner cgroup peak memory unavailable");
+          }
+          NODE
+          then
+            echo "runner cgroup peak memory unavailable"
           fi
 
       - name: Save docs i18n Go cache
@@ -4394,7 +4447,7 @@ jobs:
     permissions:
       contents: read
     name: check-lint-core-${{ matrix.stripe }}
-    needs: [preflight, check-plan]
+    needs: [preflight, check-plan, check-extension-package-boundary]
     if: ${{ !cancelled() && (needs.preflight.outputs.run_check_plan != 'true' || needs.check-plan.outputs.check_matrix != '') && (needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.run_lint_core || needs.preflight.outputs.run_lint_core) == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true')) }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) || (contains(fromJSON('["","blacksmith"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.event_name != 'workflow_dispatch')) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && needs.preflight.outputs.frozen_target != 'true' && (((needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'runson' || (needs.preflight.outputs.runner_profile == 'hybrid' && matrix.stripe == 1)) && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04'))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) || (contains(fromJSON('["","blacksmith"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.event_name != 'workflow_dispatch')) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && needs.preflight.outputs.frozen_target != 'true' && (((needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'runson' || (needs.preflight.outputs.runner_profile == 'hybrid' && matrix.stripe == 1)) && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 15
@@ -4411,9 +4464,16 @@ jobs:
 
       - name: Cache extension package boundary artifacts for hosted core lint
         id: sdk-boundary-cache
-        if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
+        if: (needs.preflight.outputs.shared_sdk_declarations != 'true' || matrix.requires_sdk_declarations != true) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
         uses: ./.ci-harness/.github/actions/sdk-declarations
         with: *sdk_main_restore_inputs
+
+      - name: Restore this run's prepared SDK for selected extension lint
+        if: needs.preflight.outputs.shared_sdk_declarations == 'true' && matrix.requires_sdk_declarations == true
+        uses: ./.ci-harness/.github/actions/sdk-declarations
+        with:
+          mode: restore-run
+          artifact-id: ${{ needs.check-extension-package-boundary.outputs.artifact_id }}
 
       - &changed_lint_step
         name: Run changed lint
@@ -4729,7 +4789,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.shared_sdk_declarations == 'true'
     runs-on: ${{ github.run_attempt == 1 && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ needs.preflight.outputs.runner_profile == 'github' && 40 || 30 }}
     outputs:
       artifact_id: ${{ steps.publish-sdk.outputs.artifact-id }}
     steps:

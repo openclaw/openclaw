@@ -43,6 +43,20 @@ endpoint key held by the tunnel child, sidecar -> tunnel child process, DERP -> 
    (enrollment.md, "Owner reset"). Certificates have no expiry unless one is entered
    explicitly (enrollment.md).
 
+## What these guarantees assume
+
+The invariants above hold against a hostile Discovery and a hostile relay. They assume that
+the code a client runs is trustworthy: for browsers, the loader and Service Worker served at
+the claw origin, and every update to them. Code delivery is trusted, like the Gateway host.
+Whoever can replace that code can skip pin verification, read stored tokens and the
+extractable peer key W, sign with the device key D (a non-extractable key cannot be exported,
+but code running in its origin can still use it), and read a recovery kit typed into the page.
+The protocol cannot detect this.
+
+The loader integration must therefore document, before remote access is on by default, who
+serves the initial loader and its updates, how that path is separated from Discovery's
+deployment and credentials, and how claw origins are isolated from each other.
+
 ## Layout
 
 ```
