@@ -20,6 +20,7 @@ const action = readWorkflow(".github/actions/detect-scheduled-changes/action.yml
 const script = action.runs.steps[0].with.script;
 
 describe("Darwin tooling event scope", () => {
+  const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
   it.each([
     [["scripts/lib/ci-node-test-plan.mts"], false],
     [["scripts/lib/ci-extension-test-shards.mts"], false],
@@ -66,12 +67,10 @@ describe("Darwin tooling event scope", () => {
     [["scripts/lib/ci-node-test-plan.mts", "scripts/pr"], true],
     [[".github/workflows/pr-tooling-darwin.yml"], true],
   ] as const)("routes %j", (files, expected) => {
-    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
     expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, files)).toBe(expected);
   });
 
   it("executes native tooling once with unconditional macOS distribution coverage", () => {
-    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
     const steps = workflow.jobs.darwin.steps.filter((step: { run?: string }) =>
       step.run?.startsWith("node scripts/run-vitest.mjs "),
     );

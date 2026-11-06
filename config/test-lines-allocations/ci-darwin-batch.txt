@@ -1,2 +1,0 @@
-# Preserve every Darwin test root in the source-closure guard after batching launcher arguments.
-1
