@@ -1,7 +1,9 @@
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { mockDocumentVisibility } from "../test-helpers/mock-cleanup.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 import {
@@ -16,6 +18,7 @@ import { parseMarkdownJson } from "./markdown-json.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
 import { toSanitizedJsonHtml, toSanitizedMarkdownHtml } from "./markdown.ts";
+import { MarkdownHtml } from "./solid/markdown-html.tsx";
 
 function render(source: string, options?: MarkdownRenderOptions) {
   return interactiveHtml(toSanitizedMarkdownHtml(source, options));
@@ -77,6 +80,53 @@ async function copy(button: HTMLButtonElement, elapsed = 0) {
   button.click();
   await vi.advanceTimersByTimeAsync(elapsed);
 }
+
+it.each([true, false])("activates preview code copying once with success=%s", async (success) => {
+  const writeText = mockClipboard(
+    success ? vi.fn().mockResolvedValue(undefined) : vi.fn().mockRejectedValue(denied),
+  );
+  const [source, setSource] = createSignal("```ts\nconst first = true;\n```\n\n[Link](#retained)");
+  const [chrome, setChrome] = createSignal<"copy" | "none">("copy");
+  const view = mountSolid(() =>
+    createComponent(MarkdownHtml, {
+      get markdown() {
+        return source();
+      },
+      get options() {
+        return { codeBlockChrome: chrome() };
+      },
+    }),
+  );
+  onTestFinished(() => view.unmount());
+  const button = view.container.querySelector<HTMLButtonElement>(".code-block-copy")!;
+  await copy(button);
+  expect(writeText.mock.calls).toEqual([["const first = true;"]]);
+  expect(button.getAttribute("aria-label")).toBe(success ? "Copied" : "Couldn’t copy. Try again.");
+
+  const links = vi.fn();
+  view.container.addEventListener("click", (event) => {
+    handleMarkdownCodeBlockClick(event);
+    if (event.target instanceof HTMLAnchorElement) {
+      links();
+      event.preventDefault();
+    }
+  });
+  setSource("```ts\nconst second = false;\n```\n\n[Link](#retained)");
+  flush();
+  const next = view.container.querySelector<HTMLButtonElement>(".code-block-copy")!;
+  expect(next).not.toBe(button);
+  await copy(next);
+  expect(writeText.mock.calls).toEqual([["const first = true;"], ["const second = false;"]]);
+  expect(next.getAttribute("aria-label")).toBe(success ? "Copied" : "Couldn’t copy. Try again.");
+  view.container.querySelector<HTMLAnchorElement>("a")!.click();
+  expect(links).toHaveBeenCalledOnce();
+
+  setChrome("none");
+  flush();
+  expect(view.container.querySelector(".code-block-copy")).toBeNull();
+  expect(view.container.querySelector("code")?.textContent).toBe("const second = false;\n");
+  expect(writeText).toHaveBeenCalledTimes(2);
+});
 
 it.each(["visible", "hidden"] as const)(
   "gates direct Markdown owners on tab visibility without losing pane intent (initially %s)",
