@@ -12,6 +12,7 @@ import {
   formatSessionToolAccessDenial,
   isSessionToolRequesterCreator,
   readDescribedSessionVisibilityRow,
+  resolveEffectiveSessionToolsVisibility,
   resolveSessionToolAccess,
   resolveSessionToolCreatorReadAccess,
 } from "./sessions-access.js";
@@ -91,19 +92,24 @@ export async function executeSessionPost(
   // Reuse the send decision so explicit outbound denials and native-child exceptions agree.
   // Preserve only the authenticated creator's tree exception; this never admits a turn.
   const readConfig = createRuntimeConfigReader(context.cfg);
-  const checkOutbound = () =>
-    resolveSessionToolCreatorReadAccess(
+  const checkOutbound = () => {
+    const cfg = readConfig();
+    return resolveSessionToolCreatorReadAccess(
       createSessionVisibilityDecisionChecker({
         action: "send",
         defaultAgentId: targetAgentId,
         requesterAgentId,
         requesterSessionKey,
         mainSessionKey: context.mainSessionKey,
-        visibility: context.sessionVisibility,
-        a2aPolicy: createAgentToAgentPolicy(readConfig(), { sandboxed: opts?.sandboxed }),
+        visibility: resolveEffectiveSessionToolsVisibility({
+          cfg,
+          sandboxed: opts?.sandboxed === true,
+        }),
+        a2aPolicy: createAgentToAgentPolicy(cfg, { sandboxed: opts?.sandboxed }),
       }).check(targetRow),
       session.createdActor,
     );
+  };
   const outbound = checkOutbound();
   if (!outbound.allowed) {
     return jsonResult({

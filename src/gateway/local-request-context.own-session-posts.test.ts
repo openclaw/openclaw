@@ -544,3 +544,50 @@ it.each(["sender send list", "global A2A enablement", "global A2A allow list"])(
     );
   },
 );
+
+it("rejects a pending same-agent post when visibility is restricted to self", async () => {
+  await withParticipantSessionToolsFixture(
+    async ({ cfg, turn, alice }) => {
+      const key = "agent:main:dashboard:visibility-revoked-post";
+      for (const [sessionKey, sessionId] of [
+        [REQUESTER, "session-tools-requester-id"],
+        [key, "visibility-revoked-post-session"],
+      ] as const) {
+        await seedSessionToolsFixtureSession({
+          sessionKey,
+          sessionId,
+          creatorId: alice.profileId,
+          visibility: "draft",
+        });
+      }
+      const options = {
+        agentSessionKey: REQUESTER,
+        requesterTurnRunId: turn.runtimeIdentity.operationalRunInstance.runId,
+        callGateway: <T>(request: Parameters<typeof callAgentToolGatewayRequest>[0]) => {
+          if (request.method === "sessions.post") {
+            cfg.tools!.sessions!.visibility = "self";
+            setRuntimeConfigSnapshot({ ...cfg });
+          }
+          return callAgentToolGatewayRequest<T>(request);
+        },
+      };
+      await expect(
+        createSessionsSendTool(options).execute("visibility-revoked-post", {
+          sessionKey: key,
+          user: alice.profileId,
+          mode: "post",
+          message: "Must not persist after visibility revocation",
+        }),
+      ).rejects.toThrow(/tools\.sessions\.visibility/);
+      const messages = await loadTranscriptEvents({
+        agentId: "main",
+        sessionKey: key,
+        sessionId: "visibility-revoked-post-session",
+      });
+      expect(JSON.stringify(messages)).not.toContain(
+        "Must not persist after visibility revocation",
+      );
+    },
+    { visibility: "all" },
+  );
+});
