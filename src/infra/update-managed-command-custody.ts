@@ -225,12 +225,10 @@ export async function createManagedCommandProcessCustody(options: {
           );
         }
         // A dead Doctor's reservation closes once no process carries its marker.
-        if (managedCommandCustody(lease) === "reserved") {
-          if (managedCommandUnsettled(lease, store.processState)) {
-            throw new Error(
-              `Native command reservation ${lease.key} may still have a running process`,
-            );
-          }
+        if (
+          managedCommandCustody(lease) === "reserved" &&
+          !managedCommandUnsettled(lease, store.processState)
+        ) {
           leases.push(lease);
           continue;
         }
