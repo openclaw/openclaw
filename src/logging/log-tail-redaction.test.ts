@@ -38,6 +38,19 @@ afterEach(() => {
   tempDirs.cleanup();
 });
 
+it.each(["password", "passwd", "token", "secret", "BRAVE_API_KEY"])(
+  "redacts single-quoted %s fields in diagnostic text",
+  async (key) => {
+    const raw = `Authentication failed: {'${key}': 'opaque-value', 'token_count': 42, 'password_hint': 'public'}\n`;
+    await seed(raw);
+    const result = await tail([
+      `Authentication failed: {'${key}': '***', 'token_count': 42, 'password_hint': 'public'}`,
+    ]);
+    expect(result.cursor).toBe(Buffer.byteLength(raw));
+    expect(await fs.readFile(file, "utf8")).toBe(raw);
+  },
+);
+
 it("redacts raw auth headers before returning log lines", async () => {
   const headers = [
     ["Authorization: Basic c2VjcmV0OnBhc3M=", "Authorization: Basic ***"],
