@@ -159,7 +159,7 @@ describe("Make reachable preparation", () => {
     window.dispatchEvent(new StorageEvent("storage", { key: "openclaw.openclawId.account" }));
   });
 
-  it("asks for one preparation when Continue is pressed twice", async () => {
+  it("checks the default name with the account's code, then asks for one preparation", async () => {
     const preparations: ((value: unknown) => void)[] = [];
     const request = vi.fn((method: string, params: { action?: string }) => {
       if (method === "openclawId.status") {
@@ -205,6 +205,12 @@ describe("Make reachable preparation", () => {
       expect(button?.disabled).toBe(false);
       return button!;
     });
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "openclawId.authority",
+        expect.objectContaining({ action: "check_name", enrollmentCode: "synthetic-code" }),
+      ),
+    );
     next.click();
     next.click();
     expect(preparations).toHaveLength(1);

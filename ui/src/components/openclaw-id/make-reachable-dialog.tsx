@@ -147,10 +147,10 @@ export function showMakeReachableDialog(params: {
         name: name().trim().toLowerCase(),
       });
       // Asks the Gateway (and through it Discovery) whether the name is free.
-      const checkName = async () => {
+      const checkName = async (code = enrollmentCode()) => {
         setCheck(null);
         setNameError(null);
-        if (!nameRequest().enrollmentCode || !nameRequest().name) {
+        if (!code.trim() || !nameRequest().name) {
           return;
         }
         try {
@@ -158,6 +158,7 @@ export function showMakeReachableDialog(params: {
             await params.client.request<NameCheck>("openclawId.authority", {
               action: "check_name",
               ...nameRequest(),
+              enrollmentCode: code.trim(),
             }),
           );
         } catch (error) {
@@ -168,10 +169,12 @@ export function showMakeReachableDialog(params: {
       const fillCodeFromAccount = async (signedIn: OpenClawIdSignedIn) => {
         const account = signedIn.email ?? t("openclawId.accountFallback");
         try {
-          setEnrollmentCode(await requestOpenClawIdLinkCode(params.client, signedIn));
+          const code = await requestOpenClawIdLinkCode(params.client, signedIn);
+          setEnrollmentCode(code);
           setCodeFromAccount(true);
           setCodeNote(t("openclawId.signedInLinkCode", { account }));
-          await checkName();
+          // Solid writes settle later; check the acquired code, not the stale signal.
+          await checkName(code);
         } catch (error) {
           setCodeError(openClawIdUiError(error, "linkCode"));
         }
