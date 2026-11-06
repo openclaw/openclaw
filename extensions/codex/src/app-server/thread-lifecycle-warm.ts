@@ -170,8 +170,6 @@ export async function releaseCodexBoundLiveThread(
   options: CodexLiveThreadReleaseParams & {
     clientId?: string;
     ownerClientId?: string;
-    /** Cold resume may join asynchronous Stop cleanup, never force its release. */
-    waitForBackgroundCleanup?: boolean;
     /** Runs synchronously when `signal` ends a wait for the previous owner's exit. */
     onExitWaitCancelled?: () => void;
   },
@@ -218,44 +216,42 @@ export async function releaseCodexBoundLiveThread(
     }
   }
   try {
-    if (
-      options.waitForBackgroundCleanup &&
-      !isCodexAppServerLiveThreadClaimed(client, options.threadId) &&
-      isCodexAppServerLiveThreadBackgroundOnly(client, options.threadId)
-    ) {
-      const deadline = AbortSignal.timeout(CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS);
-      const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
-      try {
-        await options.lifecycleTiming.measure("background-thread-cleanup", () =>
-          waitForCodexAppServerThreadBackgroundCleanup(client, options.threadId, signal),
-        );
-      } catch (error) {
-        throwIfCodexThreadLifecycleAborted(options.signal);
-        if (!deadline.aborted) {
-          throw error;
-        }
-        // A deadline is not settlement: the existing ownership guard still decides.
+    // Every unload must join settlement, including policy, context, and client rotation.
+    // Protection may also belong to a live resource lease, not a running turn.
+    const deadline = AbortSignal.timeout(CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS);
+    const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
+    try {
+      await options.lifecycleTiming.measure("background-thread-cleanup", () =>
+        waitForCodexAppServerThreadBackgroundCleanup(client, options.threadId, signal),
+      );
+    } catch (error) {
+      throwIfCodexThreadLifecycleAborted(options.signal);
+      if (!deadline.aborted) {
+        throw error;
       }
-      options.assertCurrent?.();
-      const closed = client.getCloseError();
-      if (closed) {
-        throw closed;
-      }
+      // A deadline is not settlement: the existing ownership guard still decides.
+    }
+    throwIfCodexThreadLifecycleAborted(options.signal);
+    options.assertCurrent?.();
+    const clientClosed = client.getCloseError();
+    if (clientClosed) {
+      throw clientClosed;
     }
     const claimed = isCodexAppServerLiveThreadClaimed(client, options.threadId);
     const protectedWork = isCodexAppServerLiveThreadProtected(client, options.threadId);
+    const backgroundOnly = isCodexAppServerLiveThreadBackgroundOnly(client, options.threadId);
     if (claimed || protectedWork) {
       embeddedAgentLog.debug("codex app-server retained thread release blocked", {
         threadId: options.threadId,
         changedClient: Boolean(changedClient),
         claimed,
         protected: protectedWork,
-        backgroundOnly: isCodexAppServerLiveThreadBackgroundOnly(client, options.threadId),
+        backgroundOnly,
       });
       throw new AgentHarnessPreflightError(
-        options.waitForBackgroundCleanup && !claimed && protectedWork
-          ? `Codex thread ${options.threadId} still has background work after waiting for cleanup; stop its running work and retry.`
-          : `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
+        claimed && !deadline.aborted && !backgroundOnly
+          ? `Codex thread ${options.threadId} is claimed by active work; stop it first.`
+          : `Codex thread ${options.threadId} still has background work or live resources after waiting for cleanup; wait for them to settle or release the owning resources and retry.`,
       );
     }
     released = await releaseCodexRetainedLiveThread({

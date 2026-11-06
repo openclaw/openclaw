@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -51,13 +52,16 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
     "protected rotation",
     "protected publication failure",
     "context refresh",
+    "context refresh with plugin rotation",
+    "source cancellation",
   ] as const)(
     "%s permits continuation without disturbing sibling ownership",
     { timeout: 90_000 },
     async (scenario, context) => {
       const backgroundWork = scenario !== "publication failure";
-      const contextRefresh = scenario === "context refresh";
-      const publicationFailure = scenario !== "protected rotation" && !contextRefresh;
+      const rotatingAfterCleanup = scenario === "context refresh with plugin rotation";
+      const contextRefresh = scenario === "context refresh" || rotatingAfterCleanup;
+      const publicationFailure = scenario.includes("publication failure");
       const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
         context.onTestFinished(async () => {
           await closeOpenClawStateDatabaseAsync();
@@ -174,6 +178,7 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         }),
       );
       let pluginFingerprint = "original-policy";
+      let pluginBuilds = 0;
       const common = {
         client,
         bindingStore,
@@ -186,10 +191,24 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         appServer,
         userMcpServersEnabled: false,
         signal: AbortSignal.timeout(75_000),
-        pluginThreadConfig: warmPluginConfig(() => pluginFingerprint),
+        pluginThreadConfig: warmPluginConfig(() => {
+          pluginBuilds++;
+          return pluginFingerprint;
+        }),
       };
+      const sourceAbort = new AbortController();
+      const sourceReleased = vi.fn();
       const authority = new CodexNativeProcessAuthority(
-        params.hostCapabilities,
+        scenario === "source cancellation"
+          ? {
+              ...params.hostCapabilities,
+              retainSourceAuthority: () => ({
+                signal: sourceAbort.signal,
+                assertCurrent: () => sourceAbort.signal.throwIfAborted(),
+                release: sourceReleased,
+              }),
+            }
+          : params.hostCapabilities,
         (error) => {
           throw error;
         },
@@ -281,6 +300,28 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
             ),
         ).toEqual([]);
       };
+      if (scenario === "source cancellation") {
+        sourceAbort.abort(new Error("retained source revoked"));
+        expect(sourceReleased).not.toHaveBeenCalled();
+        expect(isCodexAppServerLiveThreadProtected(client, first.threadId)).toBe(true);
+        await commandFinished.promise;
+        await vi.waitFor(() => expect(sourceReleased).toHaveBeenCalledOnce());
+        expect(isCodexAppServerLiveThreadProtected(client, first.threadId)).toBe(false);
+        expect(authority.commands.size).toBe(0);
+        const inventory = await client.request("thread/backgroundTerminals/list", {
+          threadId: first.threadId,
+        });
+        expect(inventory.data).toEqual([]);
+        expect(requests.slice(before)).toContainEqual({
+          method: "thread/backgroundTerminals/terminate",
+          threadId: first.threadId,
+        });
+        sibling!.assertCurrent();
+        await runTurn(siblingBinding.threadId);
+        expectNoRequests(["thread/unsubscribe"], siblingBinding.threadId);
+        expect(providerFailures).toEqual([]);
+        return;
+      }
       let publicationClaimed = false;
       if (contextRefresh) {
         common.contextEngineProjection = {
@@ -301,7 +342,7 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       } else {
         pluginFingerprint = "changed-policy";
         await expect(startOrResumeThread(common)).rejects.toThrow(
-          `Codex thread ${first.threadId} is claimed by active work; stop it first.`,
+          `Codex thread ${first.threadId} still has background work or live resources after waiting for cleanup; wait for them to settle or release the owning resources and retry.`,
         );
         expect(readBinding()).toEqual(saved);
         pluginFingerprint = "original-policy";
@@ -314,7 +355,7 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
             ...common,
             developerInstructions: "Changed persistent thread policy",
           }),
-        ).rejects.toThrow("claimed by active work; stop it first");
+        ).rejects.toThrow("background work or live resources");
         expect(readBinding()).toEqual(saved);
         expectNoRequests(
           ["thread/start", "thread/unsubscribe", "turn/start"],
@@ -322,7 +363,25 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
           beforePolicyChange,
         );
       }
-      const resumed = await startOrResumeThread(common);
+      const buildsBefore = pluginBuilds;
+      if (rotatingAfterCleanup) {
+        pluginFingerprint = "changed-policy";
+      }
+      const continuation = startOrResumeThread(common);
+      // Observe rejection immediately too, so a regression cannot leak an unhandled promise.
+      const outcome = continuation.catch((error: unknown) => error);
+      if (rotatingAfterCleanup) {
+        await vi.waitFor(() => expect(pluginBuilds).toBeGreaterThan(buildsBefore));
+        await setImmediate();
+        expectNoRequests(["thread/start", "thread/unsubscribe", "turn/start"], undefined, before);
+        await fs.writeFile(path.join(native.cwd, "finish-background"), "finish\n");
+        await expect(commandFinished.promise).resolves.toMatchObject({
+          status: "completed",
+          exitCode: 0,
+        });
+      }
+      const resumed = await continuation;
+      await outcome;
       if (contextRefresh) {
         expect(resumed.threadId).not.toBe(first.threadId);
         expect(resumed.contextEngine?.projection?.epoch).toBe("after");
@@ -346,14 +405,21 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
           expect(transitionRequests).toContainEqual({ method, threadId: first.threadId });
         }
       }
-      if (contextRefresh) {
+      if (rotatingAfterCleanup) {
+        expect(
+          transitionRequests.filter(
+            ({ method, threadId }) =>
+              method === "thread/unsubscribe" && threadId === first.threadId,
+          ),
+        ).toEqual([{ method: "thread/unsubscribe", threadId: first.threadId }]);
+      } else if (contextRefresh) {
         expectNoRequests(["thread/unsubscribe"], first.threadId);
       }
       expectNoRequests(["thread/unsubscribe"], siblingBinding.threadId);
       sibling!.assertCurrent();
       await runTurn(siblingBinding.threadId);
       sibling!.assertCurrent();
-      if (backgroundWork) {
+      if (backgroundWork && !rotatingAfterCleanup) {
         const inventory = await client.request("thread/backgroundTerminals/list", {
           threadId: first.threadId,
         });

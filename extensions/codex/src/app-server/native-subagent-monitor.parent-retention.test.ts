@@ -117,7 +117,7 @@ it("keeps an interrupted assignment resumable without pinning its restored paren
   await retainCodexAppServerLiveThread(client.client, binding.threadId);
   const continued = await registerParent(monitor, binding.threadId, "agent:main:main");
   await client.notify(turnStartedNotification("continued-turn"));
-  await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
+  await expect(releaseForResume()).rejects.toThrow("background work or live resources");
   await client.notify(
     childTurnCompletedNotification({ turnId: "continued-turn", status: "interrupted" }),
   );
@@ -145,7 +145,7 @@ it("permits parent cold resume once every child is terminal, while preserving un
     nativeCompletionNotification({ agentPath: "child-a", result: "first result" }),
   );
   // A still-running sibling requires the native parent subscription to remain alive.
-  await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
+  await expect(releaseForResume()).rejects.toThrow("background work or live resources");
   expect(client.request.mock.calls.some(([method]) => method === "thread/unsubscribe")).toBe(false);
 
   await client.notify(

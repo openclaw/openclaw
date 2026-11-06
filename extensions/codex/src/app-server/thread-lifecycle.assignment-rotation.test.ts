@@ -455,7 +455,11 @@ describe("native assignment custody across ordinary parent rotation", () => {
         patch.developerInstructions = "Private policy sentinel: never include in diagnostics";
       }
       try {
-        await expect(f.rotate(patch)).rejects.toThrow("claimed by active work; stop it first");
+        await expect(f.rotate(patch)).rejects.toThrow(
+          reason === "not-background-only"
+            ? "claimed by active work"
+            : "background work or live resources",
+        );
         expect(f.readState()).toEqual(before);
         expect(f.releasePredecessor).not.toHaveBeenCalled();
         expect(f.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(
@@ -555,7 +559,9 @@ describe("native assignment custody across ordinary parent rotation", () => {
         patch.config = { ...config, model_context_window: 100_000 };
       }
       try {
-        await expect(f.rotate(patch)).rejects.toThrow("claimed by active work; stop it first");
+        await expect(f.rotate(patch)).rejects.toThrow(
+          changed === "foreground" ? "claimed by active work" : "background work or live resources",
+        );
         expect(f.readState()).toEqual(before);
         expect(getCodexInferenceThread(f.client, f.parent.threadId)).toBe(route);
         expect(f.releasePredecessor).not.toHaveBeenCalled();
