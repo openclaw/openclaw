@@ -1363,7 +1363,8 @@ textarea.settings-input {
   background: var(--warn);
 }
 
-.settings-status--danger {
+/* Failure alerts carry red text; routine danger statuses keep the muted label and the red dot. */
+.settings-status--danger[role="alert"] {
   color: var(--danger);
 }
 
