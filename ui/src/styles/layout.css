@@ -4115,10 +4115,20 @@ html.openclaw-native-web-chrome
   width: 48px;
   height: 48px;
   margin-bottom: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: var(--accent);
 }
-.gateway-connection-view__mark svg {
-  width: 100%;
-  height: 100%;
+.gateway-connection-view__mark .session-run-spinner {
+  width: 22px;
+  height: 22px;
+}
+.gateway-connection-view__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
 }
 
 .gateway-connection-view h1 {

@@ -34,6 +34,7 @@ export function GatewayConnectionView(props: {
     }
     return props.kind;
   };
+  const busy = () => !["offline", "paused", "reload"].includes(state());
   const canRetry = () => state() === "offline" && !props.retryPending;
   return (
     <section
@@ -43,7 +44,9 @@ export function GatewayConnectionView(props: {
     >
       <div class="gateway-connection-view__body">
         <div class="gateway-connection-view__mark" aria-hidden="true">
-          <Icon name="lobster" />
+          <Show when={busy()} fallback={<span class="gateway-connection-view__dot" />}>
+            <span class="session-run-spinner" />
+          </Show>
         </div>
         <h1 id="gateway-connection-title">{t("connection.workspace." + state() + ".title")}</h1>
         <p class="gateway-connection-view__description" role="status" aria-live="polite">
