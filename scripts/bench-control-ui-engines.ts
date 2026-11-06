@@ -9,7 +9,12 @@ import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { chromium as chromiumEngine, webkit as webkitEngine, type Browser } from "playwright";
+import {
+  chromium as chromiumEngine,
+  firefox as firefoxEngine,
+  webkit as webkitEngine,
+  type Browser,
+} from "playwright";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
@@ -155,7 +160,7 @@ if (pagePhases.some((phase) => !["visit", "revisit", "action", "leave"].includes
   throw new Error("page-phases must contain visit, revisit, action and/or leave");
 }
 const engines: ControlUiEngine[] = values.engines.split(",").map((name) => {
-  if (name !== "chromium" && name !== "webkit") {
+  if (name !== "chromium" && name !== "webkit" && name !== "firefox") {
     throw new Error(`Unsupported engine: ${name}`);
   }
   return name;
@@ -164,9 +169,21 @@ const cpuThrottle = Number(values["cpu-throttle"]);
 if (!Number.isFinite(cpuThrottle) || cpuThrottle < 1) {
   throw new Error("cpu-throttle must be at least 1");
 }
-if (cpuThrottle !== 1 && engines.includes("webkit")) {
+if (cpuThrottle !== 1 && engines.some((engine) => engine !== "chromium")) {
   throw new Error(
-    "WebKit does not expose CPU throttling; use --engines chromium for throttled runs",
+    "Only Chromium exposes CPU throttling; use --engines chromium for throttled runs",
+  );
+}
+if (
+  engines.includes("firefox") &&
+  (values.trace ||
+    values["cpu-only"] ||
+    values["cpu-profile"] ||
+    values["native-audit"] ||
+    values.allocations)
+) {
+  throw new Error(
+    "Firefox supports application elapsed timing, not CPU counters or native traces in this harness",
   );
 }
 const networkProfiles = values["network-profiles"].split(",").map((name) => {
@@ -262,10 +279,12 @@ const browsers = new Map<ControlUiEngine, Browser>();
 const launchEngine = (engine: ControlUiEngine) =>
   engine === "webkit"
     ? webkitEngine.launch({ headless: true })
-    : chromiumEngine.launch({
-        headless: true,
-        executablePath: resolvePlaywrightChromiumExecutablePath(chromiumEngine.executablePath()),
-      });
+    : engine === "firefox"
+      ? firefoxEngine.launch({ headless: true })
+      : chromiumEngine.launch({
+          headless: true,
+          executablePath: resolvePlaywrightChromiumExecutablePath(chromiumEngine.executablePath()),
+        });
 
 function processMemory(browser: Browser) {
   // Pinned Playwright owns this child. Never include unrelated browser processes.
@@ -444,6 +463,11 @@ try {
   if (pageOrigin === "chat" && scenarios.some((scenario) => scenario.fixture?.workboardResources)) {
     throw new Error("Workboard/plugin resource fixtures require --page-origin new-session");
   }
+  if (engines.includes("firefox") && scenarios.some((scenario) => scenario.memory)) {
+    throw new Error(
+      "Firefox does not expose forced GC or heap snapshots in this harness; select non-memory steps",
+    );
+  }
   if (
     networkProfiles.some(({ name }) => name !== "localhost") &&
     scenarios.some(
@@ -517,6 +541,16 @@ try {
     browsers: Object.fromEntries(
       [...browsers].map(([engine, browser]) => [engine, browser.version()]),
     ),
+    firefoxCapabilities: engines.includes("firefox")
+      ? {
+          applicationElapsed: true,
+          cpuCounters: false,
+          nativeTraces: false,
+          heapSnapshots: false,
+          mobile: "viewport and touch only; isMobile emulation unavailable",
+          layoutInstability: "detected per observation; unsupported is null, not zero",
+        }
+      : undefined,
     bundles: servers.map(({ directory, build, sha256, workboardSource }) => ({
       directory,
       build,
@@ -550,11 +584,11 @@ try {
               ? "Playwright tracing and engine Inspector/Profiler; overhead included"
               : values["cpu-only"]
                 ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
-                : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
+                : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
     order:
       "Serial network profile and engine order alternates each pair; configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
-      "Census ranks >1.3x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
+      "Census screens >1.3x engine/Chromium; confirm with ten rotated pairs plus A/A. Fix proof: twenty rotated pairs plus A/A; median regression <=5% and p95 no worse. Missing CPU clocks cannot certify CPU wins on a noisy host; >20% attributable regression blocks.",
     frameCadence:
       "Prepare and settle frame intervals are consecutive requestAnimationFrame timestamp differences, not the full wait duration. scenarioMs includes driver input and scenario assertions; settleWaitMs measures the final two-frame wait. Their sum is wallMs. These are automation-to-assertion timings, not input-to-paint latency. Browser-local actionTiming splits the driver prefix, application elapsed to the last observed DOM commit (or native value edit), and the assertion/settle tail. These three sum to browserSpanMs, not Node wallMs. Focus work can occur in the prefix; compound input spans retain intermediate driver delays. Trace-only marks expose the same boundaries. Missing native input or an explicit Gateway-response mark, or a missing commit, makes action timing unavailable.",
     boundary:
@@ -632,10 +666,9 @@ try {
               await writeJson("observations.json", observations);
               continue;
             }
-            if (scenario.visibility === "hidden" && engine === "webkit") {
+            if (scenario.visibility === "hidden" && engine !== "chromium") {
               observation.status = "skipped";
-              observation.skipReason =
-                "WebKit has no supported native headless hiding API; no simulated visibility proof.";
+              observation.skipReason = `${engine} has no supported native headless hiding API; no simulated visibility proof.`;
               observations.push(observation);
               await writeJson(`${artifactPrefix}.json`, observation);
               await writeJson("observations.json", observations);
@@ -657,7 +690,8 @@ try {
               nativeBrowser?.context ??
               (await observationBrowser.newContext({
                 viewport: { width: viewport.width, height: viewport.height },
-                isMobile: viewport.name === "mobile",
+                // Firefox supports the narrow viewport and touch, but not isMobile emulation.
+                ...(engine === "firefox" ? {} : { isMobile: viewport.name === "mobile" }),
                 hasTouch: viewport.name === "mobile",
                 serviceWorkers: "block",
                 colorScheme: configuration.colorScheme,
@@ -1355,6 +1389,11 @@ const summary = [...cells.values()].map((cell) => {
     failed: rows.filter((row) => row.status === "failed").length,
     skipped: rows.filter((row) => row.status === "skipped").length,
     measured: measured.length,
+    observerSupport: {
+      layoutShifts: pageRows.filter((row) => row.layoutShiftsSupported).length,
+      longTasks: pageRows.filter((row) => row.longTasksSupported).length,
+      observations: pageRows.length,
+    },
     resizeErrorCount: rows.reduce((total, row) => total + row.resizeErrorCount, 0),
     resizeErrorObservations: rows.filter((row) => row.resizeErrorCount > 0).length,
     targets: cell.step.startsWith("page-")
@@ -1448,45 +1487,60 @@ const summary = [...cells.values()].map((cell) => {
 });
 const rows = summary
   .filter(({ engine }) => engine === "chromium")
-  .map((chromium) => {
-    const webkit = summary.find(
-      (row) =>
-        row.engine === "webkit" &&
-        row.step === chromium.step &&
-        row.viewport === chromium.viewport &&
-        row.bundle === chromium.bundle &&
-        row.networkProfile === chromium.networkProfile &&
-        row.configuration === chromium.configuration,
-    );
-    const application = chromium.actionTiming.applicationMs;
-    const webkitApplication = webkit?.actionTiming.applicationMs;
-    const driver = chromium.actionTiming.driverMs;
-    const webkitDriver = webkit?.actionTiming.driverMs;
-    const ratio =
-      application && webkitApplication && application.median > 0
-        ? webkitApplication.median / application.median
-        : null;
-    const driverRatio =
-      driver && webkitDriver && driver.median > 0 ? webkitDriver.median / driver.median : null;
-    const wallRatio =
-      chromium.wallMs && webkit?.wallMs ? webkit.wallMs.median / chromium.wallMs.median : null;
-    const chromiumReady = chromium.evidence.visitReadyMs ?? chromium.evidence.leaveReadyMs;
-    const webkitReady = webkit?.evidence.visitReadyMs ?? webkit?.evidence.leaveReadyMs;
-    const routeReadyRatio =
-      chromiumReady && webkitReady && chromiumReady.median > 0
-        ? webkitReady.median / chromiumReady.median
-        : null;
-    return {
-      chromium,
-      webkit,
-      ratio,
-      driverRatio,
-      wallRatio,
-      chromiumReady,
-      webkitReady,
-      routeReadyRatio,
-    };
-  })
+  .flatMap((chromium) =>
+    engines
+      .filter((engine) => engine !== "chromium")
+      .map((engine) => {
+        const compared = summary.find(
+          (row) =>
+            row.engine === engine &&
+            row.step === chromium.step &&
+            row.viewport === chromium.viewport &&
+            row.bundle === chromium.bundle &&
+            row.networkProfile === chromium.networkProfile &&
+            row.configuration === chromium.configuration,
+        );
+        const application = chromium.actionTiming.applicationMs;
+        const comparedApplication = compared?.actionTiming.applicationMs;
+        const driver = chromium.actionTiming.driverMs;
+        const comparedDriver = compared?.actionTiming.driverMs;
+        const ratio =
+          application && comparedApplication && application.median > 0
+            ? comparedApplication.median / application.median
+            : null;
+        const driverRatio =
+          driver && comparedDriver && driver.median > 0
+            ? comparedDriver.median / driver.median
+            : null;
+        const wallRatio =
+          chromium.wallMs && compared?.wallMs
+            ? compared.wallMs.median / chromium.wallMs.median
+            : null;
+        const chromiumReady =
+          chromium.evidence.visitReadyMs ??
+          chromium.evidence.leaveReadyMs ??
+          chromium.evidence.readyMs;
+        const comparedReady =
+          compared?.evidence.visitReadyMs ??
+          compared?.evidence.leaveReadyMs ??
+          compared?.evidence.readyMs;
+        const routeReadyRatio =
+          chromiumReady && comparedReady && chromiumReady.median > 0
+            ? comparedReady.median / chromiumReady.median
+            : null;
+        return {
+          engine,
+          chromium,
+          compared,
+          ratio,
+          driverRatio,
+          wallRatio,
+          chromiumReady,
+          comparedReady,
+          routeReadyRatio,
+        };
+      }),
+  )
   .toSorted((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0));
 await writeJson("summary.json", {
   headlineMetric: "applicationMs",
@@ -1525,7 +1579,8 @@ await writeJson("summary.json", {
         p95Ratio: sample && control && control.p95 > 0 ? sample.p95 / control.p95 : null,
       };
     }),
-  comparisons: rows.map(({ chromium, ratio, driverRatio, wallRatio, routeReadyRatio }) => ({
+  comparisons: rows.map(({ engine, chromium, ratio, driverRatio, wallRatio, routeReadyRatio }) => ({
+    engine,
     configuration: chromium.configuration,
     viewport: chromium.viewport,
     step: chromium.step,
@@ -1539,7 +1594,8 @@ await writeJson("summary.json", {
   planned,
   executed: observations.length,
   failed: observations.filter((row) => row.status === "failed").length,
-  skipped: planned - observations.length,
+  skipped:
+    observations.filter((row) => row.status === "skipped").length + planned - observations.length,
   ...(pageBenchmark ? { pageCoverage: enginePageCoverage } : {}),
   passed: observations.filter((row) => row.status === "passed").length,
   summary,
@@ -1566,9 +1622,11 @@ await writeFile(
   [
     "# Control UI engine comparison",
     "",
-    `Synthetic Gateway; production HTTP/bundle. ${values.trace ? "Traced samples include profiler overhead." : values["cpu-only"] ? "Sampled WebKit process CPU; Chromium main-thread CPU. No timeline or script profiler." : "Untraced wall samples; WebKit Inspector counters are unavailable (null)."} Wall time includes automation and assertions, not INP. WebKit Inspector script/layout/style durations are wall time; Chromium CDP uses thread CPU. Do not compare these as CPU ratios. Cold contexts are fresh; warm reload retains IndexedDB but mock routing disables HTTP cache.`,
+    `Synthetic Gateway; production HTTP/bundle. ${values.trace ? "Traced samples include profiler overhead." : values["cpu-only"] ? "Sampled WebKit process CPU; Chromium main-thread CPU. No timeline or script profiler." : "Untraced wall samples; WebKit/Firefox native counters are unavailable (null)."} Wall time includes automation and assertions, not INP. WebKit Inspector script/layout/style durations are wall time; Chromium CDP uses thread CPU. Do not compare these as CPU ratios. Cold contexts are fresh; warm reload retains IndexedDB but mock routing disables HTTP cache.`,
     "",
     `Completed ${observations.length}/${planned} observations; ${observations.filter(({ status }) => status === "failed").length} failed; ${observations.filter(({ status }) => status === "skipped").length} unsupported-viewport cells skipped. Timing summaries retain completed intervals with browser errors; failures are never passing proof. Browser-local boot milestones, metrics, counts, CPU coverage, host load and errors: [observations](observations.json), [summary](summary.json), [manifest](manifest.json).`,
+    "",
+    "Firefox uses the pinned Playwright build. Its mobile cells emulate viewport and touch only (isMobile is unsupported). CPU/native traces/heap snapshots are unavailable; application elapsed time keeps the same browser-local boundaries. Layout Instability and Long Tasks support are detected per observation; missing entries remain null.",
     "",
     "ResizeObserver loop errors are counted in every run, including without tracing or observer-origin diagnostics. Any browser error fails its observation and the command; completed timing intervals do not waive the zero-error requirement.",
     "",
@@ -1583,9 +1641,9 @@ await writeFile(
     "",
     "Application elapsed is first trusted native input (or an explicitly marked Gateway response delivery) to last observed DOM commit/native value edit before scenario return. Gateway marks run inside the page immediately before releasing the deferred response. It excludes the initial driver prefix and later assertion/settle tail, but includes intermediate driver gaps in compound actions; it is not CPU or paint latency. Navigation/memory and actions without both boundaries are unranked. The driver prefix may include application focus work. Browser-local phases do not include boundary RPC transport and do not sum to Node wall time.",
     "",
-    "| Configuration | Viewport | Scenario | Network | Bundle | Chromium application median/p95 (ms) | WebKit application median/p95 (ms) | Application W/C | Driver W/C | Chromium wall median/p95 (ms) | WebKit wall median/p95 (ms) | Wall W/C |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    ...rows.map(({ chromium, webkit, ratio, driverRatio, wallRatio }) => {
+    "| Engine | Configuration | Viewport | Scenario | Network | Bundle | Chromium application median/p95 (ms) | Compared application median/p95 (ms) | Application /C | Driver /C | Chromium wall median/p95 (ms) | Compared wall median/p95 (ms) | Wall /C |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...rows.map(({ engine, chromium, compared, ratio, driverRatio, wallRatio }) => {
       const format = (
         value: ReturnType<typeof distribution> | undefined,
         cell: typeof chromium | undefined,
@@ -1594,26 +1652,28 @@ await writeFile(
           ? `${value.median.toFixed(1)} / ${value.p95.toFixed(1)} (n=${value.n})`
           : cell?.skipped
             ? "unsupported viewport"
-            : "failed/absent";
-      return `| ${chromium.configuration} | ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromium.actionTiming.applicationMs, chromium)} | ${format(webkit?.actionTiming.applicationMs, webkit)} | ${ratio?.toFixed(2) ?? "—"} | ${driverRatio?.toFixed(2) ?? "—"} | ${format(chromium.wallMs, chromium)} | ${format(webkit?.wallMs, webkit)} | ${wallRatio?.toFixed(2) ?? "—"} |`;
+            : cell?.failed
+              ? "failed/unavailable"
+              : "unavailable";
+      return `| ${engine} | ${chromium.configuration} | ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromium.actionTiming.applicationMs, chromium)} | ${format(compared?.actionTiming.applicationMs, compared)} | ${ratio?.toFixed(2) ?? "—"} | ${driverRatio?.toFixed(2) ?? "—"} | ${format(chromium.wallMs, chromium)} | ${format(compared?.wallMs, compared)} | ${wallRatio?.toFixed(2) ?? "—"} |`;
     }),
-    ...(summary.some(({ step }) => step.startsWith("page-"))
+    ...(rows.some(({ chromiumReady, comparedReady }) => chromiumReady || comparedReady)
       ? [
           "",
-          "## Per-page phases",
+          "## Boot and page readiness",
           "",
-          `CPU throttle: ${cpuThrottle}x (Chromium only). Long-task target: ${50 * cpuThrottle} ms. CLS target: 0; all-shift sum also includes shifts within 500 ms of user input. Missing WebKit observer entries are unavailable, never zero. Inspector phases require a separate traced run and are elapsed wall time in WebKit, thread CPU in Chromium. Wall includes driver and assertions.`,
+          `CPU throttle: ${cpuThrottle}x (Chromium only). Long-task target: ${50 * cpuThrottle} ms. CLS target: 0; all-shift sum also includes shifts within 500 ms of user input. Missing WebKit/Firefox observer entries are unavailable, never zero. Inspector phases require a separate traced run and are elapsed wall time in WebKit, thread CPU in Chromium. Wall includes driver and assertions.`,
           "",
           "Visit and departure comparisons use browser-local route readiness; content complete also waits for the fixture's full row/control counts. CPU and task collection spans both boundaries. Action comparisons above use native-input-to-commit timing.",
           "",
-          "| Viewport | Phase | Network | Bundle | Chromium route-ready median/p95 ms | WebKit route-ready median/p95 ms | Ready W/C |",
-          "| --- | --- | --- | --- | --- | --- | --- |",
+          "| Engine | Configuration | Viewport | Phase | Network | Bundle | Chromium route-ready median/p95 ms | Compared route-ready median/p95 ms | Ready /C |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
           ...rows
-            .filter(({ chromiumReady, webkitReady }) => chromiumReady || webkitReady)
-            .map(({ chromium, chromiumReady, webkitReady, routeReadyRatio }) => {
+            .filter(({ chromiumReady, comparedReady }) => chromiumReady || comparedReady)
+            .map(({ engine, chromium, chromiumReady, comparedReady, routeReadyRatio }) => {
               const format = (value: ReturnType<typeof distribution> | undefined) =>
                 value ? `${value.median.toFixed(1)} / ${value.p95.toFixed(1)}` : "unavailable";
-              return `| ${chromium.configuration} | ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromiumReady)} | ${format(webkitReady)} | ${routeReadyRatio?.toFixed(2) ?? "—"} |`;
+              return `| ${engine} | ${chromium.configuration} | ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromiumReady)} | ${format(comparedReady)} | ${routeReadyRatio?.toFixed(2) ?? "—"} |`;
             }),
           "",
           "| Engine | Viewport | Phase | Network | Bundle | Passed/failed | Route ready median/p95 ms | Content complete median/p95 ms | Wall median/p95 ms | Ready assets / HTTP/1.1 wave floor | Longest task p95 ms | Script/style/layout median ms | CLS max | All shifts max | Elements after |",

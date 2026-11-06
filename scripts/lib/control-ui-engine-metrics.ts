@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import type { ControlUiAllocationProfile } from "./control-ui-allocation-profile.ts";
 
-export type ControlUiEngine = "chromium" | "webkit";
+export type ControlUiEngine = "chromium" | "webkit" | "firefox";
 
 export type EngineMetrics = {
   collection: "cdp-performance" | "webkit-inspector" | "untraced";
@@ -261,8 +261,18 @@ export async function startEngineMeasurement(
   engine: ControlUiEngine,
   options: MeasurementOptions,
 ) {
-  if (engine === "webkit") {
-    if (!options.trace && !options.cpuOnly) {
+  if (engine !== "chromium") {
+    if (engine === "firefox" || (!options.trace && !options.cpuOnly)) {
+      if (
+        engine === "firefox" &&
+        (options.trace ||
+          options.cpuOnly ||
+          options.cpuProfile ||
+          options.nativeAudit ||
+          options.allocations)
+      ) {
+        throw new Error("Firefox exposes no CPU counters or native profiler through this harness");
+      }
       // Inspector instrumentation has measurable cost. Keep cross-engine wall
       // comparisons untraced; collect attribution in a separate --trace run.
       return {
@@ -280,7 +290,9 @@ export async function startEngineMeasurement(
               jsHeapUsedBytes: null,
               cpuMs: null,
               notes: [
-                "WebKit has no public untraced script/layout/heap counters. Use a separate --trace run for Inspector attribution; these missing metrics are not zero.",
+                engine === "firefox"
+                  ? "Firefox supports browser-local application elapsed time, not CPU, script/layout, heap counters or native traces in this harness. Missing metrics are not zero."
+                  : "WebKit has no public untraced script/layout/heap counters. Use a separate --trace run for Inspector attribution; these missing metrics are not zero.",
               ],
             },
           };
