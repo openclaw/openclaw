@@ -91,6 +91,23 @@ it("discovers and reads an independent session created by the requesting human",
           user: alice.profileId,
         }),
       ).resolves.toMatchObject({ details: { status: "forbidden" } });
+      await expect(
+        createSessionsSendTool(options).execute("foreign-created-post", {
+          sessionKey: foreign,
+          user: alice.profileId,
+          mode: "post",
+          message: "Foreign session must not be writable",
+        }),
+      ).resolves.toMatchObject({ details: { status: "forbidden" } });
+      expect(
+        JSON.stringify(
+          await loadTranscriptEvents({
+            agentId: "main",
+            sessionKey: foreign,
+            sessionId: "foreign-created-id",
+          }),
+        ),
+      ).not.toContain("Foreign session must not be writable");
       for (const filter of [{ creatorId: bob.profileId }, { ownerId: bob.profileId }]) {
         const filtered = await createSessionsListTool(options).execute("foreign-selector-list", {
           ...filter,
