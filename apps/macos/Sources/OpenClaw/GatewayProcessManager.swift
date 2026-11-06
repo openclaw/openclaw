@@ -661,6 +661,9 @@ final class GatewayProcessManager {
                         if self.installation == .external { return }
                         let custody = try await self.retainManagedServiceForResume(
                             expectedServiceAuthority: expectedServiceAuthority)
+                        // An absent service is already paused. Do not dispatch uninstall
+                        // without a service definition to retain.
+                        guard custody.definition.plist != nil else { return }
                         failure = self.launchAgentDisableGeneration == stopGeneration
                             ? await GatewayLaunchAgentManager.set(
                                 enabled: false,

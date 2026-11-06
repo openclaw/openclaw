@@ -409,8 +409,8 @@ struct GatewayEndpointStoreTests {
             root: root,
             env: ["OPENCLAW_GATEWAY_\(credential.uppercased())": "stale-environment-secret"],
             launchdSnapshot: self.makeLaunchAgentSnapshot(
-                token: "service-token",
-                password: "service-password"))
+                token: credential == "token" ? "service-token" : nil,
+                password: credential == "password" ? "service-password" : nil))
 
         #expect(resolved == (isRemote ? "stale-environment-secret" : "configured-secret"))
     }
