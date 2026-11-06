@@ -2056,6 +2056,15 @@ def build_app_store_release(context)
   Dir[File.join(output_directory, "*.ipa")].each { |path| FileUtils.rm_f(path) }
   write_app_store_export_options(export_options_path)
 
+  compilation_cache_arguments = []
+  if env_present?(ENV["OPENCLAW_IOS_COMPILATION_CACHE_DIR"])
+    compilation_cache_arguments = [
+      "COMPILATION_CACHE_ENABLE_CACHING=YES",
+      "COMPILATION_CACHE_ENABLE_DIAGNOSTIC_REMARKS=YES",
+      "COMPILATION_CACHE_CAS_PATH=#{File.expand_path(ENV.fetch("OPENCLAW_IOS_COMPILATION_CACHE_DIR"))}",
+    ]
+  end
+
   sh(
     xcodebuild_shell_join([
       "xcodebuild",
@@ -2070,6 +2079,7 @@ def build_app_store_release(context)
       "generic/platform=iOS",
       "-archivePath",
       archive_path,
+      *compilation_cache_arguments,
       "clean",
       "archive",
     ])

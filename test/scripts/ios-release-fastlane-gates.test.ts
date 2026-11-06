@@ -1927,13 +1927,59 @@ end
     );
   });
 
-  it("uses Apple's matched rsync pair when exporting the IPA", () => {
-    const fastfile = readFastfile();
-    const builder = functionBody(fastfile, "build_app_store_release");
-    const exportStart = builder.indexOf('"-exportArchive"');
-
-    expect(exportStart).toBeGreaterThanOrEqual(0);
-    expect(builder.slice(exportStart)).toContain("system_tools_first: true");
+  it("applies optional compiler storage only to the clean archive and retains Apple's export tools", () => {
+    const source = readFastfile();
+    const script = String.raw`
+require "json"
+require "tmpdir"
+require "fileutils"
+require "shellwords"
+${["env_present?", "shell_join", "xcodebuild_shell_join", "build_app_store_release"].map((name) => functionDefinition(source, name)).join("\n")}
+def ios_root; $root; end
+def mark_ios_resource_phase(*); end
+def verify_apple_release_source!(*); end
+def write_app_store_export_options(file); File.write(file, "options"); end
+def validate_app_store_ipa!(*, **); end
+def sh(command)
+  $commands << Shellwords.split(command)
+  if $commands.length == 2
+    File.write(File.join(ios_root, "build/app-store/OpenClaw-2026.7.2.ipa"), "signed export")
+  end
+end
+Dir.mktmpdir("ios-archive-cache-") do |root|
+  $root = root
+  rows = [nil, "", File.join(root, "cache with spaces")].map do |cache|
+    cache.nil? ? ENV.delete("OPENCLAW_IOS_COMPILATION_CACHE_DIR") : ENV["OPENCLAW_IOS_COMPILATION_CACHE_DIR"] = cache
+    $commands = []
+    build_app_store_release(version: "2026.7.2", git_commit: "source", build_timestamp: "timestamp", build_number: "3", short_version: "2026.7.21")
+    { cache: cache, commands: $commands }
+  end
+  puts JSON.generate(rows)
+end
+`;
+    const result = spawnSync("ruby", ["-e", script], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    const rows = JSON.parse(result.stdout) as { cache: string | null; commands: string[][] }[];
+    for (const {
+      cache,
+      commands: [archive, exported],
+    } of rows) {
+      expect(archive.slice(-2)).toEqual(["clean", "archive"]);
+      expect(archive).toContain("Release");
+      const cacheArguments = archive.filter((part) => part.startsWith("COMPILATION_CACHE_"));
+      expect(cacheArguments).toEqual(
+        cache
+          ? [
+              "COMPILATION_CACHE_ENABLE_CACHING=YES",
+              "COMPILATION_CACHE_ENABLE_DIAGNOSTIC_REMARKS=YES",
+              `COMPILATION_CACHE_CAS_PATH=${cache}`,
+            ]
+          : [],
+      );
+      expect(exported).toContain("-exportArchive");
+      expect(exported.some((part) => part.startsWith("COMPILATION_CACHE_"))).toBe(false);
+      expect(exported[1]).toMatch(/^PATH=\/usr\/bin:\/bin:\/usr\/sbin:\/sbin:/u);
+    }
   });
 
   it("requires clean matching source before preparing and building release artifacts", () => {
