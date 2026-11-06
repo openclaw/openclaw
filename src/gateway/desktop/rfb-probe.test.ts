@@ -177,6 +177,40 @@ describe("configured VncAuth probe", () => {
     expect(rejected).toBe(1);
     expect(incomplete).toBe(1);
   });
+
+  it("returns a VncAuth rejection longer than 1 KiB", async () => {
+    const reason = "x".repeat(1025);
+    const port = await listenScriptedRfb((socket) => {
+      const pending: Buffer[] = [];
+      let stage = 0;
+      socket.on("data", (chunk) => {
+        pending.push(Buffer.from(chunk));
+        const pendingBytes = Buffer.concat(pending);
+        const body = pendingBytes.subarray(VERSION.length);
+        if (stage === 0 && pendingBytes.length >= VERSION.length) {
+          socket.write(OFFER);
+          stage = 1;
+        }
+        if (stage === 1 && body.length >= 1) {
+          socket.write(Buffer.alloc(16, 4));
+          stage = 2;
+        }
+        if (stage === 2 && body.length >= 17) {
+          const status = Buffer.alloc(4);
+          status.writeUInt32BE(1, 0);
+          const text = Buffer.from(reason);
+          const length = Buffer.alloc(4);
+          length.writeUInt32BE(text.length, 0);
+          socket.write(Buffer.concat([status, length, text]));
+          stage = 3;
+        }
+      });
+      socket.write(VERSION);
+    });
+    await expect(
+      probeRfbServer({ host: "127.0.0.1", port, timeoutMs: 2_000, vncPassword: "secret12" }),
+    ).resolves.toEqual({ kind: "auth-rejected", reason });
+  });
 });
 
 describe("RFB security classification", () => {

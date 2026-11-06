@@ -1,2 +1,2 @@
-# Loopback RFB peers have to count abandoned handshakes, disabled discovery, and revocation before the credential write.
-302
+# Loopback RFB peers have to count abandoned handshakes, disabled discovery, revocation before the credential write, and one rejection longer than the probe's previous 1 KiB cap.
+336
