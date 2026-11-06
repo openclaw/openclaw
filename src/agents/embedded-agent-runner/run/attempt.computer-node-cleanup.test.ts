@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -36,6 +36,7 @@ import {
   resolveCurrentPairedDeviceNodeBinding,
 } from "../../../infra/device-pairing-node-state.js";
 import { approveNodePairing, requestNodePairing } from "../../../infra/device-pairing-node.js";
+import { revokeDeviceToken } from "../../../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../../../infra/device-pairing.js";
 import { createNodeInvokeResponder, type NodeHostClient } from "../../../node-host/client.js";
 import type { NodeInvokeRequestPayload } from "../../../node-host/invoke-types.js";
@@ -54,6 +55,7 @@ import {
 } from "../../admitted-run-context.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import * as computerBindings from "../../tools/computer-tool-bindings.js";
 import { createComputerTool } from "../../tools/computer-tool.js";
 import { useContextEngineAttemptHarness } from "./attempt-context-engine.test-support.js";
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
@@ -217,22 +219,33 @@ async function createPairedComputerFixture(config: OpenClawConfig) {
     pairingGeneration: binding.generation,
     approvedSurface: { caps, commands: names },
   });
-  const context = createContext([], () => config);
-  context.nodeRegistry = nodeRegistry;
-  context.validateAgentRuntimeApprovalAuthority = createAgentRuntimeApprovalAuthorityValidator();
   const methods = createGatewayMethodRegistry(
     createCoreGatewayMethodDescriptors({
       "node.list": nodeReadHandlers["node.list"]!,
       "node.invoke": nodeInvokeHandlers["node.invoke"]!,
     }),
   );
-  context.getGatewayMethodRegistry = () => methods;
-  const resolveGatewayContext = () => context;
+  const makeGatewayContext = () => {
+    const next = createContext([], () => config);
+    next.nodeRegistry = nodeRegistry;
+    next.validateAgentRuntimeApprovalAuthority = createAgentRuntimeApprovalAuthorityValidator();
+    next.getGatewayMethodRegistry = () => methods;
+    return next;
+  };
+  const context = makeGatewayContext();
+  let currentContext = context;
+  const resolveGatewayContext = () => currentContext;
   context.resolveGatewayContext = resolveGatewayContext;
   return {
     nodeId,
     context,
+    socket,
     resolveGatewayContext,
+    replaceGateway() {
+      // Both contexts can reach the live node: a stale dispatch must fail on authority.
+      currentContext = makeGatewayContext();
+      currentContext.resolveGatewayContext = resolveGatewayContext;
+    },
     opened,
     closed,
     receivedCloses,
@@ -408,30 +421,34 @@ async function startComputerAttempt(
   };
 }
 
+async function createComputerAttemptFixture() {
+  const state = await createOpenClawTestState({ label: "computer-node-cleanup", applyEnv: true });
+  onTestFinished(state.cleanup);
+  const config: OpenClawConfig = {
+    plugins: { enabled: false },
+    session: { store: path.join(state.sessionsDir(), "sessions.json") },
+    tools: { codeMode: false, toolSearch: false },
+    gateway: { nodes: { commands: { allow: ["screen.snapshot", "computer.act"] } } },
+  };
+  await state.writeConfig(config);
+  await captureRuntimeConfigAsyncReader()();
+  const computer = await createPairedComputerFixture(config);
+  // Replace only unrelated tool assembly; preserve the attempt's real cleanup registrar.
+  hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => [
+    createComputerTool({
+      config: options?.config,
+      registerRunCleanup: options?.registerRunCleanup,
+      idempotencyScope: options?.runId,
+      contextEpoch: options?.computerContextEpoch,
+    }),
+  ]);
+  return { state, config, computer, sessionKey: `agent:main:computer-cleanup:${randomUUID()}` };
+}
+
 it.for(["completion", "abort"] as const)(
   "releases the paired computer for a successor after %s",
   async (ending, { signal }) => {
-    const state = await createOpenClawTestState({ label: "computer-node-cleanup", applyEnv: true });
-    onTestFinished(state.cleanup);
-    const config: OpenClawConfig = {
-      plugins: { enabled: false },
-      session: { store: path.join(state.sessionsDir(), "sessions.json") },
-      tools: { codeMode: false, toolSearch: false },
-      gateway: { nodes: { commands: { allow: ["screen.snapshot", "computer.act"] } } },
-    };
-    await state.writeConfig(config);
-    await captureRuntimeConfigAsyncReader()();
-    const computer = await createPairedComputerFixture(config);
-    // Replace only unrelated tool assembly; preserve the attempt's real cleanup registrar.
-    hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => [
-      createComputerTool({
-        config: options?.config,
-        registerRunCleanup: options?.registerRunCleanup,
-        idempotencyScope: options?.runId,
-        contextEpoch: options?.computerContextEpoch,
-      }),
-    ]);
-    const sessionKey = `agent:main:computer-cleanup:${randomUUID()}`;
+    const { state, config, computer, sessionKey } = await createComputerAttemptFixture();
     const runs: Array<Awaited<ReturnType<typeof startComputerAttempt>>> = [];
     try {
       const first = await startComputerAttempt(state, computer, config, sessionKey);
@@ -494,6 +511,82 @@ it.for(["completion", "abort"] as const)(
         run.release();
       }
       await Promise.allSettled(runs.map((run) => run.pending));
+      await computer.close();
+    }
+  },
+);
+
+it.for(["Gateway replacement", "pairing revocation"] as const)(
+  "rejects retained computer cleanup after %s before node I/O",
+  async (change, { signal }) => {
+    const { state, config, computer, sessionKey } = await createComputerAttemptFixture();
+    const closeAttempts: unknown[] = [];
+    const closeErrors: unknown[] = [];
+    const resolveBinding = computerBindings.resolveComputerBinding;
+    // Paired-node disposal consumes rejections. Observe the real binding's result
+    // unchanged so absent node I/O cannot pass because cleanup never ran.
+    vi.spyOn(computerBindings, "resolveComputerBinding").mockImplementation(async (params) => {
+      const binding = await resolveBinding(params);
+      return {
+        ...binding,
+        invoke: async (request) => {
+          const closing =
+            request.command === "computer.act" &&
+            request.commandParams.action === "__close_execution";
+          if (closing) {
+            closeAttempts.push(request.commandParams.executionId);
+          }
+          try {
+            return await binding.invoke(request);
+          } catch (error) {
+            if (closing) {
+              closeErrors.push(error);
+            }
+            throw error;
+          }
+        },
+      };
+    });
+    const first = await startComputerAttempt(state, computer, config, sessionKey);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          first.observed,
+          first.pending,
+          "Attempt ended before acquiring the paired computer",
+        ),
+        signal,
+      );
+      expect(computer.opened).toHaveLength(1);
+      if (change === "Gateway replacement") {
+        computer.replaceGateway();
+      } else {
+        await expect(
+          revokeDeviceToken({ deviceId: computer.nodeId, role: "node" }),
+        ).resolves.toMatchObject({ ok: true });
+      }
+      const sendsBeforeCleanup = computer.socket.send.mock.calls.length;
+      first.release();
+      await withinTest(first.pending, signal);
+      expect(closeAttempts).toEqual(computer.opened);
+      expect(closeErrors).toHaveLength(1);
+      expect(closeErrors[0]).toMatchObject(
+        change === "Gateway replacement"
+          ? { message: "Gateway instance unavailable for node.invoke" }
+          : {
+              message: "node pairing changed while invocation was active",
+              code: "UNAVAILABLE",
+              details: { code: "PAIRING_CHANGED" },
+            },
+      );
+      expect(computer.socket.send).toHaveBeenCalledTimes(sendsBeforeCleanup);
+      expect(computer.receivedCloses).toEqual([]);
+      expect(computer.closed).toEqual([]);
+      expect(computer.receivedActions).toEqual(["screen.snapshot"]);
+      expect(computer.errors).toEqual([]);
+    } finally {
+      first.release();
+      await Promise.allSettled([first.pending]);
       await computer.close();
     }
   },
