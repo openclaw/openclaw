@@ -6362,7 +6362,7 @@ describe("ci workflow guards", () => {
         };
         const route = (
           runner: string,
-          override: Parameters<typeof evaluateWorkflowExpression>[1] = {},
+          override: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
         ) => evaluateWorkflowExpression(runner, { ...fork, ...override });
         for (const runner of [plannerRunner, typeRunner, lintRunner]) {
           expect(route(runner)).toBe("blacksmith-4vcpu-ubuntu-2404");
@@ -6425,7 +6425,7 @@ describe("ci workflow guards", () => {
         runAttempt: 1,
         preflightOutputs: { frozen_target: frozenTarget },
       } as const;
-      const runOn = (override: Parameters<typeof evaluateWorkflowExpression>[1]) =>
+      const runOn = (override: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>) =>
         evaluateWorkflowExpression(artifactRunner, { ...context, ...override });
       for (const runnerBackend of ["", "blacksmith", "hybrid"] as const) {
         for (const eventName of ["push", "pull_request"] as const) {
