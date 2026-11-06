@@ -414,6 +414,14 @@ describe("Control UI build chunking", () => {
     const settingsSelect = modulePath("../components/solid/settings-select.tsx");
     const routeSubtitles = modulePath("../i18n/locales/en-route-subtitles.ts");
     const talk = modulePath("../pages/talk/talk-page.tsx");
+    const terminal = modulePath("../pages/terminal/terminal-page.tsx");
+    const terminalRailStyle = modulePath("../styles/session-panel-rail.css");
+    const terminalHelpers = [
+      "../components/terminal/terminal-controller-lifecycle.ts",
+      "../components/terminal/terminal-pending-actions.ts",
+      "../components/terminal/terminal-session-storage.ts",
+      "../components/terminal/terminal-tab-readiness.ts",
+    ].map(modulePath);
     const skeleton = modulePath("../components/solid/panel-loading-skeleton.tsx");
     const skeletonStyle = `${modulePath("../styles/panel-loading-skeleton.css")}?inline`;
     const sharedUi = modulePath("../components/select-picker-view.tsx");
@@ -597,10 +605,25 @@ describe("Control UI build chunking", () => {
       sources.set(id, "export const helper = 'shared';");
     }
     sources.set(helperPage, helperImports);
-    sources.set(chat, sources.get(chat)! + helperImports);
+    const terminalImports = terminalHelpers
+      .map((id, index) => `export { helper as terminal${index} } from ${JSON.stringify(id)};`)
+      .join("\n");
+    for (const id of terminalHelpers) {
+      sources.set(id, "export const helper = 'terminal-owner';");
+    }
+    sources.set(terminalRailStyle, ".terminal-rail-fixture { color: cyan; }");
+    sources.set(terminal, `import ${JSON.stringify(terminalRailStyle)}; ${terminalImports}`);
+    sources.set(
+      chat,
+      sources.get(chat)! +
+        helperImports +
+        terminalImports +
+        `import ${JSON.stringify(terminalRailStyle)};`,
+    );
     sources.set(
       entry,
-      sources.get(entry)! + `export const helpers = () => import(${JSON.stringify(helperPage)});`,
+      sources.get(entry)! +
+        `export const helpers = () => import(${JSON.stringify(helperPage)}); export const terminal = () => import(${JSON.stringify(terminal)});`,
     );
     const result = await buildFixture(entry, sources, {
       ...controlUiCodeSplitting,
@@ -645,6 +668,9 @@ describe("Control UI build chunking", () => {
     const sharedStyles = styles.find((style) => String(style.source).includes(".shared-fixture"));
     expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".sidebar-fixture") });
     expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".transcript-fixture") });
+    expect(sharedStyles).toMatchObject({
+      source: expect.stringContaining(".terminal-rail-fixture"),
+    });
     expect(sharedStyles?.source).not.toContain(".optional-fixture");
     expect(sharedStyles?.source).not.toContain(".tabs-fixture");
     const routeStyles = styles.find((style) => String(style.source).includes(".settings-fixture"));
@@ -698,6 +724,16 @@ describe("Control UI build chunking", () => {
     for (const helper of sharedHelpers) {
       const helperChunk = chunks.find((chunk) => helper in chunk.modules)!;
       expect(helperClosure).toContain(helperChunk.fileName);
+      expect(startup).not.toContain(helperChunk.fileName);
+    }
+    const terminalChunk = chunks.find((chunk) => terminal in chunk.modules)!;
+    const terminalClosure = staticImports(terminalChunk.fileName);
+    expect(terminalClosure).not.toContain(chatChunk.fileName);
+    expect(terminalClosure).not.toContain(newSessionChunk.fileName);
+    expect(startup).not.toContain(terminalChunk.fileName);
+    for (const helper of terminalHelpers) {
+      const helperChunk = chunks.find((chunk) => helper in chunk.modules)!;
+      expect(terminalClosure).toContain(helperChunk.fileName);
       expect(startup).not.toContain(helperChunk.fileName);
     }
     const sessionsChunk = chunks.find((chunk) => sessions in chunk.modules)!;

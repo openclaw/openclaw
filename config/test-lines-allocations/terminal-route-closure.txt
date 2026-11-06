@@ -1,0 +1,4 @@
+# Extend the emitted-graph fixture to keep Terminal independent of Chat and startup (+36).
+# Prove once-per-frame Gateway latency for first create, attach, restored output, and direct cold visits (+7).
+# Move existing replay tests to the rendering owner without adding cases (-2).
+41

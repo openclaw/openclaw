@@ -452,7 +452,7 @@ try {
     ...createEngineMemoryScenarios(memorySoakRounds),
     ...createEnginePluginMemoryScenarios(),
     ...createEngineStreamingScenarios(),
-    ...createEnginePageScenarios(0, pageOrigin),
+    ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
     ...interactionScenarios.filter(
       (scenario) =>
         requestedIds?.includes(scenario.id) ||
@@ -662,9 +662,11 @@ try {
                 ({ id }) => id === item.id,
               ) ??
               (item.id.startsWith("page-")
-                ? createEnginePageScenarios(networkProfile.gatewayLatencyMs, pageOrigin).find(
-                    ({ id }) => id === item.id,
-                  )
+                ? createEnginePageScenarios(
+                    networkProfile.gatewayLatencyMs,
+                    pageOrigin,
+                    slot.server.baseUrl,
+                  ).find(({ id }) => id === item.id)
                 : undefined) ??
               item;
             const idleControl = isEngineIdleControl(scenario);

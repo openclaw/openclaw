@@ -1,8 +1,106 @@
+import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
+import { disposeTerminalController } from "./terminal-controller-lifecycle.ts";
 import {
   forceTerminalRender,
+  TERMINAL_OUTPUT_ENCODER,
   type TerminalPanelSessionTab,
 } from "./terminal-panel-session-types.ts";
 import { terminalTheme } from "./terminal-theme.ts";
+
+function activeElementFor(host: HTMLElement): Element | null {
+  const root = host.getRootNode();
+  return root instanceof ShadowRoot
+    ? (root.activeElement ?? document.activeElement)
+    : document.activeElement;
+}
+
+function focusIfConnected(target: Element | null): void {
+  if (target instanceof HTMLElement && target.isConnected) {
+    target.focus();
+  }
+}
+
+/** Replays recovery output into a hidden replacement, then atomically swaps it in. */
+export async function replaceTerminalController(
+  target: {
+    controller: GhosttyTerminalController;
+    host: HTMLDivElement;
+  },
+  createController: (
+    parent: HTMLElement,
+    options?: { readOnly?: boolean },
+  ) => Promise<GhosttyTerminalController>,
+  replay: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (signal.aborted) {
+    return false;
+  }
+
+  const previousController = target.controller;
+  const previousHost = target.host;
+  const previouslyFocused = activeElementFor(previousHost);
+  const previousTerminalOwnedFocus = previousHost.contains(previouslyFocused);
+  const replacementHost = previousHost.cloneNode() as HTMLDivElement;
+  // The host is absolutely inset in the viewport. Keep it measurable while
+  // hidden so Ghostty fits the authoritative replay to the real terminal grid.
+  replacementHost.style.display = "block";
+  replacementHost.style.visibility = "hidden";
+  replacementHost.inert = true;
+  previousHost.before(replacementHost);
+
+  let replacement: GhosttyTerminalController | undefined;
+  const disposeUnpublishedReplacement = () => {
+    if (replacementHost.contains(activeElementFor(replacementHost))) {
+      focusIfConnected(previouslyFocused);
+    }
+    if (replacement) {
+      disposeTerminalController(replacement, replacementHost);
+    } else {
+      replacementHost.remove();
+    }
+  };
+  try {
+    // Ghostty autofocuses during open. Stage read-only so hidden focus can
+    // never forward keyboard input before the replacement is published.
+    replacement = await createController(replacementHost, { readOnly: true });
+    if (signal.aborted) {
+      disposeUnpublishedReplacement();
+      return false;
+    }
+    if (replay) {
+      replacement.write(TERMINAL_OUTPUT_ENCODER.encode(replay));
+    }
+    // ghostty-web 0.4.0 focuses during open and again in a zero-delay task.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    if (signal.aborted) {
+      disposeUnpublishedReplacement();
+      return false;
+    }
+  } catch (error) {
+    disposeUnpublishedReplacement();
+    throw error;
+  }
+
+  const currentlyFocused = activeElementFor(previousHost);
+  let focusTarget: Element | null = null;
+  if (previousHost.contains(currentlyFocused)) {
+    focusTarget = replacementHost;
+  } else if (replacementHost.contains(currentlyFocused)) {
+    focusTarget = previousTerminalOwnedFocus ? replacementHost : previouslyFocused;
+  }
+  replacementHost.inert = false;
+  replacement.setReadOnly(previousController.readOnly);
+  replacementHost.style.display = previousHost.style.display;
+  replacementHost.style.visibility = previousHost.style.visibility;
+  target.controller = replacement;
+  target.host = replacementHost;
+  disposeTerminalController(previousController, previousHost);
+  focusIfConnected(focusTarget);
+  return true;
+}
 
 export function repaintTerminalSession(tab: TerminalPanelSessionTab | undefined): void {
   if (tab) {
