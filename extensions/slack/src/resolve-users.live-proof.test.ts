@@ -3,6 +3,7 @@
 import { buildAllowlistResolutionSummary, mergeAllowlist } from "openclaw/plugin-sdk/allow-from";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SlackMonitorContext } from "./monitor/context.js";
 import { authorizeSlackDirectMessage } from "./monitor/dm-auth.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 
@@ -157,13 +158,16 @@ it("keeps same-form and ASCII controls unchanged through the production path", a
 // subsequent messages once the name-derived grant is removed.
 describe("name-derived grant through production admission", () => {
   const DM_POLICY = {
+    // authorizeSlackDirectMessage only reads dmEnabled / dmPolicy /
+    // allowNameMatching / teamId from ctx; cast the minimal fixture the same way
+    // monitor/auth.test.ts does so the strict CI typecheck is satisfied.
     ctx: {
       dmEnabled: true,
       dmPolicy: "allowlist" as const,
       allowNameMatching: true,
       teamId: "T_ACCENT",
       installationIdentity: { kind: "workspace", teamId: "T_ACCENT" },
-    },
+    } as unknown as SlackMonitorContext,
     accountId: "workspace",
     resolveSenderName: async () => ({ name: "Ren\u00e9e" }),
     sendPairingReply: vi.fn(),
