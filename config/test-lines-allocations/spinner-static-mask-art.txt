@@ -1,0 +1,3 @@
+# Pin spinner hosts that rotate unmasked around static masked art (regression from #189847).
+# One computed-style browser contract covers 17 spinner hosts and the pill strip; no cheaper layer reads ::before masks.
+99
