@@ -29,7 +29,11 @@ function readRecords<T>(root: string, file: string, allowEmptyLines = true): T[]
   return (allowEmptyLines ? lines.filter(Boolean) : lines).map((line) => JSON.parse(line) as T);
 }
 
-it("prepares known provider owners once while keeping catalog execution and auth request-local", async () => {
+async function exerciseCatalogWorker(observePlanning: boolean) {
+  if (observePlanning) {
+    // V8 cannot promise precise counters for functions restored from its code cache.
+    vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", "1");
+  }
   vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-reuse-empty-codex-"));
   const agentIds = ["fleet-a", "fleet-b"];
   const providerIds = ["worker-reuse-0", "worker-reuse-1", "worker-reuse-2"];
@@ -60,7 +64,8 @@ it("prepares known provider owners once while keeping catalog execution and auth
           "registrations.jsonl",
           `provider: ${JSON.stringify(provider)}, filename: __filename`,
         );
-      const plannerCoverage = `
+      const plannerCoverage = observePlanning
+        ? `
 if (require("node:worker_threads").threadId !== ${threadId} &&
     !globalThis[Symbol.for("catalog.reuse.coverage")]) {
   const session = new (require("node:inspector").Session)();
@@ -71,14 +76,20 @@ if (require("node:worker_threads").threadId !== ${threadId} &&
     post("Profiler.startPreciseCoverage", { callCount: true, detailed: true }));
   globalThis[Symbol.for("catalog.reuse.coverage")] = { post, ready };
 }
-`;
-      const execution = (provider: string) =>
-        `const coverage = globalThis[Symbol.for("catalog.reuse.coverage")];
+`
+        : "";
+      const plannerObservation = observePlanning
+        ? `const coverage = globalThis[Symbol.for("catalog.reuse.coverage")];
 await coverage.ready;
 const plannerCalls = await coverage.post("Profiler.takePreciseCoverage").then(sample =>
   sample.result.flatMap(script => script.functions)
     .filter(fn => fn.functionName === "planRuntimePluginDiscovery")
     .reduce((count, fn) => count + fn.ranges[0].count, 0));
+`
+        : "";
+      const execution = (provider: string) =>
+        plannerObservation +
+        `
 require("node:v8").queryObjects(WeakRef);
 const retainedPayloads = globalThis[Symbol.for("catalog.reuse.payloads")];
 const activePayload = retainedPayloads.at(-1);
@@ -96,7 +107,7 @@ const currentPayload = activePayload.ref.deref();
         ) +
         record(
           "executions.jsonl",
-          `provider: ${JSON.stringify(provider)}, agentDir: context.agentDir, plannerCalls`,
+          `provider: ${JSON.stringify(provider)}, agentDir: context.agentDir${observePlanning ? ", plannerCalls, workerNode: process.versions.node, workerBun: process.versions.bun ?? null" : ""}`,
         ) +
         `
         const retained = globalThis[Symbol.for("catalog.retired.registries.proof")];
@@ -242,10 +253,7 @@ throw Error("non-runtime catalog owner was loaded");`,
   const registrations = () =>
     readRecords<{ provider: string; filename: string }>(fixture.root, "registrations.jsonl");
   const executions = () =>
-    readRecords<{ provider: string; agentDir: string; plannerCalls: number }>(
-      fixture.root,
-      "executions.jsonl",
-    );
+    readRecords<{ provider: string; agentDir: string }>(fixture.root, "executions.jsonl");
   for (const provider of providerIds) {
     expect(
       fixture.snapshots[0]!.metadataSnapshot.plugins.find(({ id }) => id === provider),
@@ -301,9 +309,19 @@ throw Error("non-runtime catalog owner was loaded");`,
         `Scoped catalog did not publish: ${snapshot.agentId}/${provider}`,
       );
       expect(catalog.refreshFailed).toBeFalsy();
-      // The first request admits new owners; every already-covered request skips the planner.
       expect(executions().slice(before)).toEqual([
-        { provider, agentDir: snapshot.agentDir, plannerCalls: before === 0 ? 1 : 0 },
+        {
+          provider,
+          agentDir: snapshot.agentDir,
+          // First admission is the positive control; covered scopes must skip planning.
+          ...(observePlanning
+            ? {
+                plannerCalls: before === 0 ? 1 : 0,
+                workerNode: process.versions.node,
+                workerBun: null,
+              }
+            : {}),
+        },
       ]);
       const entries = catalog.entries.filter((entry) => entry.provider === provider);
       expect(entries.map(({ id }) => id)).toEqual([`auth-${key}`]);
@@ -409,4 +427,14 @@ throw Error("non-runtime catalog owner was loaded");`,
   });
   await closePreparedModelRuntimeSnapshots();
   expect(fs.existsSync(captureRoot)).toBe(false);
-});
+}
+
+it("keeps request-local catalog/auth with stable registrations and retained payloads", () =>
+  exerciseCatalogWorker(false));
+
+// Bun's profiler omits precompiled functions and approximates async call counts.
+// Keep the portable lifecycle proof above; CI also schedules this file on Node.
+it.skipIf("bun" in process.versions)(
+  "plans new provider owners once and skips covered scopes in a Node worker",
+  () => exerciseCatalogWorker(true),
+);
