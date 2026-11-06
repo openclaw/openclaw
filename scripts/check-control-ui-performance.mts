@@ -55,10 +55,9 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Generated-name-normalized main measurement plus 64 B toolchain headroom.
-  // PR #194017 (L294): 1,288,049 B CI-measured with the shared-boot window receipt, plus 64 B headroom.
-  // Ayaan Zaidi approved +1 KiB for naming a failed reply's provider cause (#193996, 2026-11-06).
-  chatBootJsGzipBytes: 1_289_482,
-  newBootJsGzipBytes: 797_620,
+  // Retired copy, browser fallbacks, and unused initializers: measured head plus 64 B.
+  chatBootJsGzipBytes: 1_288_098,
+  newBootJsGzipBytes: 797_539,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -72,10 +71,9 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Header-local notice matching adds 13 B and lowers 400-message 4x scroll CPU 5–7%.
-  totalCssGzipBytes: 324_685,
-  // Ranked selector splits: measured raw CSS plus 64 B headroom.
-  totalCssRawBytes: 1_678_428,
+  // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
+  totalCssGzipBytes: 324_684,
+  totalCssRawBytes: 1_675_382,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

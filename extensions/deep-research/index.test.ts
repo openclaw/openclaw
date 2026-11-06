@@ -45,7 +45,12 @@ it("registers lazily and scans bounded recovery state without network, invokes w
       throw new Error("Expected versioned registrations");
     }
     const serviceContext = {
-      sessionWork: { version: 1 as const, admit: unexpected, run: unexpected },
+      sessionWork: {
+        version: 1 as const,
+        withCurrent: unexpected,
+        admit: unexpected,
+        run: unexpected,
+      },
       scheduler,
       config: {},
       stateDir: "/unused-research-state",

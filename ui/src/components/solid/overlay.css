@@ -528,13 +528,7 @@ a.oc-menu-item[href] {
   }
 }
 
-/* Translucency needs a blur behind it to stay legible, and users can opt out of it. */
-@supports not (backdrop-filter: blur(8px)) {
-  :root {
-    --menu-surface: var(--popover);
-  }
-}
-
+/* Users can opt out of translucent surfaces. */
 @media (prefers-reduced-transparency: reduce) {
   :root {
     --menu-surface: var(--popover);
