@@ -1,5 +1,6 @@
 package ai.openclaw.app.gateway
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
@@ -105,5 +106,52 @@ class OpenClawIdNodeStoreTest {
     assertTrue(store.target(target.stableId)!!.admitted)
     assertThrows(IllegalArgumentException::class.java) { store.prepare(input("https://other-discovery.example.test")) }
     assertEquals(2L, store.target(target.stableId)!!.trust!!.snapshotSeq)
+
+    // A correctly signed removal must advance durable replay protection even though it refuses admission.
+    val removedBody =
+      JsonObject(
+        response
+          .getValue("snapshot")
+          .jsonObject
+          .getValue("body")
+          .jsonObject +
+          mapOf("seq" to JsonPrimitive(3), "issued_at" to JsonPrimitive(now + 1), "node_peer_keys" to JsonArray(emptyList())),
+      )
+    val gatewaySeed =
+      OpenClawIdEnrollmentCrypto.unhex(
+        vectors
+          .getValue("keys")
+          .jsonObject
+          .getValue("gateway")
+          .jsonObject
+          .getValue("seed_hex")
+          .jsonPrimitive.content,
+      )
+    val removedResponse =
+      OpenClawIdEnrollmentSigner(gatewaySeed).use { signer ->
+        JsonObject(response + ("snapshot" to signer.statement("MembershipSnapshot", removedBody)))
+      }
+    gatewaySeed.fill(0)
+    writable = false
+    assertThrows(IllegalStateException::class.java) { store.assess(target.stableId, removedResponse, now + 1) }
+    assertEquals(2L, store.target(target.stableId)!!.trust!!.snapshotSeq)
+    writable = true
+    val refused = store.assess(target.stableId, removedResponse, now + 1).second
+    assertEquals("node_not_admitted", refused.failure)
+    assertNull(refused.target)
+
+    // Recreate the owner from persisted bytes, rather than passing the assessment's in-memory state.
+    val reopened =
+      OpenClawIdNodeStore(memory::get) { key, value ->
+        if (value == null) memory.remove(key) else memory[key] = value
+        true
+      }
+    val persisted = reopened.target(target.stableId)!!.trust!!
+    assertEquals(3L, persisted.snapshotSeq)
+    assertEquals(now + 1, persisted.snapshotIssuedAt)
+    val replay = reopened.assess(target.stableId, response, now + 1).second
+    assertEquals("snapshot_replayed", replay.failure)
+    assertNull(replay.target)
+    assertEquals(persisted, reopened.target(target.stableId)!!.trust)
   }
 }
