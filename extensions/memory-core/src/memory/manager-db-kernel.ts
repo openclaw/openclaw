@@ -5,6 +5,7 @@ import {
   ensureMemoryChunkFtsTriggers,
   ensureMemoryPathFtsTriggers,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
+  MEMORY_INDEX_CJK_FTS_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   rebuildMemoryChunkFts,
@@ -140,6 +141,19 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
         }
         if (params.sourceSchema.paths) {
           ensureMemoryPathFtsTriggers(params.targetDb);
+        }
+        // The companion Han-bigram index travels with the canonical chunks it
+        // was derived from. Copy it verbatim so the published index keeps the
+        // two-character queries the trigram tokenizer cannot match.
+        params.targetDb.exec(`DROP TABLE IF EXISTS main.${MEMORY_INDEX_CJK_FTS_TABLE}`);
+        if (params.sourceSchema.cjk) {
+          params.targetDb.exec(params.sourceSchema.cjk);
+          params.targetDb.exec(
+            `INSERT INTO main.${MEMORY_INDEX_CJK_FTS_TABLE} ` +
+              "(rowid, text, id, path, source, model, start_line, end_line) " +
+              `SELECT rowid, text, id, path, source, model, start_line, end_line ` +
+              `FROM ${MEMORY_REINDEX_SCHEMA}.${MEMORY_INDEX_CJK_FTS_TABLE}`,
+          );
         }
         replaceMemoryVectorTable(params.targetDb, params.sourceSchema.vector);
         if (params.vectorIndexComplete) {

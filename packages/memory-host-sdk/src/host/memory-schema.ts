@@ -20,6 +20,7 @@ import {
   dropDisabledMemoryFts,
   dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
+  ensureMemoryCjkBigramFtsSchema,
   ensureMemoryPathFtsTriggers,
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_FTS_TABLE,
@@ -50,17 +51,22 @@ export {
 } from "./memory-schema-recall.js";
 
 export {
+  deleteMemoryCjkBigramRows,
   dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
   ensureMemoryChunkFtsTriggers,
+  ensureMemoryCjkBigramFtsSchema,
   ensureMemoryPathFtsTriggers,
+  upsertMemoryCjkBigramRow,
   MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_CJK_FTS_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
   MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS,
   rebuildMemoryChunkFts,
+  rebuildMemoryCjkBigramFts,
 } from "./openclaw-runtime-sqlite.js";
 export {
   ensureMemoryChunkProvenance,
@@ -150,6 +156,7 @@ function memoryIndexSchemaAdmissionKey(
       params.ftsTable ?? MEMORY_INDEX_FTS_TABLE,
       params.ftsEnabled,
       params.ftsTokenizer ?? "unicode61",
+      Boolean(params.cjkBigramFts),
     ])}`,
     schemaDependent: true,
     read: readMemoryIndexSchemaAdmission,
@@ -439,6 +446,7 @@ export function ensureMemoryIndexSchema(params: {
   ftsTable?: string;
   ftsEnabled: boolean;
   ftsTokenizer?: "unicode61" | "trigram";
+  cjkBigramFts?: boolean;
 }): { ftsAvailable: boolean; ftsError?: string } {
   const embeddingCacheTable = params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE;
   const ftsTable = params.ftsTable ?? MEMORY_INDEX_FTS_TABLE;
@@ -455,6 +463,12 @@ export function ensureMemoryIndexSchema(params: {
           if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
             backfillMemoryPathFtsRows(params.db);
           }
+          // The companion Han-bigram index is populated separately from the canonical chunks, so the
+          // admitted fast path still has to keep it present and aligned.
+          ensureMemoryCjkBigramFtsSchema({
+            db: params.db,
+            enabled: params.cjkBigramFts === true,
+          });
         };
         if (params.db.isTransaction) {
           reconcile();
@@ -595,6 +609,10 @@ export function ensureMemoryIndexSchema(params: {
         search.text = { body: { ...search.text!.body!, table: ftsTable } };
       }
       admitSqliteMemoryTextSearch(params.db, search, { fresh: params.fresh });
+      // The companion Han-bigram index answers the two-character queries the
+      // trigram tokenizer cannot match. It is derived state, so it never
+      // blocks the body index from becoming available.
+      ensureMemoryCjkBigramFtsSchema({ db: params.db, enabled: params.cjkBigramFts === true });
       ftsAvailable = true;
     } catch (err) {
       if (ftsTable === MEMORY_INDEX_FTS_TABLE) {

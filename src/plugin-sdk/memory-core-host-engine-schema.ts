@@ -17,6 +17,10 @@ export {
   registerMemoryEmbeddingMigrationFunctions,
   markInvalidImportedMemoryEmbeddings,
   rebuildMemoryChunkFts,
+  rebuildMemoryCjkBigramFts,
+  deleteMemoryCjkBigramRows,
+  ensureMemoryCjkBigramFtsSchema,
+  upsertMemoryCjkBigramRow,
   ensureMemoryIndexSchema,
   readRepairedMemoryIndexSchema,
   publishRepairedMemoryIndexSchema,
@@ -26,12 +30,20 @@ export {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_CJK_FTS_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+export {
+  buildHanBigramMatchQuery,
+  buildHanBigramPhrase,
+  containsHan,
+  encodeHanBigrams,
+  isHanTerm,
+} from "../../packages/memory-host-sdk/src/host/cjk-bigram.js";
 export {
   loadSqliteVecExtension,
   loadSqliteVecExtensionFromPath,

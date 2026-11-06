@@ -161,6 +161,7 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
             cacheEnabled: this.cache.enabled,
             ftsEnabled: shadow.fts.enabled,
             ftsTokenizer: this.settings.store.fts.tokenizer,
+            cjkBigramFts: this.settings.store.fts.cjk === "bigram",
             fresh: postgresStage ? undefined : true,
           });
         }

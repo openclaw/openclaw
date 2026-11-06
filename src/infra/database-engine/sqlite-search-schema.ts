@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { encodeHanBigrams } from "../../../packages/memory-host-sdk/src/host/cjk-bigram.js";
 import type { SqliteSchemaCatalog } from "../sqlite-schema-catalog-types.js";
 import { createSqliteTableContractReader } from "../sqlite-schema-catalog.js";
 import { normalizeSchemaSql } from "../sqlite-schema-sql.js";
@@ -13,6 +14,7 @@ export const MEMORY_INDEX_SOURCES_TABLE = "memory_index_sources";
 export const MEMORY_INDEX_CHUNKS_TABLE = "memory_index_chunks";
 export const MEMORY_INDEX_FTS_TABLE = "memory_index_chunks_fts";
 export const MEMORY_INDEX_PATHS_FTS_TABLE = "memory_index_paths_fts";
+export const MEMORY_INDEX_CJK_FTS_TABLE = "memory_index_chunks_cjk_fts";
 
 type FtsTableSchemaStatus = "missing" | "matching" | "mismatched" | "not-fts";
 type SearchSchemaObject = { type: string; name: string; sql: string | null };
@@ -286,10 +288,141 @@ export function dropDisabledMemoryFts(db: DatabaseSync, ftsTable: string, enable
   // source writes stay independent of the selected body FTS table.
   dropMemoryPathFtsTriggers(db);
   db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_PATHS_FTS_TABLE}`);
+  db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_CJK_FTS_TABLE}`);
 
   if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
     dropMemoryChunkFtsTriggers(db);
     db.exec(`DROP TABLE IF EXISTS ${ftsTable}`);
+  }
+}
+
+type MemoryCjkChunkRow = {
+  chunk_rowid: number;
+  id: string;
+  path: string;
+  source: string;
+  model: string;
+  start_line: number;
+  end_line: number;
+  text: string;
+};
+
+/** Replace every companion row with the current canonical chunk text. */
+export function rebuildMemoryCjkBigramFts(db: DatabaseSync): number {
+  const rows = db
+    .prepare(
+      `SELECT chunk_rowid, id, path, source, model, start_line, end_line, text
+         FROM ${MEMORY_INDEX_CHUNKS_TABLE}`,
+    )
+    .all() as MemoryCjkChunkRow[];
+  db.exec(`DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE}`);
+  const insert = db.prepare(
+    `INSERT INTO ${MEMORY_INDEX_CJK_FTS_TABLE} (rowid, text, id, path, source, model, start_line, end_line)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const row of rows) {
+    insert.run(
+      row.chunk_rowid,
+      encodeHanBigrams(row.text),
+      row.id,
+      row.path,
+      row.source,
+      row.model,
+      row.start_line,
+      row.end_line,
+    );
+  }
+  return rows.length;
+}
+
+/** Keep one companion row aligned with its canonical chunk row. */
+export function upsertMemoryCjkBigramRow(params: {
+  db: DatabaseSync;
+  chunkRowid: number;
+  id: string;
+  path: string;
+  source: string;
+  model: string;
+  startLine: number;
+  endLine: number;
+  text: string;
+}): void {
+  params.db
+    .prepare(`DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE rowid = ?`)
+    .run(params.chunkRowid);
+  params.db
+    .prepare(
+      `INSERT INTO ${MEMORY_INDEX_CJK_FTS_TABLE} (rowid, text, id, path, source, model, start_line, end_line)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      params.chunkRowid,
+      encodeHanBigrams(params.text),
+      params.id,
+      params.path,
+      params.source,
+      params.model,
+      params.startLine,
+      params.endLine,
+    );
+}
+
+/** Remove the companion rows that belong to a canonical chunk row. */
+export function deleteMemoryCjkBigramRows(params: { db: DatabaseSync; chunkRowid: number }): void {
+  params.db
+    .prepare(`DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE rowid = ?`)
+    .run(params.chunkRowid);
+}
+
+/**
+ * Create, refresh, or drop the companion index.
+ *
+ * The companion table is fully derived from the canonical chunk table, so it
+ * is rebuilt whenever the two disagree and dropped when the feature is off.
+ */
+export function ensureMemoryCjkBigramFtsSchema(params: {
+  db: DatabaseSync;
+  enabled: boolean;
+}): void {
+  const { db } = params;
+  if (!params.enabled) {
+    db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_CJK_FTS_TABLE}`);
+    return;
+  }
+  const tableExists =
+    db
+      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
+      .get(MEMORY_INDEX_CJK_FTS_TABLE) !== undefined;
+  const canonicalCount = (
+    db.prepare(`SELECT count(*) AS count FROM ${MEMORY_INDEX_CHUNKS_TABLE}`).get() as {
+      count: number;
+    }
+  ).count;
+  const derivedCount = tableExists
+    ? (
+        db.prepare(`SELECT count(*) AS count FROM ${MEMORY_INDEX_CJK_FTS_TABLE}`).get() as {
+          count: number;
+        }
+      ).count
+    : -1;
+  if (tableExists && derivedCount === canonicalCount) {
+    return;
+  }
+  db.exec("SAVEPOINT ensure_memory_index_cjk_fts");
+  try {
+    db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_CJK_FTS_TABLE}`);
+    db.exec(
+      buildSqliteMemoryBodyFtsSchema({
+        tableName: MEMORY_INDEX_CJK_FTS_TABLE,
+        tokenizer: "unicode61",
+      }),
+    );
+    rebuildMemoryCjkBigramFts(db);
+    db.exec("RELEASE ensure_memory_index_cjk_fts");
+  } catch (err) {
+    db.exec("ROLLBACK TO ensure_memory_index_cjk_fts");
+    db.exec("RELEASE ensure_memory_index_cjk_fts");
+    throw err;
   }
 }
 
