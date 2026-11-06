@@ -12,7 +12,7 @@ import { resolveUserPath } from "../utils.js";
 /** Plugin install record update with the target plugin id attached. */
 export type PluginInstallUpdate = PluginInstallRecord & { pluginId: string };
 
-export { buildNpmResolutionFields as buildNpmResolutionInstallFields } from "../infra/install-source-utils.js";
+export { buildNpmResolutionFields as buildNpmResolutionInstallFields } from "../infra/npm-registry-spec.js";
 
 type NpmInstallPathRecord = Pick<PluginInstallRecord, "source" | "installPath">;
 

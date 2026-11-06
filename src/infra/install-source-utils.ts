@@ -13,7 +13,7 @@ import {
   validRange as validSemverRange,
 } from "semver";
 import { resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
-import type { SpawnResult } from "../process/exec.js";
+import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath, tryParseJson } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
@@ -58,26 +58,6 @@ export type NpmSpecResolution = {
 
 type InstallSourceResult<T> = ({ ok: true } & T) | { ok: false; error: string };
 
-type NpmResolutionFields = {
-  resolvedName?: string;
-  resolvedVersion?: string;
-  resolvedSpec?: string;
-  integrity?: string;
-  shasum?: string;
-  resolvedAt?: string;
-};
-
-export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmResolutionFields {
-  return {
-    resolvedName: resolution?.name,
-    resolvedVersion: resolution?.version,
-    resolvedSpec: resolution?.resolvedSpec,
-    integrity: resolution?.integrity,
-    shasum: resolution?.shasum,
-    resolvedAt: resolution?.resolvedAt,
-  };
-}
-
 /** Creates a script-free npm environment for metadata and pack commands. */
 function createNpmMetadataEnv(
   scope: Pick<NpmProjectInstallEnvOptions, "npmConfigCwd"> = {},
@@ -100,7 +80,6 @@ export async function loadNpmPackageVersions({
   signal?: AbortSignal;
   killProcessTree?: boolean;
 }): Promise<string[] | null> {
-  const { runCommandWithTimeout } = await import("../process/exec.js");
   const versions = await runCommandWithTimeout(
     resolveNpmCommand(["view", packageName, "versions", "--json"]),
     {
@@ -195,7 +174,6 @@ export async function resolveNpmSpecMetadata(params: {
       category?: "metadata-env";
     }
 > {
-  const { runCommandWithTimeout } = await import("../process/exec.js");
   const res = await runCommandWithTimeout(
     resolveNpmCommand([
       "view",
@@ -353,7 +331,6 @@ export async function packNpmSpecToArchive(params: {
   cwd: string;
   signal?: AbortSignal;
 }): Promise<InstallSourceResult<{ archivePath: string; metadata: NpmSpecResolution }>> {
-  const { runCommandWithTimeout } = await import("../process/exec.js");
   const res = await runCommandWithTimeout(
     resolveNpmCommand([
       "pack",
@@ -423,7 +400,6 @@ export async function resolveNpmPackArchiveMetadata(params: {
   const archiveStat = await fs.stat(archivePath).catch(() => null);
   const archiveMetadataTimeoutMs =
     archiveStat && archiveStat.size > 100 * 1024 * 1024 ? 300_000 : 60_000;
-  const { runCommandWithTimeout } = await import("../process/exec.js");
   const res = await runCommandWithTimeout(
     resolveNpmCommand(["pack", archivePath, "--ignore-scripts", "--dry-run", "--json"]),
     {
