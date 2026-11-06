@@ -1028,7 +1028,10 @@ class GatewaySessionReconnectTest {
       val leases = ConcurrentLinkedQueue<GatewaySession.RequestLease>()
       val server =
         startGatewayServer(json = Json { ignoreUnknownKeys = true }) { webSocket, id, method ->
-          if (method == "connect") webSocket.send(connectResponseFrame(id))
+          when (method) {
+            "connect" -> webSocket.send(connectResponseFrame(id))
+            "health" -> webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"connection":1}}""")
+          }
         }
       val harness = createReconnectHarness()
       val onReady = {
@@ -1048,8 +1051,8 @@ class GatewaySessionReconnectTest {
 
         // A retryable "not enqueued" would park the row as Queued and replay it on every reconnect.
         assertTrue(error is GatewayRequestDefinitiveFailure && error !is GatewayRequestNotEnqueued)
-        delay(500)
-        assertTrue(lease.isCurrent())
+        // The same socket still carries the next request; OkHttp never closed it.
+        assertTrue(lease.request(method = "health", paramsJson = "{}").contains("\"connection\":1"))
         assertEquals(1, readyCount.get())
       } finally {
         shutdownReconnectHarness(harness, server)
