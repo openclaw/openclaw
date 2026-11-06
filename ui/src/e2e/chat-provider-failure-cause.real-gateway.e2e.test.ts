@@ -2,11 +2,9 @@ import { createServer } from "node:http";
 import { buffer } from "node:stream/consumers";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.js";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.js";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.js";
+import { createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js";
 
 // A provider that rejects every request with the key it was given, like a revoked key.
@@ -37,33 +35,17 @@ const suite = createControlUiE2eSuite({
         }),
     });
     const baseUrl = `http://127.0.0.1:${upstream.claim.port}/v1`;
-    instance = await createOpenClawTestInstance({
+    instance = await createChatGatewayInstance({
       name: "chat-provider-failure-cause",
-      reserveIdlePort: false,
-      env: {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        VITEST: undefined,
-        NODE_ENV: undefined,
-        ...Object.fromEntries(
-          Object.keys(process.env)
-            .filter((key) => key.endsWith("_API_KEY"))
-            .map((key) => [key, undefined]),
-        ),
-      },
-      config: {
-        gateway: { controlUi: { enabled: true } },
-        agents: { entries: { main: {} }, defaults: { model: "fixture/current" } },
-        models: {
-          providers: {
-            fixture: {
-              api: "openai-completions",
-              apiKey: "sk-synthetic-revoked",
-              baseUrl,
-              models: [{ id: "current", name: "Fixture model" }],
-            },
-          },
-        },
-      },
+      provider: "fixture",
+      identity: "Assistant",
+      model: "current",
+      api: "openai-completions",
+      baseUrl,
+      apiKey: "sk-synthetic-revoked",
+      models: [{ id: "current", name: "Fixture model" }],
+      entrypoint: ["dist/index.js"],
+      config: { update: { checkOnStart: false }, browser: { enabled: false } },
     });
     const close = async () => {
       try {
@@ -83,7 +65,19 @@ const suite = createControlUiE2eSuite({
 });
 
 async function open(route: string) {
-  const handoff = await instance.cli(["dashboard", "--json"]);
+  // A fresh Gateway answers "assets are still preparing" until it has published the UI.
+  let handoff = await instance.cli(["dashboard", "--json"]);
+  await expect
+    .poll(
+      async () => {
+        if (handoff.code !== 0 && /still preparing/u.test(handoff.stderr)) {
+          handoff = await instance.cli(["dashboard", "--json"]);
+        }
+        return /still preparing/u.test(handoff.stderr);
+      },
+      { timeout: 120_000, interval: 1_000 },
+    )
+    .toBe(false);
   expect(handoff.code, handoff.stderr).toBe(0);
   const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
   const url = new URL(route, browserUrl);
