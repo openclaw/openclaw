@@ -12,7 +12,6 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 async function fixture() {
-  // Executable-bit inference is not under test; require a declarative setup recipe.
   const f = await createProjectPreparationFixture(
     dirs.make("project-snapshot-"),
     undefined,
@@ -40,42 +39,45 @@ async function fixture() {
   await fs.writeFile(oldManifest, "obsolete manifest need not be scanned");
   const oldMemo = oldManifest.replace(/json$/, "memo");
   await fs.writeFile(oldMemo, "obsolete memo need not be scanned");
-  for (const ref of new Set([prepared.sourceManifestRef, prepared.preparedManifestRef])) {
-    await fs.writeFile(
-      path.join(root, "manifests", ref.slice(7) + ".memo"),
-      "retained optional hint",
-    );
-  }
   return { ...f, operation, prepared, root, oldSeed, oldManifest, oldMemo };
 }
 
 it("normalizes only snapshot publication, preserving the verified current project", async () => {
   const f = await fixture();
   const manifests = path.join(f.root, "manifests");
-  const retained = new Map(
-    await Promise.all(
-      (await fs.readdir(manifests))
-        .filter((name) => !name.startsWith("f".repeat(64)))
-        .map(async (name) => [name, await fs.readFile(path.join(manifests, name))] as const),
-    ),
-  );
-  // The real preparation owner emitted these artifacts; no synthetic current memo fixtures.
-  expect([...retained.keys()].filter((name) => name.endsWith(".json"))).toHaveLength(2);
-  expect([...retained.keys()].filter((name) => name.endsWith(".memo"))).toHaveLength(2);
+  const retained = new Map<string, Buffer>();
+  for (const root of [manifests, path.join(f.prepared.homeDir, ".openclaw-worker", "manifests")]) {
+    for (const name of await fs.readdir(root)) {
+      if (name === "prepared" || name.startsWith("f".repeat(64))) {
+        continue;
+      }
+      const file = path.join(root, name);
+      retained.set(file, await fs.readFile(file));
+    }
+  }
+  // Preserve every real producer copy; canonical artifact identities do not depend on HOME.
+  const names = [...new Set([...retained.keys()].map((file) => path.basename(file)))];
+  expect(names.filter((name) => name.endsWith(".json"))).toHaveLength(2);
+  expect(names.filter((name) => name.endsWith(".memo"))).toHaveLength(2);
   await f.operation.project.inspectPreparedWorkspace!(f);
   expect(await fs.readFile(f.oldManifest, "utf8")).toContain("obsolete");
   await f.operation.project.prepareSnapshot!(f);
   await expect(fs.stat(f.oldSeed)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(fs.stat(f.oldManifest)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(fs.stat(f.oldMemo)).rejects.toMatchObject({ code: "ENOENT" });
-  expect((await fs.readdir(manifests)).toSorted()).toEqual([...retained.keys()].toSorted());
-  for (const [name, bytes] of retained) {
-    expect(await fs.readFile(path.join(manifests, name))).toEqual(bytes);
+  expect((await fs.readdir(manifests)).toSorted()).toEqual(
+    [...retained.keys()]
+      .filter((file) => path.dirname(file) === manifests)
+      .map((file) => path.basename(file))
+      .toSorted(),
+  );
+  for (const [file, bytes] of retained) {
+    expect(await fs.readFile(file)).toEqual(bytes);
   }
   expect(await fs.readFile(path.join(f.prepared.workspaceDir, "input.txt"), "utf8")).toBe(
     "prepared base\n",
   );
-  expect((await fs.readdir(path.join(f.root, "manifests"))).toSorted()).toEqual(
+  expect(names.toSorted()).toEqual(
     [...new Set([f.prepared.sourceManifestRef, f.prepared.preparedManifestRef])]
       .flatMap((ref) => [ref.slice(7) + ".json", ref.slice(7) + ".memo"])
       .toSorted(),
@@ -109,6 +111,14 @@ it("rejects unsafe cache state before removing any obsolete artifacts", async ()
     expect((await fs.stat(f.oldSeed)).isDirectory()).toBe(true);
     await fs.unlink(entry);
   }
+  const source = path.join(f.root, "manifests", f.prepared.sourceManifestRef.slice(7) + ".json");
+  const bytes = await fs.readFile(source);
+  await fs.writeFile(source, "corrupt retained host manifest");
+  await expect(f.operation.project.prepareSnapshot!(f)).rejects.toMatchObject({
+    stderr: expect.stringContaining('"cacheCheck":"verification"'),
+  });
+  expect(await fs.readFile(f.oldManifest, "utf8")).toContain("obsolete");
+  await fs.writeFile(source, bytes);
   for (const [relative, check, kind] of [
     ["git-seeds/unexpected", "cache-inventory", "git-seeds"],
     [`prepared/gateway/${"c".repeat(64)}/unexpected`, "unapproved-entry", "prepared"],

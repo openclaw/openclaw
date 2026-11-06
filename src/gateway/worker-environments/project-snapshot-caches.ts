@@ -1,5 +1,5 @@
 /** Runs only for a claimed disposable image builder, after current project content is verified. */
-export const NORMALIZE_PROJECT_SNAPSHOT_CACHES_JS = `(root, input, sourceRef, preparedRef, verifySeed) => {
+export const NORMALIZE_PROJECT_SNAPSHOT_CACHES_JS = `(root, input, sourceRef, preparedRef, verifySeed, verifyManifest) => {
   const fs = require("node:fs"), path = require("node:path");
   const fail = (cacheCheck, cacheKind) => {
     const error = new Error("Project snapshot cache verification failed");
@@ -41,7 +41,9 @@ export const NORMALIZE_PROJECT_SNAPSHOT_CACHES_JS = `(root, input, sourceRef, pr
     const file = path.join(manifests, name);
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.nlink !== 1 || fs.realpathSync(file) !== file) fail("cache-path", "manifests");
-    if (!retained.has(name.slice(0, -5))) removals.push(file);
+    const selected = retained.has(name.slice(0, -5));
+    if (selected && name.endsWith(".json")) verifyManifest(file, "sha256:" + name.slice(0, -5));
+    if (!selected) removals.push(file);
   }
   // Validate the entire plan before removing anything; obsolete owned content needs no rescan.
   for (const target of removals) fs.rmSync(target, { recursive: true });

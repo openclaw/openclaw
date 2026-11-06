@@ -240,10 +240,10 @@ const runSetup = (command, workspaceDir, homeDir) => {
     if (inspectOnly) {
       if (input.snapshot) {
         readManifest(path.join(workerRoot, "manifests", sourceManifestRef.slice(7) + ".json"), sourceManifestRef);
-        readManifest(path.join(workerRoot, "manifests", preparedManifestRef.slice(7) + ".json"), preparedManifestRef);
+        // The preparation owner verified its canonical manifest pair above.
         (${NORMALIZE_PROJECT_SNAPSHOT_CACHES_JS})(workerRoot, input, sourceManifestRef, preparedManifestRef, (seed) => {
           if (git(seed, ["rev-parse", "HEAD"]) !== input.baseCommit || git(seed, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Project snapshot seed changed");
-        });
+        }, readManifest);
       }
       phase("inspection");
       return { workspaceDir, homeDir, sourceManifestRef, preparedManifestRef, baseCommit, recipePreparation: { source: input.recipe?.source ?? (input.setupRecipe ? "script" : "none"), phaseDurationsMs } };
