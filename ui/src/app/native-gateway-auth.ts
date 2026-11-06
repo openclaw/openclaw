@@ -60,7 +60,7 @@ function readNativeCredential(value: unknown): NativeGatewayAuthorization["auth"
   // Preserve the accepted native method. In particular, role-configured Gateways
   // distinguish shared-owner token/password auth from device-token authentication.
   if (!isRecord(value)) {
-    throw new Error("The app returned an invalid Gateway credential. Reconnect in the app.");
+    throw new Error(t("runtimeErrors.nativeCredential"));
   }
   const keys = Object.keys(value);
   // Ingress-authenticated sessions sign device proof without a reusable Gateway credential.
@@ -96,9 +96,12 @@ function readAuthorization(
   const mode = normalizeGatewayClientMode(
     typeof client.mode === "string" ? client.mode : undefined,
   );
+  const expectedGatewayId = result.expectedGatewayId;
   if (
     !id ||
     !mode ||
+    (expectedGatewayId !== undefined &&
+      (typeof expectedGatewayId !== "string" || !expectedGatewayId.trim())) ||
     typeof client.version !== "string" ||
     typeof client.platform !== "string" ||
     !isStringArray(result.scopes) ||
@@ -107,13 +110,6 @@ function readAuthorization(
     typeof device.signature !== "string" ||
     device.nonce !== challenge.nonce ||
     device.signedAt !== challenge.signedAt
-  ) {
-    throw new Error(t("runtimeErrors.nativeAuthorization"));
-  }
-  const expectedGatewayId = result.expectedGatewayId;
-  if (
-    expectedGatewayId !== undefined &&
-    (typeof expectedGatewayId !== "string" || expectedGatewayId.trim().length === 0)
   ) {
     throw new Error(t("runtimeErrors.nativeAuthorization"));
   }

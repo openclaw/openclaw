@@ -32,10 +32,11 @@ function fixture() {
 }
 
 describe("portable research", () => {
-  it("returns a direct-completion report whose citations resolve to fetched passages", async () => {
+  it("returns a report whose citations resolve to fetched passages without inventing a runtime", async () => {
     const { io } = fixture();
     const result = await runPortableResearch({ question: "How long is the river?" }, io);
     expect(result.status).toBe("completed");
+    expect(result.route.runtime).toBe("unobserved");
     expect(result.report).toContain("The river is 12 km long. [S1]");
     expect(result.sources).toMatchObject([
       {
@@ -45,6 +46,20 @@ describe("portable research", () => {
         extraction: "web-fetch-text-v1",
       },
     ]);
+    const observations = vi.mocked(io.progress).mock.calls.map(([, observation]) => observation);
+    expect(observations.map((observation) => observation?.phase)).toEqual([
+      "planning",
+      "gathering",
+      "assessing",
+      "auditing",
+    ]);
+    expect(observations[0]?.sources).toEqual([]);
+    expect(observations[2]?.sources[0]).toMatchObject({
+      id: "S1",
+      text: "The measured river length is 12 km.",
+    });
+    expect(observations[2]?.counts).toEqual({ modelCalls: 1, searches: 1, fetches: 1, sources: 1 });
+    expect(result.reportCitations).toHaveLength(1);
     expect(result.usage).toEqual({
       modelCalls: 3,
       searches: 1,
@@ -52,6 +67,35 @@ describe("portable research", () => {
       reportedTokens: 60,
       tokensComplete: true,
     });
+  });
+
+  it("discloses changed runtime ownership across replayed and fresh model receipts", async () => {
+    const { io } = fixture();
+    const complete = io.complete;
+    let first = true;
+    io.complete = async (...args) => {
+      const result = await complete(...args);
+      const direct = first;
+      first = false;
+      return {
+        ...result,
+        route: {
+          model: "openai/gpt-5.4",
+          runtime: direct ? "direct-provider" : "isolated-agent-runtime",
+          owner: direct ? { kind: "provider", id: "openai" } : { kind: "harness", id: "codex" },
+        },
+      };
+    };
+    const result = await runPortableResearch({ question: "River length" }, io);
+    expect(result.status).toBe("partial");
+    expect(result.route).toMatchObject({
+      runtime: "isolated-agent-runtime",
+      owner: { id: "codex" },
+    });
+    expect(result.gaps).toContain(
+      "Model execution changed between research steps; route shows the last observed execution.",
+    );
+    expect(complete).toHaveBeenCalledTimes(3);
   });
 
   it("excludes invented quotations and copied sources instead of publishing false support", async () => {

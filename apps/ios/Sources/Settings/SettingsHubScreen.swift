@@ -259,9 +259,7 @@ struct EmbeddedDashboardContent: View {
             usesNativeEmbed: true,
             embedCompatibility: self.embedCompatibility,
             accessCookie: accessCookie,
-            accessAdmissionIsCurrent: authorization.map { authorization in
-                { authorization.isCurrent() }
-            },
+            accessAdmissionIsCurrent: authorization?.isCurrent,
             accessResponseCheck: authorization?.checkResponse,
             onAccessCookieBoundaryFailure: onAccessCookieBoundaryFailure)
             .id(webContentIdentity)

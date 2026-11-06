@@ -277,7 +277,7 @@ export type CronServiceDeps = {
     /** Consumed by the occurrence; command runs are not agent runs and mint no context. */
     occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
-    job: CronJob;
+    job: CronStoredJob;
     abortSignal?: AbortSignal;
   }) => Promise<CronRunOutcome & CronRunDeliveryResult>;
   runScriptJob?: (params: {
@@ -665,6 +665,7 @@ export type CronUpdateOptions = Pick<
   | "execPolicy"
   | "streamExecApproval"
   | "streamSandbox"
+  | "streamOperatorSource"
   | "sessionEntryCurrent"
 > & {
   /** Parent incarnation recorded by `automations bind`; only fills an absent link. */

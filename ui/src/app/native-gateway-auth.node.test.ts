@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { Buffer } from "node:buffer";
 import { createHash, generateKeyPairSync, webcrypto } from "node:crypto";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import {
@@ -36,6 +37,61 @@ const signedAt = 1_790_000_000_000;
 type Challenge = { id: string; nonce: string; signedAt: number };
 const identityKey = "openclaw-device-identity-v1";
 const authKey = "openclaw.device.auth.v1:wss://gateway.example/work";
+const typedArrayApiDescriptors = {
+  toBase64: Object.getOwnPropertyDescriptor(Uint8Array.prototype, "toBase64"),
+  fromBase64: Object.getOwnPropertyDescriptor(Uint8Array, "fromBase64"),
+  toHex: Object.getOwnPropertyDescriptor(Uint8Array.prototype, "toHex"),
+};
+
+// Node 24 does not yet expose the TypedArray APIs available in supported browsers.
+function installTypedArrayApiFixture() {
+  if (typeof Uint8Array.prototype.toBase64 !== "function") {
+    Object.defineProperty(Uint8Array.prototype, "toBase64", {
+      configurable: true,
+      value(this: Uint8Array, options?: { alphabet?: "base64" | "base64url"; omitPadding?: boolean }) {
+        let encoded = Buffer.from(this.buffer, this.byteOffset, this.byteLength).toString("base64");
+        if (options?.alphabet === "base64url") {
+          encoded = encoded.replaceAll("+", "-").replaceAll("/", "_");
+        }
+        if (options?.omitPadding) {
+          encoded = encoded.replace(/=+$/u, "");
+        }
+        return encoded;
+      },
+    });
+  }
+  if (typeof Uint8Array.fromBase64 !== "function") {
+    Object.defineProperty(Uint8Array, "fromBase64", {
+      configurable: true,
+      value(value: string) {
+        const binary = atob(value);
+        return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      },
+    });
+  }
+  if (typeof Uint8Array.prototype.toHex !== "function") {
+    Object.defineProperty(Uint8Array.prototype, "toHex", {
+      configurable: true,
+      value(this: Uint8Array) {
+        return Buffer.from(this.buffer, this.byteOffset, this.byteLength).toString("hex");
+      },
+    });
+  }
+}
+
+function restoreTypedArrayApiFixture() {
+  for (const [target, key, descriptor] of [
+    [Uint8Array.prototype, "toBase64", typedArrayApiDescriptors.toBase64],
+    [Uint8Array, "fromBase64", typedArrayApiDescriptors.fromBase64],
+    [Uint8Array.prototype, "toHex", typedArrayApiDescriptors.toHex],
+  ] as const) {
+    if (descriptor) {
+      Object.defineProperty(target, key, descriptor);
+    } else {
+      Reflect.deleteProperty(target, key);
+    }
+  }
+}
 
 function expectNativeGrant(params: ConnectParams, auth: Record<string, string>) {
   expect(params.device?.id).toBe(deviceId);
@@ -180,6 +236,7 @@ describe("native authenticated Control UI", () => {
   }
 
   beforeEach(() => {
+    installTypedArrayApiFixture();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     vi.spyOn(Math, "random").mockReturnValue(0);
     wsInstances.length = 0;
@@ -223,6 +280,7 @@ describe("native authenticated Control UI", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    restoreTypedArrayApiFixture();
     wsInstances.length = 0;
   });
 

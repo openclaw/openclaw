@@ -360,33 +360,8 @@
 }
 
 .session-actions-page--advanced .session-actions-page__row > .session-actions-page__switch {
-  position: relative;
-  flex: 0 0 30px;
-  width: 30px;
-  height: 18px;
-  border-radius: 999px;
-  background: var(--border-strong);
-}
-
-.session-actions-page__switch::after {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--text);
-  content: "";
-}
-
-.session-actions-page--advanced
-  .session-actions-page__row
-  > .session-actions-page__switch[data-checked="true"] {
-  background: var(--accent);
-}
-
-.session-actions-page__switch[data-checked="true"]::after {
-  transform: translateX(12px);
+  display: inline-flex;
+  flex: none;
 }
 
 .session-actions-page__communication .session-menu__communication {
