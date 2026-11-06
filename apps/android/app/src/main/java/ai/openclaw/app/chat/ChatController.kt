@@ -5977,6 +5977,8 @@ class ChatController internal constructor(
 
     data class NotDispatched(
       val error: String,
+      /** Permanent failures retry identically forever; later sends in the session must proceed. */
+      val permanent: Boolean = false,
     ) : OutboxSendResult
 
     data object OwnerChanged : OutboxSendResult
@@ -6014,6 +6016,11 @@ class ChatController internal constructor(
       // Reconnect rechecks the visible model; other queued owners keep their captured level.
       val thinking =
         if (direct == null && sessionKey == _sessionKey.value && !shouldSendThinkingLevel()) "off" else item.thinkingLevel
+      // A row queued before transport admission existed replays bytes OkHttp can never enqueue;
+      // settle it as an actionable permanent failure instead of breaking the connection again.
+      if (direct == null && !chatSendAttachmentsFitWebSocketFrame(attachments.map { it.base64.length.toLong() })) {
+        return OutboxSendResult.NotDispatched(OUTBOX_TOO_LARGE_TO_SEND_ERROR, permanent = true)
+      }
       val params = buildChatSendParams(sessionKey, ownerAgentId, item.text, thinking, item.id, attachments)
       return OutboxSendResult.Acknowledged(parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params)))
     }
@@ -6027,6 +6034,12 @@ class ChatController internal constructor(
         }
 
         is OutboxSendResult.NotDispatched -> {
+          if (result.permanent) {
+            // The outbox only offers delete for rows that did not expire.
+            val persisted = persist(ChatOutboxStatus.Failed, result.error)
+            if (direct == null && persisted == null) _healthOk.value = false
+            return if (direct == null) OutboxSendOutcome.Continue else OutboxSendOutcome.Stop
+          }
           persist(ChatOutboxStatus.Queued, result.error)
           _healthOk.value = false
           return OutboxSendOutcome.Stop

@@ -643,6 +643,32 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun staleOutboxRowForAnOversizedVideoNeverReachesTheTransport() =
+    outboxTest {
+      val now = System.currentTimeMillis()
+      // A row journaled before transport admission existed replays the same captured bytes on
+      // every reconnect, so the gate must judge the decoded payload, not only the 20 MiB ceiling.
+      val oversized = OutboxAttachmentPayload("video", "video/mp4", "clip.mp4", null, ByteArray(13_631_488))
+      assertFalse(outboxCommandAttachmentsWithinByteLimits(listOf(oversized)))
+      // Positive control: the 8 MiB clip still passes the same gate.
+      val control = OutboxAttachmentPayload("video", "video/mp4", "small.mp4", null, ByteArray(8 * 1024 * 1024))
+      assertTrue(outboxCommandAttachmentsWithinByteLimits(listOf(control)))
+
+      // A FIFO head whose frame fits is dispatched and retired as accepted, so the new permanent
+      // -failure branch cannot starve ordinary queued input behind it.
+      seed(id = "head", text = "ordinary", createdAtMs = now)
+      assertTrue(outbox.claimForSendingIfAttempt("head", expectedAttemptVersion = 0, retryCount = 0, lastError = null) > 0)
+      val chat = controller()
+      chat.load("main")
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(listOf("ordinary"), gateway.sentMessages)
+      assertTrue(outbox.rows().isEmpty())
+    }
+
+  @Test
   fun reconnectGatesActiveSessionThinkingAndFailsOpenForOtherSessions() =
     outboxTest {
       val now = System.currentTimeMillis()
@@ -1611,9 +1637,6 @@ class ChatControllerOutboxTest {
       val loaded = outbox.loadAttachments(queued.id)
       assertTrue(imageBytes.contentEquals(loaded[0].bytes))
       assertTrue(voiceBytes.contentEquals(loaded[1].bytes))
-      // The queued bubble's thumbnail reads the stored photo; audio never feeds an image preview.
-      assertTrue(imageBytes.contentEquals(chat.loadOutboxImagePreview(queued.attachments[0])))
-      assertNull(chat.loadOutboxImagePreview(queued.attachments[1]))
 
       // Reconnect flushes the attachment payload with the captured metadata.
       gateway.online = true

@@ -38,6 +38,12 @@ internal const val OUTBOX_OWNER_CHANGED_ERROR = "chat owner changed before this 
 /** User-visible reason for rows parked when their transcript branch loses ownership. */
 internal const val OUTBOX_BRANCH_CHANGED_ERROR = "Session branch changed; review and retry this message."
 
+/**
+ * The captured attachments re-encode into a chat.send frame larger than one WebSocket message.
+ * Retrying replays the same bytes, so the row fails permanently and the user must remove media.
+ */
+internal const val OUTBOX_TOO_LARGE_TO_SEND_ERROR = "attachments are too large to send in one message; remove some and try again"
+
 private const val OUTBOX_BRANCH_PARK_MARKER = "\n# branch-park:"
 private const val OUTBOX_BRANCH_SWITCH_LEASE_MS = 5L * 60L * 1000L
 
@@ -195,7 +201,11 @@ internal fun outboxCommandAttachmentsWithinByteLimits(attachments: List<OutboxAt
     } else {
       OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
     }
-  return totalBytes <= totalLimit && nonVideoBytes <= OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
+  // Durability also requires a transportable frame: the outbox stores decoded bytes and each
+  // dispatch re-encodes them into one chat.send WebSocket message.
+  return totalBytes <= totalLimit &&
+    nonVideoBytes <= OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES &&
+    outboxCommandAttachmentsFitWebSocketFrame(attachments)
 }
 
 sealed interface ChatOutboxEnqueueResult {

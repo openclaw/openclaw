@@ -9,6 +9,7 @@ import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
 import ai.openclaw.app.chat.OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES
 import ai.openclaw.app.chat.VoiceNoteRecorderState
+import ai.openclaw.app.chat.chatSendAttachmentsFitWebSocketFrame
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.saveable.listSaver
 import kotlinx.coroutines.CancellationException
@@ -386,6 +387,8 @@ internal const val CHAT_COMPOSER_MAX_ATTACHMENTS = 8
 
 // Gateway chat attachments default to 20 MiB (images: 6 MiB); Android's outbox further caps audio/documents at 8 MiB.
 internal const val CHAT_COMPOSER_MAX_AUDIO_DECODED_BYTES = OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
+// A 20 MiB video is legal for the Gateway, but its Base64 chat.send frame exceeds the 16 MiB
+// OkHttp WebSocket message bound. [admitChatAttachments] additionally checks the complete frame.
 internal const val CHAT_COMPOSER_MAX_VIDEO_DECODED_BYTES = OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES
 internal const val CHAT_COMPOSER_MAX_DOCUMENT_DECODED_BYTES = OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
 internal const val CHAT_COMPOSER_MAX_DECODED_ATTACHMENT_BYTES = CHAT_COMPOSER_MAX_VIDEO_DECODED_BYTES
@@ -429,9 +432,24 @@ internal fun admitChatAttachments(
     val withinCount = currentAttachments.size + accepted.size < maxAttachmentCount
     val withinBase64 = candidateBase64Chars <= maxBase64Chars - base64Chars
     val withinDecoded = candidateDecodedBytes <= maxDecodedBytes - decodedBytes
+    // The complete chat.send frame must fit one OkHttp WebSocket message; the decoded ceiling
+    // alone admitted 20 MiB videos whose Base64 payload can never be enqueued.
+    val withinTransport =
+      chatSendAttachmentsFitWebSocketFrame(
+        currentAttachments.map { decodedBase64ByteCount(it.base64) } +
+          accepted.map { decodedBase64ByteCount(it.base64) } +
+          candidateDecodedBytes,
+      )
     val withinNonVideoBase64 = candidateIsVideo || candidateBase64Chars <= maxNonVideoBase64Chars - nonVideoBase64Chars
     val withinNonVideoDecoded = candidateIsVideo || candidateDecodedBytes <= maxNonVideoDecodedBytes - nonVideoDecodedBytes
-    if (withinKind && withinCount && withinBase64 && withinDecoded && withinNonVideoBase64 && withinNonVideoDecoded) {
+    if (withinKind &&
+      withinCount &&
+      withinBase64 &&
+      withinDecoded &&
+      withinTransport &&
+      withinNonVideoBase64 &&
+      withinNonVideoDecoded
+    ) {
       accepted += candidate
       base64Chars += candidateBase64Chars
       decodedBytes += candidateDecodedBytes
