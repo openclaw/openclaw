@@ -237,27 +237,32 @@ cd apps/android
 
 ### OpenClaw ID native transport
 
-Phone APK/AAB builds compile `crates/openclaw-iroh-ffi` from the checked-in source
-and lockfile through its canonical `scripts/build-android.sh`. Gradle includes
-the crate's checked-in generated Kotlin wrapper and Android initialization helper,
-and registers the native build as a generated JNI source producer. Both store
-flavors and debug/release packaging require all four native libraries; there is
-no optional prebuilt or skip-native packaging path. JNA 5.19.1 and coroutines
-1.11.0 remain the app's existing dependencies.
+Native packaging is **off by default**. Existing Android lanes compile the checked-in
+Kotlin bindings and Android helper without requiring Rust or the NDK. OpenClaw ID
+node connections fail closed with “native transport not packaged” in these builds;
+ordinary Gateway connections are unaffected.
 
-Provision Rust 1.99.0, cargo-ndk 3.5.4, NDK 28.2.13676358, Python 3, Bash, and the
-four Rust Android targets described in
-[`PACKAGING.md`](../../crates/openclaw-iroh-ffi/PACKAGING.md) before building.
-Set `ANDROID_NDK_HOME` to that NDK directory. Gradle selects Rust 1.99.0 and invokes
-the source build; it does not provision these prerequisites. Missing native build
-prerequisites fail packaging rather than silently omitting the transport.
+On a provisioned host, opt in explicitly:
 
-The native producer is attached only to JNI packaging, not `preBuild`. JVM-only
-tests such as `:app:testPlayDebugUnitTest` compile the Kotlin sources without
-cross-compiling Android Rust libraries; transport unit tests must inject their
-native boundary rather than load an Android `.so` on the host. Native loading,
-release shrinking, APK ZIP alignment, and runtime behavior on a 16 KiB device
-still need a provisioned Android validation lane.
+```bash
+cd apps/android
+./gradlew -PopenclawIrohNative=true :app:assemblePlayDebug
+```
+
+This registers `buildOpenClawIroh` and its generated JNI sources for all variants.
+It builds `crates/openclaw-iroh-ffi` from its checked-in source and lockfile through
+`scripts/build-android.sh`, requiring all four native libraries. Provision Rust
+1.99.0, cargo-ndk 3.5.4, NDK 28.2.13676358, Python 3, Bash, and the four Rust Android
+targets in [`PACKAGING.md`](../../crates/openclaw-iroh-ffi/PACKAGING.md). Set
+`ANDROID_NDK_HOME` to that NDK directory. Gradle does not install prerequisites.
+JNA 5.19.1 and coroutines 1.11.0 remain the app's existing dependencies.
+
+The dedicated `android-iroh-native.yml` workflow owns opt-in provisioning and APK
+proof; shared Android setup and existing workflows are unchanged. The producer is
+attached only to JNI packaging, not `preBuild`. JVM-only tests compile the Kotlin
+sources without cross-compiling Android libraries. Native loading, release
+shrinking, APK ZIP alignment, and runtime behavior on a 16 KiB device still need
+a provisioned Android validation lane.
 
 **Distribution license audit remains open.** The bundled `iroh` notice includes
 its additional Tailscale BSD notice, but is not a complete Rust dependency notice

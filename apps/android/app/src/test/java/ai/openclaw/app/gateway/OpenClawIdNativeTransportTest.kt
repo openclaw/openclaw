@@ -1,6 +1,7 @@
 package ai.openclaw.app.gateway
 
 import ai.openclaw.iroh.BiStream
+import ai.openclaw.iroh.CancelToken
 import ai.openclaw.iroh.CloseInfo
 import ai.openclaw.iroh.CloseKind
 import ai.openclaw.iroh.Connection
@@ -85,7 +86,7 @@ class OpenClawIdNativeTransportTest {
         }
       val native =
         object : Connection(NoHandle) {
-          override suspend fun openBi(): BiStream = BiStream(send, recv)
+          override suspend fun openBi(cancel: CancelToken?): BiStream = BiStream(send, recv)
         }
       val stream = OpenClawIdNativeConnection(native).openBi()
       stream.send.writeAll(byteArrayOf(1, 2, 3))
@@ -112,7 +113,7 @@ class OpenClawIdNativeTransportTest {
             reason: ByteArray,
           ) = Unit
 
-          override suspend fun openBi(): BiStream {
+          override suspend fun openBi(cancel: CancelToken?): BiStream {
             caller.cancel()
             return BiStream(
               object : SendStream(NoHandle) {
@@ -183,7 +184,7 @@ class OpenClawIdNativeTransportTest {
         }
       val native =
         object : Connection(NoHandle) {
-          override suspend fun openBi(): BiStream = BiStream(send, recv)
+          override suspend fun openBi(cancel: CancelToken?): BiStream = BiStream(send, recv)
         }
       val stream = OpenClawIdNativeConnection(native).openBi()
       stream.send.finish()

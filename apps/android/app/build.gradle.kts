@@ -242,28 +242,36 @@ androidComponents.onVariants { variant ->
 }
 
 val openClawIrohDirectory = rootProject.layout.projectDirectory.dir("../../crates/openclaw-iroh-ffi")
-val buildOpenClawIroh =
-  tasks.register<BuildOpenClawIroh>("buildOpenClawIroh") {
-    group = "build"
-    description = "Builds the locked OpenClaw ID transport for all four Android ABIs."
-    workingDir(openClawIrohDirectory)
-    environment("RUSTUP_TOOLCHAIN", "1.99.0")
-    commandLine("bash", "scripts/build-android.sh")
-    outputDirectory.set(openClawIrohDirectory.dir("dist/android/jniLibs"))
-    // Cargo owns incremental compilation and toolchain/environment invalidation. Always
-    // enter its canonical script rather than letting Gradle reuse an unqualified .so.
-    outputs.upToDateWhen { false }
-    doLast {
-      listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86").forEach { abi ->
-        val library = outputDirectory.get().file("$abi/libopenclaw_iroh_ffi.so").asFile
-        check(library.isFile && library.length() > 0) { "Missing OpenClaw ID native library: $library" }
+val openClawIrohNative =
+  providers
+    .gradleProperty("openclawIrohNative")
+    .map(String::toBooleanStrict)
+    .orElse(false)
+    .get()
+if (openClawIrohNative) {
+  val buildOpenClawIroh =
+    tasks.register<BuildOpenClawIroh>("buildOpenClawIroh") {
+      group = "build"
+      description = "Builds the locked OpenClaw ID transport for all four Android ABIs."
+      workingDir(openClawIrohDirectory)
+      environment("RUSTUP_TOOLCHAIN", "1.99.0")
+      commandLine("bash", "scripts/build-android.sh")
+      outputDirectory.set(openClawIrohDirectory.dir("dist/android/jniLibs"))
+      // Cargo owns incremental compilation and toolchain/environment invalidation. Always
+      // enter its canonical script rather than letting Gradle reuse an unqualified .so.
+      outputs.upToDateWhen { false }
+      doLast {
+        listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86").forEach { abi ->
+          val library = outputDirectory.get().file("$abi/libopenclaw_iroh_ffi.so").asFile
+          check(library.isFile && library.length() > 0) { "Missing OpenClaw ID native library: $library" }
+        }
       }
     }
+  androidComponents.onVariants { variant ->
+    // A generated JNI source carries its producer dependency into APK/AAB packaging,
+    // without attaching cross-compilation to preBuild or JVM-only compilation/tests.
+    variant.sources.jniLibs?.addGeneratedSourceDirectory(buildOpenClawIroh, BuildOpenClawIroh::outputDirectory)
   }
-androidComponents.onVariants { variant ->
-  // A generated JNI source carries its producer dependency into APK/AAB packaging,
-  // without attaching cross-compilation to preBuild or JVM-only compilation/tests.
-  variant.sources.jniLibs?.addGeneratedSourceDirectory(buildOpenClawIroh, BuildOpenClawIroh::outputDirectory)
 }
 
 // NuGet is used only as an upstream native artifact container, never as a managed/runtime dependency.
@@ -416,6 +424,7 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     versionCode = openClawAndroidVersionCode
     versionName = openClawAndroidVersionName
+    buildConfigField("boolean", "OPENCLAW_IROH_NATIVE", openClawIrohNative.toString())
     buildConfigField("String", "GIT_COMMIT", "\"$openClawBuildCommit\"")
     buildConfigField("String", "BUILD_TIMESTAMP", "\"$openClawBuildTimestamp\"")
     ndk {

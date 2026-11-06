@@ -1,5 +1,5 @@
 name: Setup Android toolchain
-description: Set up the pinned Java, Android SDK, and Rust JNI toolchains used by OpenClaw builds.
+description: Set up the pinned Java and Android SDK toolchain used by OpenClaw builds.
 inputs:
   cache-mode:
     description: Cache authority for this job (off, restore, or read-write).
@@ -157,7 +157,6 @@ runs:
           "platform-tools"
           "platforms;android-37.0"
           "build-tools;37.0.0"
-          "ndk;28.2.13676358"
         )
         if [[ "${INSTALL_SCREENSHOT_EMULATORS}" == "true" ]]; then
           case "${RUNNER_ARCH}" in
@@ -175,24 +174,6 @@ runs:
           )
         fi
         sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install "${packages[@]}"
-        echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/28.2.13676358" >> "${GITHUB_ENV}"
-
-    - name: Install Rust JNI toolchain
-      shell: bash
-      env:
-        RUSTUP_TOOLCHAIN: "1.99.0"
-      run: |
-        set -euo pipefail
-        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-        export PATH="$HOME/.cargo/bin:$PATH"
-        if ! command -v rustup >/dev/null; then
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
-        fi
-        # Match the four ABIs built by the native transport's canonical build script.
-        rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal \
-          --target aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
-        cargo install cargo-ndk --version 3.5.4 --locked
-        echo "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" >> "$GITHUB_ENV"
 
     - name: Install native generation dependencies
       if: inputs.install-native-deps == 'true'
