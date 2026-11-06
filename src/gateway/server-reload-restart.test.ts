@@ -233,8 +233,8 @@ describe("gateway restart readiness preflight", () => {
     vi.useFakeTimers();
     // A config reload holds the plugin lifecycle lease and needs root admission
     // before it can release it; restart preparation waits for that lease.
-    const holderGate = Promise.withResolvers<void>();
-    const lease = Promise.withResolvers<void>();
+    const holderGate = createDeferred();
+    const lease = createDeferred();
     void holderGate.promise.then(() =>
       runWithGatewayIndependentRootWorkAdmission(async () => {}, "reload:config").then(
         lease.resolve,
