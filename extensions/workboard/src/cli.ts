@@ -1,4 +1,6 @@
 import {
+  WORKBOARD_PRIORITIES,
+  WORKBOARD_PROOF_STATUSES,
   WORKBOARD_STATUSES,
   type WorkboardCard,
   type WorkboardCardCursor,
@@ -105,7 +107,7 @@ export function registerWorkboardCli(params: {
       runLocal: ({ assertCurrent }) =>
         params.withStore(async (store) => {
           assertCurrent();
-          return await action(store, assertCurrent);
+          return await store.runOperation(() => action(store, assertCurrent), assertCurrent);
         }),
     });
   const list = async (boardId?: string) => {
@@ -123,6 +125,13 @@ export function registerWorkboardCli(params: {
       after = page.nextCursor;
     } while (after);
     return { cards: [...cards.values()].toSorted(compareCards) };
+  };
+  const findCard = async (id: string) => {
+    const { card, error } = resolveWorkboardCardByIdOrPrefix((await list()).cards, id);
+    if (!card) {
+      throw new Error(error);
+    }
+    return card;
   };
   const workboard = params.program
     .command("workboard")
@@ -213,11 +222,7 @@ export function registerWorkboardCli(params: {
     .description("Show one Workboard card")
     .option("--json", "Print JSON", false)
     .action(async (id: string, options: JsonOptions) => {
-      const cards = (await list()).cards;
-      const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
-      if (!card) {
-        throw new Error(error);
-      }
+      const card = await findCard(id);
       writeCard(card, options);
       if (!options.json && card.notes) {
         writeLine(
@@ -239,11 +244,7 @@ export function registerWorkboardCli(params: {
       if (!(WORKBOARD_STATUSES as readonly string[]).includes(options.status)) {
         throw new Error(`--status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
       }
-      const cards = (await list()).cards;
-      const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
-      if (!card) {
-        throw new Error(error);
-      }
+      const card = await findCard(id);
       const input = { id: card.id, status: options.status, expectedUpdatedAt: card.updatedAt };
       const { card: updated } = await local(
         "workboard.cards.move",
@@ -257,6 +258,106 @@ export function registerWorkboardCli(params: {
       );
       writeCard(updated, options);
     });
+
+  workboard
+    .command("edit")
+    .argument("<id>", "Card id or prefix")
+    .description("Edit a Workboard card")
+    .option("--title <text>", "Card title")
+    .option("--notes <text>", "Card notes (empty to clear)")
+    .addOption(
+      workboard
+        .createOption("--priority <priority>", "Priority")
+        .choices([...WORKBOARD_PRIORITIES]),
+    )
+    .option("--labels <items>", "Comma-separated labels (empty to clear)")
+    .option("--json", "Print JSON", false)
+    .action(
+      async (
+        id: string,
+        options: JsonOptions & {
+          title?: string;
+          notes?: string;
+          priority?: string;
+          labels?: string;
+        },
+      ) => {
+        const patch = {
+          title: options.title,
+          notes: options.notes,
+          priority: options.priority,
+          labels: options.labels,
+        };
+        if (Object.values(patch).every((value) => value === undefined)) {
+          throw new Error("Supply at least one of --title, --notes, --priority, or --labels.");
+        }
+        const card = await findCard(id);
+        const expectedUpdatedAt = card.updatedAt;
+        const { card: updated } = await local(
+          "workboard.cards.update",
+          { id: card.id, patch, expectedUpdatedAt },
+          async (store) => ({ card: await store.update(card.id, patch, { expectedUpdatedAt }) }),
+        );
+        writeCard(updated, options);
+      },
+    );
+
+  workboard
+    .command("comment")
+    .argument("<id>", "Card id or prefix")
+    .description("Append a comment to a Workboard card")
+    .requiredOption("--body <text>", "Comment text")
+    .option("--json", "Print JSON", false)
+    .action(async (id: string, options: JsonOptions & { body: string }) => {
+      const card = await findCard(id);
+      const input = { id: card.id, body: options.body };
+      const { card: updated } = await local("workboard.cards.comment", input, async (store) => ({
+        card: await store.addComment(card.id, input),
+      }));
+      writeCard(updated, options);
+    });
+
+  workboard
+    .command("proof")
+    .argument("<id>", "Card id or prefix")
+    .description("Record proof metadata without executing its command")
+    .requiredOption("--label <text>", "Proof label")
+    .option("--command <text>", "Command that was run (recorded only)")
+    .addOption(
+      workboard
+        .createOption("--status <status>", "Self-reported outcome")
+        .choices([...WORKBOARD_PROOF_STATUSES])
+        .default("unknown"),
+    )
+    .option("--url <url>", "Evidence URL")
+    .option("--note <text>", "Evidence note")
+    .option("--json", "Print JSON", false)
+    .action(
+      async (
+        id: string,
+        options: JsonOptions & {
+          label: string;
+          command?: string;
+          status: string;
+          url?: string;
+          note?: string;
+        },
+      ) => {
+        const card = await findCard(id);
+        const input = {
+          id: card.id,
+          label: options.label,
+          command: options.command,
+          status: options.status,
+          url: options.url,
+          note: options.note,
+        };
+        const { card: updated } = await local("workboard.cards.proof", input, async (store) => ({
+          card: await store.addProof(card.id, input),
+        }));
+        writeCard(updated, options);
+      },
+    );
 
   addGatewayClientOptions(
     workboard
