@@ -72,6 +72,16 @@ function history(row: GatewaySessionRow): ChatHistoryResponse {
   };
 }
 
+function rebuildingHistoryError(method: string) {
+  return new GatewayRequestError({
+    code: "UNAVAILABLE",
+    message: "session history is rebuilding; retry shortly",
+    details: { method },
+    retryable: true,
+    retryAfterMs: 250,
+  });
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("localStorage", createStorageMock());
@@ -315,15 +325,7 @@ describe("history descriptor observation order", () => {
     const first = h.begin(firstState, method === "chat.startup");
     expect(h.reads).toHaveLength(1);
     expect(h.reads[0]!.method).toBe(method);
-    h.reads[0]!.pending.reject(
-      new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "session history is rebuilding; retry shortly",
-        details: { method },
-        retryable: true,
-        retryAfterMs: 250,
-      }),
-    );
+    h.reads[0]!.pending.reject(rebuildingHistoryError(method));
     await vi.advanceTimersByTimeAsync(0);
     const between = { ...initial, label: "Roster read between attempts" };
     await h.refreshManaged(between);
@@ -438,15 +440,7 @@ describe("history descriptor observation order", () => {
     await vi.waitFor(() => expect(h.reads).toHaveLength(1));
     expect(h.reads[0]!.method).toBe("chat.startup");
     expect(h.reads[0]!.params).toMatchObject({ sessionKey: key });
-    h.reads[0]!.pending.reject(
-      new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "session history is rebuilding; retry shortly",
-        details: { method: "chat.startup" },
-        retryable: true,
-        retryAfterMs: 250,
-      }),
-    );
+    h.reads[0]!.pending.reject(rebuildingHistoryError("chat.startup"));
     await vi.advanceTimersByTimeAsync(0);
     await h.refreshManaged({ ...initial, updatedAt: 5, label: "Between startup attempts" });
     expect(h.managedRow()?.label).toBe("Between startup attempts");

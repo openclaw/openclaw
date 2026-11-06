@@ -3,6 +3,7 @@ import { expect } from "vitest";
 import type { MockGatewayWindow } from "./control-ui-e2e-contract.ts";
 import { createControlUiMockGatewayInitScript } from "./control-ui-e2e.ts";
 import {
+  connectMockGateway,
   flushMockTimers as flush,
   mockGatewayTest as it,
 } from "./mock-gateway-page.test-support.ts";
@@ -72,14 +73,8 @@ it.for(["resolve", "reject"] as const)(
 );
 
 it("keeps roster deferrals separate from child queries", async ({ gatewayPage }) => {
-  const { window, execute, responses: frames } = gatewayPage;
-  execute(createControlUiMockGatewayInitScript());
-  const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-  if (!gateway) {
-    throw new Error("Mock Gateway was not installed");
-  }
-  const { send } = gatewayPage.connect("ws://mock-gateway/roster");
-  await flush();
+  const { responses: frames } = gatewayPage;
+  const { send, gateway } = await connectMockGateway(gatewayPage, {}, "ws://mock-gateway/roster");
 
   const rosterMatch = { includeGlobal: true };
   const childQuery = { includeGlobal: false, spawnedBy: "agent:main:parent" };
@@ -112,16 +107,13 @@ it("keeps roster deferrals separate from child queries", async ({ gatewayPage })
 it.for(["resolve", "reject"] as const)(
   "%ss startup held inside the subscription response without a second wire request",
   async (outcome, { gatewayPage }) => {
-    const messages = [{ role: "assistant", content: "Live witness" }];
-    gatewayPage.execute(
-      createControlUiMockGatewayInitScript({
-        deferredMethods: ["chat.startup"],
-        historyMessages: messages,
-      }),
-    );
-    const { send, frames } = gatewayPage.connect();
-    const gateway = (gatewayPage.window as MockGatewayWindow).openclawControlUiE2eGateway!;
-    await flush();
+    const messages = [
+      { role: "assistant", content: "Live witness", __openclaw: { id: "witness", seq: 1 } },
+    ];
+    const { send, frames, gateway } = await connectMockGateway(gatewayPage, {
+      deferredMethods: ["chat.startup"],
+      historyMessages: messages,
+    });
     send("subscription", "sessions.messages.subscribe", {
       key: "agent:main:main",
       initialHistory: {},
@@ -147,14 +139,9 @@ it.for(["resolve", "reject"] as const)(
 );
 
 it("preserves explicitly supplied deferred subscription payloads", async ({ gatewayPage }) => {
-  gatewayPage.execute(
-    createControlUiMockGatewayInitScript({
-      heldMethods: ["chat.startup"],
-    }),
-  );
-  const { send, frames } = gatewayPage.connect();
-  const gateway = (gatewayPage.window as MockGatewayWindow).openclawControlUiE2eGateway!;
-  await flush();
+  const { send, frames, gateway } = await connectMockGateway(gatewayPage, {
+    heldMethods: ["chat.startup"],
+  });
   const key = "agent:main:main";
   const payloads = [
     { key },
@@ -173,14 +160,9 @@ it("preserves explicitly supplied deferred subscription payloads", async ({ gate
 
 it("replaces the static startup and history transcript together", async ({ gatewayPage }) => {
   const stale = { messages: [{ role: "assistant", content: "Saved witness" }], hasMore: false };
-  gatewayPage.execute(
-    createControlUiMockGatewayInitScript({
-      methodResponses: { "chat.startup": stale, "chat.history": stale },
-    }),
-  );
-  const { request } = gatewayPage.connect();
-  const gateway = (gatewayPage.window as MockGatewayWindow).openclawControlUiE2eGateway!;
-  await flush();
+  const { request, gateway } = await connectMockGateway(gatewayPage, {
+    methodResponses: { "chat.startup": stale, "chat.history": stale },
+  });
   const messages = [{ role: "assistant", content: "Live witness" }];
   gateway.setHistoryMessages(messages);
   for (const method of ["chat.startup", "chat.history"]) {

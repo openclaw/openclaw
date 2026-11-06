@@ -41,6 +41,15 @@ describe("full tail after a long live turn", () => {
     sessionInfo: { ...sessionInfo, hasActiveRun: false, status: "killed" as const },
   });
 
+  const gapPacket = (): ChatHistoryResult => ({
+    messages: transcript.slice(2, 4),
+    hasMore: true,
+    olderCursor: "older:head",
+    nextOffset: 5,
+    totalMessages: 7,
+    sessionInfo,
+  });
+
   async function loadAfterLiveTurn(
     tail: ChatHistoryResult,
     older: (cursor: string) => Promise<ChatHistoryResult>,
@@ -225,14 +234,7 @@ describe("full tail after a long live turn", () => {
   it("keeps each fresh gap response's provenance instead of certifying an aggregate packet", async () => {
     const older = vi.fn(async (cursor: string): Promise<ChatHistoryResult> =>
       cursor === "older:tail"
-        ? {
-            messages: transcript.slice(2, 4),
-            hasMore: true,
-            olderCursor: "older:head",
-            nextOffset: 5,
-            totalMessages: 7,
-            sessionInfo,
-          }
+        ? gapPacket()
         : { messages: transcript.slice(0, 2), totalMessages: 7, sessionInfo },
     );
     const { state, request } = await loadAfterLiveTurn(tailFrom(4), older);
@@ -260,14 +262,7 @@ describe("full tail after a long live turn", () => {
       if (cursor === "older:head") {
         throw new Error("offline");
       }
-      return {
-        messages: transcript.slice(2, 4),
-        hasMore: true,
-        olderCursor: "older:head",
-        nextOffset: 5,
-        totalMessages: 7,
-        sessionInfo,
-      };
+      return gapPacket();
     });
 
     expect(state.chatMessages).toEqual(transcript.slice(2));
@@ -287,14 +282,7 @@ describe("full tail after a long live turn", () => {
       const entered = createDeferred();
       const pending = createDeferred<ChatHistoryResult>();
       let current: TestState | undefined;
-      const reply = {
-        messages: transcript.slice(2, 4),
-        hasMore: true,
-        olderCursor: "older:head",
-        nextOffset: 5,
-        totalMessages: 7,
-        sessionInfo,
-      };
+      const reply = gapPacket();
       const loading = loadAfterLiveTurn(
         tailFrom(4),
         async () => {

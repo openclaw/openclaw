@@ -1,5 +1,7 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import type { MessageReactionSummary } from "@openclaw/gateway-protocol";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ControlUiBootstrapConfig } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type {
   AgentsListResult,
@@ -7,6 +9,10 @@ import type {
   UpdateAvailable,
   UpdateScheduleState,
 } from "../api/types.ts";
+import {
+  nativeHistoryMessageSourceId,
+  nativeHistoryMessageSourceIdentity,
+} from "../lib/chat/history-message-identity.ts";
 import type { MockGatewayRequestSelector } from "./control-ui-e2e-contract.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -82,6 +88,7 @@ export interface ControlUiMockGatewayScenario
   featureMethods?: string[];
   /** Simulate a legacy Gateway that predates the advertised method catalog. */
   omitFeatureMethods?: boolean;
+  /** Stored source fixtures; unidentified rows acquire stable IDs at admission. Wire overrides stay exact. */
   historyMessages?: unknown[];
   /** Disable only for scenarios exercising the separate chat.startup fallback. */
   subscriptionInitialHistory?: boolean;
@@ -163,6 +170,34 @@ const DEFAULT_MOCK_ATTACHMENT_MAX_BYTES = Math.floor(
   ((DEFAULT_MOCK_MAX_PAYLOAD_BYTES - 256 * 1024) * 3) / 4,
 );
 
+/** Source declarations own identity; page reads and live events must never invent it. */
+export function createMockHistoryMaterializer(reserved: readonly unknown[] = []) {
+  const ids = new Set(reserved.map(nativeHistoryMessageSourceId));
+  let sequence = 0;
+  return (messages: readonly unknown[]): unknown[] => {
+    for (const message of messages) {
+      ids.add(nativeHistoryMessageSourceId(message));
+    }
+    return messages.map((message) => {
+      const record = asNullableRecord(message);
+      if (
+        !record ||
+        nativeHistoryMessageSourceIdentity(message) !== null ||
+        readSessionMessageIdentity(message)?.isImported
+      ) {
+        return message;
+      }
+      let id: string;
+      do {
+        id = `mock-history:${++sequence}`;
+      } while (ids.has(id));
+      ids.add(id);
+      // IDs suffice for source custody. Never fabricate ordering around supplied sequence facts.
+      return { ...record, __openclaw: { ...asNullableRecord(record["__openclaw"]), id } };
+    });
+  };
+}
+
 export function normalizeScenario(
   scenario: ControlUiMockGatewayScenario,
 ): NormalizedControlUiMockGatewayScenario {
@@ -172,6 +207,11 @@ export function normalizeScenario(
     scenario.mainSessionKey?.trim() ||
     (scenario.sessionScope === "global" ? "global" : `agent:${defaultAgentId}:main`);
   const sessionKey = scenario.sessionKey?.trim() || mainSessionKey;
+  const transcripts = scenario.sessionTranscripts ?? {};
+  const materializeHistory = createMockHistoryMaterializer([
+    ...(scenario.historyMessages ?? []),
+    ...Object.values(transcripts).flatMap((transcript) => transcript.messages),
+  ]);
   const staticList = scenario.methodResponses?.["sessions.list"] as
     | { sessions?: ControlUiSessionFixture[] }
     | undefined;
@@ -239,10 +279,15 @@ export function normalizeScenario(
     // mixed-version methods provide an explicit narrower catalog.
     featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
     omitFeatureMethods: scenario.omitFeatureMethods ?? false,
-    historyMessages: scenario.historyMessages ?? [],
+    historyMessages: materializeHistory(scenario.historyMessages ?? []),
     subscriptionInitialHistory: scenario.subscriptionInitialHistory ?? true,
     sessionReactions: scenario.sessionReactions ?? {},
-    sessionTranscripts: scenario.sessionTranscripts ?? {},
+    sessionTranscripts: Object.fromEntries(
+      Object.entries(transcripts).map(([key, transcript]) => [
+        key,
+        { ...transcript, messages: materializeHistory(transcript.messages) },
+      ]),
+    ),
     maxPayload: scenario.maxPayload ?? DEFAULT_MOCK_MAX_PAYLOAD_BYTES,
     mainSessionKey,
     methodResponses: { ...createControlUiDefaultResponses(scenario), ...scenario.methodResponses },

@@ -1,5 +1,11 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { JSDOM } from "jsdom";
 import { it } from "vitest";
+import type { MockGatewayWindow } from "./control-ui-e2e-contract.ts";
+import {
+  createControlUiMockGatewayInitScript,
+  type ControlUiMockGatewayScenario,
+} from "./control-ui-e2e.ts";
 
 type ResponseFrame = {
   type: "res";
@@ -30,6 +36,21 @@ export function flushMockTimers(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 0);
   });
+}
+
+export async function connectMockGateway(
+  page: MockGatewayPage,
+  scenario: ControlUiMockGatewayScenario = {},
+  url?: string,
+) {
+  page.execute(createControlUiMockGatewayInitScript(scenario));
+  const socket = page.connect(url);
+  await flushMockTimers();
+  const gateway = expectDefined(
+    (page.window as MockGatewayWindow).openclawControlUiE2eGateway,
+    "Mock Gateway was not installed",
+  );
+  return { ...socket, gateway };
 }
 
 export const mockGatewayTest = it.extend<{ gatewayPage: MockGatewayPage }>({

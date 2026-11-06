@@ -117,7 +117,7 @@ suite.define(() => {
               : "Control+f",
           );
           await page
-            .getByRole("textbox", { name: "Search messages", exact: true })
+            .getByRole("textbox", { name: "Search loaded messages", exact: true })
             .fill("looks good");
           expect(await page.locator('[data-entry-id="adjacent-prompt"]').count()).toBe(0);
           await expect

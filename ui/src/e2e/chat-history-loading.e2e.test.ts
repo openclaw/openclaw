@@ -6,6 +6,7 @@ import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-scr
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { newChatPage } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
+import { historyMessageCount } from "./chat-history-pagination-probe.test-support.ts";
 import { expectTranscriptLayoutCommitted } from "./claude-sessions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureFrame } from "./sidebar-assertions.test-support.ts";
@@ -23,7 +24,6 @@ function historyPage(messages: unknown[], hasMore: boolean, nextOffset?: number)
     hasMore,
     ...(hasMore && nextOffset !== undefined ? { olderCursor: `older-${nextOffset}` } : {}),
     nextOffset,
-    totalMessages: 22,
     sessionId: "native-underfill-pagination",
     thinkingLevel: null,
   };
@@ -103,6 +103,7 @@ suite.define(() => {
           [
             {
               role: "assistant",
+              __openclaw: { seq: 1 },
               content: [
                 {
                   type: "toolCall",
@@ -114,6 +115,7 @@ suite.define(() => {
             },
             {
               role: "toolResult",
+              __openclaw: { seq: 2 },
               toolName: "read",
               toolCallId: "read-1",
               content: "Synthetic tool result",
@@ -210,7 +212,7 @@ suite.define(() => {
   it("keeps keyboard focus on the earlier-history action while older history loads", async () => {
     const page = await newChatPage(suite);
     const message = (seq: number) => ({
-      __openclaw: { seq },
+      __openclaw: { id: `focus-${seq}`, seq },
       role: seq % 2 ? "user" : "assistant",
       content: [{ type: "text", text: `Conversation message ${seq}` }],
       timestamp: 1_800_000_000_000 + seq,
@@ -219,8 +221,8 @@ suite.define(() => {
       Array.from({ length: count }, (_, index) => message(first + index));
     const gateway = await installMockGateway(page, {
       deferredRequests: [{ method: "chat.history", match: { cursor: "older-40" } }],
-      // The second packet is delivered to certify overflow before one atomic
-      // publication. It remains staged until the next reader intent.
+      // Both replies fit their adaptive request envelopes and leave older data.
+      // The bounded action must finish without disabling the focused control.
       featureMethods: ["chat.metadata", "chat.startup"],
       methodResponses: {
         "chat.startup": historyPage(messages(441, 40), true, 40),
@@ -228,23 +230,9 @@ suite.define(() => {
           cases: [
             {
               match: { cursor: "older-40" },
-              response: historyPage(
-                messages(361, 80).flatMap((source) =>
-                  Array.from({ length: 4 }, (_unused, fragment) => ({
-                    ...source,
-                    content: [
-                      {
-                        type: "text",
-                        text: "Conversation fragment " + source["__openclaw"].seq + "-" + fragment,
-                      },
-                    ],
-                  })),
-                ),
-                true,
-                60,
-              ),
+              response: historyPage(messages(361, 80), true, 60),
             },
-            { match: { cursor: "older-60" }, response: historyPage(messages(281, 80), false) },
+            { match: { cursor: "older-60" }, response: historyPage(messages(121, 240), true, 360) },
           ],
         },
       },
@@ -282,8 +270,10 @@ suite.define(() => {
 
     await gateway.resolveDeferred("chat.history", undefined, { match: { cursor: "older-40" } });
     await expect.poll(cursors).toEqual(["older-40", "older-60"]);
+    await expect.poll(() => action.getAttribute("aria-busy")).toBe("false");
     await expectHistoryBoundaryState(pane, false);
     expect(await actionFocused()).toBe(true);
+    expect(await historyMessageCount(pane)).toBe(360);
     await page.close();
   });
 

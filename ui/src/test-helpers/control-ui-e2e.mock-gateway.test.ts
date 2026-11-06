@@ -17,7 +17,11 @@ import {
 } from "./control-ui-e2e.ts";
 import { normalizeControlUiMockAuth } from "./control-ui-mock-auth.ts";
 import { collectGarbageForTest } from "./garbage-collection.ts";
-import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
+import {
+  connectMockGateway,
+  flushMockTimers,
+  mockGatewayTest as it,
+} from "./mock-gateway-page.test-support.ts";
 
 const getGateway = (window: MockGatewayWindow) =>
   expectDefined(window.openclawControlUiE2eGateway, "Mock Gateway was not installed");
@@ -25,10 +29,7 @@ const getGateway = (window: MockGatewayWindow) =>
 it("retains only bounded row counts from successful delivered session lists", async ({
   gatewayPage,
 }) => {
-  gatewayPage.execute(createControlUiMockGatewayInitScript());
-  const gateway = getGateway(gatewayPage.window);
-  const { request, send } = gatewayPage.connect();
-  await flushMockTimers();
+  const { gateway, request, send } = await connectMockGateway(gatewayPage);
   let response: unknown;
   gateway.setRequestHandler("sessions.list", ({ respond }) => respond(response));
   response = { sessions: [] };
@@ -105,9 +106,7 @@ it.for([undefined, null, "profile-current"])(
       profileActivityViewerId,
       operatorScopes: ["operator.sessions.write"],
     });
-    gatewayPage.execute(createControlUiMockGatewayInitScript(prepared));
-    const first = gatewayPage.connect();
-    await flushMockTimers();
+    const first = await connectMockGateway(gatewayPage, prepared);
     const hello = await first.request("first-connect", "connect", {});
     expect(hello.auth).toMatchObject({
       ...prepared.operatorRolePolicy,
@@ -133,9 +132,7 @@ it.for([undefined, null, "profile-current"])(
 it("serves protocol-valid empty Custodian history without method advertisement", async ({
   gatewayPage,
 }) => {
-  gatewayPage.execute(createControlUiMockGatewayInitScript({ featureMethods: ["openclaw.chat"] }));
-  const { request } = gatewayPage.connect();
-  await flushMockTimers();
+  const { request } = await connectMockGateway(gatewayPage, { featureMethods: ["openclaw.chat"] });
 
   const history = await request("custodian-history", "openclaw.chat.history", {});
 
@@ -146,14 +143,9 @@ it("serves protocol-valid empty Custodian history without method advertisement",
 it("keeps catalog resolution read-only and preserves configured outcomes", async ({
   gatewayPage,
 }) => {
-  gatewayPage.execute(
-    createControlUiMockGatewayInitScript({
-      sessions: [{ key: "agent:main:main", snapshotAt: 1 }],
-    }),
-  );
-  const { request, frames } = gatewayPage.connect();
-  await flushMockTimers();
-  const gateway = getGateway(gatewayPage.window);
+  const { request, frames, gateway } = await connectMockGateway(gatewayPage, {
+    sessions: [{ key: "agent:main:main", snapshotAt: 1 }],
+  });
   const initial = await request("catalog-list-before", "sessions.list", {});
   for (const method of ["sessions.catalog.resolve", "beam.owned.resolve"]) {
     expect(await request(`${method}-unbound`, method, {})).toBeNull();
@@ -174,9 +166,7 @@ it("keeps catalog resolution read-only and preserves configured outcomes", async
 });
 
 it("serves protocol-valid empty channel status and pairing defaults", async ({ gatewayPage }) => {
-  gatewayPage.execute(createControlUiMockGatewayInitScript());
-  const { request } = gatewayPage.connect();
-  await flushMockTimers();
+  const { request } = await connectMockGateway(gatewayPage);
 
   const snapshot = await request("channel-status", "channels.status", { probe: false });
 
@@ -189,9 +179,7 @@ it("serves protocol-valid empty channel status and pairing defaults", async ({ g
 });
 
 it("serves protocol-valid empty plugin discovery defaults", async ({ gatewayPage }) => {
-  gatewayPage.execute(createControlUiMockGatewayInitScript());
-  const { request } = gatewayPage.connect();
-  await flushMockTimers();
+  const { request } = await connectMockGateway(gatewayPage);
 
   const categories = await request("plugin-categories", "plugins.catalog.categories", {});
   expect(Compile(PluginsCatalogCategoriesResultSchema).Check(categories)).toBe(true);
@@ -203,9 +191,7 @@ it("serves protocol-valid empty plugin discovery defaults", async ({ gatewayPage
 });
 
 it("serves protocol-valid empty memory plans for the requested agent", async ({ gatewayPage }) => {
-  gatewayPage.execute(createControlUiMockGatewayInitScript());
-  const { request } = gatewayPage.connect();
-  await flushMockTimers();
+  const { request } = await connectMockGateway(gatewayPage);
   const validate = Compile(MigrationProtocolSchemas.MigrationsMemoryPlanResult);
 
   for (const agentId of ["main", "research"]) {
@@ -451,18 +437,13 @@ it.for(["absent", "null", "explicit"] as const)(
 it("publishes a catalog adoption only after its deferred response succeeds", async ({
   gatewayPage,
 }) => {
-  const { execute } = gatewayPage;
   const sessionKey = "agent:main:deferred-catalog-adoption";
-  const script = createControlUiMockGatewayInitScript({
+  const { frames, send, request, gateway } = await connectMockGateway(gatewayPage, {
     deferredMethods: ["sessions.catalog.continue"],
     methodResponses: {
       "sessions.catalog.continue": { sessionKey },
     },
   });
-  execute(script);
-
-  const { frames, send, request } = gatewayPage.connect();
-  await flushMockTimers();
 
   send("deferred-adoption", "sessions.catalog.continue", {
     catalogId: "codex",
@@ -472,7 +453,6 @@ it("publishes a catalog adoption only after its deferred response succeeds", asy
   await flushMockTimers();
   expect(frames.find((frame) => frame.id === "deferred-adoption")).toBeUndefined();
 
-  const gateway = getGateway(gatewayPage.window);
   gateway.resolveDeferred("sessions.catalog.continue", { sessionKey });
   await flushMockTimers();
   expect(frames.find((frame) => frame.id === "deferred-adoption")?.payload).toEqual({
@@ -496,10 +476,7 @@ it("publishes a catalog adoption only after its deferred response succeeds", asy
 it("keeps a same-session observer subscribed when another observer releases", async ({
   gatewayPage,
 }) => {
-  gatewayPage.execute(createControlUiMockGatewayInitScript());
-  const gateway = getGateway(gatewayPage.window);
-  const { frames, request } = gatewayPage.connect();
-  await flushMockTimers();
+  const { frames, request, gateway } = await connectMockGateway(gatewayPage);
   await request("connect", "connect", { caps: ["session-scoped-events"] });
   const key = "agent:main:shared-observers";
   await request("first", "sessions.messages.subscribe", { key, subscriptionId: "first" });

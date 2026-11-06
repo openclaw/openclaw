@@ -109,7 +109,7 @@ async function sendPrompt(page: Page, gateway: Gateway, prompt: string) {
 }
 function completedHistory(sessionKey: string, runId: string, content: string, active = false) {
   return {
-    messages: [{ role: "assistant", content }],
+    messages: prepareChatHistoryFixture([{ role: "assistant", content }]).messages,
     sessionId: "session:" + sessionKey,
     sessionInfo: {
       key: sessionKey,
@@ -610,7 +610,9 @@ suite.define(() => {
     // Post-Stop reads begin when the Gateway answers Stop. Publishing them earlier
     // lets a still-pending startup read settle the run before Stop is clicked.
     await gateway.setMethodResponse("chat.history", {
-      messages: [{ role: "assistant", content: "Cached activity has finished." }],
+      messages: prepareChatHistoryFixture([
+        { role: "assistant", content: "Cached activity has finished." },
+      ]).messages,
       sessionId: `session:${sessionKey}`,
       sessionInfo: finishedSession,
     });

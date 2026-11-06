@@ -108,7 +108,6 @@ suite.define(() => {
       nextOffset,
       olderCursor: `older-activity-${nextOffset}`,
       hasMore: true,
-      totalMessages: 2072,
       sessionId: "activity-history",
     });
 
@@ -144,10 +143,21 @@ suite.define(() => {
         heldMethods: ["chat.history"],
         methodResponses: {
           "chat.startup": historyPage(recent, 72),
-          "chat.history": historyPage(
-            Array.from({ length: 1000 }, (_, index) => activity(index + 1)),
-            1072,
-          ),
+          "chat.history": {
+            cases: [
+              {
+                match: { cursor: "older-activity-72" },
+                response: historyPage(
+                  Array.from({ length: 160 }, (_, index) => activity(index + 841)),
+                  232,
+                ),
+              },
+              ...Array.from({ length: 4 }, (_, index) => ({
+                match: { cursor: `older-activity-${232 + index}` },
+                response: historyPage([], 233 + index),
+              })),
+            ],
+          },
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -185,9 +195,15 @@ suite.define(() => {
           .poll(() => pane.getAttribute("class"))
           .not.toContain("chat-pane-cache__pane--active");
       }
-      await gateway.deferNext("chat.history");
       await gateway.resolveDeferred("chat.history");
-      await expect.poll(count).toBe(1072);
+      await expect.poll(count).toBe(232);
+      expect(
+        await pane.evaluate(
+          (element) =>
+            (element as HTMLElement & { state: ChatPageHost }).state.chatHistoryPagination.hasMore,
+        ),
+      ).toBe(true);
+      await pane.locator(".chat-history-sentinel").waitFor({ state: "attached" });
       await twoFrames(page);
       const tops = await probe.evaluate((stop) => stop());
       await probe.dispose();
@@ -277,32 +293,43 @@ suite.define(() => {
           content: [{ type: "text", text: `Transcript entry ${seq}. ${detail}` }],
           timestamp: 1_800_000_000_000 + seq,
         });
-        const recent = Array.from({ length: 800 }, (_, index) => message(index + 1001));
-        const older = Array.from({ length: onlyGroup ? 6 : 1000 }, (_, index) =>
-          message(index + (onlyGroup ? 995 : 1)),
+        const recent = Array.from({ length: 80 }, (_, index) => message(index + 1001));
+        const older = Array.from({ length: onlyGroup ? 6 : 80 }, (_, index) =>
+          message(index + (onlyGroup ? 995 : 921)),
         );
         const loadedCount = recent.length + older.length;
-        const totalMessages = loadedCount + (more ? 10 : 0);
         const history = (messages: typeof recent, hasMore: boolean, nextOffset: number) => ({
           messages,
           hasMore,
           nextOffset,
           ...(hasMore ? { olderCursor: `older-prepend-${nextOffset}` } : {}),
-          totalMessages,
           sessionId: "prepend-session",
         });
         const gateway = await installMockGateway(page, {
           sessionKey: "agent:main:main",
           sessions: [{ key: "agent:main:main", sessionId: "prepend-session" }],
           methodResponses: {
-            "chat.startup": history(recent, true, 800),
-            "chat.history": history(older, more, loadedCount),
+            "chat.startup": history(recent, true, 80),
+            "chat.history": {
+              cases: [
+                {
+                  match: { cursor: "older-prepend-80" },
+                  response: history(older, more, loadedCount),
+                },
+                // Filtered pages advance the raw cursor. The sparse bound stops
+                // foreground traversal; its one parked reply keeps the edge open.
+                ...Array.from({ length: more ? 4 : 0 }, (_, index) => ({
+                  match: { cursor: `older-prepend-${loadedCount + index}` },
+                  response: history([], true, loadedCount + index + 1),
+                })),
+              ],
+            },
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         const pane = page.locator(".chat-pane-cache__pane--active");
         const thread = pane.locator(".chat-thread");
-        await thread.getByText(/^Transcript entry 1800\./).waitFor();
+        await thread.getByText(/^Transcript entry 1080\./).waitFor();
         await waitForChatScrollIdle(page);
         await gateway.deferNext("chat.history");
         await thread.hover();
@@ -343,6 +370,16 @@ suite.define(() => {
           await thread.evaluate(touchGesture, { start: false, momentum });
         }
         await waitForChatScrollIdle(page);
+        if (more) {
+          expect(
+            await pane.evaluate(
+              (element) =>
+                (element as HTMLElement & { state: ChatPageHost }).state.chatHistoryPagination
+                  .hasMore,
+            ),
+          ).toBe(true);
+          await pane.locator(".chat-history-sentinel").waitFor({ state: "attached" });
+        }
         // Require the fetched page to reach the viewport, not just pane state.
         await expect.poll(scrollTop).toBeGreaterThan(heldOffset + (momentum ? 40 : 0) + 100);
         const frames = await probe.evaluate((stop) => stop());
@@ -361,7 +398,7 @@ suite.define(() => {
           await thread.hover();
           await page.mouse.wheel(0, -1_000_000);
           await waitForChatScrollIdle(page);
-          const first = thread.getByText(/^Transcript entry 1\./);
+          const first = thread.getByText(/^Transcript entry 921\./);
           await first.waitFor();
           const firstBox = await layoutBox(first);
           const viewport = await layoutBox(thread);

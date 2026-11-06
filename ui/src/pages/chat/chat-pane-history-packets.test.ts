@@ -25,6 +25,36 @@ import {
   reduceChatSessionProjection,
 } from "./history-merge.ts";
 
+function pendingInput(
+  state: Parameters<typeof reduceChatSessionProjection>[0],
+  runId: string,
+  content: string,
+) {
+  reduceChatSessionProjection(state, {
+    type: "sendPending",
+    runId,
+    message: { role: "user", content, __openclaw: { idempotencyKey: `${runId}:user` } },
+  });
+  return {
+    persisted: (seq: number) =>
+      Object.assign(nativeHistoryMessage(seq, content), {
+        __openclaw: { seq, idempotencyKey: `${runId}:user` },
+      }),
+    pending: () =>
+      getChatSessionProjection(state).entries.some(
+        (entry) => entry.pending && entry.pendingRunId === runId,
+      ),
+  };
+}
+
+function fragmentedSource(seq: number, keyed = false) {
+  return Array.from({ length: 401 }, (_, fragment) =>
+    Object.assign(nativeHistoryMessage(seq, `fragment-${fragment}`), {
+      __openclaw: { seq, ...(keyed ? { id: `source-${seq}` } : {}) },
+    }),
+  );
+}
+
 it("admits a contiguous packet chain in one foreground publication", async () => {
   const held = createDeferred<ChatHistoryResult>();
   const request = stagedPagesRequest({
@@ -158,23 +188,13 @@ it("adopts later-packet user receipts while keeping a live publication made duri
   const request = stagedPagesRequest({ 4: () => held.promise });
   const { pane, state } = createStagedPrefetchPane(request);
   const runId = "batch-input";
-  reduceChatSessionProjection(state, {
-    type: "sendPending",
-    runId,
-    message: {
-      role: "user",
-      content: "Accepted input",
-      __openclaw: { idempotencyKey: `${runId}:user` },
-    },
-  });
+  const { persisted, pending } = pendingInput(state, runId, "Accepted input");
   const loading = pane.loadOlderMessages();
   await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
   const live = nativeHistoryMessage(9);
   reduceChatSessionProjection(state, { type: "messagePersisted", message: live });
   const published = vi.spyOn(state, "chatMessages", "set");
-  const durable = Object.assign(nativeHistoryMessage(3, "Accepted input"), {
-    __openclaw: { seq: 3, idempotencyKey: `${runId}:user` },
-  });
+  const durable = persisted(3);
   held.resolve({
     ...historyPage([3, 4], pagination(9, 6)),
     messages: [durable, nativeHistoryMessage(4)],
@@ -183,39 +203,22 @@ it("adopts later-packet user receipts while keeping a live publication made duri
   expect(published).toHaveBeenCalledTimes(1);
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   expect(state.chatMessages.at(-1)).toBe(live);
-  expect(
-    getChatSessionProjection(state).entries.some(
-      (entry) => entry.pending && entry.pendingRunId === runId,
-    ),
-  ).toBe(false);
+  expect(pending()).toBe(false);
 });
 
 it("does not adopt an overflow packet's pending receipt before its actual admission", async () => {
   const { pane, state, request, moveReader } = packetHistoryPane();
   const runId = "overflow-input";
-  reduceChatSessionProjection(state, {
-    type: "sendPending",
-    runId,
-    message: {
-      role: "user",
-      content: "Queued source",
-      __openclaw: { idempotencyKey: `${runId}:user` },
-    },
-  });
+  const { persisted, pending } = pendingInput(state, runId, "Queued source");
   const base = request.getMockImplementation()!;
   request.mockImplementation(async (method, params) => {
     const result = await base(method, params);
     if (params.cursor === "older-80") {
-      result.messages![0] = Object.assign(nativeHistoryMessage(1, "Queued source"), {
-        __openclaw: { seq: 1, idempotencyKey: `${runId}:user` },
-      });
+      result.messages![0] = persisted(1);
     }
     return result;
   });
-  const pending = () =>
-    getChatSessionProjection(state).entries.some(
-      (entry) => entry.pending && entry.pendingRunId === runId,
-    );
+
   await expect(pane.loadOlderMessages()).resolves.toBe(true);
   expect(pending()).toBe(true);
   expect(pane.stagedHistory.page).not.toBeNull();
@@ -231,27 +234,13 @@ it.each(["around", "older", "newer"] as const)(
   (direction) => {
     const { state } = createStagedPrefetchPane(vi.fn());
     const runId = "admitted-input";
-    reduceChatSessionProjection(state, {
-      type: "sendPending",
-      runId,
-      message: {
-        role: "user",
-        content: "Admitted source",
-        __openclaw: { idempotencyKey: `${runId}:user` },
-      },
-    });
-    const durable = Object.assign(nativeHistoryMessage(1, "Admitted source"), {
-      __openclaw: { seq: 1, idempotencyKey: `${runId}:user` },
-    });
+    const { persisted, pending } = pendingInput(state, runId, "Admitted source");
+    const durable = persisted(1);
     const published = vi.spyOn(state, "chatMessages", "set");
     admitChatHistoryPages(state, [{ messages: [durable] }], direction);
     expect(published).toHaveBeenCalledTimes(1);
     expect(state.chatMessages).toContain(durable);
-    expect(
-      getChatSessionProjection(state).entries.some(
-        (entry) => entry.pending && entry.pendingRunId === runId,
-      ),
-    ).toBe(false);
+    expect(pending()).toBe(false);
   },
 );
 
@@ -266,15 +255,7 @@ it.each(
     const request = stagedPagesRequest({ 4: () => second.promise });
     const { pane, state } = createStagedPrefetchPane(request);
     const runId = "superseded-input";
-    reduceChatSessionProjection(state, {
-      type: "sendPending",
-      runId,
-      message: {
-        role: "user",
-        content: "Not yet admitted",
-        __openclaw: { idempotencyKey: `${runId}:user` },
-      },
-    });
+    const { persisted, pending } = pendingInput(state, runId, "Not yet admitted");
     const loading = pane.loadOlderMessages();
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     if (change === "cursor") {
@@ -294,9 +275,7 @@ it.each(
     }
     const before = state.chatMessages;
     const published = vi.spyOn(state, "chatMessages", "set");
-    const durable = Object.assign(nativeHistoryMessage(3, "Not yet admitted"), {
-      __openclaw: { seq: 3, idempotencyKey: `${runId}:user` },
-    });
+    const durable = persisted(3);
     if (outcome === "resolved") {
       second.resolve({
         ...historyPage([3, 4], pagination(8, 6)),
@@ -311,11 +290,7 @@ it.each(
     expect(pane.stagedHistory.page).toBeNull();
     if (change === "cursor" || change === "projection") {
       expect(pane.history.olderError).toBe("History refreshed before this page loaded. Try again.");
-      expect(
-        getChatSessionProjection(state).entries.some(
-          (entry) => entry.pending && entry.pendingRunId === runId,
-        ),
-      ).toBe(change === "cursor");
+      expect(pending()).toBe(change === "cursor");
     } else {
       expect(pane.history.olderError).toBeNull();
       expect(state.lastError).toBeNull();
@@ -503,12 +478,8 @@ it.each(["older", "newer"] as const)(
 );
 
 it("refines multiple intrinsic sources without granting their whole packet an exception", async () => {
-  const giant = (seq: number) =>
-    Array.from({ length: 401 }, (_unused, fragment) =>
-      nativeHistoryMessage(seq, `fragment-${fragment}`),
-    );
-  const a = giant(2);
-  const b = giant(1);
+  const a = fragmentedSource(2);
+  const b = fragmentedSource(1);
   const request = vi.fn(async (_method: string, params: { cursor: string; limit: number }) =>
     params.cursor === "older-2"
       ? {
@@ -552,13 +523,9 @@ it.each([
 ] as const)(
   "pauses a narrow $direction packet until its reader moves (unrelated=$unrelated)",
   async ({ direction, unrelated }) => {
-    const giant = (seq: number) =>
-      Array.from({ length: 401 }, (_unused, fragment) =>
-        nativeHistoryMessage(seq, `fragment-${fragment}`),
-      );
-    const a = giant(direction === "older" ? 3 : 1);
-    const b = giant(2);
-    const c = giant(direction === "older" ? 1 : 3);
+    const a = fragmentedSource(direction === "older" ? 3 : 1);
+    const b = fragmentedSource(2);
+    const c = fragmentedSource(direction === "older" ? 1 : 3);
     const page = (messages: unknown[], seq: number): ChatHistoryResult => ({
       messages,
       hasMore: seq > 1,
@@ -667,14 +634,8 @@ it.each(["fit", "raw"] as const)(
 it.each([true, false])(
   "preserves reverse navigation after moving inside one original packet (id=%s)",
   async (keyed) => {
-    const giant = (seq: number) =>
-      Array.from({ length: 401 }, (_unused, fragment) =>
-        Object.assign(nativeHistoryMessage(seq, `fragment-${fragment}`), {
-          __openclaw: { seq, ...(keyed ? { id: `source-${seq}` } : {}) },
-        }),
-      );
-    const a = giant(1);
-    const b = giant(2);
+    const a = fragmentedSource(1, keyed);
+    const b = fragmentedSource(2, keyed);
     const c = nativeHistoryMessage(3);
     const request = vi.fn(
       async (_method: string, params: { messageId?: string; cursor?: string; limit?: number }) => {

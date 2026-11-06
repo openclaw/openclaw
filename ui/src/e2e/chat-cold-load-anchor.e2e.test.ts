@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { closeChatDetails, openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
@@ -73,7 +74,9 @@ suite.define(() => {
             {
               match: { sessionKey: sourceKey },
               response: {
-                messages: [{ role: "assistant", content: "Starting conversation." }],
+                messages: prepareChatHistoryFixture([
+                  { role: "assistant", content: "Starting conversation." },
+                ]).messages,
                 sessionId: "starting",
               },
             },

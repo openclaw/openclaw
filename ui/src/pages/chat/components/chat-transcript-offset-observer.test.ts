@@ -21,6 +21,7 @@ import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import {
   subscribeTranscriptScroll,
   type TranscriptNativeScroll,
+  type TranscriptScrollObservation,
 } from "./chat-transcript-scroll-events.ts";
 import { createTranscriptPresentation } from "./chat-transcript-session.ts";
 import {
@@ -28,6 +29,44 @@ import {
   resetTranscriptTestDom,
   resizeObservers,
 } from "./chat-transcript.test-support.ts";
+
+function offsetOwner(
+  state: TranscriptOffsetState,
+  element: HTMLDivElement,
+  overrides: Partial<Parameters<typeof observeTranscriptOffset>[0]>,
+) {
+  const defaults = {
+    state,
+    getScrollElement: () => element,
+    endAnchor: new TranscriptEndAnchor(() => {}),
+    prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
+    canFollowEnd: () => false,
+    isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
+    isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
+    cancelScroll: vi.fn(),
+    onLayoutCorrection: vi.fn(),
+    invalidate: vi.fn(),
+    onOffset: vi.fn(),
+    onReaderScroll: vi.fn(),
+    onComposerLayout: vi.fn(),
+  };
+  return Object.assign(defaults, overrides);
+}
+
+function recordOffsets<T>(
+  element: HTMLDivElement,
+  project: (event: Extract<TranscriptScrollObservation, { type: "offset" }>) => T,
+) {
+  const events: T[] = [];
+  onTestFinished(
+    subscribeTranscriptScroll(element, (event) => {
+      if (event.type === "offset") {
+        events.push(project(event));
+      }
+    }),
+  );
+  return events;
+}
 
 it.each([false, true])(
   "classifies an idle or pending offset without layout (pending: %s)",
@@ -124,22 +163,14 @@ it.each([
   });
   onTestFinished(
     observeTranscriptOffset(
-      {
-        state,
-        getScrollElement: () => element,
+      offsetOwner(state, element, {
         endAnchor,
-        prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
-        canFollowEnd: () => false,
-        isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
         cancelScroll,
-        isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
-        onLayoutCorrection: vi.fn(),
-        invalidate: vi.fn(),
         onOffset,
         onReaderScroll,
         onComposerLayout: () => order.push("composer"),
         onNativeScroll,
-      },
+      }),
       virtualizer,
       deliver,
     ),
@@ -243,22 +274,13 @@ it.each([
     observeElementRect: (_, callback) => callback({ width: 800, height: 200 }),
     observeElementOffset: (instance, callback) =>
       observeTranscriptOffset(
-        {
-          state,
-          getScrollElement: () => element,
+        offsetOwner(state, element, {
           endAnchor,
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
           canFollowEnd: () => canAutoFollowChat(policy),
-          isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
-          isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
-          cancelScroll: vi.fn(),
           onLayoutCorrection: (before, after) => endAnchor.recordLayoutCorrection(before, after),
-          invalidate: vi.fn(),
-          onOffset: vi.fn(),
           onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
           onNativeScroll: (scroll) => handleChatScroll(policy, scroll),
-          onComposerLayout: vi.fn(),
-        },
+        }),
         instance,
         callback,
       ),
@@ -325,25 +347,7 @@ it.each([
       scrollTranscriptOffset(state, host, 0, offset, options, instance),
     observeElementRect: (_, callback) => callback({ width: 800, height: 100 }),
     observeElementOffset: (instance, callback) =>
-      observeTranscriptOffset(
-        {
-          state,
-          getScrollElement: () => element,
-          endAnchor: new TranscriptEndAnchor(() => {}),
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
-          canFollowEnd: () => false,
-          isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
-          isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
-          cancelScroll: vi.fn(),
-          onLayoutCorrection: vi.fn(),
-          invalidate: vi.fn(),
-          onOffset: vi.fn(),
-          onReaderScroll: vi.fn(),
-          onComposerLayout: vi.fn(),
-        },
-        instance,
-        callback,
-      ),
+      observeTranscriptOffset(offsetOwner(state, element, {}), instance, callback),
     measureElement: (row, entry) => presentation.measureElement(row, entry),
   });
   const presentation = createTranscriptPresentation(
@@ -419,22 +423,10 @@ function observedMaintenance(useScrollendEvent = false) {
   virtualizer.scrollOffset = element.scrollTop;
   const programmatic = () => isTranscriptProgrammaticScroll(state, element);
   const deliveries: Array<{ offset: number; scrolling: boolean; programmatic: boolean }> = [];
-  const owner = {
-    state,
-    getScrollElement: () => element,
-    endAnchor: new TranscriptEndAnchor(() => {}),
-    prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
-    canFollowEnd: () => false,
+  const owner = Object.assign(offsetOwner(state, element, {}), {
     isProgrammaticScroll: programmatic,
-    isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
-    cancelScroll: vi.fn(),
-    onLayoutCorrection: vi.fn(),
-    invalidate: vi.fn(),
-    onOffset: vi.fn(),
-    onReaderScroll: vi.fn(),
     onNativeScroll: vi.fn(),
-    onComposerLayout: vi.fn(),
-  };
+  });
   const connect = () =>
     observeTranscriptOffset(owner, virtualizer, (offset, scrolling) => {
       virtualizer.scrollOffset = offset;
@@ -478,6 +470,39 @@ function observedMaintenance(useScrollendEvent = false) {
     },
   };
 }
+
+it.each(["none", "before capture", "after capture"] as const)(
+  "preserves upward native policy through measurement synchronization: %s",
+  (synchronization) => {
+    const observed = observedMaintenance();
+    observed.native();
+    observed.owner.onNativeScroll.mockClear();
+    observed.element.scrollTop = 160;
+    const synchronize = () => {
+      observed.state.syncNativeOffset?.(true);
+      expect(observed.virtualizer.scrollOffset).toBe(160);
+      expect(observed.owner.onNativeScroll).not.toHaveBeenCalled();
+    };
+    if (synchronization === "before capture") {
+      synchronize();
+    } else if (synchronization === "after capture") {
+      observed.owner.onComposerLayout.mockImplementationOnce(synchronize);
+    }
+    observed.native();
+    expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
+      viewport: { scrollTop: 160, clientHeight: 200, scrollHeight: 1_000 },
+      delta: -640,
+      programmatic: false,
+      maintenance: false,
+    });
+    observed.native();
+    expect(observed.owner.onNativeScroll.mock.calls.map(([scroll]) => scroll.delta)).toEqual([
+      -640, 0,
+    ]);
+    vi.runAllTimers();
+    expect(observed.owner.onNativeScroll).toHaveBeenCalledTimes(2);
+  },
+);
 
 it.each(["native clamp", "capped editor"] as const)(
   "preserves the captured viewport and acknowledges the real composer correction: %s",
@@ -676,14 +701,10 @@ it.each(["wheel", "keydown", "pointerdown", "touchstart"] as const)(
 
 it("publishes preceding native movement before marking a new correction", () => {
   const observed = observedMaintenance();
-  const events: Array<{ delta: number; programmatic: boolean }> = [];
-  onTestFinished(
-    subscribeTranscriptScroll(observed.element, (event) => {
-      if (event.type === "offset") {
-        events.push({ delta: event.delta, programmatic: event.programmatic });
-      }
-    }),
-  );
+  const events = recordOffsets(observed.element, ({ delta, programmatic }) => ({
+    delta,
+    programmatic,
+  }));
   observed.element.scrollTop = 780;
   observed.write(40);
   expect(events).toEqual([{ delta: -20, programmatic: false }]);
@@ -737,14 +758,10 @@ it.each([
   }
   observed.resize(testCase.maximum);
   observed.element.scrollTop = testCase.before;
-  const events: Array<{ delta: number; programmatic: boolean }> = [];
-  onTestFinished(
-    subscribeTranscriptScroll(observed.element, (event) => {
-      if (event.type === "offset") {
-        events.push({ delta: event.delta, programmatic: event.programmatic });
-      }
-    }),
-  );
+  const events = recordOffsets(observed.element, ({ delta, programmatic }) => ({
+    delta,
+    programmatic,
+  }));
   observed.write(testCase.after);
   expect(events).toEqual([{ delta: testCase.delta, programmatic: testCase.owned }]);
   expect(observed.programmatic()).toBe(true);
@@ -758,14 +775,10 @@ it.each([
   observed.native(600);
   observed.state.scrollCommand = { target: "end", behavior: "smooth" };
   observed.element.scrollTop = testCase.before;
-  const events: Array<{ delta: number; programmatic: boolean }> = [];
-  onTestFinished(
-    subscribeTranscriptScroll(observed.element, (event) => {
-      if (event.type === "offset") {
-        events.push({ delta: event.delta, programmatic: event.programmatic });
-      }
-    }),
-  );
+  const events = recordOffsets(observed.element, ({ delta, programmatic }) => ({
+    delta,
+    programmatic,
+  }));
   observed.write(testCase.after);
   expect(events).toEqual([{ delta: testCase.before - 600, programmatic: testCase.owned }]);
 });
@@ -810,14 +823,7 @@ it("does not transfer a retired observer's target to its replacement", () => {
 
 it("delivers policy only for native events, preserving generic write, sync and idle observations", () => {
   const observed = observedMaintenance();
-  const events: Array<{ delta: number; scrolling: boolean }> = [];
-  onTestFinished(
-    subscribeTranscriptScroll(observed.element, (event) => {
-      if (event.type === "offset") {
-        events.push({ delta: event.delta, scrolling: event.scrolling });
-      }
-    }),
-  );
+  const events = recordOffsets(observed.element, ({ delta, scrolling }) => ({ delta, scrolling }));
   observed.native(800);
   expect(observed.deliveries.at(-1)?.scrolling).toBe(true);
   events.length = 0;
@@ -831,9 +837,10 @@ it("delivers policy only for native events, preserving generic write, sync and i
   expect(events.at(-1)).toEqual({ delta: 20, scrolling: true });
   expect(observed.owner.onNativeScroll).not.toHaveBeenCalled();
   observed.native(80);
+  // Synchronizing at 60 must not discard movement after the actual write to 40.
   expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
     viewport: { scrollTop: 80, clientHeight: 200, scrollHeight: 1_000 },
-    delta: 20,
+    delta: 40,
     programmatic: false,
     maintenance: false,
   });

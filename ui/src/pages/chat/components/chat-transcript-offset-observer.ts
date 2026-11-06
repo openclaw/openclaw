@@ -203,6 +203,9 @@ export function observeTranscriptOffset(
 ): () => void {
   const element = owner.getScrollElement();
   let nativeOffset = element?.scrollTop ?? 0;
+  // Measurement may synchronize TanStack before the native event arrives.
+  // Only delivered native movement or an owned write may consume pane policy's baseline.
+  let nativePolicyOffset = nativeOffset;
   // Late native echoes must not become reader intent after the event receipt retires.
   let maintenanceTarget: number | null = null;
   let maintenanceRevision = 0;
@@ -234,6 +237,7 @@ export function observeTranscriptOffset(
     // Record a real write before subscribers can remap the viewport. An exact
     // composer correction can cover a browser clamp captured before layout.
     if (before !== after) {
+      nativePolicyOffset = after;
       maintenanceTarget = owner.state.maintenanceScrollOffset = after;
       maintenanceRevision += 1;
       const captured = capturedNativeScroll;
@@ -298,12 +302,15 @@ export function observeTranscriptOffset(
         clientHeight: element?.clientHeight ?? 0,
         scrollHeight: element?.scrollHeight ?? 0,
       },
-      delta: offset - nativeOffset,
+      delta: offset - nativePolicyOffset,
       programmatic: owner.isProgrammaticScroll(),
       maintenance: owner.isMaintenanceScroll(),
     };
   };
   const publishOffset = (offset: number, scrolling: boolean, scroll?: TranscriptNativeScroll) => {
+    if (scroll) {
+      nativePolicyOffset = scroll.viewport.scrollTop;
+    }
     // Native policy uses only the root event's captured geometry. Explicit
     // synchronization and idle notifications do not manufacture reader input.
     if (scrolling && offset !== nativeOffset && owner.state.touchActive) {

@@ -10,6 +10,10 @@ import {
   type ControlUiE2eDiagnosticEvent,
 } from "./control-ui-e2e-diagnostics.ts";
 import { controlUiE2eWaitTimeoutMs } from "./control-ui-e2e-readiness.ts";
+import {
+  createMockHistoryMaterializer,
+  type NormalizedControlUiMockGatewayScenario,
+} from "./control-ui-mock-scenario.ts";
 
 let mockRequestBindingSequence = 0;
 
@@ -46,10 +50,14 @@ export async function installMockGatewayScript(
 
 export function createMockGatewayControls(
   page: Page,
-  defaultSessionKey: string,
+  scenario: NormalizedControlUiMockGatewayScenario,
   diagnosticEvents: ControlUiE2eDiagnosticEvent[],
-  methodResponses: Record<string, unknown>,
 ): MockGatewayControls {
+  const { sessionKey: defaultSessionKey, methodResponses } = scenario;
+  const materializeHistory = createMockHistoryMaterializer([
+    ...scenario.historyMessages,
+    ...Object.values(scenario.sessionTranscripts).flatMap((transcript) => transcript.messages),
+  ]);
   const mutate = async <K extends GatewayMutation>(
     method: K,
     ...args: Parameters<ControlUiMockGateway[K]>
@@ -132,7 +140,7 @@ export function createMockGatewayControls(
     setGatewayBootId: (...args) => mutate("setGatewayBootId", ...args),
     setServerBuildId: (...args) => mutate("setServerBuildId", ...args),
     setOperatorScopes: (...args) => mutate("setOperatorScopes", ...args),
-    setHistoryMessages: (...args) => mutate("setHistoryMessages", ...args),
+    setHistoryMessages: (messages) => mutate("setHistoryMessages", materializeHistory(messages)),
     async setMethodResponse(method, payload) {
       methodResponses[method] = payload;
       await mutate("setMethodResponse", method, payload);

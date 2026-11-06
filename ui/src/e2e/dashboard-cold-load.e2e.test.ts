@@ -4,6 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { isChatHistoryState } from "../lib/protocol-validators.generated/history-state.js";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
@@ -70,6 +71,9 @@ suite.define(() => {
               sandboxPort: sandbox(widgetHtml).sandboxPort,
             }),
           ]);
+          const { messages } = prepareChatHistoryFixture([
+            { role: "assistant", content: "Synthetic mission briefing." },
+          ]);
           const gateway = await installMockGateway(page, {
             sessionKey,
             authMethod: "trusted-proxy",
@@ -78,14 +82,14 @@ suite.define(() => {
             heldMethods: ["connect", "board.get"],
             featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
             sessions: [row, { ...row, key: otherSessionKey, label: "Other mission" }],
-            historyMessages: [{ role: "assistant", content: "Synthetic mission briefing." }],
+            historyMessages: messages,
             methodResponses: {
               ...(delayTranscriptValidation
                 ? {
                     "chat.startup": {
                       sessionId: row.sessionId,
                       sessionInfo: { key: sessionKey, sessionId: row.sessionId, kind: "direct" },
-                      messages: [{ role: "assistant", content: "Synthetic mission briefing." }],
+                      messages,
                       stateRevision: {
                         sessionInfo: "mission-session-v1",
                         commands: "mission-commands-v1",
