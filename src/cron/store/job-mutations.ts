@@ -233,6 +233,8 @@ export function planCronJobMutation(
     // Declarative re-registration is not a fresh authorization of an existing account.
     if (options.inferenceBinding && (!previousJob || mutation.kind === "update")) {
       nextJob.inferenceBinding = options.inferenceBinding;
+    } else if (mutation.kind === "update" && options.inferenceBinding === null) {
+      delete nextJob.inferenceBinding;
     }
     const explicitlyMutatesToolsAllow =
       mutation.kind === "add"
@@ -247,7 +249,10 @@ export function planCronJobMutation(
     });
     // Neither an ordinary edit nor an app-only recovery flag proves fresh inference consent.
     // Capture is admitted and rechecked by the caller's existing mutation commit guard.
-    if (mutation.kind === "update" && (options.runtimeAuthority || options.inferenceBinding)) {
+    if (
+      mutation.kind === "update" &&
+      (options.runtimeAuthority || options.inferenceBinding !== undefined)
+    ) {
       delete nextJob.ownerTransferPending;
     }
     if (nextJob.runtimeAuthority) {

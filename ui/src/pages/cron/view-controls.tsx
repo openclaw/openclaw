@@ -126,7 +126,12 @@ export function EnabledSwitch(
     compact?: boolean;
   },
 ) {
-  const stateLabel = () => (props.job.enabled ? t("cron.detail.active") : t("cron.detail.paused"));
+  const stateLabel = () =>
+    props.job.state?.autoDisabled
+      ? t("cron.detail.autoDisabled")
+      : props.job.enabled
+        ? t("cron.detail.active")
+        : t("cron.detail.paused");
   const actionLabel = () =>
     t(props.job.enabled ? "cron.actions.pauseJob" : "cron.actions.resumeJob", {
       name: props.job.displayName ?? props.job.name,

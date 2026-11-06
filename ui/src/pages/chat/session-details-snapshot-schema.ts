@@ -1,3 +1,4 @@
+import { isSessionParticipantIdentity } from "../../../../packages/gateway-protocol/src/compiled/sender-identity.js";
 import * as json from "../../lib/snapshot-json.ts";
 
 const nonnegative = json.refine(json.number, (value) => value >= 0);
@@ -14,6 +15,23 @@ const subagentStatus = json.enumeration([
 export const detailsSnapshotSchema = json.optional(
   json.object({
     locale: json.text,
+    session: json.optional(
+      json.object({
+        createdActor: json.optional(
+          json.object({
+            type: json.enumeration(["human", "agent", "system"]),
+            id: json.optional(json.text),
+            label: json.optional(json.text),
+            avatarUrl: json.optional(json.text),
+            identity: json.optional(json.checked(isSessionParticipantIdentity)),
+          }),
+        ),
+        participantCount: json.optional(nonnegative),
+      }),
+    ),
+    environment: json.optional(
+      json.object({ branch: json.optional(json.text), worktree: json.boolean }),
+    ),
     progress: json.optional(
       json.object({
         revision: nonnegative,
@@ -78,6 +96,19 @@ export const detailsSnapshotSchema = json.optional(
       }),
     ),
     outputs: json.optional(nonnegative),
+    processes: json.optional(
+      json.object({
+        total: nonnegative,
+        rows: json.array(
+          json.object({
+            processId: sessionKeySchema,
+            instanceId: sessionKeySchema,
+            name: json.text,
+          }),
+          3,
+        ),
+      }),
+    ),
   }),
 );
 

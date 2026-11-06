@@ -183,10 +183,11 @@ it("retains the focused capability row and management link through catalog refre
       capabilityMenu: makeCapabilities({ ...previous.capabilityMenu!.read()!, ...capability }),
     }));
   await import("./chat-composer-plus-menu-content.tsx");
+  await import("./chat-composer-plus-menu-subview.tsx");
   await waitForSolid(() => expect(checkbox("Focused skill")).toBeTruthy());
   for (const [name, description] of [
-    ["Broken", "deps missing"],
-    ["Private", "not available for this agent"],
+    ["Broken", "Missing dependencies"],
+    ["Private", "Not available for this agent"],
   ]) {
     expect(
       view.getByRole("menuitem", { name, description, hidden: true }).hasAttribute("disabled"),
@@ -720,15 +721,15 @@ it("expands one server at a time and keeps switch and bulk tool actions separate
   setCurrentView("root");
   await waitForSolid(() =>
     expect(
-      view.queryByRole("menuitem", { name: "2 changes for this session", hidden: true }),
+      view.queryByRole("menuitem", { name: "2 changes in this session", hidden: true }),
     ).not.toBeNull(),
   );
-  view.getByRole("menuitem", { name: "2 changes for this session", hidden: true }).click();
+  view.getByRole("menuitem", { name: "2 changes in this session", hidden: true }).click();
   await waitForSolid(() => {
     expect(patch).toHaveBeenLastCalledWith(null);
     expect(overrides()).toBeNull();
     expect(
-      view.queryByRole("menuitem", { name: /changes for this session/, hidden: true }),
+      view.queryByRole("menuitem", { name: /changes in this session/, hidden: true }),
     ).toBeNull();
   });
 });

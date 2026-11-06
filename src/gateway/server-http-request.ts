@@ -264,7 +264,7 @@ export function createGatewayHttpRequestHandler(
       });
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
-        sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
+        respondPlainText(res, 400, "Bad Request");
         return undefined;
       }
       if (scopedNodeCapability.rewrittenUrl) {

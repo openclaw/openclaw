@@ -606,7 +606,7 @@ async function resolveExpectedPluginPolicyError(params: {
   if (!message) {
     return undefined;
   }
-  const { ExpectedCliError } = await import("./failure-output.js");
+  const { ExpectedCliError } = await import("./expected-cli-error.js");
   return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
 

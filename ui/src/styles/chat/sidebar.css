@@ -67,12 +67,20 @@
   inset: 0 var(--chat-thread-gutter) auto;
   height: 24px;
   pointer-events: none;
+  /* Panes that tint their backdrop (Incognito) hand in the tint so the blend
+     matches it; resolved here, where the pane surface is defined. */
+  --chat-header-blend-color: color-mix(
+    in srgb,
+    var(--chat-header-tint, transparent) var(--chat-header-tint-strength, 0%),
+    var(--chat-surface)
+  );
+
   background: linear-gradient(
     to bottom,
-    var(--chat-surface) 2px,
-    color-mix(in srgb, var(--chat-surface) 88%, transparent) 25%,
-    color-mix(in srgb, var(--chat-surface) 50%, transparent) 50%,
-    color-mix(in srgb, var(--chat-surface) 12%, transparent) 75%,
+    var(--chat-header-blend-color) 2px,
+    color-mix(in srgb, var(--chat-header-blend-color) 88%, transparent) 25%,
+    color-mix(in srgb, var(--chat-header-blend-color) 50%, transparent) 50%,
+    color-mix(in srgb, var(--chat-header-blend-color) 12%, transparent) 75%,
     transparent
   );
 }
@@ -205,25 +213,34 @@
   color: var(--hljs-keyword);
 }
 
-:is(.file-view, .code-highlight)
-  :where(.tok-number, .tok-literal, .tok-atom, .tok-bool, .tok-variableName, .tok-variableName2) {
+:is(.file-view, .code-highlight) :where(.tok-number),
+:is(.file-view, .code-highlight) :where(.tok-literal),
+:is(.file-view, .code-highlight) :where(.tok-atom),
+:is(.file-view, .code-highlight) :where(.tok-bool),
+:is(.file-view, .code-highlight) :where(.tok-variableName),
+:is(.file-view, .code-highlight) :where(.tok-variableName2) {
   color: var(--hljs-number);
 }
 
-:is(.file-view, .code-highlight) :where(.tok-string, .tok-string2) {
+:is(.file-view, .code-highlight) :where(.tok-string),
+:is(.file-view, .code-highlight) :where(.tok-string2) {
   color: var(--hljs-string);
 }
 
-:is(.file-view, .code-highlight) :where(.tok-heading, .tok-definition) {
+:is(.file-view, .code-highlight) :where(.tok-heading),
+:is(.file-view, .code-highlight) :where(.tok-definition) {
   color: var(--hljs-title);
 }
 
-:is(.file-view, .code-highlight)
-  :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
+:is(.file-view, .code-highlight) :where(.tok-typeName),
+:is(.file-view, .code-highlight) :where(.tok-className),
+:is(.file-view, .code-highlight) :where(.tok-namespace),
+:is(.file-view, .code-highlight) :where(.tok-macroName) {
   color: var(--hljs-type);
 }
 
-:is(.file-view, .code-highlight) :where(.tok-propertyName, .tok-labelName) {
+:is(.file-view, .code-highlight) :where(.tok-propertyName),
+:is(.file-view, .code-highlight) :where(.tok-labelName) {
   color: var(--hljs-attribute);
 }
 

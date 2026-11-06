@@ -135,6 +135,9 @@ describe("anthropic payload policy", () => {
     expect(disabledPayload).not.toHaveProperty("context_management");
 
     const configuredPolicy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
       contextWindow: 200_000,
       enableServerCompaction: true,
       extraParams: { anthropicServerCompaction: true },

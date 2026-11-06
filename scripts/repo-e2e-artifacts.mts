@@ -43,12 +43,19 @@ export function transferRepoE2eArtifacts(
     const outputs = [
       "dist",
       ...(fs.existsSync(path.join(root, "dist-runtime")) ? ["dist-runtime"] : []),
-      ...fs.readdirSync(path.join(root, "packages")).flatMap((name) => {
-        const output = `packages/${name}/dist`;
-        return fs.existsSync(path.join(root, output)) ? [output] : [];
-      }),
-      ...listGeneratedExtensionAssetSources({ rootDir: root }),
+      // Source-discovered plugins serve their generated browser assets in place.
+      ...["packages", "extensions"].flatMap((directory) =>
+        fs.readdirSync(path.join(root, directory)).flatMap((name) => {
+          const output = `${directory}/${name}/dist`;
+          return fs.existsSync(path.join(root, output)) ? [output] : [];
+        }),
+      ),
     ];
+    outputs.push(
+      ...listGeneratedExtensionAssetSources({ rootDir: root }).filter(
+        (source) => !outputs.some((output) => source === output || source.startsWith(`${output}/`)),
+      ),
+    );
     fs.mkdirSync(artifactRoot, { recursive: true });
     // Tar preserves hidden stamps, executable bits, and relative runtime-overlay links.
     execFileSync("tar", ["-czf", archive, "--null", "-T", "-"], {

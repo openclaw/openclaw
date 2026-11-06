@@ -17,6 +17,7 @@ type ComposerTextareaResizeObserverState = {
   // Width a forced scrollbar takes from this textarea; null until first overflow.
   scrollbarWidth: number | null;
   editing: boolean;
+  cappedValue?: string;
   getTranscriptElement: () => HTMLElement | null;
   getContext: () => HTMLElement | null;
   // Set by the first connected measurement; pane-owned editors observe their pane.
@@ -213,6 +214,7 @@ function resetSingleLineTextarea(el: HTMLTextAreaElement) {
     el.style.height = "";
     el.style.overflowY = "";
     el.removeAttribute("data-composer-scrollable");
+    el.removeAttribute("data-composer-overflow");
     el.removeAttribute("data-scroll-fade-top");
     el.removeAttribute("data-scroll-fade-bottom");
   }
@@ -224,11 +226,18 @@ function updateTextareaOverflow(
   deferNativeEditing = true,
   measured?: { scrollHeight: number; clientHeight: number },
 ) {
+  const state = composerTextareaResizeObservers.get(el);
   if (
     deferNativeEditing &&
-    composerTextareaResizeObservers.get(el)?.editing &&
-    hasNativeTextareaContentSizing(el)
+    state?.editing &&
+    state.cappedValue &&
+    el.value.startsWith(state.cappedValue)
   ) {
+    el.removeAttribute("data-scroll-fade-top");
+    el.removeAttribute("data-scroll-fade-bottom");
+    return;
+  }
+  if (deferNativeEditing && state?.editing && hasNativeTextareaContentSizing(el)) {
     // Clear the caret mask before native scrolling, but measure overflow only
     // after the edit. Browser support alone says nothing about sibling fields.
     scheduleNativeTextareaOverflow(el);
@@ -236,7 +245,6 @@ function updateTextareaOverflow(
   }
   const clientHeight = measured?.clientHeight ?? el.clientHeight;
   const scrollHeight = measured?.scrollHeight ?? el.scrollHeight;
-  const state = composerTextareaResizeObservers.get(el);
   if (resetSingleLineTextarea(el)) {
     if (state) {
       state.height = clientHeight;
@@ -272,11 +280,11 @@ function updateTextareaOverflow(
   const scrollable = scrollHeight > clientHeight + 1;
   // Two 16px fades need enough vertical runway not to overlap into a narrow
   // opaque strip on short drafts. Small overflows still scroll, just unfaded.
-  const canFade =
-    scrollable && clientHeight >= 64 && !composerTextareaResizeObservers.get(el)?.editing;
+  const canFade = scrollable && clientHeight >= 64 && !state?.editing;
   const fadeTop = canFade && el.scrollTop > 1;
   const fadeBottom = canFade && el.scrollTop + clientHeight < scrollHeight - 1;
   setTextareaScrollbarGutter(el, scrollable, state);
+  el.toggleAttribute("data-composer-overflow", scrollable);
   el.toggleAttribute("data-scroll-fade-top", fadeTop);
   el.toggleAttribute("data-scroll-fade-bottom", fadeBottom);
   if (state) {
@@ -312,6 +320,14 @@ export function adjustTextareaHeight(
   }
   if (resetSingleLineTextarea(el)) {
     return;
+  }
+  // Appending cannot undo proven overflow. Replacements, shrinking drafts and
+  // structural measurements must establish the cap again.
+  if (options.nativeInput && state?.cappedValue && el.value.startsWith(state.cappedValue)) {
+    return;
+  }
+  if (state) {
+    state.cappedValue = undefined;
   }
   // Modern engines can size the textarea from its content in the normal layout
   // pass. Do not force repeated transcript and textarea layout reads on every
@@ -350,27 +366,15 @@ export function adjustTextareaHeight(
         : 0),
   );
   const assignedHeight = /^(\d+(?:\.\d+)?)px$/u.exec(el.style.height);
-  // Intermediate drafts still need the normal shrink measurement. The previous
-  // assignment only selects candidates; actual layout must prove either bound.
-  if (
-    !assignedHeight ||
-    Number(assignedHeight[1]) <= minHeight ||
-    (pixelMaxHeight && Number(assignedHeight[1]) >= maxHeight)
-  ) {
+  // Intermediate drafts still need the normal shrink measurement.
+  if (!assignedHeight || Number(assignedHeight[1]) <= minHeight) {
     const height = Number.parseFloat(style.height);
     const scrollHeight = el.scrollHeight;
     const clientHeight = el.clientHeight;
     const overflows = scrollHeight > clientHeight + 1;
-    // Rows and padding can exceed the CSS minimum. At the cap, a classic
-    // scrollbar may itself cause overflow by narrowing text; measure it hidden.
+    // Rows and padding can exceed the CSS minimum.
     const atMinimum = !overflows && height === minHeight;
-    const atMaximum =
-      overflows &&
-      pixelMaxHeight &&
-      height >= maxHeight &&
-      el.offsetWidth - el.clientWidth <=
-        Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.borderRightWidth);
-    if (atMinimum || atMaximum) {
+    if (atMinimum) {
       updateTextareaOverflow(el, false, { scrollHeight, clientHeight });
       return;
     }
@@ -382,8 +386,12 @@ export function adjustTextareaHeight(
   // scrollHeight includes padding but not borders. Bordered answer fields share
   // this owner with the borderless composer and must not scroll on a single line.
   const borderHeight = style.boxSizing === "border-box" ? el.offsetHeight - el.clientHeight : 0;
-  el.style.height = `${Math.min(el.scrollHeight + borderHeight, maxHeight)}px`;
+  const measuredHeight = el.scrollHeight + borderHeight;
+  el.style.height = `${Math.min(measuredHeight, maxHeight)}px`;
   updateTextareaOverflow(el);
+  if (state && measuredHeight > maxHeight && !hasNativeTextareaContentSizing(el)) {
+    state.cappedValue = el.value;
+  }
   // Once capped, the textarea can perturb the sibling transcript without
   // resizing its viewport, so ResizeObserver has no correction to apply.
   if (thread) {
@@ -491,6 +499,7 @@ export function observeTextareaOverflow(
   state.observer =
     typeof ResizeObserver === "function"
       ? new ResizeObserver(() => {
+          state.cappedValue = undefined;
           const nextWidth = el.getBoundingClientRect().width;
           if (nextWidth !== width) {
             width = nextWidth;
@@ -567,6 +576,10 @@ export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
 }
 
 export function scheduleTextareaHeightAdjustment(el: HTMLTextAreaElement) {
+  const state = composerTextareaResizeObservers.get(el);
+  if (state) {
+    state.cappedValue = undefined;
+  }
   // Refs run before connection and before the controlled value commits.
   // Measure once the render has settled.
   queueMicrotask(() => {

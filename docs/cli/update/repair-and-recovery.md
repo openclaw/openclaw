@@ -115,8 +115,12 @@ the current run's latest stop and restarts the installed package after Doctor's
 writers settle. It records the observed recovery outcome while preserving the
 failed update result. Earlier runs' stop receipts never authorize that restart;
 operator-stopped services and explicit data-risk refusals remain stopped.
-When `openclaw update repair` finishes with the managed Gateway still stopped, it
-records a warning naming `openclaw gateway start` instead of reporting a silent success.
+After finalization, `openclaw update repair` starts and verifies a managed Gateway
+whose pending stop is recorded by the update. A Gateway stopped by the operator
+stays stopped. If recovery is refused or fails, repair names the reason and
+`openclaw gateway start` as the manual next step after resolving it; a successful
+automatic restart does not emit that warning. Named data-risk refusals keep the
+Gateway stopped and retain their recovery guidance.
 Normal Doctor exits do not require a separate process-settlement receipt. On
 Windows, recovery restores the suspended Scheduled Task before restarting the
 Gateway, while preserving the failed Doctor check IDs in the update report.
@@ -168,6 +172,8 @@ migration resources. The capture stays beside the selected state directory in
 `<state-directory>.update-captures/<run-id>`. Doctor continuations keep the same
 capture; they do not replace it with already migrated state. State-directory
 relocation leaves its original location and recorded paths intact.
+Each database copy is one coherent SQLite image, so a Gateway that keeps committing
+during capture, as its owner lease does every 30 seconds, leaves the copy valid.
 Continuation verifies the recorded live updater's process identity and ancestry;
 unreadable supervisors above that updater do not prevent its Doctor from reusing the capture.
 If ancestry cannot be verified through the live updater, Doctor defers maintenance
@@ -301,6 +307,14 @@ It creates no new backup or witness store and does not authorize migration,
 rollback, startup, or activation. Updates retain their existing safety gates;
 automatic migration acceptance is a separate integration.
 
+### Interrupted while the Gateway restarts
+
+A signal such as Ctrl-C or `SIGTERM` during `restarting` or `verifying` stops the
+updater's readiness wait right away instead of letting it poll until the update
+deadline. The updater then recovers and reports the interruption; a Gateway that
+already came up stays running. Run `openclaw update status`, then
+`openclaw update repair` for any recovery that remains pending.
+
 ### Interrupted state restore
 
 Update commands, including `update repair`, refuse with
@@ -402,6 +416,28 @@ including a verified backup and stopping the managed Gateway, then run
 from the new installation before restarting through the service manager.
 
 ## `update repair`
+
+If the managed update helper is still alive after its updater dies, it recovers
+the Gateway automatically when either the helper or the updater stopped it.
+Both the helper and `update repair` use the same unfinished-stop evidence from
+update history: the helper's stop step, or a recorded managed handoff followed
+by the updater's activation phase while the Gateway is currently stopped. Target
+selection may record a package-manager method without losing the handoff evidence.
+It restores a verified original installation
+when activation never started, or completes an interrupted package publication
+and runs post-core repair before restarting the verified candidate. Post-core
+repair first settles a plugin cohort that the killed updater reserved for the
+same update; a restored original runtime settles it the same way before its
+Gateway restarts. Its private
+staged runtime survives a missing installed package and records a terminal result
+in `openclaw update status`. This requires the helper that started the update to
+contain the recovery fix. `update repair` remains the backstop if the helper also
+dies, such as after a reboot or a process-group kill. After finalization, repair
+starts and verifies a Gateway that the update left stopped. A later recorded
+start, running observation, completed managed restart, or settled run retires
+that stop intent, so a subsequent operator stop stays stopped. Recorded data risk, lost
+ownership, or failed identity checks still require operator attention; inspect
+`openclaw update status` and `openclaw gateway status --deep` before restarting.
 
 If state ownership or a maintenance lock is held, repair refuses before that
 maintenance and reports `Stop the Gateway first (openclaw gateway stop)`. Stop
@@ -544,9 +580,11 @@ openclaw update repair --accept-capabilities
 An interrupted automatic triage can leave an uncertain installation handoff after
 its updater and helper exit. Explicit `openclaw update repair` can reclaim that
 handoff when both recorded PID/start identities are provably dead, a complete
-host census finds no remaining references to its run or retained paths, and at
-least 45 minutes have passed since the lease's last recorded activity. A
-recoverable larger recorded timeout extends that grace period. Gateway startup
+host census finds no remaining references to its run or retained paths. Proven
+death of every recorded owner permits immediate repair. Unknown or missing
+owner identities retain the 45-minute grace since the lease's last activity;
+a recoverable larger recorded timeout extends it. Grace expiration never
+substitutes for the required process-identity and descendant checks. Gateway startup
 and borrowed update processes do not reclaim these leases. The census matches
 process arguments and working directories. On macOS it does not read process
 environments, which some macOS releases report without a bounded end; a process
@@ -578,8 +616,7 @@ occupied-slot and candidate roots bound to that generation, and every child
 lease beneath them. Repair requires the evidence it uses for triage handoffs:
 every recorded updater, child, and command process and process group has exited;
 the update run is identifiable in the selected state and has no unverified
-rollback or restoration; the 45-minute grace, or a longer recorded timeout, has
-passed since the family's latest recorded activity; and the host census finds no
+rollback or restoration; and the host census finds no
 process referencing the run, its retained paths, or any family key, including the
 installation and service roots. A process that matches only because it runs from
 the installation or service root, or is an OpenClaw process, does not block repair
@@ -593,8 +630,8 @@ Package publication recovery left by the cancelled updater settles under that
 claim, so it does not need fresh update admission.
 A failed or deferred repair keeps the original custody record in its claim and
 reports it as retained custody. A later repair resumes that claim once the
-interrupted repair process has exited; the grace still counts from the cancelled
-custody's activity, not from the claim.
+interrupted repair process has exited. Proven-dead owners need no grace; any
+remaining grace counts from the cancelled custody's activity, not from the claim.
 
 When any condition fails, or the family contains custody repair cannot inspect,
 repair leaves every row unchanged and still finishes its other maintenance.
@@ -662,8 +699,24 @@ This finishes Doctor and post-core convergence through a fresh owner. Check the
 repair result before restarting an already stopped Gateway through its service
 owner. Updating the candidate cannot change the older updater already in memory.
 
-When a managed Gateway was already stopped before standalone repair, repair leaves
-it offline and warns that you must run `openclaw gateway start` to bring it online.
+When update history records that the recovered update's managed handoff stopped
+the Gateway and never successfully started or verified it again, successful
+standalone repair starts it through its service manager and verifies readiness.
+The existing helper `service-stop` step, or a recorded managed handoff followed
+by activation, provides this evidence together with current service state and
+verification facts; the service merely being stopped does not. A recorded named data risk prevents
+startup. Successful restoration reports `restart: true` and verified health in
+JSON and update history, and a startup or health failure names
+`openclaw gateway status --deep`.
+If startup succeeded but readiness failed, a later repair retries verification
+while the Gateway is running. If it was subsequently stopped, repair leaves it
+stopped and reports a warning. Repair retains successful native starts and
+observations of a running service as steps in its own run history before waiting
+for readiness. Failed, cancelled, or stopped readiness results cannot erase them.
+
+When a managed Gateway was stopped by its operator without this update stop
+record, repair leaves it offline and warns that you must run
+`openclaw gateway start` to bring it online.
 If its service definition points to a different installation, repair instead reports
 the installation repair command. These maintenance warnings also appear in
 `postUpdate.doctor.warnings`; otherwise successful finalization reports
@@ -676,7 +729,7 @@ the installation repair command. These maintenance warnings also appear in
 | `--timeout <seconds>`                            | Override each repair phase deadline in seconds. Defaults vary by phase (see below).                                                                                                                                                                                                              |
 | `--yes`                                          | Skip confirmation prompts.                                                                                                                                                                                                                                                                       |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
-| `--no-restart`                                   | Accepted for parity; repair does not request update activation. The repair parent restores a Gateway it stopped for maintenance.                                                                                                                                                                 |
+| `--no-restart`                                   | Accepted for parity; repair does not request update activation. The repair parent restores a Gateway stopped for maintenance or by the recovered update's managed handoff.                                                                                                                       |
 
 An invalid `--channel` exits with status 1 without changing the configured channel.
 With `--json`, stdout contains a JSON error object (`ok: false`, `error.type: "cli_error"`)
@@ -744,7 +797,7 @@ The repair parent uses Doctor's maintenance lifecycle to stop the owned Gateway,
 then releases its database locks before running the Doctor children. The children
 repair state without stopping or restarting the service. The parent restores and
 verifies the same service after convergence, including when a Doctor child fails.
-An already stopped service stays stopped. Service ownership and the invoking
+An operator-stopped service stays stopped. Service ownership and the invoking
 run are revalidated before every native operation. A restoration failure names
 the cause and the commands to inspect and restart the Gateway. Normal update
 finalization continues to leave activation with its outer updater.
@@ -805,7 +858,8 @@ Configured runtime plugins whose versions follow OpenClaw are checked against
 the newly installed core during post-update repair, even when the updater process
 started on the previous version.
 It does not install a new core package or request update activation. The repair
-parent restores a service it stopped for maintenance, as described above.
+parent restores a service it stopped for maintenance or that the recovered
+update's managed handoff stopped, as described above.
 Human output ends with a finalization result that distinguishes completion,
 completion with warnings, and failure.
 
@@ -1099,12 +1153,19 @@ for other SQLite maintenance commands to finish. Stop database readers too,
 including watchers that repeatedly run `openclaw sessions --all-agents --json`,
 and keep them stopped until cleanup exits. Cleanup tolerates timestamp changes
 from read-only WAL/SHM bookkeeping, but still rejects replaced files, size changes,
-and changed database, WAL, or rollback-journal contents. A changed device number
-requires independent content evidence as well as the recorded inode. Cleanup can
-re-verify a closed destination against a producer-verified full original or an
-earlier verified destination fingerprint. A successful check restamps the device
-and records an optional `databaseIdentity.sha256` fingerprint in the existing
-manifest. Older manifests remain readable. Scoped backups and destinations with
+and changed database, WAL, or rollback-journal contents. A reboot can give the
+same volume a new device number. When the recorded device differs, cleanup accepts
+the original stored beside the destination, or its interrupted `.cleanup-*` claim,
+as proof of a remount: it must be on the destination's current device with its
+recorded inode, modification time, and size, and the destination must keep its
+recorded inode. Cleanup then restamps the device in the existing manifest without
+recording a new fingerprint, so destinations written since the migration still
+qualify. A destination with a different inode always keeps its originals. Without
+remount proof, for example when the original is on another device, cleanup needs
+independent content evidence: it can re-verify a closed destination against a
+producer-verified full original or an earlier verified destination fingerprint.
+That check restamps the device and records an optional `databaseIdentity.sha256`
+fingerprint. Older manifests remain readable. Scoped backups and destinations with
 data-bearing WAL or rollback journals cannot supply this full-image proof.
 If the contents differ or proof is unavailable, cleanup retains the originals
 with `destination-verification-failed` and names the device change. Run

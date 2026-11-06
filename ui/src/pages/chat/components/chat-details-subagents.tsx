@@ -1,12 +1,11 @@
 import { For, Show, createMemo } from "solid-js";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-details-subagents.css";
-import "./chat-subagents-working.css";
 import {
   isDetailsSubagentWorking as isWorking,
   projectDetailsSubagents,
@@ -93,10 +92,7 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
           class={[
             "chat-details-subagents__status",
             {
-              "sr-only":
-                props.row.status === "done" || (props.mobile && props.row.status === "running"),
-              "chat-details-subagents__working text-shimmer":
-                !props.mobile && props.row.status === "running",
+              "sr-only": props.row.status === "done" || props.row.status === "running",
             },
           ]}
         >
@@ -171,7 +167,13 @@ export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
               <span class="chat-details-subagents__counts">
                 <For each={presentation().counts} keyed={(entry) => entry.status}>
                   {(entry) => (
-                    <span class="chat-details-subagents__count" data-status={entry().status}>
+                    <span
+                      class={[
+                        "chat-details-subagents__count",
+                        { "text-shimmer": entry().status === "running" },
+                      ]}
+                      data-status={entry().status}
+                    >
                       <span>{entry().count}</span>{" "}
                       <span class="chat-details-subagents__count-label">
                         {countLabel(entry().status)}

@@ -287,7 +287,7 @@ export async function repairDoctorStateDatabase(
     repairOpenClawStateDatabaseIndexesForDoctor,
     repairOpenClawStateDatabaseReadabilityForDoctor,
   ]) {
-    const result = repair({ env: process.env, integrityCheck });
+    const result = await repair({ env: process.env, integrityCheck });
     repairedState ||= result.changes.length > 0;
     if (result.warnings.length > 0) {
       throw new Error(result.warnings.join("\n"));
@@ -308,6 +308,19 @@ export async function prepareDoctorRuntimeChecks(
 ) {
   const measure: DoctorProgressMeasure = (label, run) =>
     withDoctorProgress(formatDoctorProgressPhase(label), run, options.json !== true);
+  const { getOpenClawDatabaseMaintenanceScope } =
+    await import("../state/openclaw-state-maintenance-context.js");
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (maintenance?.ownsSchemaMaintenance) {
+    const { hasUpdateDoctorMigrationCapture } =
+      await import("../infra/update-doctor-migration-attribution.js");
+    const { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
+    if (hasUpdateDoctorMigrationCapture() && fs.existsSync(resolveOpenClawStateSqlitePath())) {
+      const { openOpenClawStateDatabaseForDoctor } = await import("../state/openclaw-state-db.js");
+      await openOpenClawStateDatabaseForDoctor();
+      maintenance.assertAdmission();
+    }
+  }
   const { repairDoctorAgentDeletionJournal } =
     await import("../commands/doctor-agent-deletion-journal.js");
   const deletionJournal = await measure("Agent deletion journal", () =>

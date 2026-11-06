@@ -329,6 +329,7 @@ export const zh_CN = {
       laneQuickHint: "查找 AI 访问方式，由你选择要验证的连接，然后打开网页仪表板。",
       laneCustomLabel: "自定义设置",
       laneCustomHint: "逐项选择所有设置选项。",
+      quickstartKeepRunningQuestion: "让 OpenClaw 在后台持续运行？",
       quickstartDashboard: "仪表板：{url}",
       quickstartForeground: "网关正在前台运行。按 Ctrl+C 停止。",
       quickstartBackground: "如需以后让网关在后台持续运行，请运行：openclaw gateway install",

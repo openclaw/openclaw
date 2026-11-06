@@ -97,14 +97,14 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     pendingDirectBlockReplyDelivery: Promise.resolve(),
     progressCallbackStartTail: Promise.resolve(),
   };
-  const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
+  const cleanBlockTtsDirectiveText = (await shouldCleanTtsDirectiveText({
     cfg,
     preparedTtsPreferences: state.preparedTtsPreferences,
     ttsAuto: state.sessionTtsAuto,
     agentId: state.sessionAgentId,
     channelId: state.deliveryChannel,
     accountId: state.replyRoute.accountId,
-  })
+  }))
     ? createTtsDirectiveTextStreamCleaner()
     : undefined;
 

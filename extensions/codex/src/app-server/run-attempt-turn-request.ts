@@ -402,6 +402,7 @@ export async function prepareCodexAttemptTurnRequest(
         error.name = "AbortError";
         throw error;
       }
+      resourceState.nativeHookRelay?.bindForegroundTurn(threadId, acceptedTurnId);
       await continuation?.accept(acceptedTurnId);
       return { turn: startedTurn, upstreamUserText };
     } catch (error) {

@@ -268,25 +268,34 @@ const request = async (overrides: Partial<Request> = {}): Promise<Request> => ({
 });
 const run = async (overrides: Partial<Request> = {}) =>
   runUtilityCompletion(await request(overrides), complete);
-const failThenAnswer = (reason: "timeout" | "rate_limit" = "timeout") => {
+const failThenAnswer = (reason: "timeout" | "rate_limit" | "model_not_found" = "timeout") => {
   complete
-    .mockRejectedValueOnce(new FailoverError("Provider unavailable", { reason }))
+    .mockRejectedValueOnce(
+      reason === "model_not_found"
+        ? Object.assign(new Error("Codex app-server model not found: small"), {
+            code: "model_not_found",
+          })
+        : new FailoverError("Provider unavailable", { reason }),
+    )
     .mockResolvedValue(answer);
 };
 beforeEach(() => {
   complete.mockReset();
 });
 
-it("resolves fallback aliases and keeps credentials and main-model fallbacks independent", async () => {
-  failThenAnswer();
-  await expect(run()).resolves.toEqual(answer);
-  expect(
-    complete.mock.calls.map(([call]) => [call.provider, call.model, call.authProfileId]),
-  ).toEqual([
-    ["local", "small", "local:utility"],
-    ["other", "backup", undefined],
-  ]);
-});
+it.each(["timeout", "model_not_found"] as const)(
+  "recovers from %s with independent utility fallbacks and credentials",
+  async (reason) => {
+    failThenAnswer(reason);
+    await expect(run()).resolves.toEqual(answer);
+    expect(
+      complete.mock.calls.map(([call]) => [call.provider, call.model, call.authProfileId]),
+    ).toEqual([
+      ["local", "small", "local:utility"],
+      ["other", "backup", undefined],
+    ]);
+  },
+);
 
 it("preserves operator model restrictions for utility fallbacks", async () => {
   failThenAnswer("rate_limit");

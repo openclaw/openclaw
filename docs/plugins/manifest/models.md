@@ -237,6 +237,9 @@ Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest 
 
 After a provider gains credentials, list and picker surfaces show its declared manifest rows while account discovery is still pending, in every discovery mode. Once discovery publishes for that provider, its account result replaces them.
 
+Default picker views honor that replacement rather than re-adding static fallback
+rows. Explicitly configured rows and retained current selections remain listed.
+
 Catalog refresh plans keep manual root declarations separate from generated provider inventory. A plugin owning the same provider ID does not turn a manual model into disposable cache data. Merge mode preserves those declarations and auth-only records; explicit replace mode retains its replacement contract. Generated catalogs still follow current ownership, endpoint eligibility, and authoritative replacement rules.
 
 Generated cache reads for plugins with `activation.onStartup: false` require current authentication for at least one currently owned, endpoint-eligible provider in that catalog. Runtime readers use captured auth or a usable key from provider configuration; a retained catalog cannot authenticate itself. Explicitly authored rows remain separate. This membership rule does not delete stored data or grant request authority.

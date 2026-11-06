@@ -44,7 +44,7 @@ import type { OperatorScope } from "../../operator-scopes.js";
 import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
-import { formatForLog } from "../../ws-log.js";
+import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type {
   AuthenticatedGatewayConnect,
@@ -257,7 +257,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
       minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
     });
     logWsControl.warn(
-      `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")}`,
+      `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatPeerTextForLog(clientLabel)} ${connectParams.client.mode} v${formatPeerTextForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatPeerTextForLog(connectParams.client.instanceId ?? "n/a")}`,
     );
     sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
       retryable: false,

@@ -26,7 +26,7 @@ import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
-import { resolveSessionDisplayKind } from "../../lib/session-display.ts";
+import { resolveSessionDisplayKind, resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
@@ -66,14 +66,16 @@ function SessionStatusBadge(props: { row: GatewaySessionRow }) {
             : (props.row.status && SESSION_RUN_STATUS_LABELS[props.row.status]) ||
               "sessionsView.statusUnknown",
     );
-  const kind = (): "ok" | "warn" | "muted" | "danger" =>
+  const kind = (): "running" | "ok" | "warn" | "muted" | "danger" =>
     props.row.status === "queued"
       ? "warn"
-      : active() || props.row.status === "done"
-        ? "ok"
-        : idle() || !props.row.status || props.row.status === "interrupted"
-          ? "muted"
-          : "danger";
+      : active()
+        ? "running"
+        : props.row.status === "done"
+          ? "ok"
+          : idle() || !props.row.status || props.row.status === "interrupted"
+            ? "muted"
+            : "danger";
   const detail = () => `${t("sessionsView.status")}: ${label()}`;
   // The tooltip needs a focusable trigger for keyboard access.
   return (
@@ -240,6 +242,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
       : undefined,
   );
   const displayKind = createMemo(() => resolveSessionDisplayKind(row()));
+  const listTitle = createMemo(() => resolveSessionDisplayName(row().key, row()));
   const kindClass = () => ["session-kind", `session-kind--${displayKind()}`];
   const rowClass = () => [
     "session-data-row session-data-row--expandable",
@@ -260,6 +263,25 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
   const rowDrop = createMemo(() =>
     categoryDropHandlers(props, normalizeOptionalString(row().category) ?? null),
   );
+  const unreadDot = () =>
+    row().unread === true ? (
+      <span class="session-unread-dot" role="img" aria-label={t("sessionsView.unread")} />
+    ) : undefined;
+  function RowLink(link: { text: string }) {
+    return (
+      <Show when={canLink()} fallback={<span>{link.text}</span>}>
+        <a
+          href={chatUrl()}
+          class="session-link"
+          onClick={(e: MouseEvent) =>
+            handleNavigationClick(e, () => props.onNavigateToChat(row().key))
+          }
+        >
+          {link.text}
+        </a>
+      </Show>
+    );
+  }
   const openMenuFromEvent: SolidJSX.EventHandler<
     HTMLTableRowElement,
     MouseEvent | KeyboardEvent
@@ -319,43 +341,39 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
           />
         </td>
         <td class="data-table-key-col">
-          <div
-            class={["session-key-cell", { mono: !friendlyKeyLabel() }]}
-            data-tooltip={keyCellTitle()}
-          >
-            <div class="session-key-cell__text">
-              <span class="session-key-cell__primary">
-                {row().unread === true ? (
-                  <span
-                    class="session-unread-dot"
-                    role="img"
-                    aria-label={t("sessionsView.unread")}
-                  />
-                ) : undefined}
-                {canLink() ? (
-                  <a
-                    href={chatUrl()}
-                    class="session-link"
-                    onClick={(e: MouseEvent) =>
-                      handleNavigationClick(e, () => props.onNavigateToChat(row().key))
-                    }
-                  >
-                    {friendlyKeyLabel() ?? row().key}
-                  </a>
-                ) : (
-                  <span>{friendlyKeyLabel() ?? row().key}</span>
-                )}
-                {trimmedLabel() ? (
-                  <span class="session-label-chip" title={trimmedLabel()}>
-                    {trimmedLabel()}
-                  </span>
-                ) : undefined}
+          {props.phoneLayout ? (
+            <div class="session-list-cell">
+              <span class="session-list-cell__title">
+                {unreadDot()}
+                <RowLink text={listTitle()} />
               </span>
-              {showDisplayName() ? (
-                <span class="muted session-key-display-name">{displayName()}</span>
-              ) : undefined}
+              <span class="session-list-cell__meta">
+                <code class="session-list-cell__key">{row().key}</code>
+                <span aria-hidden="true">·</span>
+                <span class="session-list-cell__updated">{updated()}</span>
+              </span>
             </div>
-          </div>
+          ) : (
+            <div
+              class={["session-key-cell", { mono: !friendlyKeyLabel() }]}
+              data-tooltip={keyCellTitle()}
+            >
+              <div class="session-key-cell__text">
+                <span class="session-key-cell__primary">
+                  {unreadDot()}
+                  <RowLink text={friendlyKeyLabel() ?? row().key} />
+                  {trimmedLabel() ? (
+                    <span class="session-label-chip" title={trimmedLabel()}>
+                      {trimmedLabel()}
+                    </span>
+                  ) : undefined}
+                </span>
+                {showDisplayName() ? (
+                  <span class="muted session-key-display-name">{displayName()}</span>
+                ) : undefined}
+              </div>
+            </div>
+          )}
         </td>
         {props.allAgentsScope ? (
           <td class="session-agent-col">
@@ -365,7 +383,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
           </td>
         ) : undefined}
         {categoryMode() ? <CategoryCell {...props} row={row()} /> : undefined}
-        <td>{updated()}</td>
+        {props.phoneLayout ? undefined : <td>{updated()}</td>}
         <td class="session-actions-cell">
           <div class="session-actions">
             <button

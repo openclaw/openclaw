@@ -11,7 +11,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { expectNoCalls } from "../daemon-cli/lifecycle-assertions.test-support.js";
-import { ExpectedCliError } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { registerNodeCli } from "./register.js";
 
 function runNodeIdentity(json = false, identity?: string) {

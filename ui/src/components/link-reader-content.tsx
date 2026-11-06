@@ -3,6 +3,7 @@ import { createMemo, For, Show } from "solid-js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
+import { formatDateTimeMs } from "../lib/reactive/format.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { LinkReaderMarkdown, documentUrl, type LoadImage } from "./link-reader-markdown.tsx";
@@ -26,7 +27,7 @@ function DateLabel(props: { value: string | undefined }) {
       {(value) => {
         const display = () => {
           const date = new Date(value());
-          return Number.isNaN(date.getTime()) ? value() : date.toLocaleString();
+          return Number.isNaN(date.getTime()) ? value() : formatDateTimeMs(date.getTime());
         };
         return (
           <time datetime={value()} title={value()}>

@@ -1,10 +1,22 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
+import { resolveSessionContextLimit } from "../../lib/sessions/context-budget.ts";
 import { resolveUiSessionNavigationParentKey } from "../../lib/sessions/session-key.ts";
 import * as json from "../../lib/snapshot-json.ts";
 
 export const chatSessionStateSnapshotSchema = json.object({
+  runActive: json.optional(json.boolean),
+  contextUsage: json.optional(
+    json.object({
+      used: json.refine(json.number, (value) => value >= 0),
+      limit: json.refine(json.number, (value) => value > 0),
+      approximate: json.boolean,
+      fromLastPrompt: json.boolean,
+    }),
+  ),
   chrome: json.optional(
     json.object({
       workspace: json.object({ root: json.nullable(json.text), label: json.nullable(json.text) }),
@@ -28,7 +40,17 @@ export function projectChatSessionStateSnapshot(
   session: GatewaySessionRow,
   previous: ChatSessionStateSnapshot | undefined,
 ): ChatSessionStateSnapshot {
+  const used = asNonNegativeFiniteNumber(session.totalTokens);
+  const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(session);
   return {
+    runActive: isSessionRunStateActive(session) || session.hasActiveSubagentRun === true,
+    // Omitted enrichment retains display; an unavailable measurement clears it.
+    contextUsage:
+      used === undefined && session.totalTokensFresh === false
+        ? undefined
+        : used === undefined || !limit
+          ? previous?.contextUsage
+          : { used, limit, approximate: session.totalTokensFresh === false, fromLastPrompt },
     chrome: previous?.chrome,
     archived: session.archived,
     // Display only; the composer still requires current live mutation authority.

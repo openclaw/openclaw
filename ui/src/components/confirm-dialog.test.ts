@@ -11,6 +11,7 @@ import {
 } from "./confirm-dialog.ts";
 
 let restoreDialogPolyfill: () => void;
+const prompt = { title: "Continue?", confirmLabel: "Confirm" };
 
 function setCheckbox(selector: string, checked: boolean) {
   const checkbox = document.body.querySelector<HTMLInputElement>(selector);
@@ -22,7 +23,7 @@ function setCheckbox(selector: string, checked: boolean) {
 }
 
 async function show(options: Partial<ConfirmDialogOptions> = {}) {
-  const result = showConfirmDialog({ message: "Continue?", ...options });
+  const result = showConfirmDialog({ ...prompt, message: "Continue?", ...options });
   return { result, ...(await getRenderedModalDialog(document.body)) };
 }
 
@@ -78,6 +79,7 @@ describe("showConfirmDialog", () => {
   ])("remembers only a confirmed opt-out (action=$action, skipped=$skipped)", async (choice) => {
     const remember = vi.fn();
     const pending = showConfirmDialog({
+      ...prompt,
       message: "Delete?",
       skipPreference: { skipped: choice.skipped, remember },
     });
@@ -98,6 +100,7 @@ describe("showConfirmDialog", () => {
     async (choice) => {
       let allowed = true;
       const result = showConfirmChoiceDialog({
+        ...prompt,
         message: "Choose a scope",
         alternativeLabel: "Only this session",
         confirmLabel: "All sessions",
@@ -127,7 +130,7 @@ describe("showConfirmDialog", () => {
     ),
   )("cancels choice=$choice on $action without stacking", async ({ choice, action }) => {
     const controller = new AbortController();
-    const options = { title: "First", message: "Continue?", signal: controller.signal };
+    const options = { ...prompt, title: "First", message: "Continue?", signal: controller.signal };
     const pending = choice
       ? showConfirmChoiceDialog({
           ...options,
@@ -135,9 +138,9 @@ describe("showConfirmDialog", () => {
         })
       : showConfirmDialog(options);
     const { modal } = await getRenderedModalDialog(document.body);
-    await expect(showConfirmDialog({ message: "Second" })).resolves.toBe(false);
+    await expect(showConfirmDialog({ ...prompt, message: "Second" })).resolves.toBe(false);
     await expect(
-      showConfirmChoiceDialog({ message: "Third", alternativeLabel: "Other" }),
+      showConfirmChoiceDialog({ ...prompt, message: "Third", alternativeLabel: "Other" }),
     ).resolves.toBeNull();
     expect(document.body.textContent).toContain("First");
     expect(document.body.textContent).not.toContain("Second");

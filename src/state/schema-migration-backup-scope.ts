@@ -44,8 +44,9 @@ export function resolveSchemaMigrationIntegrityCheck(
     check,
     tables: resolveSchemaMigrationIntegrityTables(migration),
     ...(migration.kind === "agent" &&
-    migration.foundVersion === 38 &&
-    migration.supportedVersion === 39
+    migration.foundVersion >= 38 &&
+    migration.foundVersion < migration.supportedVersion &&
+    migration.supportedVersion <= 40
       ? { schemaOnly: true as const }
       : {}),
   };

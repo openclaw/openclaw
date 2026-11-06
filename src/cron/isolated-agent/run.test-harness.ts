@@ -10,7 +10,6 @@ import { runInitialModelFallbackAttempt } from "../../agents/test-helpers/model-
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type * as CronHelpers from "./helpers.js";
 // Isolated run test harness builds cron run inputs, mocks, and assertions.
@@ -19,6 +18,10 @@ import {
   createCronModelCatalogOwnerFixture,
   createCronPreparedModelRuntimeFixture,
 } from "./run-prepared-runtime.test-support.js";
+import {
+  createSessionEntryPatchStore,
+  usesRealAccessorStore,
+} from "./run-session-store.test-support.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
@@ -55,10 +58,6 @@ function normalizeModelSelectionForTest(value: unknown): string | undefined {
     return undefined;
   }
   return normalizeOptionalString((value as { primary?: unknown }).primary);
-}
-
-function usesRealAccessorStore(storePath?: string): boolean {
-  return Boolean(storePath && storePath !== "/tmp/store.json");
 }
 
 export const buildWorkspaceSkillSnapshotMock = vi.fn();
@@ -376,8 +375,10 @@ vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importO
             sessionKey: scope.sessionKey,
             operation,
             replaceEntry: options?.replaceEntry,
+            preserveActivity: options?.preserveActivity,
           }) ?? null,
-        options,
+        // The operation already produced a complete row, including intentional field removals.
+        { ...options, replaceEntry: true },
       ),
   };
 });
@@ -740,7 +741,11 @@ function resetRunSessionMocks(): void {
     },
   );
   patchSessionEntryMock.mockReset();
-  installPatchSessionEntryStore();
+  patchSessionEntryMock.mockImplementation(
+    createSessionEntryPatchStore(loadSessionEntryMock, (scope, entry) =>
+      actualReplaceSessionEntry(scope, entry),
+    ),
+  );
   resolveCronSessionMock.mockReset();
   resolveCronSessionMock.mockReturnValue(makeCronSession());
   callGatewayMock.mockReset();
@@ -749,52 +754,6 @@ function resetRunSessionMocks(): void {
   removeCronRunContinuationSessionIfIdleMock.mockResolvedValue(undefined);
   retireSessionMcpRuntimeMock.mockReset();
   retireSessionMcpRuntimeMock.mockResolvedValue(true);
-}
-
-/**
- * In-memory stand-in for the SQLite accessor `patchSessionEntryCore` used by the
- * cron persist path. Prod flips real session storage to per-agent SQLite, but
- * these orchestration tests must stay off disk. The store keys on
- * storePath+sessionKey so successive persists in one run observe the row the
- * previous persist committed, mirroring the accessor's read-modify-write and
- * letting the lifecycle claim guard prove ownership without real SQLite.
- */
-function installPatchSessionEntryStore(): void {
-  type PatchRow = Record<string, unknown>;
-  const rows = new Map<string, PatchRow>();
-  patchSessionEntryMock.mockImplementation(
-    async (
-      scope: { storePath?: string; sessionKey: string },
-      update: (
-        entry: PatchRow,
-        context: { existingEntry: PatchRow | undefined },
-      ) => PatchRow | null,
-      options: { fallbackEntry?: PatchRow } = {},
-    ) => {
-      const key = `${scope.storePath ?? ""}\\0${scope.sessionKey}`;
-      const existingEntry =
-        rows.get(key) ??
-        (usesRealAccessorStore(scope.storePath)
-          ? await readSessionEntryReadOnlyInWorker(scope)
-          : loadSessionEntryMock(scope.storePath, scope.sessionKey));
-      const writeBase = existingEntry ?? options.fallbackEntry;
-      if (!writeBase) {
-        return null;
-      }
-      const next = update(structuredClone(writeBase), {
-        existingEntry: existingEntry ? structuredClone(existingEntry) : undefined,
-      });
-      if (!next) {
-        return structuredClone(writeBase);
-      }
-      const committed = structuredClone(next);
-      rows.set(key, committed);
-      if (usesRealAccessorStore(scope.storePath)) {
-        await actualReplaceSessionEntry(scope as never, committed as never);
-      }
-      return committed;
-    },
-  );
 }
 
 export function resetRunCronIsolatedAgentTurnHarness(): void {

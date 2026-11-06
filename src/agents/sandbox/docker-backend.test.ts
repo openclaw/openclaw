@@ -120,7 +120,9 @@ function assertMasked(bridge: Bridge, paths: string[]) {
 }
 
 function provision(containerName = "sandbox-container", podmanTarget?: typeof localTarget) {
-  mocks.ensureSandboxContainer.mockResolvedValueOnce({ containerName, containerId, podmanTarget });
+  mocks.ensureSandboxContainer.mockImplementationOnce(async (_params, prepare) =>
+    prepare({ containerName, containerId, podmanTarget }),
+  );
 }
 
 const bind = (source: string, target: string, writable: boolean) => ({ source, target, writable });
@@ -235,11 +237,11 @@ it.each(["allocation", "mount inspection", "engine validation"] as const)(
       }
       return result;
     });
-    mocks.ensureSandboxContainer.mockImplementationOnce(async () => {
+    mocks.ensureSandboxContainer.mockImplementationOnce(async (_params, prepare) => {
       if (stage === "allocation") {
         current = false;
       }
-      return { containerName: "sandbox-container", containerId };
+      return prepare({ containerName: "sandbox-container", containerId });
     });
     const operation = createDockerSandboxBackend(
       backendParams({
@@ -435,6 +437,10 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
       cfg: resolveSandboxConfigForAgent(createConfig("podman", false)),
     }),
   );
+  // Discovery can become unavailable after admission; the prepared target still works.
+  mocks.validateSandboxContainerEngineTarget.mockRejectedValue(new Error("discovery unavailable"));
+  mocks.execContainerRaw.mockResolvedValueOnce(rawResult());
+  await expect(backend.runShellCommand({ script: "true" })).resolves.toMatchObject({ code: 0 });
   const execSpec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
 
   expect(mocks.ensureSandboxContainer).toHaveBeenCalledWith(
@@ -443,6 +449,7 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
       scopeKey,
       readOnlyResourceMounts,
     }),
+    expect.any(Function),
   );
   expect(mocks.execContainer).toHaveBeenCalledWith(
     expect.objectContaining({ id: "podman", globalArgs: podmanTarget.globalArgs }),

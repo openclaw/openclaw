@@ -24,6 +24,8 @@ The full conversation history stays on disk. Compaction only changes what the mo
 
 Compaction loads the complete current context: the latest reset or compaction boundary, its retained messages and previous summary, and the following history. Obsolete history before that window stays on disk without being loaded again, even when daily resets or `/new` keep the same session ID. The history hydration byte limit for ordinary turns does not clip compaction input; the summarizer's existing input budget still applies.
 
+Recovery keeps a bounded copy of the active human request in the summary, including across repeated compactions after its original message leaves the current context. Internal updates retain their source labels without replacing that request; newer human steering can update it. An independent internal run does not revive completed human work. An admitted input that has not been processed must remain intact.
+
 OpenAI Responses native compaction and checkpoint replay follow
 [context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership),
 including legacy defaults, explicit opt-in, and handling of preexisting checkpoints
@@ -320,6 +322,8 @@ of the available byte capacity, subject to event and turn sizes, then grows towa
 the cap. Its existing prefix stays unchanged between steps, including across
 worker or process restarts. An independent event-count limit can still shorten
 unusually dense histories.
+If the previous turn exceeds the cap, the loader keeps its newest affordable
+atomic frames rather than starting the next turn with only the new prompt.
 
 This selection does not delete saved history, create a summary, run a memory
 flush, or trigger compaction notifications. Older context can therefore remain
@@ -406,6 +410,9 @@ cleanup; removing checkpoint controls does not delete stored conversation histor
 ## Pluggable compaction providers
 
 Plugins can register a custom compaction provider via `registerCompactionProvider()` on the plugin API. When a provider is registered and configured, OpenClaw delegates summarization to it instead of the built-in LLM pipeline.
+
+Surrounding whitespace in a registered ID is ignored for lookup and duplicate
+checks; matching remains case-sensitive. The plugin-owned descriptor is not rewritten.
 
 To use a registered provider, set its id in your config:
 

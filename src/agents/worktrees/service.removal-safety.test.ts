@@ -455,20 +455,25 @@ describe("managed exact-state retirement", () => {
   }
 
   it("round-trips detached HEAD, separate branch, split index and work bytes from snapshot objects", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), "saved.secret\ncache.tmp\n");
+    await fs.writeFile(path.join(repo, ".gitignore"), "saved.secret\ncache.tmp\nnode_modules/\n");
     await exactGit(repo, "add", ".gitignore");
     await exactGit(repo, "commit", "-m", "ignore fixture data");
     await fs.writeFile(path.join(repo, "saved.secret"), "provisioned secret\n");
+    await fs.mkdir(path.join(repo, "node_modules/pkg"), { recursive: true });
+    await fs.writeFile(path.join(repo, "node_modules/pkg/data"), "exact dependency bytes\n");
     const created = await fixture("exact-state", {
       ownerKind: "session",
       ownerId: "exact-state-owner",
-      provisionedPaths: ["saved.secret"],
+      provisionedPaths: ["saved.secret", "node_modules/pkg/data"],
     });
     const branchHead = await exactGit(created.path, "rev-parse", "HEAD");
     await exactGit(created.path, "checkout", "--detach", "HEAD~1");
     const head = await exactGit(created.path, "rev-parse", "HEAD");
     // Keep native ignore/provisioning policy while HEAD differs from the recorded branch.
-    await fs.writeFile(path.join(created.path, ".gitignore"), "saved.secret\ncache.tmp\n");
+    await fs.writeFile(
+      path.join(created.path, ".gitignore"),
+      "saved.secret\ncache.tmp\nnode_modules/\n",
+    );
     await fs.writeFile(
       path.join(created.path, ".gitattributes"),
       "*.txt text eol=crlf\n*.utf16 working-tree-encoding=UTF-16LE\n",
@@ -530,6 +535,7 @@ describe("managed exact-state retirement", () => {
       code: "ENOENT",
     });
     expect(await read(restored.path, "saved.secret")).toBe("saved ignored bytes\n");
+    expect(await read(restored.path, "node_modules/pkg/data")).toBe("exact dependency bytes\n");
     expect(await read(restored.path, "cache.tmp").catch(() => undefined)).toBeUndefined();
     if (process.platform !== "win32") {
       expect((await fs.stat(path.join(restored.path, "untracked.sh"))).mode & 0o777).toBe(0o751);

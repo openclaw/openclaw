@@ -19,6 +19,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, resolveGatewayErrorDetailCode } from "../../api/gateway.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import {
   DocsLink,
   SettingsEmpty,
@@ -39,6 +40,7 @@ import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { createTimeout } from "../../lib/reactive/timers.ts";
 import { showToast } from "../../lib/toast.ts";
+import { CloudEnvironmentsAdminRequired } from "./cloud-worker-admin-required.tsx";
 import {
   cloudEnvironments,
   environmentState,
@@ -344,7 +346,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       return;
     }
     const confirmed = await confirm({
-      title: i18n.t(`cloudWorkersPage.snapshots.${dismiss ? "dismissBuild" : "cancelBuild"}`),
+      title: i18n.t(`cloudWorkersPage.snapshots.${dismiss ? "dismissBuild" : "cancelBuildTitle"}`),
       message: i18n.t(
         `cloudWorkersPage.snapshots.${dismiss ? "dismissBuildMessage" : "cancelBuildMessage"}`,
       ),
@@ -509,7 +511,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       } catch (error) {
         if (gateway.isCurrent(scope)) {
           if (kind === "mutating") {
-            showToast({ message: formatUiError(error) });
+            showToast({ severity: "error", message: formatUiError(error) });
           } else {
             const code =
               error instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(error) : null;
@@ -570,11 +572,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       <SettingsPage>
         <Show
           when={canCall("environments.list") || view.inventory !== null}
-          fallback={
-            gateway.connected ? (
-              <SettingsEmpty message={t("cloudWorkersPage.environments.adminRequired")} />
-            ) : undefined
-          }
+          fallback={gateway.connected ? <CloudEnvironmentsAdminRequired /> : undefined}
         >
           <Loading on={feedback()}>
             <Errored
@@ -677,8 +675,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         </Show>
       </SettingsPage>
       <SettingsPage>
-        <details class="cloud-environments__advanced">
-          <summary>{t("cloudWorkersPage.environments.advanced")}</summary>
+        <SettingsDisclosure sections title={t("cloudWorkersPage.environments.advanced")}>
           {props.machines()}
           <CloudWorkerMachinePool inventory={view.inventory} />
           <CloudWorkerSnapshotPolicy />
@@ -722,7 +719,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
               </For>
             </SettingsSection>
           </Show>
-        </details>
+        </SettingsDisclosure>
       </SettingsPage>
     </>
   );

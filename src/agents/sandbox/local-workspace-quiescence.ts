@@ -305,7 +305,9 @@ export async function quiesceLocalWorkspace(params: {
       using resumePhases = observeDiagnosticsTimelinePhases(
         "attempt.setup.sandbox.workspace_selection.resume.engine_target",
       );
-      await validateSandboxContainerEngineTarget(engine, backendTarget);
+      if (engine.id === "docker") {
+        await validateSandboxContainerEngineTarget(engine, backendTarget);
+      }
       params.assertCurrent();
       // Archive may have removed this exact generation while settlement held it.
       // A missing or already-running runtime needs receipt cleanup, not unpause.

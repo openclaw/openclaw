@@ -1,7 +1,12 @@
 import { matchesGlob } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
-import { acceptsWorkflowPaths, readCiWorkflow, readWorkflow } from "./ci-workflow.test-support.js";
+import {
+  acceptsWorkflowPaths,
+  evaluateWorkflow,
+  readCiWorkflow,
+  readWorkflow,
+} from "./ci-workflow.test-support.js";
 
 const before = "a".repeat(40);
 const head = "b".repeat(40);
@@ -39,6 +44,12 @@ describe("Darwin tooling event scope", () => {
     [["test/scripts/pr-materialized-anchor.test.ts"], true],
     [["test/scripts/pr-operation-lock.test.ts"], true],
     [["test/scripts/pr-git-invocation.test.ts"], true],
+    [["test/scripts/package-mac-dist.test.ts"], true],
+    [["scripts/package-mac-dist.sh"], true],
+    [["scripts/notarize-mac-artifact.sh"], true],
+    [["src/infra/directory-walk.ts"], true],
+    [["test/scripts/package-mac-app.test.ts"], false],
+    [["src/infra/directory-walk.test.ts"], false],
     [["test/scripts/pr-wrapper.test-support.ts"], true],
     [["test/scripts/pr-main-refresh.test-support.ts"], true],
     [["test/scripts/pr-darwin-process-identity.test.py"], true],
@@ -57,6 +68,17 @@ describe("Darwin tooling event scope", () => {
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
     expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, files)).toBe(expected);
+  });
+
+  it("executes the complete macOS distribution owner without another admission condition", () => {
+    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
+    const steps = workflow.jobs.darwin.steps.filter(
+      (step: { run?: string }) =>
+        step.run ===
+        "node scripts/run-vitest.mjs test/scripts/package-mac-dist.test.ts --maxWorkers=1",
+    );
+    expect(steps).toHaveLength(1);
+    expect(steps[0].if).toBeUndefined();
   });
 });
 
@@ -87,6 +109,7 @@ describe("plugin scaffold event scope", () => {
     [[".github/workflows/plugin-init-scaffold-validation.yml"], true],
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/plugin-init-scaffold-validation.yml");
+    expect(workflow.jobs["validate-provider-scaffold"]["runs-on"]).toBe("ubuntu-24.04");
     expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
     for (const event of ["push", "pull_request"]) {
       expect(acceptsWorkflowPaths(workflow.on[event].paths, files)).toBe(expected);
@@ -102,12 +125,22 @@ async function scheduledScope(
     status?: string;
     ageHours?: number;
     skipFirst?: boolean;
+    recentJobs?: string[];
     unavailable?: boolean;
     paths?: string;
     missingProof?: boolean;
     identical?: boolean;
     proofJobs?: string;
     completedJobs?: string[];
+    codeqlConfig?: string;
+    profile?: Record<string, unknown>;
+    proofs?: string;
+    attributes?: [string, string];
+    attributeModes?: [string, string];
+    gitFiles?: string[];
+    gitFailure?: "fetch" | "diff";
+    gitOutput?: string;
+    gitHead?: string;
   } = {},
 ) {
   const proof = {
@@ -125,7 +158,13 @@ async function scheduledScope(
   }));
   const list = vi.fn().mockResolvedValue({
     data: {
-      workflow_runs: options.skipFirst ? [{ ...proof, id: 99 }, proof] : [proof],
+      workflow_runs:
+        options.skipFirst || options.recentJobs
+          ? [
+              { ...proof, id: 99, ...(options.recentJobs ? { head_sha: "c".repeat(40) } : {}) },
+              proof,
+            ]
+          : [proof],
     },
   });
   if (options.unavailable) {
@@ -135,13 +174,53 @@ async function scheduledScope(
     .fn()
     .mockImplementation((_method, args) =>
       args.run_id === 99
-        ? [{ ...jobs[0], conclusion: "skipped" }]
+        ? (options.recentJobs?.map((name) => ({ ...jobs[0], name, head_sha: "c".repeat(40) })) ?? [
+            { ...jobs[0], conclusion: "skipped" },
+          ])
         : options.missingProof
           ? []
           : jobs,
     );
   const output = vi.fn();
   const notice = vi.fn();
+  const compare = vi.fn().mockResolvedValue({
+    data: { status: options.status ?? "ahead", files: options.files ?? [] },
+  });
+  if (options.recentJobs) {
+    compare.mockImplementation(({ basehead }) =>
+      Promise.resolve({
+        data: {
+          status: "ahead",
+          files: basehead.startsWith("c".repeat(40)) ? [] : (options.files ?? []),
+        },
+      }),
+    );
+  }
+  const execute = vi.fn(async (command: string, args: string[]) => {
+    if (command === "yq") {
+      return { stdout: JSON.stringify(options.profile ?? readWorkflow(args[2]!)) };
+    }
+    if (options.gitFailure && args.includes(options.gitFailure)) {
+      throw new Error("Git unavailable");
+    }
+    if (args.includes("ls-tree")) {
+      const index = args.includes(before) ? 0 : 1;
+      return {
+        stdout: `${options.attributeModes?.[index] ?? "100644"} blob ${String(index).repeat(40)}\t.gitattributes\0`,
+      };
+    }
+    if (args[0] === "cat-file") {
+      return { stdout: options.attributes?.[args[2] === "0".repeat(40) ? 0 : 1] ?? "" };
+    }
+    return {
+      stdout:
+        args[0] === "rev-parse"
+          ? `${options.gitHead ?? head}\n`
+          : args[0] === "diff"
+            ? (options.gitOutput ?? (options.gitFiles ?? []).map((file) => `${file}\0`).join(""))
+            : "",
+    };
+  });
   await runInNewContext(`(async () => { ${script} })()`, {
     require: () => ({ matchesGlob }),
     context,
@@ -149,26 +228,25 @@ async function scheduledScope(
       env: {
         SCHEDULED_PATHS: options.paths ?? "src/contracts/**\n.github/actions/**",
         SCHEDULED_PROOF_JOBS: options.proofJobs ?? "Proof",
+        SCHEDULED_PROOFS: options.proofs,
+        SCHEDULED_CODEQL_CONFIG: options.codeqlConfig,
+        SCHEDULED_GIT_DIFF: options.gitFiles ? "true" : "false",
         SCHEDULED_WORKFLOW_REF: "openclaw/openclaw/.github/workflows/example.yml@refs/heads/main",
       },
     },
     core: { setOutput: output, notice, warning: vi.fn() },
+    exec: { getExecOutput: execute },
     github: {
       paginate,
       rest: {
         actions: { listWorkflowRuns: list, listJobsForWorkflowRunAttempt: vi.fn() },
         repos: {
-          compareCommitsWithBasehead: vi.fn().mockResolvedValue({
-            data: {
-              status: options.status ?? "ahead",
-              files: options.files ?? [],
-            },
-          }),
+          compareCommitsWithBasehead: compare,
         },
       },
     },
   });
-  return { output, notice, paginate };
+  return { output, notice, paginate, list, compare, execute };
 }
 
 describe("bounded scheduled proof reuse", () => {
@@ -205,7 +283,9 @@ describe("bounded scheduled proof reuse", () => {
     async (name) => {
       const workflow = readWorkflow(`.github/workflows/${name}.yml`);
       const scope = workflow.jobs.scope.steps.find((step: { id?: string }) => step.id === "scope");
-      const patterns = scope.with.paths.trim().split("\n");
+      const patterns = workflow.jobs.scope.steps
+        .filter((step: { with?: { paths?: string } }) => step.with?.paths)
+        .flatMap((step: { with: { paths: string } }) => step.with.paths.trim().split("\n"));
       expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
       for (const path of workflow.on.push.paths.filter(
         (pattern: string) => !pattern.startsWith("!"),
@@ -252,6 +332,221 @@ describe("bounded scheduled proof reuse", () => {
   );
 });
 
+describe("scheduled CodeQL input reuse", () => {
+  const workflow = readWorkflow(".github/workflows/codeql.yml");
+  const scopes = workflow.jobs.scope.steps.filter(
+    (step: { uses?: string }) => step.uses === "./.github/actions/detect-scheduled-changes",
+  );
+  const categories = [
+    "core-auth-secrets",
+    "channel-runtime-boundary",
+    "network-ssrf-boundary",
+    "mcp-process-tool-boundary",
+    "process-exec-boundary",
+    "plugin-trust-boundary",
+    "actions",
+  ];
+  const completedJobs = categories.map((category) => `Security High (${category})`);
+
+  async function selected(files: string[], options: Parameters<typeof scheduledScope>[0] = {}) {
+    expect(scopes).toHaveLength(1);
+    const { output } = await scheduledScope({
+      completedJobs,
+      files: files.map((filename) => ({ filename })),
+      ...options,
+      paths: scopes[0].with.paths,
+      proofs: scopes[0].with.proofs,
+    });
+    const results = JSON.parse(output.mock.calls[0]![1]);
+    return categories.filter((category) => results[category] !== false);
+  }
+
+  it.each([
+    ["docs/intro.md", []],
+    [".github/workflows/docs.yml", ["actions"]],
+    ["src/process/exec.ts", ["mcp-process-tool-boundary", "process-exec-boundary"]],
+    ["src/agents/bash-tools.exec-runtime.test.ts", []],
+    ["src/process/exec.test.ts", []],
+    ["src/infra/net/request.ts", ["network-ssrf-boundary"]],
+    ["src/channels/.runtime.ts", ["channel-runtime-boundary"]],
+    ["src/agents/nested/deep/auth-provider.ts", ["core-auth-secrets"]],
+    ["src/plugins/runtime/package.json", ["plugin-trust-boundary"]],
+    ["src/plugins/runtime/tsconfig.json", ["plugin-trust-boundary"]],
+    ["ui/src/views/channels.ts", []],
+    ["package.json", []],
+    [".github/codeql/codeql-actions-critical-security.yml", categories],
+    [".github/actions/detect-scheduled-changes/action.yml", categories],
+    [".github/workflows/codeql.yml", categories],
+    ["src/.hidden/.gitattributes", categories],
+  ])("selects extraction profiles after %s changes", async (filename, expected) => {
+    expect(await selected([filename as string])).toEqual(expected);
+  });
+
+  it("reuses each category's last actual proof, ignoring newer skipped jobs", async () => {
+    expect(
+      await selected(["docs/intro.md"], {
+        completedJobs: completedJobs.filter(
+          (name) => name !== "Security High (network-ssrf-boundary)",
+        ),
+        skipFirst: true,
+      }),
+    ).toEqual(["network-ssrf-boundary"]);
+  });
+
+  it("requires a complete diff before skipping a category beyond the API cap", async () => {
+    const docs = Array.from({ length: 300 }, (_, index) => `docs/${index}.md`);
+    expect(await selected(docs)).toEqual(categories);
+    expect(await selected(docs, { gitFiles: [...docs, "src/infra/net/request.ts"] })).toEqual([
+      "network-ssrf-boundary",
+    ]);
+    for (const failure of [
+      { gitFailure: "fetch" as const },
+      { gitFailure: "diff" as const },
+      { gitHead: before },
+      { gitOutput: "docs/incomplete" },
+    ]) {
+      expect(await selected(docs, { gitFiles: docs, ...failure })).toEqual(categories);
+    }
+  });
+
+  it("shares raw lookups while retaining each category's completed proof", async () => {
+    const docs = Array.from({ length: 300 }, (_, index) => ({ filename: `docs/${index}.md` }));
+    const result = await scheduledScope({
+      proofs: scopes[0].with.proofs,
+      paths: scopes[0].with.paths,
+      completedJobs: completedJobs.filter((job) => job !== "Security High (network-ssrf-boundary)"),
+      skipFirst: true,
+      files: docs,
+      gitFiles: docs.map((file) => file.filename),
+    });
+    expect(result.output).toHaveBeenCalledExactlyOnceWith(
+      "proofs",
+      JSON.stringify(
+        Object.fromEntries(
+          categories.map((category) => [category, category === "network-ssrf-boundary"]),
+        ),
+      ),
+    );
+    expect(result.list).toHaveBeenCalledOnce();
+    expect(result.paginate.mock.calls.map(([, args]) => args.run_id)).toEqual([99, 90]);
+    expect(result.compare).toHaveBeenCalledOnce();
+    expect(result.execute.mock.calls.filter(([, args]) => args.includes("fetch"))).toHaveLength(1);
+    expect(result.execute.mock.calls.filter(([, args]) => args[0] === "diff")).toHaveLength(1);
+  });
+
+  it("compares each category against its own successful revision", async () => {
+    const result = await scheduledScope({
+      proofs: scopes[0].with.proofs,
+      paths: scopes[0].with.paths,
+      completedJobs,
+      recentJobs: ["Security High (mcp-process-tool-boundary)"],
+      files: [{ filename: "src/process/exec.ts" }],
+    });
+    const decisions = JSON.parse(result.output.mock.calls[0]![1]);
+    expect(decisions["mcp-process-tool-boundary"]).toBe(false);
+    expect(decisions["process-exec-boundary"]).toBe(true);
+    expect(result.compare.mock.calls.map(([args]) => args.basehead)).toEqual([
+      `${before}...${head}`,
+      `${"c".repeat(40)}...${head}`,
+    ]);
+    expect(result.paginate.mock.calls.map(([, args]) => args.run_id)).toEqual([99, 90]);
+  });
+
+  it.each([
+    ["src/*.test.ts", "src/deep/example.test.ts", true],
+    ["src/*.test.ts", "src/example.test.ts", false],
+    ["**/*.test.ts", "src/deep/example.test.ts", false],
+    ["**/*.test.ts", "src/example.test.ts\n", true],
+    ["**/*.test.ts\n", "docs/intro.md", true],
+    ["**/*.test.ts", "example.test.ts", false],
+    ["src/**/fixtures", "src/fixtures/data.ts", false],
+    ["src/**/fixtures", "src/deep/fixtures/data.ts", false],
+    ["src/**/fixtures", "src/deep/fixtures-other/data.ts", true],
+    ["src/**foo", "docs/intro.md", true],
+    ["src/", "docs/intro.md", true],
+    ["src/[a-z]", "docs/intro.md", true],
+  ])("matches exclusion %s against %s conservatively", async (pattern, filename, expected) => {
+    const { output } = await scheduledScope({
+      codeqlConfig: "profile.yml",
+      profile: {
+        paths: ["src", "*.test.ts"],
+        "paths-ignore": [pattern],
+        queries: [{ uses: "security-extended" }],
+      },
+      files: [{ filename }],
+    });
+    expect(output).toHaveBeenCalledExactlyOnceWith("changed", expected);
+  });
+
+  it("never excludes a shared query or tooling input", async () => {
+    expect(
+      await selected([".github/workflows/codeql.yml"], {
+        profile: {
+          paths: ["src"],
+          "paths-ignore": ["**"],
+          queries: [{ uses: "security-extended" }],
+        },
+      }),
+    ).toEqual(categories);
+  });
+
+  it.each([
+    [
+      "*.ts text\n",
+      "*.ts text\n# Preserve immutable upstream bytes.\napps/ios/** -whitespace\napps/shared/** -whitespace\n",
+      false,
+    ],
+    ["*.ts text\napps/ios/** -whitespace\n", "*.ts text\n", false],
+    ["*.ts text\n", "*.ts -text\n", true],
+    ["*.ts text\n\uFFFD", "*.ts text\n\uFFFD", true],
+    ["*.ts text\n", "*.ts text -whitespace\n", true],
+    ["*.ts text\n", "[attr]whitespace -text\n*.ts text\n", true],
+    ["*.ts text\n", '"apps/ios/**" -whitespace\n*.ts text\n', true],
+  ])(
+    "only ignores standalone whitespace diagnostic rules",
+    async (oldContent, newContent, changed) => {
+      expect(
+        await selected([".gitattributes"], {
+          gitFiles: [],
+          attributes: [oldContent, newContent],
+        }),
+      ).toEqual(changed ? categories : []);
+    },
+  );
+
+  it("retains scans for attribute mode changes or unavailable exact blobs", async () => {
+    for (const failure of [
+      { attributeModes: ["100644", "120000"] as [string, string] },
+      { attributeModes: ["100644", "100755"] as [string, string] },
+      { gitFailure: "fetch" as const },
+      { gitHead: before },
+    ]) {
+      expect(await selected([".gitattributes"], { gitFiles: [], ...failure })).toEqual(categories);
+    }
+  });
+
+  it("includes a rename's old extraction path", async () => {
+    expect(
+      await selected([], {
+        files: [{ filename: "retired.ts", previous_filename: "src/infra/net/request.ts" }],
+      }),
+    ).toEqual(["network-ssrf-boundary"]);
+  });
+
+  it("runs every profile when its input contract is unsupported", async () => {
+    for (const profile of [
+      { paths: [], queries: [{ uses: "security-extended" }] },
+      ...["src/[a-z]", "src/", "./src", "."].map((path) => ({
+        paths: [path],
+        queries: [{ uses: "security-extended" }],
+      })),
+      { paths: ["src"], queries: [{ uses: "./custom-query.ql" }] },
+    ]) {
+      expect(await selected(["docs/intro.md"], { profile })).toEqual(categories);
+    }
+  });
+});
+
 describe("independent scheduled node runtime proofs", () => {
   const workflow = readWorkflow(".github/workflows/node-runtime-conformance.yml");
   const detectors = workflow.jobs.scope.steps.filter(
@@ -277,7 +572,9 @@ describe("independent scheduled node runtime proofs", () => {
     const outputs = Object.fromEntries(
       Object.entries(workflow.jobs.scope.outputs).map(([key, value]) => [
         key,
-        runInNewContext((value as string).slice(3, -2), { steps }),
+        runInNewContext((value as string).slice(3, -2), {
+          steps: { ...steps, pr_scope: { outputs: {} } },
+        }),
       ]),
     );
     return Object.fromEntries(
@@ -328,6 +625,141 @@ describe("independent scheduled node runtime proofs", () => {
   );
 });
 
+describe("pull request node contract owners", () => {
+  const workflow = readWorkflow(".github/workflows/node-runtime-conformance.yml");
+  const step = workflow.jobs.scope.steps.find((entry: { id?: string }) => entry.id === "pr_scope");
+
+  it.each([
+    {
+      files: [{ filename: "scripts/lib/ci-node-test-plan.mts", status: "modified" }],
+      expected: [true, false],
+    },
+    { files: [{ filename: ".cargo/config.toml", status: "modified" }], expected: [false, true] },
+    {
+      files: [{ filename: "crates/openclaw-node-host/src/main.rs", status: "modified" }],
+      expected: [true, true],
+    },
+    {
+      files: [{ filename: "packages/gateway-protocol/src/version.ts", status: "modified" }],
+      expected: [true, true],
+    },
+    {
+      files: [{ filename: "test/fixtures/node-sidecar-handshake-v1.json", status: "modified" }],
+      expected: [true, true],
+    },
+    {
+      files: [
+        { filename: "package.json", status: "modified" },
+        { filename: ".cargo/config.toml", status: "modified" },
+      ],
+      expected: [true, true],
+    },
+    {
+      files: [
+        { filename: "scripts/new.mjs", previous_filename: ".cargo/config.toml", status: "renamed" },
+      ],
+      expected: [true, true],
+    },
+    { files: [{ filename: "scripts/old.mjs", status: "removed" }], expected: [true, true] },
+    { files: [{ filename: "docs/intro.md", status: "modified" }], expected: [true, true] },
+    { files: [{ status: "modified" }], expected: [true, true] },
+    { files: [{ filename: "scripts/new.mjs", status: "renamed" }], expected: [true, true] },
+    { files: [], expected: [true, true] },
+    { files: undefined, expected: [true, true] },
+    {
+      files: Array.from({ length: 300 }, () => ({ filename: "package.json", status: "modified" })),
+      expected: [true, true],
+    },
+    { unavailable: true, expected: [true, true] },
+    { missingHead: true, expected: [true, true] },
+  ])(
+    "selects from exact complete inputs: %#",
+    async ({ files, unavailable, missingHead, expected }) => {
+      const output = vi.fn();
+      const compare = unavailable
+        ? vi.fn().mockRejectedValue(new Error("unavailable"))
+        : vi.fn().mockResolvedValue({ data: { files } });
+      await runInNewContext(`(async () => { ${step.with.script} })()`, {
+        require: () => ({ matchesGlob }),
+        process: { env: step.env },
+        context: {
+          ...context,
+          payload: {
+            pull_request: { base: { sha: before }, head: { sha: missingHead ? "" : head } },
+          },
+        },
+        core: { setOutput: output, warning: vi.fn() },
+        github: { rest: { repos: { compareCommitsWithBasehead: compare } } },
+      });
+      expect(output.mock.calls).toEqual([
+        ["changed", expected[0]],
+        ["rust_changed", expected[1]],
+      ]);
+      if (!missingHead) {
+        expect(compare).toHaveBeenCalledExactlyOnceWith({
+          ...context.repo,
+          basehead: `${before}...${head}`,
+        });
+      }
+      const steps = {
+        pr_scope: {
+          outputs: Object.fromEntries(
+            output.mock.calls.map(([key, value]) => [key, String(value)]),
+          ),
+        },
+        scope: { outputs: {} },
+        rust_scope: { outputs: {} },
+      };
+      const outputs = Object.fromEntries(
+        Object.entries(workflow.jobs.scope.outputs).map(([key, expression]) => [
+          key,
+          runInNewContext((expression as string).slice(3, -2), { steps }),
+        ]),
+      );
+      for (const [index, id] of ["typescript", "rust"].entries()) {
+        expect(
+          evaluateWorkflow(workflow.jobs[id].if, {
+            eventName: "pull_request",
+            additionalNeeds: { scope: { outputs } },
+          }),
+        ).toBe(expected[index]);
+      }
+    },
+  );
+
+  it("keeps manual, missing evidence and draft admission policies", () => {
+    for (const id of ["typescript", "rust"]) {
+      for (const eventName of ["pull_request", "workflow_dispatch"] as const) {
+        expect(
+          evaluateWorkflow(workflow.jobs[id].if, {
+            eventName,
+            additionalNeeds: { scope: { outputs: {} } },
+          }),
+        ).toBe(true);
+      }
+      expect(
+        evaluateWorkflow(workflow.jobs[id].if, {
+          eventName: "pull_request",
+          draft: true,
+          additionalNeeds: { scope: { outputs: {} } },
+        }),
+      ).toBe(false);
+    }
+    expect(
+      evaluateWorkflow(`\${{ ${workflow.jobs.scope.if} }}`, { eventName: "pull_request" }),
+    ).toBe(true);
+    expect(
+      evaluateWorkflow(`\${{ ${workflow.jobs.scope.if} }}`, {
+        eventName: "pull_request",
+        draft: true,
+      }),
+    ).toBe(false);
+    expect(
+      evaluateWorkflow(`\${{ ${workflow.jobs.scope.if} }}`, { eventName: "workflow_dispatch" }),
+    ).toBe(false);
+  });
+});
+
 describe("node runtime event scope", () => {
   it.each([
     [["patches/README.md"], false],
@@ -340,6 +772,9 @@ describe("node runtime event scope", () => {
       true,
     ],
     [["crates/openclaw-node-host/Cargo.toml"], true],
+    [[".cargo/config.toml"], true],
+    [["rust-toolchain.toml"], true],
+    [["test/fixtures/node-sidecar-handshake-v1.json"], true],
     [["crates/openclaw-node-host/tests/fixtures/README.md"], true],
     [[".github/workflows/node-runtime-conformance.yml"], true],
   ] as const)("routes %j", (files, expected) => {

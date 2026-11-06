@@ -900,7 +900,7 @@ packages/ai/src/providers/clean-for-gemini.ts	4
 packages/ai/src/providers/google-shared.ts	2
 packages/ai/src/providers/mistral.ts	1
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
-packages/ai/src/providers/openai-chatgpt-responses.ts	16
+packages/ai/src/providers/openai-chatgpt-responses.ts	15
 packages/ai/src/providers/openai-completions.ts	1
 packages/ai/src/providers/openai-reasoning-effort.ts	5
 packages/ai/src/providers/openai-responses-shared.ts	4
@@ -1011,7 +1011,7 @@ src/agents/agent-bundle-mcp-combined.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-command.ts	1
-src/agents/agent-hooks/compaction-safeguard.ts	9
+src/agents/agent-hooks/compaction-safeguard.ts	7
 src/agents/agent-project-settings-snapshot.ts	3
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-receipt.ts	1
@@ -1071,7 +1071,6 @@ src/agents/content-blocks.ts	1
 src/agents/context-cache.ts	1
 src/agents/context-runtime-state.ts	1
 src/agents/cron-creator-authority-context.ts	1
-src/agents/custom-api-registry.ts	1
 src/agents/delegation-capability.ts	1
 src/agents/embedded-agent-helpers/bootstrap.ts	2
 src/agents/embedded-agent-helpers/images.ts	3
@@ -1170,7 +1169,7 @@ src/agents/lazy-process-tool.ts	1
 src/agents/live-cache-regression-policy.ts	2
 src/agents/mcp-auth-profile.ts	1
 src/agents/mcp-http-fetch.ts	3
-src/agents/mcp-json-schema-validator.ts	4
+src/agents/mcp-json-schema-validator.ts	3
 src/agents/mcp-transport-config.ts	1
 src/agents/mcp-transport.ts	2
 src/agents/mcp-ui-resource.ts	2
@@ -1250,7 +1249,7 @@ src/agents/tool-call-id.ts	7
 src/agents/tool-display-common.ts	1
 src/agents/tool-images.ts	2
 src/agents/tool-policy-shared.ts	1
-src/agents/tool-result-error.ts	2
+src/agents/tool-result-error.ts	1
 src/agents/tool-schema-hints.ts	1
 src/agents/tool-search-catalog.ts	2
 src/agents/tool-search-directory.ts	1
@@ -1261,7 +1260,7 @@ src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agents-wait-tool.ts	1
 src/agents/tools/ask-user-tool.ts	2
 src/agents/tools/chat-history-text.ts	1
-src/agents/tools/common.ts	2
+src/agents/tools/common.ts	1
 src/agents/tools/computer-tool-node.ts	1
 src/agents/tools/computer-tool-request.ts	3
 src/agents/tools/computer-tool.ts	2
@@ -1358,7 +1357,7 @@ src/boards/sqlite-board-codec.ts	7
 src/bootstrap/node-startup-env.ts	1
 src/canvas/documents.ts	1
 src/canvas/serve.runtime.ts	1
-src/canvas/widget-tool.ts	2
+src/canvas/widget-tool.ts	1
 src/channels/account-snapshot-fields.ts	1
 src/channels/allowlist-match.ts	1
 src/channels/allowlists/resolve-utils.ts	3
@@ -1440,7 +1439,7 @@ src/cli/exec-approvals-cli.ts	9
 src/cli/exec-policy-cli.ts	1
 src/cli/gateway-cli/dev.ts	1
 src/cli/gateway-cli/register.ts	4
-src/cli/gateway-cli/run.ts	5
+src/cli/gateway-cli/run.ts	4
 src/cli/gateway-cli/suspend-cli.ts	2
 src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
@@ -1785,7 +1784,6 @@ src/gateway/session-history-state.ts	2
 src/gateway/session-transcript-derived-readers.ts	1
 src/gateway/sessions-history-http.ts	1
 src/gateway/stale-install.ts	1
-src/gateway/talk/handlers/index.ts	3
 src/gateway/talk/relay/session-create.ts	1
 src/gateway/test-http-response.ts	4
 src/gateway/test-temp-config.ts	1
@@ -2074,7 +2072,7 @@ src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
 src/plugins/hook-types.ts	1
-src/plugins/hooks.ts	7
+src/plugins/hooks.ts	5
 src/plugins/host-hook-attachments.ts	1
 src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	4
@@ -2141,7 +2139,6 @@ src/plugins/uninstall.ts	1
 src/plugins/update-channel.ts	2
 src/plugins/update-config.ts	2
 src/plugins/update-installed.ts	5
-src/plugins/update-summary.ts	2
 src/plugins/web-search-install-catalog.ts	2
 src/poll-params.ts	1
 src/process/command-queue.ts	2
@@ -2211,7 +2208,6 @@ src/skills/lifecycle/clawhub-store.ts	4
 src/skills/loading/frontmatter.ts	1
 src/skills/loading/workspace-skill-sync.runtime.ts	1
 src/skills/runtime/remote-skills.ts	1
-src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	7
 src/snapshot/local-repository.ts	3
 src/snapshot/manifest.ts	1
@@ -2247,7 +2243,7 @@ src/templates/project-build.ts	4
 src/templates/project.ts	2
 src/templates/reader.ts	3
 src/templates/schema.ts	2
-src/trajectory/export.ts	8
+src/trajectory/export.ts	7
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	2
 src/transcripts/config.ts	2

@@ -19,6 +19,7 @@ import {
 } from "../process/exec-result.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import type { DiffReadTiming } from "./diff-read-timing.js";
 import { withContentGitSlot } from "./git-content-budget.js";
 import { startGitOperationTiming } from "./git-operation-timing.js";
@@ -98,7 +99,7 @@ const SPAWN_OPERATIONS = {
   "workspace.manifest.overlay": "workspace.manifest",
   "workspace.manifest.pair": "workspace.manifest",
   "workspace.manifest.staged": "workspace.manifest",
-  "workspace.manifest.entries": "workspace.manifest",
+  "workspace.manifest.result": "workspace.manifest",
   "workspace.manifest.file": "workspace.manifest",
   "workspace.manifest.nodes": "workspace.manifest",
   "workspace.manifest.stage-input": "workspace.manifest",
@@ -106,12 +107,6 @@ const SPAWN_OPERATIONS = {
   "workspace.manifest.remote-capture": "workspace.manifest",
   "workspace.reconcile.preflight": "workspace.manifest",
 } satisfies Record<keyof GitWorkerOperations, GitProcessOperation>;
-
-function trackPending<T>(pending: Set<Promise<T>>, operation: Promise<T>): void {
-  pending.add(operation);
-  const settled = () => pending.delete(operation);
-  void operation.then(settled, settled);
-}
 
 function runtime(): GitWorkerRuntime {
   return resolveGlobalSingleton<GitWorkerRuntime>(
@@ -197,6 +192,10 @@ export type GitWorkerOperationOptions = {
     buffered: typeof runGitBuffered;
   };
   onInventoryChunk?: (bytes: Uint8Array, context: { signal: AbortSignal }) => Promise<void>;
+  readWorkspaceManifest?: (
+    knownTreeRoot: string | undefined,
+    context: { signal: AbortSignal },
+  ) => Promise<Uint8Array<ArrayBuffer>>;
   onEffect?: (
     effect: GitWorktreeEffect,
     context: { signal: AbortSignal },
@@ -250,9 +249,10 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
     ...options,
     git: options.git ? { text: options.git.text, buffered: options.git.buffered } : undefined,
   });
-  trackPending(state.pending, operation);
   // SAFETY: Private typed workers bind the operation discriminant to this result contract.
-  return operation as Promise<GitWorkerOperations[Command["type"]]["output"]>;
+  return createPendingPromiseTracker(state.pending)(operation) as Promise<
+    GitWorkerOperations[Command["type"]]["output"]
+  >;
 }
 
 async function executeOperation(
@@ -448,6 +448,14 @@ async function executeOperation(
         }
         options.assertCurrent?.();
         await options.onInventoryChunk(effect.input.bytes, { signal });
+      } else if (effect.type === "workspace.manifest.read") {
+        if (!options.readWorkspaceManifest) {
+          throw new Error("Workspace manifest has no active read owner");
+        }
+        options.assertCurrent?.();
+        const bytes = await options.readWorkspaceManifest(effect.input.knownTreeRoot, { signal });
+        result = bytes;
+        transferList.push(bytes.buffer);
       } else {
         if (!options.onEffect) {
           throw new Error("Git read operation requested a lifecycle effect");
@@ -516,8 +524,7 @@ async function executeOperation(
           transferList: [...new Set(replies.flatMap((response) => response.transferList ?? []))],
           timeoutMs: WORKER_PHASE_TIMEOUT_MS,
         }));
-        trackPending(hostWork, pending);
-        return pending;
+        return createPendingPromiseTracker(hostWork)(pending);
       },
     });
     timing?.markPhase();

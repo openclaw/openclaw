@@ -9,6 +9,14 @@ on:
     paths: &validation_paths
       - ".github/workflows/node-runtime-conformance.yml"
       - "crates/**"
+      - ".cargo/**"
+      - "rust-toolchain*"
+      - "rustfmt.toml"
+      - ".rustfmt.toml"
+      - "clippy.toml"
+      - ".clippy.toml"
+      - ".gitattributes"
+      - "test/fixtures/node-sidecar-*.json"
       - "packages/gateway-protocol/src/index.ts"
       - "packages/gateway-protocol/src/version.ts"
       - "packages/gateway-protocol/src/schema/nodes.ts"
@@ -40,6 +48,8 @@ on:
       - "src/infra/node-commands.ts"
       - "packages/normalization-core/**"
       - "!crates/openclaw-node-host/SIDECAR_PROTOCOL.md"
+      # Standalone Cargo workspace, not part of the shared crates/ build.
+      - "!crates/openclaw-iroh-node/**"
       - "!patches/README.md"
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
@@ -62,24 +72,26 @@ env:
 
 jobs:
   scope:
-    if: github.event_name == 'schedule' && github.repository == 'openclaw/openclaw'
+    if: (github.event_name == 'schedule' && github.repository == 'openclaw/openclaw') || (github.event_name == 'pull_request' && !github.event.pull_request.draft)
     runs-on: ubuntu-24.04
     outputs:
-      changed: ${{ steps.scope.outputs.changed }}
-      rust_changed: ${{ steps.rust_scope.outputs.changed }}
+      changed: ${{ steps.pr_scope.outputs.changed || steps.scope.outputs.changed }}
+      rust_changed: ${{ steps.pr_scope.outputs.rust_changed || steps.rust_scope.outputs.changed }}
     steps:
       - name: Checkout scheduled admission
+        if: github.event_name == 'schedule'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/actions/detect-scheduled-changes
           persist-credentials: false
       - name: Detect scheduled TypeScript input changes
+        if: github.event_name == 'schedule'
         id: scope
         uses: ./.github/actions/detect-scheduled-changes
         with:
           proof-jobs: TypeScript contracts
           # Reuse is stricter than event admission: include transitive source and tool inputs.
-          paths: |
+          paths: &typescript_inputs |
             .github/workflows/node-runtime-conformance.yml
             .github/actions/detect-scheduled-changes/**
             .github/actions/setup-node-env/**
@@ -101,12 +113,13 @@ jobs:
             packages/**
             crates/**
       - name: Detect scheduled Rust input changes
+        if: github.event_name == 'schedule'
         id: rust_scope
         uses: ./.github/actions/detect-scheduled-changes
         with:
           proof-jobs: Rust workspace
           # Cargo consumes protocol versions and shared fixtures without a Node setup.
-          paths: |
+          paths: &rust_inputs |
             .github/workflows/node-runtime-conformance.yml
             .github/actions/detect-scheduled-changes/**
             crates/**
@@ -120,9 +133,56 @@ jobs:
             .clippy.toml
             .gitattributes
 
+      - name: Select pull request contract owners
+        if: github.event_name == 'pull_request'
+        id: pr_scope
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TYPESCRIPT_INPUTS: *typescript_inputs
+          RUST_INPUTS: *rust_inputs
+        with:
+          script: |
+            const { matchesGlob } = require('node:path');
+            let changed = true;
+            let rustChanged = true;
+            try {
+              const { base, head } = context.payload.pull_request;
+              if (![base?.sha, head?.sha].every(sha => /^[a-f0-9]{40}$/.test(sha ?? ''))) {
+                throw new Error('missing exact pull request revisions');
+              }
+              const { data } = await github.rest.repos.compareCommitsWithBasehead({
+                ...context.repo, basehead: `${base.sha}...${head.sha}`,
+              });
+              // The compare endpoint caps files at 300; incomplete evidence keeps both proofs.
+              if (!Array.isArray(data.files) || !data.files.length || data.files.length >= 300) {
+                throw new Error('missing or capped changed files');
+              }
+              const paths = data.files.flatMap(file => {
+                if (!['added', 'modified', 'renamed', 'copied', 'changed', 'unchanged'].includes(file.status) ||
+                    typeof file.filename !== 'string' || !file.filename ||
+                    (file.status === 'renamed' && !file.previous_filename) ||
+                    (file.previous_filename !== undefined && typeof file.previous_filename !== 'string')) {
+                  throw new Error('unsupported changed file');
+                }
+                return [file.filename, file.previous_filename].filter(Boolean);
+              });
+              const typescript = process.env.TYPESCRIPT_INPUTS.trim().split('\n');
+              const rust = process.env.RUST_INPUTS.trim().split('\n');
+              const matches = (path, patterns) => patterns.some(pattern => matchesGlob(path, pattern));
+              if (paths.some(path => !matches(path, typescript) && !matches(path, rust))) {
+                throw new Error('unknown contract input');
+              }
+              changed = paths.some(path => matches(path, typescript));
+              rustChanged = paths.some(path => matches(path, rust));
+            } catch {
+              core.warning('Contract owner lookup incomplete; running both proofs.');
+            }
+            core.setOutput('changed', changed);
+            core.setOutput('rust_changed', rustChanged);
+
   typescript:
     needs: scope
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'pull_request' || needs.scope.outputs.changed != 'false') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     name: TypeScript contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -150,7 +210,7 @@ jobs:
 
   rust:
     needs: scope
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'schedule' || needs.scope.outputs.rust_changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'schedule' || needs.scope.outputs.rust_changed == 'true') && (github.event_name != 'pull_request' || needs.scope.outputs.rust_changed != 'false') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     name: Rust workspace
     runs-on: ubuntu-24.04
     timeout-minutes: 20

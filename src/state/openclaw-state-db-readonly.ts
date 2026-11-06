@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync } from "node:fs";
 import { isMainThread } from "node:worker_threads";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import { retainSnapshotWork } from "../infra/sqlite-readonly-location-cleanup.js";
@@ -15,6 +16,7 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   artifactPreservingReads,
+  isLiveStateRead,
   isArtifactPreservingStateRead,
   withArtifactPreservingStateReads,
 } from "./artifact-preserving-state-reads.js";
@@ -69,10 +71,7 @@ import type {
 } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 
-export {
-  isArtifactPreservingStateRead,
-  withArtifactPreservingStateReads,
-} from "./artifact-preserving-state-reads.js";
+export { isArtifactPreservingStateRead, withArtifactPreservingStateReads };
 
 const disposableStateReads = resolveGlobalSingleton(
   Symbol.for("openclaw.disposableStateReads"),
@@ -89,6 +88,7 @@ const stateSnapshotReads = resolveGlobalSingleton(
         forkSource: Awaited<
           ReturnType<typeof prepareOpenClawStateReadSnapshotSource>
         >["forkSource"];
+        recoverRollbackJournal: () => void;
         env: NodeJS.ProcessEnv;
         callerSignal?: AbortSignal;
       }
@@ -106,10 +106,18 @@ function resolveStateReadCallerSignal(): AbortSignal | undefined {
   return snapshot && signal === snapshot.work.signal ? snapshot.callerSignal : signal;
 }
 
-/** Stable identity and private bytes for reads within the enclosing snapshot scope. */
+/** Scope membership must not materialize private bytes just to select a reader/cache. */
+export function hasActiveOpenClawStateDatabaseReadSnapshot(
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  const current = stateSnapshotReads.getStore();
+  return current?.active === true && current.path === resolveOpenClawStateReadPath(options);
+}
+
+/** Selected live or private source within the enclosing read admission. */
 export function getActiveOpenClawStateDatabaseReadSnapshot(
   options: OpenClawStateDatabaseOptions = {},
-): Readonly<{ location: string; cleanClose?: boolean }> | undefined {
+): Readonly<{ location: string }> | undefined {
   const current = stateSnapshotReads.getStore();
   return current?.path === resolveOpenClawStateReadPath(options) ? current.readSource() : undefined;
 }
@@ -117,7 +125,7 @@ export function getActiveOpenClawStateDatabaseReadSnapshot(
 /** Prepare lazy snapshot bytes without blocking asynchronous discovery callers. */
 export async function getActiveOpenClawStateDatabaseReadSnapshotAsync(
   options: OpenClawStateDatabaseOptions = {},
-): Promise<Readonly<{ location: string; cleanClose?: boolean }> | undefined> {
+): Promise<Readonly<{ location: string }> | undefined> {
   const current = stateSnapshotReads.getStore();
   if (current?.path !== resolveOpenClawStateReadPath(options)) {
     return undefined;
@@ -146,18 +154,22 @@ export async function forkActiveOpenClawStateDatabaseReadSnapshot(
   return current.work.track(() => current.forkSource(signal));
 }
 
-/** Use a SQLite snapshot or the PostgreSQL read owner without redirecting live writers. */
+type StateReadScopeOptions = OpenClawStateDatabaseOptions & {
+  admissionTimeoutMs?: number;
+  /** Only startup may inspect a hot journal privately before guarded canonical recovery. */
+  allowStartupRollbackRecovery?: true;
+  /** Selected reports acquire shared bytes only when a reader actually needs them. */
+  lazy?: boolean;
+  /** Command owners may cancel preparation before the callback acquires its read scope. */
+  signal?: AbortSignal;
+};
+
+/** Retain private inspection bytes or live read admission without redirecting writers. */
 export async function withOpenClawStateDatabaseReadSnapshot<T>(
   operation: () => Promise<T>,
-  options: OpenClawStateDatabaseOptions & {
-    admissionTimeoutMs?: number;
-    reuseCleanClose?: boolean;
-    /** Selected reports acquire shared bytes only when a reader actually needs them. */
-    lazy?: boolean;
-    /** Command owners may cancel preparation before the callback acquires its read scope. */
-    signal?: AbortSignal;
-  } = {},
+  options: StateReadScopeOptions = {},
 ): Promise<T> {
+  const live = isLiveStateRead();
   const inheritedSignal = resolveStateReadCallerSignal();
   const callerSignal =
     options.signal && inheritedSignal
@@ -165,12 +177,9 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
       : (options.signal ?? inheritedSignal);
   callerSignal?.throwIfAborted();
   const postgres = isStatePostgres();
-  if (!postgres) {
-    assertStateFileSnapshotAllowed();
-  }
   const pathname = resolveOpenClawStateReadPath(options);
   const current = stateSnapshotReads.getStore();
-  const lazy = options.lazy === true && !postgres;
+  const lazy = options.lazy === true && !postgres && !live;
   if (
     (current?.active && current.path === pathname) ||
     (!lazy && !existingPathOrUndefined(pathname))
@@ -189,7 +198,8 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
       controller,
       callerSignal,
       admissionTimeoutMs: options.admissionTimeoutMs,
-      reuseCleanClose: options.reuseCleanClose,
+      allowStartupRollbackRecovery: options.allowStartupRollbackRecovery === true,
+      live,
     });
     let readSucceeded = false;
     const snapshot = Object.assign(
@@ -198,6 +208,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
         readSource: source.readSource,
         prepareSource: source.prepareSource,
         forkSource: source.forkSource,
+        recoverRollbackJournal: source.recoverRollbackJournal,
         env,
         callerSignal,
       },
@@ -230,6 +241,18 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
   });
 }
 
+/** Startup calls this only after validating config and its current live-owner guard. */
+export function recoverOpenClawStateRollbackJournalForStartup(
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  const pathname = resolveOpenClawStateReadPath(options);
+  const current = stateSnapshotReads.getStore();
+  if (current?.path === pathname) {
+    assertRetainedReadScopeAdmission(pathname, [current]);
+    current.recoverRollbackJournal();
+  }
+}
+
 /** The caller owns this private database and removes its files after the scope closes. */
 export async function withDisposableOpenClawStateReads<T>(
   pathname: string,
@@ -247,7 +270,7 @@ export async function withDisposableOpenClawStateReads<T>(
 
 function requiresArtifactPreservingSnapshot(pathname: string): boolean {
   // PostgreSQL reads use the admitted connection's read-only transaction, never a copied anchor.
-  if (isStatePostgres()) {
+  if (isStatePostgres() || isLiveStateRead()) {
     return false;
   }
   const required =
@@ -668,8 +691,8 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
       options.env ?? process.env,
     );
     const directRead =
-      (isStatePostgres() || options.allowNativeRead) &&
-      !isArtifactPreservingStateRead() &&
+      (isStatePostgres() || options.allowNativeRead || isLiveStateRead()) &&
+      (!isArtifactPreservingStateRead() || isLiveStateRead()) &&
       !openStateSchemaReadAdmission;
     if (!directRead) {
       assertStateFileSnapshotAllowed();
@@ -695,11 +718,15 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
       return snapshot.work.track(async () => {
         await snapshot.prepareSource!();
         resolveStateReadCallerSignal()?.throwIfAborted();
-        const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
+        const reused = withEngineStoreAdmission(() =>
+          withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname),
+        );
         return reused.reused ? reused.value : undefined;
       });
     }
-    const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
+    const reused = withEngineStoreAdmission(() =>
+      withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname),
+    );
     if (reused.reused) {
       return reused.value;
     }
@@ -709,7 +736,9 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
     const env = options.env ?? process.env;
     openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
     if (!requiresArtifactPreservingSnapshot(pathname)) {
-      return withOpenClawStateReadOnlyLocation(operation, pathname, pathname);
+      return withEngineStoreAdmission(() =>
+        withOpenClawStateReadOnlyLocation(operation, pathname, pathname),
+      );
     }
     const prepared = await prepareSqliteReadOnlyLocation(pathname, {
       preserveSourceArtifacts: true,
@@ -721,7 +750,9 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
       prepared.cleanup();
       throw error;
     }
-    return withOpenClawStateReadOnlyLocation(operation, pathname, prepared);
+    return withEngineStoreAdmission(() =>
+      withOpenClawStateReadOnlyLocation(operation, pathname, prepared),
+    );
   });
 }
 

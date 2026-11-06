@@ -52,6 +52,55 @@ without recording cache keys or contents.
 independently of a dashboard occupying the main region. These are DOM and I/O
 milestones; filmstrip inspection still owns paint claims.
 
+For tall dashboard-side transcript anchoring, add `--dashboard-end-anchor` with
+`--transcript-late-paint`. This uses a 1720 × 1515 viewport, a saved 320 px side
+column, 33 short exchanges ending in a roughly 4.5k-character prose reply with
+collapsed tool activity, and twelve trailing hidden custom messages. Per-frame
+`transcriptGeometry` records scroll distance from the end, pane width/height,
+last assistant row height, and bottom paragraph intersection. The final paragraph
+has its own Element Timing marker, `bottomParagraphPaintMs`. Join the geometry
+samples to the inspected first transcript PNG; DOM sampling alone does not prove
+the first painted scroll position. Runtime code is unchanged by this diagnostic.
+
+Add `--dashboard-pane-chrome` to give the
+dashboard its own archived conversation with 160 trailing tool exchanges,
+so the loaded transcript window contains activity groups and an earlier-history
+boundary rather than assistant prose. `paneChrome.frames` records identity-action
+children, versions-button geometry, boundary text/geometry, and message/activity
+counts from navigation through settle. The dashboard retains its generated peer
+owner, outside the operator's Involving me roster. Its unpinned activity is seven
+days old, below the bounded agent-roster window, so its session menu arrives after
+cached header admission. The chat target remains archived.
+With plugin activation, the dashboard also contains a native Workboard summary
+and one synthetic backlog card, created through the existing Gateway RPCs.
+
+For active-session composer proof, add `--active-targets` with `--transcript-late-paint`.
+Targets stay unarchived with a fresh, versioned 1,800-token context total and 96,000-token
+limit. `contextRingFrames` retains changed composer/ring display samples, and
+`firstComposerDomHasFinalRing` requires the final ring label and dial at opacity one
+in the first visible composer DOM sample. Inspect the correlated compositor frame
+and its predecessor before claiming first-paint presence.
+
+Add `--composer-controls` for the bundled Anthropic model's nondefault 200K window
+and High effort. It uses synthetic credentials and the static catalog without
+model requests. Preparation opens the real picker and requires its final values
+and persisted composer snapshot. Per-frame samples retain control x/width/text;
+use `--active-targets` for active chat and omit it for the archived secondary.
+
+For plugin-publication attribution, add `--plugin-activation`. This enables bundled
+Workboard and two isolated native modules: a neutral CSS theme with a header
+accessory, and a board-like module that awaits two lazy chunks before registering
+a page, navigation, panel, accessory, widget, and unselected transcript replacement.
+Bundled assets use `/assets/plugins/`; synthetic native assets use
+`/__openclaw__/plugins/control-ui/`. The fixture does not copy installed plugins,
+private styles, or stored surface selections. Before interpreting results, verify
+successful asset responses from both routes, complete `pluginStates` with zero
+errors, and the expected contribution counts. `pluginMarks` records synthetic
+module milestones; `pluginsCompleteMs` records registry completion.
+`transcriptTextPaintMs` records a paragraph reported by Largest Contentful Paint,
+which may be absent when another element remains the largest paint candidate.
+Use the compositor filmstrip for missing text-paint observations.
+
 Run this mode twice for the two visit sequences. The default repeats reloads.
 Adding `--reload-after-navigation` leaves the app, removes only the synthetic
 target's transcript snapshot and metadata, opens a fresh `/new` document, and

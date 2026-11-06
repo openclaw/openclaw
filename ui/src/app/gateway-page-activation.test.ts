@@ -119,6 +119,14 @@ function setupRecovery() {
   const makeClient = () =>
     new GatewayBrowserClient({
       url: `ws://${window.location.host}`,
+      onConnecting: () => {
+        snapshot.reconnectAt = undefined;
+        notify();
+      },
+      onReconnectScheduled: (delayMs) => {
+        snapshot.reconnectAt = Date.now() + delayMs;
+        notify();
+      },
       onClose: (info) => {
         snapshot.lastErrorCode = info.busy ? "GATEWAY_BUSY" : null;
         notify();
@@ -128,6 +136,7 @@ function setupRecovery() {
     client: GatewayBrowserClient;
     phase: ApplicationGatewayPhase;
     lastErrorCode: string | null;
+    reconnectAt?: number;
     restartPending?: boolean;
     suspensionPhase?: "draining" | "accepting";
   } = { client: makeClient(), phase: "reconnecting", lastErrorCode: null };
@@ -160,21 +169,28 @@ function setupRecovery() {
   return { snapshot, connect, fetchProbe, visibility, notify, dispose };
 }
 
-it("replaces a blackholed opening on fresh reachability evidence without an online event", async () => {
-  const { connect, fetchProbe, snapshot, notify } = setupRecovery();
-  fetchProbe.mockRejectedValue(new TypeError("offline"));
-  await vi.advanceTimersByTimeAsync(10_000);
-  expect(connect).not.toHaveBeenCalled();
-  fetchProbe.mockResolvedValue(Response.json({ ok: true, status: "live" }));
-  await vi.advanceTimersByTimeAsync(2_500);
-  expect(connect).toHaveBeenCalledOnce();
-  expect(wsInstances).toHaveLength(2);
-  expect(wsInstances[0]?.lastClose).not.toBeNull();
-  snapshot.phase = "connected";
-  notify();
-  await vi.advanceTimersByTimeAsync(20_000);
-  expect(connect).toHaveBeenCalledOnce();
-});
+it.each([false, true])(
+  "replaces a blackholed opening without an online event (HTTP initially live: %s)",
+  async (initiallyLive) => {
+    const { connect, fetchProbe, snapshot, notify } = setupRecovery();
+    if (initiallyLive) {
+      await vi.advanceTimersByTimeAsync(9_000);
+    } else {
+      fetchProbe.mockRejectedValue(new TypeError("offline"));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(connect).not.toHaveBeenCalled();
+      fetchProbe.mockResolvedValue(Response.json({ ok: true, status: "live" }));
+      await vi.advanceTimersByTimeAsync(2_500);
+    }
+    expect(connect).toHaveBeenCalledOnce();
+    expect(wsInstances).toHaveLength(2);
+    expect(wsInstances[0]?.lastClose).not.toBeNull();
+    snapshot.phase = "connected";
+    notify();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(connect).toHaveBeenCalledOnce();
+  },
+);
 
 it("cuts short transport backoff after a successful fresh probe", async () => {
   const { connect, fetchProbe } = setupRecovery();
@@ -188,6 +204,33 @@ it("cuts short transport backoff after a successful fresh probe", async () => {
   fetchProbe.mockResolvedValue(Response.json({ ok: true, status: "live" }));
   await vi.advanceTimersByTimeAsync(2_500);
   expect(connect).toHaveBeenCalledOnce();
+});
+
+it("preserves connect backoff while HTTP health remains live", async () => {
+  vi.stubGlobal("crypto", { randomUUID: () => "synthetic-connect" });
+  const { connect, fetchProbe } = setupRecovery();
+  for (const delay of [880, 1_496, 2_544]) {
+    const socket = wsInstances.at(-1)!;
+    socket.emitOpen();
+    socket.emitConnectChallenge({ nonce: "synthetic-challenge", ts: Date.now() });
+    await vi.advanceTimersByTimeAsync(0);
+    const request = JSON.parse(socket.sent.at(-1)!);
+    expect(request.method).toBe("connect");
+    socket.emitMessage({
+      type: "res",
+      id: request.id,
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "temporarily unavailable", retryable: true },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const attempts = wsInstances.length;
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(wsInstances).toHaveLength(attempts);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(wsInstances).toHaveLength(attempts + 1);
+  }
+  expect(fetchProbe).toHaveBeenCalled();
+  expect(connect).not.toHaveBeenCalled();
 });
 
 it("finds a restored link within one second during a short outage", async () => {

@@ -8,7 +8,7 @@ import { mountCloudProfiles } from "./cloud-target.test-support.ts";
 const container = document.createElement("div");
 document.body.append(container);
 
-const blockedProvider = "Default, Cloud worker provider: custom-worker, Capacity exhausted";
+const blockedProvider = "Default, Cloud provider: custom-worker, Capacity exhausted";
 
 async function expectChoice(name: string, description: string | RegExp) {
   const choice = page.getByRole("button", { name, exact: true });
@@ -27,11 +27,11 @@ it.each([
     onSelect: vi.fn(),
   };
   const { update } = mountCloudProfiles(params, container);
-  await expectChoice("aws", `Cloud worker provider: ${profile.provider}`);
+  await expectChoice("aws", `Cloud provider: ${profile.provider}`);
 
   const production = { ...params.profiles[0]!, id: "production" };
   update({ ...params, profiles: [production] });
-  await expectChoice("production", `Cloud worker provider: ${profile.provider}`);
+  await expectChoice("production", `Cloud provider: ${profile.provider}`);
   if (profile.providerId === "crabbox") {
     const configured = {
       ...production,
@@ -45,15 +45,15 @@ it.each([
     const choice = page.getByRole("button", { name: "production Linux · Standard", exact: true });
     await expect
       .element(choice)
-      .toHaveAccessibleDescription(/Operating system.*Linux.*Windows.*Machine.*Standard/);
+      .toHaveAccessibleDescription(/Operating system.*Linux.*Windows.*Device size.*Standard/);
     await choice.click();
-    await expectChoice("production Linux · Standard", /Cloud worker provider: Azure/);
+    await expectChoice("production Linux · Standard", /Cloud provider: Azure/);
   }
 });
 
 it.each([
-  [true, false, false, "AWS", "Cloud worker provider: AWS, production"],
-  [false, true, false, "AWS", "Default, Cloud worker provider: AWS"],
+  [true, false, false, "AWS", "Cloud provider: AWS, production"],
+  [false, true, false, "AWS", "Default, Cloud provider: AWS"],
   [false, true, true, "custom-worker", blockedProvider],
   [true, true, true, "custom-worker", blockedProvider],
   [true, false, true, undefined, "Capacity exhausted"],

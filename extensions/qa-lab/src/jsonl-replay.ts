@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { RuntimeId } from "./runtime-id.js";
-import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
+import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.types.js";
 import { extractQaContentText } from "./runtime-transcript.js";
 
 type JsonlReplayResult = {
