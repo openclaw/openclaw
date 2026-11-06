@@ -249,9 +249,22 @@ Completed source classifications and durable census counts remain unchanged.
   and an empty result. Restored1/1 passed through filtering, transcript navigation
   and archive/Undo feedback. This proves browser request/render behavior against a
   fixture response, not backend search correctness.
-- Batch115: causal qualification and recorder repair remain in progress.
+- Batch115 is excluded from this PR. A positive exact-request canary failed
+  with the old recorder and passed after observing the actual returned socket.
+  The final candidate run then exposed an overlapping `sessions.describe`
+  request at the existing duplicate-negative assertion. The recorder candidate
+  and failure evidence are retained locally; the primary is restored byte-for-byte
+  to the pinned base. No assertion was weakened, no product repair was attempted,
+  and no repair or removal credit is claimed for this nominee.
 
-Final scoped checks, removal scans, independent review and hosted gates are pending.
+The five repaired targets passed57 actual cases (6+1+6+33+11). The unchanged
+coalescing suite retains its baseline1/1 evidence separately. Net test growth is14
+lines, covered by one exact per-change allocation; the shared ceiling is unchanged.
+Scoped UI types, typed lint, formatting, ledger MDX, whitespace and the test-line
+ratchet passed. All three required removal scans passed with zero unused
+dependencies, files or exports. The simplification pass preserved CSS visibility
+in the settled History assertion; its final full browser flow passed again.
+Independent review and hosted admission remain pending.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
