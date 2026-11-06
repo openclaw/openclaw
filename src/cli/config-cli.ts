@@ -16,6 +16,7 @@ import {
   writeRuntimeJson,
   writeRuntimeStdout,
 } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
@@ -70,14 +71,21 @@ async function runConfigMutation(
     runtime?: RuntimeEnv;
     throwOnError?: boolean;
     localStateOwner?: ConfigMutationOwner;
+    preparationSignal?: AbortSignal;
   },
   prepare: () => Promise<Omit<ConfigOperationParams, "runtime" | "options">>,
   jsonOutput = Boolean(opts.cliOptions.json),
 ) {
   const runtime = opts.runtime ?? defaultRuntime;
   const { handleConfigMutationError, runConfigOperations } = await import("./config-cli-runner.js");
+  let inputPrepared = false;
   try {
+    opts.preparationSignal?.throwIfAborted();
     const prepared = await prepare();
+    if (opts.preparationSignal?.aborted) {
+      return;
+    }
+    inputPrepared = true;
     const databaseOnly =
       opts.localStateOwner !== undefined &&
       prepared.operations.length > 0 &&
@@ -128,6 +136,9 @@ async function runConfigMutation(
       });
     }
   } catch (err) {
+    if (!inputPrepared && opts.preparationSignal?.aborted) {
+      return;
+    }
     if (opts.throwOnError) {
       throw err;
     }
@@ -174,7 +185,8 @@ export async function runConfigPatch(opts: {
   runtime?: RuntimeEnv;
   localStateOwner?: ConfigMutationOwner;
 }) {
-  return runConfigMutation(opts, async () => {
+  const signal = opts.cliOptions.stdin ? getAsyncWorkSignal() : undefined;
+  return runConfigMutation({ ...opts, preparationSignal: signal }, async () => {
     const { configPatchModeError, readConfigPatchOperations } =
       await import("./config-cli-input.js");
     if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {

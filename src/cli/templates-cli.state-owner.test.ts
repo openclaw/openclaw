@@ -26,10 +26,13 @@ describe("Template Add CLI state ownership", () => {
 
   beforeEach(async () => {
     root = path.dirname(process.env.OPENCLAW_STATE_DIR!);
-    source = path.join(root, "template.json");
+    source = path.join(root, "CLAW.md");
     output.length = 0;
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => output.push(value));
-    await fs.writeFile(source, JSON.stringify({ schemaVersion: 1, agent: { id: "demo" } }));
+    await fs.writeFile(
+      source,
+      `---\n${JSON.stringify({ schemaVersion: 1, agent: { id: "demo" } })}\n---\n`,
+    );
   });
 
   it("refuses Add and dry-run while another process owns the Gateway state", async () => {

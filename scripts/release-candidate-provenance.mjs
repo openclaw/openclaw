@@ -64,7 +64,7 @@ function validateCandidateSigningProvenance(targetSha, metadata) {
   };
 }
 
-export function validateCandidateActorPermission(actor, permission) {
+function validateCandidateActorPermission(actor, permission) {
   requireValue(
     isRecord(permission) &&
       (permission.permission === "admin" || permission.role_name === "maintain"),
@@ -73,7 +73,7 @@ export function validateCandidateActorPermission(actor, permission) {
   return actor;
 }
 
-export function verifyCandidateProvenance({
+function verifyCandidateProvenance({
   repository,
   targetSha,
   provenanceKind,

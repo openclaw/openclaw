@@ -1,0 +1,2 @@
+# Preserve regressions for unreadable configuration before CLI setup can write.
+100

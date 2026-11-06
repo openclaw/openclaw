@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, onCleanup, refresh, useContext } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
+import { isInlineImageSource } from "../../../lib/chat/message-extract.ts";
 import { chatImageDisplayKey, isChatThumbnail } from "../../../lib/chat/row-display-facts.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -24,18 +25,19 @@ import {
   readCachedManagedImageUrl,
   resolveManagedImageResource,
 } from "./chat-message-image-loading.ts";
-import { openMessageImage } from "./chat-message-image-open.ts";
+import { openMessageImage, withMessageImageGallery } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
   isCanonicalInboundMediaSource,
   isLocalAssistantAttachmentSource,
 } from "./chat-message-local-media.ts";
+import type { MessageMediaAction } from "./chat-message-media-actions.ts";
 import {
   observeChatMediaResourceSubscriber,
   releaseChatMediaResourceOwner,
   readManagedImageBlob,
 } from "./chat-message-media.ts";
-import type { ImageBlock, ImageRenderOptions, MessageMediaAction } from "./chat-message-media.ts";
+import type { ImageBlock, ImageRenderOptions } from "./chat-message-media.ts";
 import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 
@@ -53,9 +55,6 @@ type RetainedInlineImage = {
   timeout?: ReturnType<typeof setTimeout>;
 };
 
-const isInlineImageSource = (source: string | undefined): source is string =>
-  source?.startsWith("data:image/") === true || source?.startsWith("blob:") === true;
-
 function createMessageImagePresentation(props: MessageImageProps) {
   const display = useContext(ChatRowDisplayContext);
   let active = true;
@@ -71,6 +70,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
   const previewWidth = chatImageRenditionWidth("inline");
   let pendingPreview: Promise<unknown> | undefined;
   let imageKey = Symbol("image-presentation");
+  let frameSize: ReturnType<typeof resolveChatImagePreviewSize> | undefined;
   let retainedImage: RetainedInlineImage | { status: "unavailable" } | undefined;
   let admitted = false;
   let stopObserving: (() => void) | undefined;
@@ -237,6 +237,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
         previewElement = undefined;
         admitted = false;
         imageKey = Symbol("image-presentation");
+        frameSize = undefined;
       }
       releaseChatMediaResourceOwner(refreshImage);
     }
@@ -299,8 +300,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
     admitted = true;
     // A pane owns cancellation; this image alone owns its presentation updates.
     const subscriptionOptions = subscribedOptions(options);
-    const observed = subscriptionOptions !== options;
-    if (observed) {
+    if (subscriptionOptions !== options && !isInlineImageSource(image.url)) {
       pendingPreview = undefined;
       observeChatMediaResourceSubscriber(options?.mediaOwner, refreshImage);
     } else {
@@ -315,7 +315,6 @@ function createMessageImagePresentation(props: MessageImageProps) {
     const failure = availability.status === "unavailable" ? availability : undefined;
     // Tickets authorize new reads, not already decoded pixels. Only this
     // mounted image can survive an unconfirmed renewal; denial still clears it.
-    const unconfirmed = availability.status === "checking" || failure?.unconfirmed;
     const displayUrl =
       availability.status === "available"
         ? buildAssistantAttachmentUrl(
@@ -327,7 +326,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
             managed ? undefined : "thumbnail",
             previewWidth,
           )
-        : unconfirmed
+        : availability.status === "checking" || failure?.unconfirmed
           ? loadedElement?.getAttribute("src")
           : undefined;
     if (!displayUrl || decodeFailed) {
@@ -526,16 +525,19 @@ function createMessageImagePresentation(props: MessageImageProps) {
             ...view.actions,
           },
         };
+    const previewSize = resolveChatImagePreviewSize(
+      knownImageSize(image),
+      view.previewUrl && loadedElement
+        ? { width: loadedElement.naturalWidth, height: loadedElement.naturalHeight }
+        : undefined,
+    );
     return {
       image,
       managed,
       key: active ? imageKey : undefined,
-      previewSize: resolveChatImagePreviewSize(
-        knownImageSize(image),
-        view.previewUrl && loadedElement
-          ? { width: loadedElement.naturalWidth, height: loadedElement.naturalHeight }
-          : undefined,
-      ),
+      // Keep an admitted remote frame stable through decode and display-fact writes.
+      // Newly learned dimensions size its next admission; local pastes still adopt their pixels.
+      previewSize: isInlineImageSource(image.url) ? previewSize : (frameSize ??= previewSize),
       ...view,
       ...placeholder,
     };
@@ -625,7 +627,7 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
       previousImages.map((image, index) => [image.factIndex, slots[index]?.key]),
     );
     // Publish options with the slot key so retiring images keep their previous policy.
-    const imageOptions = { ...options, galleryImages: options?.galleryImages ?? images };
+    const imageOptions = withMessageImageGallery(options, images);
     slots = images.map((image, index) => {
       const slot = slots[index];
       const displayKey = row && chatImageDisplayKey(image, chatImageRenditionWidth("inline"));
@@ -691,9 +693,9 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
 
 function MessageImage(props: MessageImageProps): JSX.Element {
   const presented = useContext(ContentPresentation);
-  // Parked content releases active image subscriptions.
+  // Inline bytes have no remote resource custody and can retain decoded pixels while parked.
   return (
-    <Show when={presented()}>
+    <Show when={presented() || isInlineImageSource(props.image.url)}>
       {(_presented) => {
         const view = createMessageImagePresentation(props);
         return (

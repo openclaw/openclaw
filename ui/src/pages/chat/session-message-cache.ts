@@ -12,6 +12,7 @@ import {
   chatDisplaySourceKey,
   chatRowDisplaySchema,
   boundChatThumbnails,
+  CHAT_ROW_DISPLAY_WINDOW,
   projectChatRowDisplay,
   MAX_CHAT_THUMBNAILS,
   MAX_CHAT_THUMBNAIL_BYTES,
@@ -24,6 +25,7 @@ import type {
   ChatHeaderViewersSnapshot,
 } from "./chat-header-viewers-snapshot.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
+import { trimmedChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
@@ -97,6 +99,10 @@ export type ChatComposerSnapshot = Pick<
     GatewaySessionRow,
     "thinkingLevel" | "thinkingLevels" | "thinkingDefault" | "permissionMode"
   > & {
+    contextWindowDisplay?: Pick<
+      GatewaySessionRow,
+      "contextWindow" | "contextWindowDefault" | "contextWindows"
+    >;
     defaultPermissionMode?: GatewaySessionRow["permissionMode"];
     speed?: ChatFastModePresentation;
   };
@@ -187,7 +193,18 @@ export function createChatDisplayFacts(
           }
           const previous = snapshot.rowDisplay?.[messageId];
           const row = parseSnapshot(chatRowDisplaySchema, { ...previous, ...update });
-          if (!row || JSON.stringify(row).length > 8192) {
+          if (!row) {
+            return;
+          }
+          // Oversized replies recover live instead of becoming a first-paint payload.
+          if (
+            row.recoveredMessage &&
+            new TextEncoder().encode(JSON.stringify(row.recoveredMessage)).byteLength > 64 * 1024
+          ) {
+            delete row.recoveredMessage;
+          }
+          const { recoveredMessage: _recoveredMessage, ...display } = row;
+          if (JSON.stringify(display).length > 8192) {
             return;
           }
           cacheChatSessionSnapshot(cache, host, target, {
@@ -532,7 +549,10 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.board === snapshot.board &&
     existing.snapshot.composer === snapshot.composer &&
     (previousState === sessionState ||
-      (previousState?.archived === sessionState?.archived &&
+      (previousState?.chrome === sessionState?.chrome &&
+        JSON.stringify(previousState?.contextUsage) ===
+          JSON.stringify(sessionState?.contextUsage) &&
+        previousState?.archived === sessionState?.archived &&
         previousState?.visibility === sessionState?.visibility &&
         previousState?.sharingRole === sessionState?.sharingRole &&
         previousState?.unarchiveAllowed === sessionState?.unarchiveAllowed &&
@@ -589,25 +609,27 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
   }
   let retainedMessageWeight = messageWeights.reduce((sum, weight) => sum + weight, 0);
   let start = 0;
+  // Every trim before the row display window shares one envelope; measure it once,
+  // not once per dropped message group.
+  const trimmedPagination = trimmedChatHistoryPagination(snapshot.pagination);
+  const lastSharedTrim = snapshot.messages.length - CHAT_ROW_DISPLAY_WINDOW;
+  let sharedEnvelope: ReturnType<typeof measureChatSnapshotEnvelope> | undefined;
   while (true) {
-    const pagination =
-      start === 0
-        ? snapshot.pagination
-        : capSnapshotPagination(snapshot.pagination, snapshot.messages, start);
-    if (!pagination) {
+    if (start > 0 && start === snapshot.messages.length) {
       return null;
     }
-    const rowDisplay = projectChatRowDisplay(snapshot, start);
-    const envelope = { ...snapshot, messages: [], rowDisplay, pagination };
-    let weight: number | null;
-    try {
-      weight =
-        (JSON.stringify(envelope)?.length ?? 0) +
-        retainedMessageWeight +
-        Math.max(0, messageWeights.length - start - 1);
-    } catch {
-      weight = null;
+    const pagination = start === 0 ? snapshot.pagination : trimmedPagination;
+    const shared = start > 0 && start <= lastSharedTrim;
+    const envelope =
+      (shared && sharedEnvelope) || measureChatSnapshotEnvelope(snapshot, start, pagination);
+    if (shared) {
+      sharedEnvelope = envelope;
     }
+    const { rowDisplay } = envelope;
+    const weight =
+      envelope.weight === null
+        ? null
+        : envelope.weight + retainedMessageWeight + Math.max(0, messageWeights.length - start - 1);
     if (weight !== null && weight <= MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
       return {
         snapshot:
@@ -640,6 +662,20 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
   }
 }
 
+function measureChatSnapshotEnvelope(
+  snapshot: ChatSessionSnapshot,
+  start: number,
+  pagination: ChatHistoryPagination,
+) {
+  const rowDisplay = projectChatRowDisplay(snapshot, start);
+  try {
+    const envelope = { ...snapshot, messages: [], rowDisplay, pagination };
+    return { rowDisplay, weight: JSON.stringify(envelope)?.length ?? 0 };
+  } catch {
+    return { rowDisplay, weight: null };
+  }
+}
+
 function serializedArrayItemWeight(value: unknown): number | null {
   if (value && typeof value === "object") {
     const cached = cachedMessageWeights.get(value);
@@ -659,37 +695,16 @@ function serializedArrayItemWeight(value: unknown): number | null {
   }
 }
 
-function capSnapshotPagination(
-  pagination: ChatHistoryPagination,
-  messages: unknown[],
-  start = 0,
-): ChatHistoryPagination | null {
-  const totalMessages = pagination.totalMessages;
-  let oldestSeq: number | null = null;
-  for (let index = start; index < messages.length; index += 1) {
-    oldestSeq = readSessionMessageSequence(messages[index]);
-    if (oldestSeq !== null) {
-      break;
-    }
-  }
-  if (typeof totalMessages !== "number" || oldestSeq === null) {
-    return null;
-  }
-  const retainedDepth = totalMessages - oldestSeq + 1;
-  if (retainedDepth <= 0) {
-    return null;
-  }
-  return oldestSeq > 1
-    ? { hasMore: true, nextOffset: retainedDepth, totalMessages }
-    : { hasMore: false, totalMessages };
-}
-
 function samePagination(left: ChatHistoryPagination, right: ChatHistoryPagination): boolean {
   if (left.hasMore !== right.hasMore || left.totalMessages !== right.totalMessages) {
     return false;
   }
   if (left.hasMore && right.hasMore) {
-    return left.nextOffset === right.nextOffset;
+    return (
+      left.nextOffset === right.nextOffset &&
+      left.olderCursor === right.olderCursor &&
+      left.needsBoundary === right.needsBoundary
+    );
   }
   return !left.hasMore && !right.hasMore && left.completeSnapshot === right.completeSnapshot;
 }

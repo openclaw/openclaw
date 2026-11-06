@@ -33,6 +33,7 @@ import {
 } from "../plugins/portable-icon-paths.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound as sendNotFound } from "./control-ui-http-utils.js";
+import { loadControlUiLinkMetadata } from "./control-ui-link-preview.js";
 import { sendMethodNotAllowed } from "./http-common.js";
 import {
   createHttpImageRepresentation,
@@ -194,6 +195,8 @@ async function loadCatalogIcon(params: {
   iconUrl: string;
   maxBytes?: number;
   requireHttps?: boolean;
+  signal?: AbortSignal;
+  beforeRequest?: () => void;
 }): Promise<HttpImageRepresentation | null> {
   const parsed = URL.parse(params.iconUrl);
   if (
@@ -218,7 +221,9 @@ async function loadCatalogIcon(params: {
       timeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
       responseHeaderTimeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
       readIdleTimeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
+      ...(params.beforeRequest ? { beforeRequest: params.beforeRequest } : {}),
       requestInit: {
+        ...(params.signal ? { signal: params.signal } : {}),
         headers: {
           Accept: "image/avif,image/webp,image/png,image/jpeg,image/gif,image/svg+xml",
         },
@@ -232,6 +237,51 @@ async function loadCatalogIcon(params: {
   } catch {
     return null;
   }
+}
+
+async function loadLinkFavicon(
+  hostname: string,
+  assertCurrent: () => void,
+): Promise<HttpImageRepresentation | null> {
+  const signal = AbortSignal.timeout(PLUGIN_ICON_REQUEST_TIMEOUT_MS);
+  const beforeRequest = () => {
+    signal.throwIfAborted();
+    assertCurrent();
+  };
+  const loadIcon = (iconUrl: string) =>
+    loadCatalogIcon({
+      iconUrl,
+      maxBytes: LINK_FAVICON_MAX_BYTES,
+      requireHttps: true,
+      signal,
+      beforeRequest,
+    });
+  const origin = new URL(`https://${hostname}/`);
+  const conventionalUrl = new URL("/favicon.ico", origin).href;
+  const conventional = await loadIcon(conventionalUrl);
+  if (conventional) {
+    return conventional;
+  }
+  // Reuse the preview metadata reader, not the full image/preview pipeline.
+  const page = await loadControlUiLinkMetadata(
+    origin,
+    () => {
+      beforeRequest();
+      return true;
+    },
+    signal,
+    { requireHttps: true, allowSvgIcons: true },
+  );
+  for (const iconUrl of page?.icons ?? []) {
+    if (iconUrl === conventionalUrl) {
+      continue;
+    }
+    const icon = await loadIcon(iconUrl);
+    if (icon) {
+      return icon;
+    }
+  }
+  return null;
 }
 
 export function clearPluginIconCacheForTest(): void {
@@ -371,8 +421,7 @@ export async function handlePluginIconHttpRequest(
         iconUrl: catalogIconUrl,
       }) ?? resolveClawHubCatalogIconUrl(catalogIconUrl))
     : faviconHostname
-      ? // The route accepts a hostname, never a caller-controlled URL. Keep
-        // path and scheme fixed so only the strict fetch guard owns redirects.
+      ? // Keep one cache identity for both conventional and page-declared icons.
         `https://${faviconHostname}/favicon.ico`
       : undefined;
   if (!pluginIcon && !remoteIconUrl) {
@@ -402,10 +451,9 @@ export async function handlePluginIconHttpRequest(
             rootPath: pluginIcon.rootPath,
             activity: activityRequest.matched,
           })
-        : loadCatalogIcon({
-            iconUrl: remoteIconUrl!,
-            ...(faviconHostname ? { maxBytes: LINK_FAVICON_MAX_BYTES, requireHttps: true } : {}),
-          });
+        : faviconHostname
+          ? loadLinkFavicon(faviconHostname, () => requestAuth.assertCurrent())
+          : loadCatalogIcon({ iconUrl: remoteIconUrl! });
   const icon = cached
     ? await cached.promise
     : faviconHostname &&

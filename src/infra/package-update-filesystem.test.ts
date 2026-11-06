@@ -112,6 +112,34 @@ it("keeps forced package cleanup idempotent when the parent is already absent", 
   await expectMissing(parent);
 });
 
+it.runIf(process.platform !== "win32")(
+  "refuses unjournaled symlink activation revoked during canonical source resolution",
+  async () => {
+    await writeFiles({ "target/marker.txt": "candidate" });
+    await fs.symlink("target", source);
+    let revoked = false;
+    const realpath = fs.realpath.bind(fs);
+    vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
+      const resolved = await realpath(...args);
+      if (String(args[0]) === source) {
+        revoked = true;
+      }
+      return resolved;
+    });
+    const published = vi.fn();
+    await expect(
+      activateStagedNpmPackageRoot(source, destination, undefined, {
+        assertCaller: assertOwner(() => revoked, errno("owner revoked", "EXDEV")),
+        onPublished: published,
+        warnings: [],
+      }),
+    ).rejects.toThrow("owner revoked");
+    expect(published).not.toHaveBeenCalled();
+    await expectMissing(destination);
+    expect(await fs.readlink(source)).toBe("target");
+  },
+);
+
 it.each(["copy", "remove", "activate", "restore", "discard"] as const)(
   "rejects a returned Promise at the raw %s authority boundary before filesystem effects",
   async (operation) => {

@@ -105,6 +105,7 @@ const RERUN_GROUPS = new Set([
   "windows-node",
   "live-e2e",
   "package",
+  "qualified-package",
   "qa-parity",
   "qa-live",
   "npm-telegram",
@@ -197,7 +198,7 @@ export function fullReleaseConcurrencyBranchPrefix(
 }
 
 function usage() {
-  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <candidate-sha>] [--trusted-workflow-ref <candidate|main|release-publish-tag>] [--admission-workflow-sha <P-sha>] [--admission-workflow-ref <main|release-publish-tag>] [--request-file <path>] [--keep-branch] [--dry-run] [-- -f key=value ...]
+  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <candidate-sha>] [--trusted-workflow-ref <candidate|main|release-publish-tag>] [--admission-workflow-sha <P-sha>] [--admission-workflow-ref <main|release-publish-tag>] [--pin-admission-workflow] [--request-file <path>] [--keep-branch] [--dry-run] [-- -f key=value ...]
        node scripts/full-release-validation-at-sha.mjs --reconcile-request <path>
        node scripts/full-release-validation-at-sha.mjs --resume-request <path>
 
@@ -205,7 +206,9 @@ Candidate-owned qualification is the default: C=Q. Invoking it attests that the
 selected exact candidate and its qualification policy are reviewed. The existing
 prepare workflow at independently trusted P authenticates the complete request;
 then this same dispatch owner runs the candidate workflow graph at Q. P defaults
-to a pinned main revision, never the qualification harness. Missing C/Q or P
+to a verified main revision that may advance before dispatch, never the qualification harness.
+Pass --pin-admission-workflow with an exact P SHA to require that main remain unchanged;
+protected publication tags are always pinned. Missing C/Q or P
 contracts require a deliberate backport/tooling repair; there is no main fallback.
 Explicit main/protected qualification tooling retains the historical diagnostic
 route. Scheduled main qualification selects that route explicitly.
@@ -421,6 +424,7 @@ export function parseArgs(argv: string[]) {
     reconcileRequest: "",
     resumeRequest: "",
     specifiedInputs: [] as string[],
+    pinAdmissionWorkflow: false,
     keepBranch: false,
     dryRun: false,
     inputs,
@@ -455,6 +459,10 @@ export function parseArgs(argv: string[]) {
     if (valueKey) {
       args[valueKey] = requireOptionArgument(argv, i, arg);
       i += 1;
+      continue;
+    }
+    if (arg === "--pin-admission-workflow") {
+      args.pinAdmissionWorkflow = true;
       continue;
     }
     if (arg === "--keep-branch") {
@@ -585,6 +593,9 @@ export function parseArgs(argv: string[]) {
   }
   if (args.admissionWorkflowRef !== "main" && !SHA_PATTERN.test(args.admissionWorkflowSha)) {
     throw new Error("Protected admission tooling requires its full --admission-workflow-sha");
+  }
+  if (args.pinAdmissionWorkflow && !SHA_PATTERN.test(args.admissionWorkflowSha)) {
+    throw new Error("--pin-admission-workflow requires a full --admission-workflow-sha");
   }
   return args;
 }
@@ -1765,7 +1776,11 @@ function releaseDecisionAvailable(parentRunId: string, parentRunAttempt: number)
   }
 }
 
-function waitForWorkflowRun(parentRunId: string, workflowSha: string, record?: DispatchRecord) {
+function waitForWorkflowRun(
+  parentRunId: string,
+  workflowSha: string,
+  record?: DispatchRecord,
+): "success" | "pending" {
   let lastSummary = "";
   let consecutiveErrors = 0;
   const startedAt = Date.now();
@@ -1811,6 +1826,27 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string, record?: D
       }
       if (decision.state === "ready") {
         const releaseDecision = tryReadReleaseDecision(parentRunId, attempt, workflowSha);
+        if (
+          releaseDecision?.state === "blocked_diagnostics_running" &&
+          suite.status === "completed" &&
+          stringValue(suite.conclusion) &&
+          suite.conclusion !== "success"
+        ) {
+          throw new Error(
+            `Full Release Validation concluded ${stringValue(suite.conclusion).toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+          );
+        }
+        if (
+          releaseDecision?.state === "blocked_diagnostics_running" &&
+          suite.status !== "completed"
+        ) {
+          console.log(formatReleaseStateOutcome(releaseDecision));
+          console.log(
+            `Full Release Validation remains active: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+          );
+          console.log(`Continue with: pnpm frv watch --run ${parentRunId}`);
+          return "pending";
+        }
         if (releaseDecision && releaseDecisionStopsForeground(releaseDecision.state)) {
           throw new Error(
             `${formatReleaseStateOutcome(releaseDecision)}\nhttps://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
@@ -1825,7 +1861,7 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string, record?: D
     }
     if (suite?.status === "completed" && stringValue(suite.conclusion)) {
       if (suite.conclusion === "success") {
-        return suite;
+        return "success";
       }
       throw new Error(
         `Full Release Validation concluded ${stringValue(suite.conclusion, "unknown").toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
@@ -2222,6 +2258,10 @@ async function main() {
           inputs: selection.wireInputs,
         }),
         workflowSha: admissionWorkflowSha,
+        workflowShaPolicy:
+          args.admissionWorkflowRef === "main" && !args.pinAdmissionWorkflow
+            ? "advance-with-main"
+            : "pinned",
         workflowRef: args.admissionWorkflowRef,
         workflowId: Number(metadata.id),
         phase: "prepared",
@@ -2435,15 +2475,16 @@ async function executeFrozenDispatch(options: {
     }
     if (parentRunId) {
       console.log(`Parent run: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`);
-      waitForWorkflowRun(parentRunId, workflowSha, record);
-      parentConclusion = "success";
-      verifyReleaseEvidence(
-        parentRunId,
-        // Admission may have advanced P with main before its POST.
-        record?.admission?.workflowSha ?? admissionWorkflowSha ?? workflowSha,
-        candidateOwned ? args.admissionWorkflowRef : args.trustedWorkflowRef,
-      );
-      evidenceVerified = true;
+      parentConclusion = waitForWorkflowRun(parentRunId, workflowSha, record);
+      if (parentConclusion === "success") {
+        verifyReleaseEvidence(
+          parentRunId,
+          // Admission may have advanced P with main before its POST.
+          record?.admission?.workflowSha ?? admissionWorkflowSha ?? workflowSha,
+          candidateOwned ? args.admissionWorkflowRef : args.trustedWorkflowRef,
+        );
+        evidenceVerified = true;
+      }
     }
   } catch (error) {
     operationError = error instanceof Error ? error : new Error(String(error));

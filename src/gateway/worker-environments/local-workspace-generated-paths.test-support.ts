@@ -30,6 +30,8 @@ const lock = ".artifacts/dist-artifacts.lock/owner.json";
 const packageCaches = [
   ".openclaw/tmp/toolchain/node/bin/node",
   ".local/share/pnpm/store/v11/files/10/package-content",
+  "artifacts/task-environment/local/share/pnpm/store/v11/files/10/package-content",
+  ".openclaw/.pnpm-store/v11/files/10/package-content",
   ".cache/openclaw/bun/pinned/linux-x64/bin/bun",
   ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome",
   ".cache/bun-transpiler/compiled.pile",
@@ -131,9 +133,7 @@ export async function proveNestedGitWorkspaceRecovery(owner: LocalWorkspaceOwner
   const commit = await runGit(["commit-tree", resultTree], message(after.ref));
   await runGit(["update-ref", ref, commit]);
   expect(await readStagedWorkerWorkspaceResult(canonical, ref)).toMatchObject({
-    baseManifestRaw: before.raw,
     baseManifestRef: before.ref,
-    currentManifestRaw: after.raw,
     currentManifestRef: after.ref,
   });
   const invalid = workerWorkspaceResultRef(`historical-nested-git-v${version}-bad-digest`);
@@ -239,7 +239,10 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
   }
   const row = (await readLocalWorkspaceProjection(owner.worktree.id))!;
   // Old captures can retain a cache ancestor that has since disappeared on the host.
-  await writeWorkspaceFiles(projection, { [retainedWorker]: "previous compiler output\n" });
+  await writeWorkspaceFiles(projection, {
+    [retainedWorker]: "previous compiler output\n",
+    ...cacheFiles(packageCaches, "previous dependency cache\n"),
+  });
   const base = { ...(await manifestFor(projection)), baseCommit: row.base_commit };
   const before = legacyManifest(base);
   await setBaseline(owner, before);

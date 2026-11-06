@@ -45,9 +45,13 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
             channelId,
             ctx.withOpts(),
           )
-        : (await discordMessagingActionRuntime.listPinsDiscord(channelId, ctx.withOpts())).map(
-            (pin) => ctx.normalizeMessage(pin),
-          );
+        : (
+            await discordMessagingActionRuntime.listPinsDiscord(
+              channelId,
+              ctx.withOpts(),
+              readPositiveIntegerParam(ctx.params, "limit"),
+            )
+          ).map((pin) => ctx.normalizeMessage(pin));
       return jsonResult({ ok: true, [gate]: value });
     }
     case "fetchMessage": {

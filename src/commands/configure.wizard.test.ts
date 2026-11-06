@@ -91,13 +91,12 @@ describe("runConfigureWizard", () => {
       readError: { code: "EACCES" },
       issues: [{ path: "", message: "Permission denied reading configuration" }],
     });
-    const runtime = mocks.runtime;
     await runConfigureWizard({});
     expect(mocks.clackOutro).toHaveBeenCalledWith(
       expect.stringContaining("OpenClaw config could not be read"),
     );
     expect(mocks.clackOutro.mock.calls.flat().join("\n")).not.toContain("doctor --fix");
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.clackSelect).not.toHaveBeenCalled();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });

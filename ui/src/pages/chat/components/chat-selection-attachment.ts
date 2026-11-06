@@ -21,6 +21,19 @@ export function formatChatSelectionAnnotation(annotation: ChatSelectionAnnotatio
   ].join("\n\n");
 }
 
+/** Message-text form of a comment: the quote renders in the sent bubble and reads naturally to the model. */
+export function formatChatSelectionQuote(annotation: ChatSelectionAnnotation): string {
+  const quote = annotation.text
+    .trim()
+    .split("\n")
+    .map((line) => (line.trim() ? `> ${line}` : ">"))
+    .join("\n");
+  const comment = annotation.comment.trim();
+  return comment ? `${quote}\n\n${comment}` : quote;
+}
+
+// The text payload only carries the staged comment through local draft persistence;
+// sends turn the annotation into message text and never upload this file.
 export function createChatSelectionAttachment(
   annotation: ChatSelectionAnnotation,
   options: Pick<ChatAttachmentControlsProps, "attachmentLimits" | "selectionContextOnly">,

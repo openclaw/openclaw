@@ -128,17 +128,11 @@ describe("runMessageAction plugin dispatch", () => {
             : mocks.callGatewayLeastPrivilege;
         const handleActionResult = vi.fn(async () => jsonResult({ ok: true, local: true }));
         setupGatewayPlugin("Gateway Chat timeout reconciliation test plugin.", handleActionResult);
-        const timeout =
-          route === "hosted"
-            ? new GatewayProtocolRequestTimeoutError({
-                method: "message.action",
-                timeoutMs: 30_000,
-                requestSent: true,
-              })
-            : Object.assign(new Error("gateway timeout after 30000ms"), {
-                name: "GatewayTransportError",
-                kind: "timeout",
-              });
+        const timeout = new GatewayProtocolRequestTimeoutError({
+          method: "message.action",
+          timeoutMs: 30_000,
+          requestSent: true,
+        });
         request
           .mockRejectedValueOnce(timeout)
           .mockResolvedValueOnce({ ok: true, messageId: "gw-send-late" });
@@ -229,6 +223,7 @@ describe("runMessageAction plugin dispatch", () => {
       const timeout = Object.assign(new Error("gateway timeout after 30000ms"), {
         name: "GatewayTransportError",
         kind: "timeout",
+        requestDispatched: true,
       });
       mocks.callGatewayLeastPrivilege
         .mockRejectedValueOnce(timeout)

@@ -208,6 +208,38 @@ it("Doctor reclaims an abandoned runtime despite unrelated helpers with unreadab
   expect(output).not.toContain("4243");
 });
 
+it.each([
+  ["Gateway", ["openclaw-gateway"], true],
+  ["title-erased CLI that may be its updater", ["openclaw"], false],
+] as const)("Doctor with a live %s", async (_name, argv, reclaimed) => {
+  const runtime = projection("Gate01");
+  const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
+    "../infra/openclaw-process-census.js",
+  );
+  mocks.census.mockImplementation(actual.inspectOtherOpenClawProcesses);
+  mockProcessPlatform("linux");
+  vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
+  vi.spyOn(processGroups, "readProcessGroupMembers").mockImplementation(function* () {
+    for (const [pid, command] of [
+      [process.pid, ["openclaw-doctor"]],
+      [4245, argv],
+    ] as const) {
+      yield { pid, pgid: process.pid, state: "S", command: { ppid: 0, argv: [...command] } };
+    }
+  });
+  vi.spyOn(processArgv, "readProcessWorkingDirectories").mockReturnValue(
+    new Map([
+      [process.pid, parent],
+      [4245, "/"],
+    ]),
+  );
+  const output = await runDoctor(true);
+  expect(fs.existsSync(runtime)).toBe(!reclaimed);
+  expect(output).toContain(
+    reclaimed ? `Removed abandoned updater runtime: ${runtime}` : "PIDs: 4245",
+  );
+});
+
 it("Doctor reclaims an npm-prefix runtime and releases its activation journal hardlink", async () => {
   const installed = path.join(parent, "prefix/lib/node_modules/openclaw");
   fs.mkdirSync(path.dirname(installed), { recursive: true });

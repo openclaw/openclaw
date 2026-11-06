@@ -1,6 +1,9 @@
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import type {
+  AdmittedRunOperatorAuthority,
+  OperationalRunInstanceRef,
+} from "../agents/admitted-run-context.js";
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
 import type { LlmBoundaryOptions } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
@@ -16,7 +19,6 @@ import type { SessionActor } from "../config/sessions/session-actor-contract.js"
 import type { SessionAdmissionDatabaseClaim } from "../config/sessions/session-admission-claim.types.js";
 import type { SessionAdmissionTransition } from "../config/sessions/session-admission-transition.types.js";
 import type { SessionEntryCohortReader } from "../config/sessions/session-entry-read-runtime.types.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
 import type { Context, Model } from "../llm/types.js";
@@ -44,6 +46,7 @@ import type {
   ReplyBackendMessageInjectionV2,
   ReplyBackendHandle,
   ReplyTurnParticipantInput,
+  ReplySteerNowResult,
 } from "./session-controller.backend-contracts.js";
 import type { LifecycleDiagnosticOperation } from "./session-controller.lifecycle-diagnostics.js";
 import type { SessionTarget } from "./session-controller.target.js";
@@ -216,6 +219,11 @@ export type ReplyOperation = {
   /** A steered input joined this operation; any earlier source answer predates it. */
   markSteeredInputAccepted(params: { inboundAudio: boolean }): void;
   markSourceReplyDelivered(): void;
+  /**
+   * Observe the moment a final message-tool send answers this turn's source, while the
+   * run continues. Channel progress UI retires here instead of rendering below the answer.
+   */
+  onSourceReplyDelivered(listener: () => void): () => void;
   /** Freeze the complete caller policy before a concrete backend attempt attaches. */
   /** @deprecated Use bindToolAuthoritySnapshotAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   bindToolAuthoritySnapshot(snapshot: ReplyToolAuthoritySnapshot): void;
@@ -375,11 +383,6 @@ export type ReplyOperationAdmission = {
   resolveSessionTarget?: () => SessionEntryTargetPatchScope | undefined;
   sessionActor?: SessionActor;
   acquireSessionActor?: () => Promise<SessionActor | undefined>;
-  /** Accepted input keeps its durable claim while capacity admission adopts the writer. */
-  adoptInput?: (writer?: {
-    runId: string;
-    assertCurrent?: () => void;
-  }) => Promise<InternalSessionEntry>;
   afterTransition?: (transition: SessionAdmissionTransition) => Promise<void>;
 };
 
@@ -547,8 +550,12 @@ export type SessionControllerInput = {
     predecessor: Promise<boolean>;
     settled: Promise<boolean>;
     settle(accepted: boolean): void;
-    accepted?: boolean;
     admitted?: boolean;
+    steerNow?: {
+      target: ReplyMessageInjectionTarget;
+      queueIdentity: string;
+      result?: ReplySteerNowResult;
+    };
   };
   claim?: SessionControllerMailboxClaim;
   ready?: (claim: SessionControllerMailboxClaim) => void;
@@ -578,6 +585,8 @@ export type SessionControllerMailboxClaim = {
   retryBeforeExecution?: boolean;
 };
 
+type FollowupSummaryEntry = { source: FollowupRun; line: string };
+
 /** All runnable inputs, including direct native producers, share this ordered owner. */
 export type SessionControllerMailbox = {
   readonly key: string;
@@ -602,14 +611,11 @@ export type SessionControllerMailbox = {
   cap: number;
   dropPolicy: "old" | "new" | "summarize";
   droppedCount: number;
-  summaryLines: string[];
-  summarySources: FollowupRun[];
+  summaryEntries: FollowupSummaryEntry[];
   activeSummarySources: Set<FollowupRun>;
   summaryElisions: Array<{
     contextKey: string;
-    count: number;
-    sources: FollowupRun[];
-    summaryLines: string[];
+    entries: FollowupSummaryEntry[];
     sourceRefs: Map<FollowupRun, FollowupRun>;
   }>;
   lastRun?: FollowupRun["run"];
@@ -621,6 +627,8 @@ export type SessionControllerMailbox = {
 };
 
 export type SessionControllerSourceAdapter = {
+  /** Original personal ingress, bound at admission; identity evidence, not an execution grant. */
+  initiatingPersonalOperator?: AdmittedRunOperatorAuthority;
   readonly scope?: string;
   readonly authority?: { assertCurrent(): void; signal?: AbortSignal };
   readonly signal?: AbortSignal;
@@ -642,6 +650,7 @@ export type SessionControllerSourceAdapter = {
 export type SessionControllerSourceInjection = {
   admit(): Promise<boolean>;
   accepted(accepted: boolean): void;
+  /** Authoritative final custody; only proven withdrawal can undo native acceptance. */
   finish(consumed: boolean): void;
 };
 
@@ -654,6 +663,8 @@ export type SessionControllerWithdrawalHold = (() => void) & {
 export const inputCancellation = Symbol.for("openclaw.sessionControllerInputCancellation");
 
 export type FollowupRun = FollowupRunPayload & {
+  /** @internal Host-only fallback eligibility; false preserves a caller without a profile grant. */
+  sessionPrincipalTurn?: boolean;
   run: FollowupRunPayload["run"] & {
     /** Observe admission without transferring the runner's settlement custody. */
     onOperationAdmitted?: (operation: ReplyOperation) => void;

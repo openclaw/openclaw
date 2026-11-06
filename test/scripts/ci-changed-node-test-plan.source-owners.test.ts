@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -17,27 +16,21 @@ import {
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import {
   gatewayCallsitesGuard,
+  createFixtureGit,
   createChangedNodeTestShards,
   materializeGatewayCallsitesFixture,
   selectedFiles,
   fallbackGroups,
   expectProtectedOwnerExpansion,
+  writeFiles,
 } from "./ci-changed-node-test-plan.test-support.js";
 
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const sourcePolicyTest = "src/infra/fs-safe-import-boundary.test.ts";
 const lintSuppressionInventory = "test/scripts/lint-suppressions.test.ts";
-
-function writeFiles(cwd: string, files: Record<string, string>) {
-  for (const [file, source] of Object.entries(files)) {
-    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-    writeFileSync(path.join(cwd, file), source);
-  }
-}
 
 function createSourceFixture(prefix: string, files: Record<string, string>) {
   const cwd = argvTempDirs.make(prefix);
@@ -86,22 +79,7 @@ function createErasedCoreSourceFixture() {
     "src/example/runtime-before.ts": "export const value = 1;\n",
   });
   materializeGatewayCallsitesFixture(cwd);
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.test",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "core.hooksPath=/dev/null",
-        ...args,
-      ],
-      { cwd, env: createNestedGitEnv(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
+  const git = createFixtureGit(cwd);
   git("init", "--quiet");
   git("add", ".");
   git("commit", "--quiet", "-m", "fixture baseline");
@@ -127,6 +105,18 @@ function createErasedCoreSourceFixture() {
 }
 
 describe("CI changed Node test plan", () => {
+  it.each([
+    ["extensions/ollama/openclaw.plugin.json", "src/config/defaults.ollama-output-cap.test.ts"],
+    ["test/fixtures/hooks-install/tar-evil-id.tar", "src/hooks/install.test.ts"],
+  ])("keeps the declared file reader when %s changes", (input, reader) => {
+    const cwd = createSourceFixture("changed-declared-input-", {
+      [input]: "{}\n",
+      [reader]: "export {};\n",
+    });
+    expectFiles(createChangedNodeTestShards([input], { cwd }), [reader]);
+    expect(resolvePolicyTestTargets([`${input}.unrelated`], { cwd })).not.toContain(reader);
+  });
+
   it.each([
     ["extensions/copilot/index.ts", ["extensions/copilot/index.test.ts"]],
     ["extensions/copilot/harness.ts", ["extensions/copilot/harness.test.ts"]],
@@ -218,6 +208,7 @@ describe("CI changed Node test plan", () => {
         "src/auto-reply/reply/commands-allowlist.owner.test.ts",
         "src/auto-reply/reply/commands-plugin.channel-native.test.ts",
         "src/auto-reply/reply/commands-plugin.native-subagents.test.ts",
+        "src/gateway/operator-run-recovery.channel.test.ts",
         "src/gateway/operator-run-recovery.test.ts",
         "src/gateway/server.mcp-session-owner.test.ts",
       ],
@@ -444,12 +435,7 @@ describe("CI changed Node test plan", () => {
     ]);
     // Local explicit selection still runs only the requested file.
     expect(buildVitestRunPlans([target])).toMatchObject([
-      {
-        config: "test/vitest/vitest.boundary.config.ts",
-        includePatterns: [target],
-        forwardedArgs: [],
-        watchMode: false,
-      },
+      runPlan("test/vitest/vitest.boundary.config.ts", target),
     ]);
   });
 
@@ -703,76 +689,78 @@ describe("CI changed Node test plan", () => {
     }
   });
 
-  it.each([
-    ...[
-      "src/secrets/runtime-auth-store-admission.ts",
-      "src/agents/prepared-model-runtime.configured.ts",
-    ].map((changedPath) => ({
-      changedPath,
-      expected: ["src/gateway/server.agents.config-readiness.test.ts"],
-    })),
-    {
-      changedPath: "src/gateway/config-reload.ts",
-      expected: [
-        "src/gateway/server.config-patch.test.ts",
-        "src/gateway/server.agents.config-readiness.test.ts",
+  it.each(
+    Array.of<[string[], string[]]>(
+      [
+        [
+          "src/secrets/runtime-auth-store-admission.ts",
+          "src/agents/prepared-model-runtime.configured.ts",
+        ],
+        ["src/gateway/server.agents.config-readiness.test.ts"],
       ],
-    },
-    ...["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"].map((changedPath) => ({
-      changedPath,
-      expected: [
-        "src/gateway/server.agent-execution-shutdown.test.ts",
-        "src/gateway/server.agent-late-admission.test.ts",
-        "test/gateway-session-end-shutdown.e2e.test.ts",
+      [
+        ["src/gateway/config-reload.ts"],
+        [
+          "src/gateway/server.config-patch.test.ts",
+          "src/gateway/server.agents.config-readiness.test.ts",
+        ],
       ],
-    })),
-    // Child-process E2Es: the import graph reaches only the test-instance helper.
-    {
-      changedPath: "src/gateway/server-startup-observers.ts",
-      expected: ["test/gateway-restart-resume.e2e.test.ts"],
-    },
-    {
-      changedPath: "src/process/command-queue.capacity-groups.ts",
-      expected: ["test/gateway-hook-concurrency.e2e.test.ts"],
-    },
-    {
-      changedPath: "src/sessions/session-controller.steer.ts",
-      expected: [
-        "test/gateway-restart-resume.e2e.test.ts",
-        "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
+      [
+        ["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"],
+        [
+          "src/gateway/server.agent-execution-shutdown.test.ts",
+          "src/gateway/server.agent-late-admission.test.ts",
+          "test/gateway-session-end-shutdown.e2e.test.ts",
+        ],
       ],
-    },
-    {
-      changedPath: "src/auto-reply/reply/queue/drain.ts",
-      expected: ["test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts"],
-    },
-    {
-      changedPath: "node-runtime-recovery.mjs",
-      expected: ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"],
-    },
-    {
-      changedPath: "src/auto-reply/reply/abort.test.ts",
-      expected: ["test/scripts/tsgo-core-test-shards.test.ts"],
-    },
-    {
-      changedPath: "scripts/lib/ci-proof-test-inventory.mts",
-      expected: ["test/vitest-pr-exempt-retention.test.ts"],
-    },
-    {
-      changedPath: "src/plugins/plugin-instance.ts",
-      expected: [
-        "test/scripts/eager-import-closure.test.ts",
-        "test/scripts/pr-worktree-provision.test.ts",
+      // Child-process E2Es: the import graph reaches only the test-instance helper.
+      [["src/gateway/server-startup-observers.ts"], ["test/gateway-restart-resume.e2e.test.ts"]],
+      [
+        ["src/process/command-queue.capacity-groups.ts"],
+        ["test/gateway-hook-concurrency.e2e.test.ts"],
       ],
-    },
-    {
-      changedPath: "scripts/e2e/lib/upgrade-survivor/run.sh",
-      expected: [
-        "test/scripts/package-acceptance-workflow.test.ts",
-        "test/scripts/upgrade-survivor-missing-load-path.test.ts",
+      [
+        ["src/sessions/session-controller.steer.ts"],
+        [
+          "test/gateway-restart-resume.e2e.test.ts",
+          "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
+        ],
       ],
-    },
-  ])(
+      [
+        ["src/auto-reply/reply/queue/drain.ts"],
+        ["test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts"],
+      ],
+      [["node-runtime-recovery.mjs"], ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"]],
+      [["src/auto-reply/reply/abort.test.ts"], ["test/scripts/tsgo-core-test-shards.test.ts"]],
+      [["scripts/lib/ci-proof-test-inventory.mts"], ["test/vitest-pr-exempt-retention.test.ts"]],
+      [
+        ["src/plugins/plugin-instance.ts"],
+        ["test/scripts/eager-import-closure.test.ts", "test/scripts/pr-worktree-provision.test.ts"],
+      ],
+      [
+        ["scripts/e2e/lib/upgrade-survivor/run.sh"],
+        [
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/upgrade-survivor-missing-load-path.test.ts",
+        ],
+      ],
+      [
+        [
+          "scripts/lib/check-limits.mts",
+          "scripts/lib/release-context.mjs",
+          "scripts/lib/release-version.mjs",
+        ],
+        [
+          "test/scripts/ocm-npm-workspace-deps.test.ts",
+          "test/scripts/control-ui-performance.test.ts",
+        ],
+      ],
+      [
+        ["src/plugins/official-runtime-plugins.ts"],
+        ["src/node-host/codex-node-plugin.integration.test.ts"],
+      ],
+    ).flatMap(([paths, expected]) => paths.map((changedPath) => ({ changedPath, expected }))),
+  )(
     "retains explicit policy guards for $changedPath in automatic CI",
     ({ changedPath, expected }) => {
       const importer = "src/agents/live-model-filter.test.ts";
@@ -792,16 +780,18 @@ describe("CI changed Node test plan", () => {
         const reasons: string[] = [];
         const shards = createChangedNodeTestShards([changedPath], {
           runnerBackend: "github",
-          // Gateway owner watches must survive the default aggressive PR selection.
-          selectionMode: changedPath.startsWith("src/gateway/") ? "aggressive" : "full",
+          // Explicit owner watches must survive the default aggressive PR selection.
+          selectionMode: "aggressive",
           includeReleaseOnlyRuntimeTests: false,
           includePrExemptRuntimeTests: false,
           onFallback: (reason) => reasons.push(reason),
         });
         expect(shards, reasons.join("\n")).not.toBeNull();
         const files = selectedFiles(shards);
+        const unrelated = resolvePolicyTestTargets(["unrelated/path.ts"]);
         for (const guard of expected) {
           expect(files.filter((file) => file === guard)).toHaveLength(1);
+          expect(unrelated).not.toContain(guard);
         }
         expect(files.includes("test/vitest-pr-exempt-retention.test.ts")).toBe(
           expected.includes("test/vitest-pr-exempt-retention.test.ts"),

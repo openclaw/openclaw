@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import { assert, expect, it, vi } from "vitest";
@@ -501,6 +502,24 @@ it("refuses a prepared target whose owner closes during lifecycle preparation", 
         ),
       ).rejects.toThrow("admitted run authority is no longer active");
       expect(arm).not.toHaveBeenCalled();
+    },
+    { existing: true },
+  ));
+
+it("prepares a warm transcript from its admitted database identity without resolving its path", () =>
+  withInitialWriter(
+    async ({ preparedSessionTarget, runParams }) => {
+      using realpath = vi.spyOn(fs.realpathSync, "native");
+      const prepared = await prepareTranscript({ ...runParams, preparedSessionTarget });
+      try {
+        expect(prepared.ownedTranscriptWriteContext.sessionActor?.actor.target).toMatchObject({
+          database: { kind: "file" },
+          sessionKey: runParams.sessionKey,
+        });
+        expect(realpath).not.toHaveBeenCalled();
+      } finally {
+        await prepared.transcriptLifecycle.dispose();
+      }
     },
     { existing: true },
   ));

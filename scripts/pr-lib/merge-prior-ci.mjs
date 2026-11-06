@@ -533,11 +533,16 @@ async function preparePreExistingFailure(
     cancelledRoots,
   ));
   return async (checks, qualifiedMain) => {
+    // Distinct workflow events remain independent required checks. Only the
+    // attested attempt's suite and job may receive the prior-failure exception.
     const current = checks.filter(
       (check) =>
         check.name === "openclaw/ci-gate" &&
         positiveInteger(check.checkRunId) &&
-        check.publisherId === 15368,
+        check.publisherId === 15368 &&
+        check.checkSuiteId === (primary?.run ?? run).check_suite_id &&
+        gates[0]?.check_run_url ===
+          `https://api.github.com/repos/${evidence.repository}/check-runs/${check.checkRunId}`,
     );
     requireEvidence(
       gates.length === 1 &&
@@ -547,10 +552,7 @@ async function preparePreExistingFailure(
           : ["failure", "cancelled"].includes(gates[0].conclusion)) &&
         (primary ? current[0].bucket === "pass" : ["fail", "cancel"].includes(current[0].bucket)) &&
         current[0].publisherId === 15368 &&
-        positiveInteger((primary?.run ?? run).check_suite_id) &&
-        current[0].checkSuiteId === (primary?.run ?? run).check_suite_id &&
-        gates[0].check_run_url ===
-          `https://api.github.com/repos/${evidence.repository}/check-runs/${current[0].checkRunId}`,
+        positiveInteger((primary?.run ?? run).check_suite_id),
       "selected failed attempt must own the currently effective CI gate check-run",
     );
     const combined = checks.filter(
@@ -1006,12 +1008,11 @@ async function verifyPriorCiAdmin({
     );
   }
   const runHead = preExisting(evidence) ? head : evidence.priorHead;
+  // GitHub refreshes nested PR heads after pushes; the run's head_sha below
+  // binds the tested commit while this association binds the PR and repository.
   let samePullRequest =
     Array.isArray(run?.pull_requests) &&
-    run.pull_requests.some(
-      (pull) =>
-        pull.number === pr && pull.head?.sha === runHead && pull.base?.repo?.id === authority.id,
-    );
+    run.pull_requests.some((pull) => pull.number === pr && pull.base?.repo?.id === authority.id);
   let runAssociation = "pull-request";
   if (
     preExisting(evidence) &&

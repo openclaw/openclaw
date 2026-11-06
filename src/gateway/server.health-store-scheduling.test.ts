@@ -79,6 +79,10 @@ test.each(["separate", "shared"] as const)(
         rpcReq<StatusSummary>(ws, "status", { includeChannelSummary: false });
       await health();
       await requestHealth();
+      // The post-connect passive refresh runs independently of the explicit probe.
+      await Promise.all(
+        vi.mocked(collector.collectGatewayHealthSnapshot).mock.results.map(({ value }) => value),
+      );
       sqliteSummaries.mockClear();
       const projection = expectDefined(
         vi.mocked(collector.collectGatewayHealthSnapshot).mock.calls.at(-1)?.[0]

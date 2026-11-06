@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { assembleMSTeamsInboundFacts, prepareMSTeamsDebounceEntry } from "./inbound-facts.js";
 
+const botIdentity = {
+  recipient: { id: "bot-id" },
+  entities: [{ type: "mention", text: "<at>Bot</at>", mentioned: { id: "bot-id" } }],
+};
+
 function prepare(activity: Omit<MSTeamsTurnContext["activity"], "type">) {
   return prepareMSTeamsDebounceEntry({
     accountId: "default",
@@ -13,6 +18,7 @@ describe("msteams inbound facts", () => {
   it.each([
     [
       {
+        ...botIdentity,
         text: "  <at>Bot</at> hello &lt;tag&gt;  ",
         attachments: [{ contentType: "text/html", content: "<p>ignored</p>" }],
         value: { action: "ignored" },
@@ -41,6 +47,7 @@ describe("msteams inbound facts", () => {
     ],
   ])("preserves HTML text in the inbound body: %s", async (html, expected) => {
     const entry = await prepare({
+      ...botIdentity,
       attachments: [{ contentType: "text/html", content: html }],
       value: { action: "ignored" },
     });
@@ -50,6 +57,7 @@ describe("msteams inbound facts", () => {
 
   it("strips native mentions from card text when HTML has no visible text", async () => {
     const entry = await prepare({
+      ...botIdentity,
       attachments: [{ contentType: "text/html", content: "<at>Bot</at>" }],
       value: "<at>Bot</at> answer &lt;tag&gt;",
     });

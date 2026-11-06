@@ -430,6 +430,10 @@ export function createContext(
   const context = {
     gateway,
     plugins,
+    overlays: {
+      snapshot: { updateRunning: false, updateReconciliationPending: false },
+      subscribe: vi.fn(() => () => {}),
+    },
     basePath: "",
     resourceBasePath: "",
     router: createRouter({ routes: [] }),

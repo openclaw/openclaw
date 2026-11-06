@@ -30,6 +30,7 @@ export const V2026_7_1_2_STATE_MIGRATION_CHANGES = [
   "Removed redundant conversation binding target projections (v15)",
   "Replaced retained task indexes with ordered cron history indexes (v24)",
   "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
+  "Introduced durable default cron partition selection (v34)",
   "Migrated shared state tables to SQLite STRICT typing (46)",
 ];
 
@@ -58,7 +59,7 @@ export function expectV2026_7_1_2CronHistoryPreserved(database: SqlConnection): 
         "SELECT value_json FROM config_machine_state WHERE state_key = 'cron.defaultStoreKey'",
       )
       .get(),
-  ).toBeUndefined();
+  ).toEqual({ value_json: JSON.stringify("/fixture/state/cron/jobs.json") });
 }
 
 export function materializeV2026_7_1_2StateDatabase(stateDir: string) {
@@ -89,4 +90,19 @@ export function markStateDatabaseVersion(database: DatabaseSync, version: number
     ${version < 8 ? "DROP INDEX IF EXISTS idx_worker_session_placements_environment;" : ""} PRAGMA user_version = ${version};
     UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
   `);
+}
+
+/** Shared expected tail for historical fixtures; independent of production migration discovery. */
+export function expectedStateMigrationsFromV27(pathname: string) {
+  return [
+    "state-write-indexes-v27",
+    "github-publication-draft-v28",
+    "local-client-credentials-v29",
+    "automation-policy-fence-v30",
+    "local-workspace-manifests-v31",
+    "local-workspace-cas-v35",
+    "template-names-v36",
+    "worker-resource-receipts-v37",
+    "repository-disk-authority-v38",
+  ].map((kind) => ({ kind, path: pathname }));
 }

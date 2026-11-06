@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 import { DEFAULT_HUB_PERCENTILE } from "./page-budget.js";
+import { parseRecallGate, RecallGateConfig, type RecallGatePolicy } from "./recall-gate.js";
 import { AGENT_ID, STORE_KEY, type GrantAccess } from "./stores-contract.js";
 export const agentIdPattern = new RegExp(AGENT_ID);
-const storeKeyPattern = new RegExp(STORE_KEY);
 
 const NamedStore = Type.Object(
   {
@@ -23,8 +23,8 @@ export type StoresSection = Static<typeof StoresSection>;
  * everything else is a plugin-wide gate. */
 export const PluginConfig = Type.Object(
   {
-    operatorRead: Type.Optional(Type.Boolean()),
-    writesEnabled: Type.Optional(Type.Boolean()),
+    operatorRead: Type.Optional(Type.Boolean({ default: true })),
+    writesEnabled: Type.Optional(Type.Boolean({ default: true })),
     stores: Type.Optional(StoresSection),
     pageBudgets: Type.Optional(
       Type.Object(
@@ -69,6 +69,7 @@ export const PluginConfig = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    recallGate: Type.Optional(RecallGateConfig),
   },
   { additionalProperties: false },
 );
@@ -85,6 +86,8 @@ export type Policy = {
   writesEnabled: boolean;
   hubPercentile: number;
   maintenance: MaintenanceSettings;
+  /** Decision-model recall gate; undefined when not configured or off. */
+  recallGate?: RecallGatePolicy;
 };
 const DEFAULT_MAINTENANCE_SCHEDULE = "30 3 * * *";
 
@@ -98,6 +101,7 @@ export function parsePolicy(config: Record<string, unknown> | undefined): Policy
     throw new Error("Knowledge configuration is invalid; review plugins.entries.knowledge.config.");
   }
   const maintenance = value.maintenance ?? {};
+  const recallGate = parseRecallGate(value.recallGate);
   return {
     operatorRead: value.operatorRead ?? true,
     writesEnabled: value.writesEnabled ?? true,
@@ -107,6 +111,7 @@ export function parsePolicy(config: Record<string, unknown> | undefined): Policy
       schedule: maintenance.schedule ?? DEFAULT_MAINTENANCE_SCHEDULE,
       timezone: maintenance.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     },
+    ...(recallGate ? { recallGate } : {}),
   };
 }
 
@@ -157,7 +162,7 @@ export function parseMembership(raw: unknown): Membership {
     issues: string[] = [];
   const assigned = new Map<string, string>(),
     invalid = new Set<string>();
-  if (!Check(StoresSection, raw) || Object.keys(raw).some((key) => !storeKeyPattern.test(key))) {
+  if (!Check(StoresSection, raw)) {
     // Salvage agent names so the affected agents are reported, never defaulted.
     const entries: unknown[] = Object.values(raw && typeof raw === "object" ? raw : {});
     for (const entry of entries) {

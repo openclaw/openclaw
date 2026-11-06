@@ -569,7 +569,7 @@ function buildPluginInspectRecord(
     bundleCapabilities: plugin.bundleCapabilities ?? [],
     diagnostics,
     policy: {
-      allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,
+      allowPromptInjection: policyEntry?.hooks?.allowPromptModification,
       allowConversationAccess: policyEntry?.hooks?.allowConversationAccess,
       hookTimeoutMs: policyEntry?.hooks?.timeoutMs,
       hookTimeouts: policyEntry?.hooks?.timeouts ? { ...policyEntry.hooks.timeouts } : undefined,

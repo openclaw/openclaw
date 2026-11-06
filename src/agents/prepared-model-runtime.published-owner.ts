@@ -16,7 +16,7 @@ import {
   resolvePreparedModelRuntimeOwnerBySnapshot,
   resolvePublishedOwner,
 } from "./prepared-model-runtime.owner.js";
-import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { createPreparedModelRuntimeLease } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelCatalogRefreshOptions,
   PreparedModelRuntimeInput,
@@ -60,11 +60,10 @@ export function retainPublishedModelRuntimeOwner(
   if (!pluginGeneration) {
     throw new Error("Published model runtime has no plugin generation");
   }
-  return {
-    snapshot: capturePreparedModelRuntimeCatalog(snapshot, snapshot),
+  return createPreparedModelRuntimeLease(
+    capturePreparedModelRuntimeCatalog(snapshot, snapshot),
     pluginGeneration,
-    [Symbol.asyncDispose]: retainPreparedPluginGeneration(pluginGeneration),
-  };
+  );
 }
 
 type PublishedModelRuntimeContext = {

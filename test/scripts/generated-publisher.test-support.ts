@@ -70,6 +70,7 @@ export type GeneratedPublisherOptions = {
   existingPr?: boolean;
   expectFailure?: boolean;
   failGeneratedPush?: boolean;
+  generatedFiles?: Record<string, string>;
   invalidationPaths?: string;
   malformedAutoMergeRecord?: boolean;
   mergeGeneratedPush?: boolean;
@@ -138,6 +139,9 @@ export function prepareGeneratedPublisherFixture(
   }
   if (!options.noGeneratedChange) {
     writeFixture(worktree, "generated/a.txt", "desired-a\n");
+  }
+  for (const [name, contents] of Object.entries(options.generatedFiles ?? {})) {
+    writeFixture(worktree, name, contents);
   }
   if (options.failGeneratedPush) {
     writeExecutable(path.join(origin, "hooks", "pre-receive"), [
@@ -269,14 +273,29 @@ export function prepareGeneratedPublisherFixture(
 
       const branchRef = "refs/heads/" + headBranch;
       const originGit = (...args: string[]) => runGit(root, ["--git-dir", origin, ...args]);
-      const branchExists =
-        spawnSync("git", ["--git-dir", origin, "show-ref", "--verify", branchRef]).status === 0;
-      const branchHead = branchExists ? originGit("rev-parse", branchRef) : "";
+      const branch = spawnSync(
+        "git",
+        ["--git-dir", origin, "show-ref", "--verify", "--hash", branchRef],
+        { encoding: "utf8" },
+      );
+      const branchExists = branch.status === 0;
+      const branchHead = branchExists ? branch.stdout.trim() : "";
       const generated = (file: string) =>
         branchExists ? originGit("show", `${branchRef}:generated/${file}.txt`) : "";
       return {
         branchExists,
         branchHead,
+        localHead: runGit(worktree, ["rev-parse", "HEAD"]),
+        generatedFiles: Object.fromEntries(
+          Object.keys(options.generatedFiles ?? {}).map((name) => [
+            name,
+            branchExists
+              ? execFileSync("git", ["--git-dir", origin, "show", `${branchRef}:${name}`], {
+                  encoding: "utf8",
+                })
+              : "",
+          ]),
+        ),
         initialBranch,
         generatedA: generated("a"),
         generatedB: generated("b"),

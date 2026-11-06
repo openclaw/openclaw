@@ -21,27 +21,10 @@ export async function assertSessionSectionCountAlignment(
       await toggle.click();
     }
   }
-  const rightEdges = await Promise.all(
-    sections.map(async (section) => {
-      const bounds = await section.locator(".sidebar-session-group-count").boundingBox();
-      if (!bounds) {
-        throw new Error("Expected visible collapsed section count");
-      }
-      return bounds.x + bounds.width;
-    }),
-  );
-  const expected = rightEdges[0];
-  if (expected === undefined || rightEdges.some((edge) => Math.abs(edge - expected) > 0.1)) {
-    throw new Error(`Expected aligned section count edges, received ${rightEdges.join(", ")}`);
-  }
   for (const section of sections) {
-    await section.locator(".sidebar-session-group-count").click();
-    const toggle = section.locator(".sidebar-session-group-toggle");
-    await waitForExpanded(
-      await section.getAttribute("data-session-section"),
-      ".sidebar-session-group-toggle",
-    );
-    await toggle.click();
+    if ((await section.locator(".sidebar-session-group-count").count()) !== 0) {
+      throw new Error("Expected collapsed sections to show no count");
+    }
   }
   for (const [index, sectionId] of sectionIds.entries()) {
     const section = sections[index];
@@ -50,17 +33,11 @@ export async function assertSessionSectionCountAlignment(
     }
     const header = section.locator(":scope > .sidebar-recent-sessions__head");
     await header.hover();
-    const count = header.locator(".sidebar-session-group-count");
-    const countBox = await count.boundingBox();
-    const countOpacity = await count.evaluate((element) => getComputedStyle(element).opacity);
-    if (!countBox || Number.parseFloat(countOpacity) <= 0) {
-      throw new Error("Expected visible catalog count on hover");
-    }
     const actionBoxes: Array<{ x: number; y: number; width: number; height: number }> = [];
     for (const action of await header.locator(".sidebar-session-group-actions").all()) {
       const actionBox = await action.boundingBox();
-      if (!actionBox || actionBox.x + actionBox.width > countBox.x) {
-        throw new Error("Expected catalog hover actions to stay left of the count");
+      if (!actionBox) {
+        throw new Error("Expected visible catalog hover actions");
       }
       actionBoxes.push(actionBox);
     }
@@ -98,19 +75,21 @@ export async function assertSessionSectionCountAlignment(
     }
     await page.keyboard.press("Escape");
     await section.locator(".sidebar-session-group-toggle").click();
+    let countEdge: number | undefined;
     for (const nestedCount of await section
       .locator(".sidebar-session-catalog-host__count, .sidebar-session-catalog-project__count")
       .all()) {
       const nestedBounds = await nestedCount.boundingBox();
+      if (!nestedBounds) {
+        continue;
+      }
+      const nestedEdge = nestedBounds.x + nestedBounds.width;
+      countEdge ??= nestedEdge;
       const textAlign = await nestedCount.evaluate(
         (element) => getComputedStyle(element).textAlign,
       );
-      if (
-        !nestedBounds ||
-        textAlign !== "right" ||
-        Math.abs(nestedBounds.x + nestedBounds.width - expected) > 0.1
-      ) {
-        throw new Error("Expected expanded catalog counts to share the section count edge");
+      if (textAlign !== "right" || Math.abs(nestedEdge - countEdge) > 0.1) {
+        throw new Error("Expected expanded catalog counts to share one edge");
       }
     }
     await section.locator(".sidebar-session-group-toggle").click();

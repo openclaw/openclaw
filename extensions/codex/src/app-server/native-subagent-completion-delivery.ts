@@ -64,8 +64,9 @@ export class CodexNativeSubagentCompletionDelivery {
     }
     let deferredToForeground = false;
     try {
-      if (childState.cancellationRequested && completion.status === "cancelled") {
-        // Stop owns durable cancellation acknowledgement before releasing this child.
+      if (childState.cancellationRequested) {
+        // Stop settles owned processes before acknowledging cancellation or
+        // delivering a natural result that won the interruption race.
         return;
       }
       if (

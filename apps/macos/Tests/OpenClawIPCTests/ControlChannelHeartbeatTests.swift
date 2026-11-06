@@ -120,7 +120,7 @@ private final class HeartbeatGatewayFixture {
     let gateway: GatewayConnection
     let control: ControlChannel
     private let previousMode = AppStateStore.shared.connectionMode
-    private let previousAccent = AppStateStore.shared.profileAccentHex
+    private let previousAccent = AppStateStore.shared.profileAccent
     private let previousMainKey = WorkActivityStore.shared.mainSessionKey
 
     init() {
@@ -164,7 +164,7 @@ private final class HeartbeatGatewayFixture {
     func stop() async {
         await self.control.disconnect()
         AppStateStore.shared.connectionMode = self.previousMode
-        AppStateStore.shared.profileAccentHex = self.previousAccent
+        AppStateStore.shared.profileAccent = self.previousAccent
         WorkActivityStore.shared.reset()
         WorkActivityStore.shared.setMainSessionKey(self.previousMainKey)
     }

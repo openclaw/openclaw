@@ -72,9 +72,9 @@ import {
   canRunPreparedAgentRuntimeAuthAttempt,
   prepareAgentRuntimeAuth,
   preparedAgentRuntimeProfileAttemptHasCandidate,
-  type PreparedAgentRuntimeAuthAttempt,
 } from "./runtime-plan/prepare-auth.js";
 import { scopeAuthProfileStoreToPreparedPlan } from "./runtime-plan/resolve-auth.js";
+import type { PreparedAgentRuntimeAuthAttempt } from "./runtime-plan/types.js";
 import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
 export type { IsolatedCompletionResult } from "./isolated-completion-output.js";
 
@@ -701,17 +701,19 @@ async function runIsolatedCompletionOwned(
         usage: result.assistant.usage,
       };
     };
-    return await withPluginRuntimeGenerationScope(lease.snapshot, async () => {
-      const result = await run();
-      assertCurrent();
-      if (!result.text && input.outputTextPolicy !== "strict-visible") {
-        throw new IsolatedCompletionError(
-          "output-rejected",
-          "Isolated completion returned empty output.",
-        );
-      }
-      return result;
-    });
+    return await lease.run(() =>
+      withPluginRuntimeGenerationScope(lease.snapshot, async () => {
+        const result = await run();
+        assertCurrent();
+        if (!result.text && input.outputTextPolicy !== "strict-visible") {
+          throw new IsolatedCompletionError(
+            "output-rejected",
+            "Isolated completion returned empty output.",
+          );
+        }
+        return result;
+      }),
+    );
   } finally {
     closed = true;
   }

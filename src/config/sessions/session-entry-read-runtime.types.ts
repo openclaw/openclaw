@@ -45,7 +45,12 @@ export type SessionEntrySummaryWorkerRead = Omit<SessionStoreWorkerReadScope, "a
 
 export type PreparedSessionEntryWorkerRead = {
   result: SessionExactEntriesWorkerResult;
-  database: { agentId: string; path: string; env: NodeJS.ProcessEnv };
+  database: {
+    agentId: string;
+    path: string;
+    env: NodeJS.ProcessEnv;
+    readIdentity?: DatabasePathIdentity;
+  };
   assertCurrent: () => void;
 };
 

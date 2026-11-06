@@ -286,15 +286,8 @@ export async function prepareGatewayClose(
         warnings,
       }),
     );
-    // Track settlement immediately: ordinary-stop hooks may still be running
-    // when an admission releases or its cancellation callback fails.
-    const settlement = cleanupWork.track(() =>
-      measureGatewayCloseStep("restart.close.session-admissions", () => admissions.released),
-    );
-    void settlement.catch((error: unknown) => {
-      shutdownLog.warn(`session admission settlement failed: ${formatErrorMessage(error)}`);
-      recordShutdownWarning(warnings, "session-admissions");
-    });
+    // Start the join immediately, alongside the remaining shutdown hooks.
+    void shutdownStep("session-admissions", () => admissions.released);
     return admissions.failure;
   };
 
@@ -648,14 +641,18 @@ async function closeGatewayResources(
                 await measureCloseStep("incognito-sessions", () =>
                   memorySessionActorOwners.reset(),
                 );
-                // Owned process trees get their normal TERM window before shared state retires.
-                await measureCloseStep(
+                const supervisorFailure = await measureCloseStep(
                   "process-supervisor",
-                  shutdownProcessSupervisor,
+                  () => shutdownProcessSupervisor().catch((error: unknown) => ({ error })),
                   GRACEFUL_CANCEL_TIMEOUT_MS + 1_000,
                 );
+                // A settled failure has joined owned runs; failed out-of-process trees own
+                // their own connections and leases. Pending cleanup still retains our handles.
                 // Releasing agent leases still writes shared state; keep its owner alive until then.
                 await measureCloseStep("agent-databases", closeOpenClawAgentDatabasesAsync);
+                if (supervisorFailure) {
+                  throw supervisorFailure.error;
+                }
                 await measureCloseStep("debug-proxy", () =>
                   finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure),
                 );

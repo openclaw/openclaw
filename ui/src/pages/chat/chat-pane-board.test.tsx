@@ -203,6 +203,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_EMBED__");
   theme.dispose();
   vi.restoreAllMocks();
   saveSettings(loadSettings());
@@ -244,31 +245,48 @@ describe("chat pane board shell", () => {
     }
   });
 
-  it("opens split view once when the current task first gains a dashboard", async () => {
-    const pane = createTestPane(undefined, "agent:main:first-dashboard");
-    const provider = createMockBoardProvider("agent:main:first-dashboard");
-    pane.boardProvider = provider;
-    pane.routeFace = "chat";
-    pane.onFaceChange = vi.fn();
-    await provider.applyOps([
-      { kind: "widget_remove", name: "session-status" },
-      { kind: "widget_remove", name: "recent-findings" },
-      { kind: "widget_remove", name: "source-map" },
-      { kind: "tab_delete", tabId: "main" },
-      { kind: "tab_delete", tabId: "research" },
-    ]);
-    pane.syncRetainedBoardSession(pane.resolveBoardView());
+  it.each([false, true])(
+    "first dashboard only auto-opens outside native mobile (mobile=%s)",
+    async (mobile) => {
+      if (mobile) {
+        Reflect.set(window, "__OPENCLAW_NATIVE_EMBED__", { platform: "ios", formFactor: "phone" });
+      }
+      const pane = createTestPane(undefined, "agent:main:first-dashboard");
+      const provider = createMockBoardProvider("agent:main:first-dashboard");
+      pane.boardProvider = provider;
+      pane.routeFace = "chat";
+      pane.onFaceChange = vi.fn();
+      await provider.applyOps([
+        { kind: "widget_remove", name: "session-status" },
+        { kind: "widget_remove", name: "recent-findings" },
+        { kind: "widget_remove", name: "source-map" },
+        { kind: "tab_delete", tabId: "main" },
+        { kind: "tab_delete", tabId: "research" },
+      ]);
+      pane.syncRetainedBoardSession(pane.resolveBoardView());
 
-    await provider.applyOps([{ kind: "tab_create", tabId: "main", title: "Dashboard" }]);
-    pane.syncRetainedBoardSession(pane.resolveBoardView());
+      await provider.applyOps([{ kind: "tab_create", tabId: "main", title: "Dashboard" }]);
+      pane.syncRetainedBoardSession(pane.resolveBoardView());
 
-    expect(slots(pane)).toContain("dashboard");
-    expect(pane.state.sidebarLayout.expanded).toBe(false);
-    expect(pane.onFaceChange).toHaveBeenCalledOnce();
+      expect(slots(pane).includes("dashboard")).toBe(!mobile);
+      if (!mobile) {
+        expect(pane.state.sidebarLayout.expanded).toBe(false);
+      }
+      expect(pane.onFaceChange).toHaveBeenCalledTimes(mobile ? 0 : 1);
 
-    pane.syncRetainedBoardSession(pane.resolveBoardView());
-    expect(pane.onFaceChange).toHaveBeenCalledOnce();
-  });
+      pane.syncRetainedBoardSession(pane.resolveBoardView());
+      expect(pane.onFaceChange).toHaveBeenCalledTimes(mobile ? 0 : 1);
+      if (mobile) {
+        pane.handleBoardCommand({
+          sessionKey: pane.sessionKey,
+          command: { kind: "focus_tab", tabId: "main" },
+        });
+        expect(slots(pane)).not.toContain("dashboard");
+        pane.showDashboard(false);
+        expect(slots(pane)).toContain("dashboard");
+      }
+    },
+  );
 
   it("publishes conversation presentation per pane without overwriting shared session state", () => {
     const first = createTestPane();

@@ -520,8 +520,8 @@ export async function buildPreparedCompactionRuntime(
     const { prepareTtsPreferences } = await import("../../tts/tts-preferences.js");
     const preparedTtsPreferences =
       promptMode === "full" ? await prepareTtsPreferences() : undefined;
-    const buildSystemPromptText = () => {
-      const builtSystemPrompt = buildConfiguredAgentSystemPrompt({
+    const buildSystemPromptText = async () => {
+      const builtSystemPrompt = await buildConfiguredAgentSystemPrompt({
         preparedTtsPreferences,
         config: params.config,
         preparedModelRuntime: params.preparedModelRuntime,

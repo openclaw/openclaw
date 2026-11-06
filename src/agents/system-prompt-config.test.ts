@@ -16,10 +16,9 @@ import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 import * as systemPrompt from "./system-prompt.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-vi.mock("../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: vi.fn(() => undefined),
-  resolveModelOverridePolicy: vi.fn(),
-  setTtsMachinePrefsPathResolver: vi.fn(),
+vi.mock("../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: vi.fn(async () => undefined),
 }));
 
 afterEach(() => vi.restoreAllMocks());
@@ -98,7 +97,7 @@ function preparedOwner(
 
 function buildPrompt(
   params: Omit<Parameters<typeof buildConfiguredAgentSystemPrompt>[0], "workspaceDir">,
-): string {
+): Promise<string> {
   return buildConfiguredAgentSystemPrompt({
     workspaceDir: "/tmp/openclaw",
     ...params,
@@ -127,7 +126,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     ["native auto off", "slack", reasoningConfig(false), false],
     ["text enabled", "discord", reasoningConfig(undefined, false), true],
     ["text-only surface", "webchat", reasoningConfig(false, false), true],
-  ])("renders reasoning command guidance for %s", (_name, channel, config, enabled) => {
+  ])("renders reasoning command guidance for %s", async (_name, channel, config, enabled) => {
     const registry = createTestRegistry(
       ["discord", "slack"].map((id) => ({
         pluginId: id,
@@ -145,7 +144,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     onTestFinished(() => restoreActivePluginRegistrySnapshot(previous));
     // Command routing consumes process-level channel metadata.
     setActivePluginRegistry(registry);
-    const prompt = buildPrompt({
+    const prompt = await buildPrompt({
       config,
       runtimeInfo: { channel },
       reasoningLevel: "stream",
@@ -157,8 +156,8 @@ describe("buildConfiguredAgentSystemPrompt", () => {
 
   it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
     "does not recommend disabled update or restart commands with tools $toolNames",
-    ({ toolNames }) => {
-      const disabled = buildPrompt({
+    async ({ toolNames }) => {
+      const disabled = await buildPrompt({
         toolNames,
         config: { commands: { restart: false } },
       });
@@ -166,17 +165,17 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       expect(disabled).not.toContain("`/restart`");
       expect(disabled).toContain("maintenance tools, not exec or detached jobs");
       expect(disabled).toContain("Toggle /reasoning; /status shows when enabled.");
-      const enabled = buildPrompt({ toolNames, config: {} });
+      const enabled = await buildPrompt({ toolNames, config: {} });
       expect(enabled).toContain("`/update`");
     },
   );
 
   it.each(["minimal", "none"] as const)(
     "skips full-only preparation in %s mode and refreshes the next full prompt",
-    (promptMode) => {
+    async (promptMode) => {
       const hint = vi
-        .spyOn(ttsSettings, "buildTtsSystemPromptHint")
-        .mockReturnValue("Fixture first voice guidance.");
+        .spyOn(ttsSettings, "buildTtsSystemPromptHintAsync")
+        .mockResolvedValue("Fixture first voice guidance.");
       const config = modelConfig({ "fixture/model": "Before" });
       const owner = preparedOwner(config, ["model"]);
       const params = {
@@ -184,27 +183,27 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         preparedModelRuntime: owner,
         includeMemorySection: false,
       };
-      const full = buildPrompt(params);
+      const full = await buildPrompt(params);
       expect(full).toContain("- Before: fixture/model");
       expect(full).toContain("Fixture first voice guidance.");
       hint.mockClear();
       owner.isCurrent.mockClear();
-      const reduced = buildPrompt({ ...params, promptMode });
+      const reduced = await buildPrompt({ ...params, promptMode });
       expect(hint).not.toHaveBeenCalled();
       expect(owner.isCurrent).not.toHaveBeenCalled();
       expect(reduced).not.toContain("## Model Aliases");
       expect(reduced).not.toContain("## Voice (TTS)");
-      expect(buildPrompt(params)).toBe(full);
+      expect(await buildPrompt(params)).toBe(full);
 
       owner.isCurrent.mockReturnValue(false);
       const nextConfig = modelConfig({ "fixture/model": "After" });
       params.config = nextConfig;
       params.preparedModelRuntime = preparedOwner(nextConfig, ["model"]);
-      hint.mockReturnValue("Fixture current voice guidance.");
+      hint.mockResolvedValue("Fixture current voice guidance.");
       hint.mockClear();
-      expect(buildPrompt({ ...params, promptMode })).toBe(reduced);
+      expect(await buildPrompt({ ...params, promptMode })).toBe(reduced);
       expect(hint).not.toHaveBeenCalled();
-      const refreshed = buildPrompt(params);
+      const refreshed = await buildPrompt(params);
       expect(refreshed).toContain("- After: fixture/model");
       expect(refreshed).not.toContain("- Before: fixture/model");
       expect(refreshed).toContain("Fixture current voice guidance.");
@@ -310,7 +309,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     },
   ])(
     "publishes only the supported target for $name",
-    ({
+    async ({
       config,
       modelIds = ["current"],
       agentId = "main",
@@ -321,7 +320,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       excluded = [],
     }) => {
       const owner = preparedOwner(config, modelIds, agentId, metadata, provider);
-      const prompt = buildPrompt({
+      const prompt = await buildPrompt({
         config,
         agentId,
         preparedModelRuntime: owner,
@@ -334,7 +333,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     },
   );
 
-  it("keeps admitted aliases when their borrowed snapshot retires without rediscovery", () => {
+  it("keeps admitted aliases when their borrowed snapshot retires without rediscovery", async () => {
     const config = modelConfig(
       {
         "fixture/current": "Current",
@@ -349,10 +348,10 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       .mockImplementation(unexpectedRuntimeWork);
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network"));
     const params = { config, agentId: "writer" };
-    expect(buildPrompt(params)).not.toContain("## Model Aliases");
+    expect(await buildPrompt(params)).not.toContain("## Model Aliases");
     let admitted = "";
     for (let index = 0; index < 3; index++) {
-      const prompt = buildPrompt({ ...params, preparedModelRuntime: owner });
+      const prompt = await buildPrompt({ ...params, preparedModelRuntime: owner });
       expect(prompt).toContain("- Current: fixture/current");
       expect(prompt).toContain("- Another: fixture/another");
       expect(prompt).not.toContain("Unavailable");
@@ -360,10 +359,10 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       admitted = prompt;
     }
     owner.isCurrent.mockReturnValue(false);
-    expect(buildPrompt({ ...params, preparedModelRuntime: owner })).toBe(admitted);
+    expect(await buildPrompt({ ...params, preparedModelRuntime: owner })).toBe(admitted);
     const replacementConfig = modelConfig({ "fixture/current": "Replacement" });
     expect(
-      buildPrompt({
+      await buildPrompt({
         ...params,
         config: replacementConfig,
         preparedModelRuntime: preparedOwner(replacementConfig, ["current"], "writer"),
@@ -378,9 +377,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
   it.each([
     { name: "absent", config: undefined },
     { name: "empty", config: {} },
-  ])("preserves owner display semantics with $name config", ({ config }) => {
+  ])("preserves owner display semantics with $name config", async ({ config }) => {
     const render = vi.spyOn(systemPrompt, "buildAgentSystemPrompt");
-    const prompt = buildPrompt({
+    const prompt = await buildPrompt({
       config,
       ownerNumbers: ["owner-a"],
       ownerDisplay: "hash",
@@ -422,8 +421,8 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       true,
       "coordinator",
     ],
-  ])("%s", (_name, config, sessionKey, expected, agentId) => {
-    const prompt = buildPrompt({
+  ])("%s", async (_name, config, sessionKey, expected, agentId) => {
+    const prompt = await buildPrompt({
       config,
       agentId: agentId ?? "main",
       runtimeInfo: { sessionKey },

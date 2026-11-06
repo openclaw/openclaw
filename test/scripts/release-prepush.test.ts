@@ -23,12 +23,10 @@ function fixture() {
   const deps = {
     assertCleanWorktree: vi.fn(),
     assertAuditBounds: vi.fn().mockReturnValue(BASE_SHA),
-    createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
     currentBranch: vi.fn().mockReturnValue("release/2026.10.6"),
     pushValidatedHead: vi.fn(),
     refreshMain: vi.fn(),
     refreshReleaseBranch: vi.fn(),
-    removeValidationCheckout: vi.fn(),
     resolveCommit: vi.fn((ref: string) => (ref === "origin/main" ? BASE_SHA : HEAD_SHA)),
     runCommand: vi
       .fn<NonNullable<Parameters<typeof runReleasePrepush>[1]>["runCommand"]>()
@@ -109,23 +107,18 @@ describe("release:prepush", () => {
     );
   });
 
-  it("uses the audited merge base for gates on a divergent release branch", async () => {
+  it("uses the audited merge base for the short preflight on a divergent release branch", async () => {
     const { deps, run } = fixture();
     deps.assertAuditBounds.mockReturnValue(MERGE_BASE_SHA);
     expect(await run()).toBe(0);
     expect(deps.runCommand.mock.calls.map(([command]) => [command.bin, command.args])).toEqual([
-      ["pnpm", ["install", "--frozen-lockfile"]],
-      ["pnpm", ["check:changed", "--base", MERGE_BASE_SHA, "--head", HEAD_SHA]],
-      ["pnpm", ["deadcode:knip"]],
-      ["node", ["scripts/test-projects.mts", "--changed", MERGE_BASE_SHA]],
+      ["git", ["diff", "--check", MERGE_BASE_SHA, HEAD_SHA]],
+      ["node", ["scripts/release-changelog.mjs", "check", "--ref", HEAD_SHA]],
     ]);
-    expect(deps.runCommand.mock.calls.every(([command]) => command.cwd === "/snapshot")).toBe(true);
-    expect(deps.runCommand.mock.calls[1]?.[0].env).toMatchObject({
-      CHECKOUT_BASE_SHA: MERGE_BASE_SHA,
-      CI: "1",
-      OPENCLAW_LOCAL_CHECK: "0",
-      OPENCLAW_OXLINT_TRUSTED_POLICY_REF: BASE_SHA,
-    });
+    expect(deps.runCommand.mock.calls.every(([command]) => command.cwd === process.cwd())).toBe(
+      true,
+    );
+    expect(deps.runCommand.mock.calls[0]?.[0].env?.OPENCLAW_RELEASE_CONTEXT_REF).toBeUndefined();
   });
 
   it("stops at the first failed integrated gate", async () => {
@@ -133,7 +126,6 @@ describe("release:prepush", () => {
     deps.runCommand.mockResolvedValueOnce(0).mockResolvedValueOnce(9);
     expect(await run()).toBe(9);
     expect(deps.runCommand).toHaveBeenCalledTimes(2);
-    expect(deps.removeValidationCheckout).toHaveBeenCalledWith("/snapshot");
   });
 
   it("rejects a head that changes during validation", async () => {
@@ -146,30 +138,28 @@ describe("release:prepush", () => {
     expect(deps.assertCleanWorktree).toHaveBeenCalledTimes(2);
   });
 
-  it("refreshes main and pushes only the captured SHA to the canonical branch", async () => {
+  it.each([false, true])("pushes only the validated cut (explicit: %s)", async (explicit) => {
     const { deps, run } = fixture();
     deps.assertAuditBounds.mockReturnValueOnce(MERGE_BASE_SHA).mockReturnValueOnce(RELEASE_SHA);
     deps.refreshReleaseBranch.mockReturnValue(RELEASE_SHA);
-    expect(await run({ push: true })).toBe(0);
+    const options = explicit
+      ? { branch: "release/2026.10.6", head: HEAD_SHA, push: true }
+      : { push: true };
+    expect(await run(options)).toBe(0);
     expect(deps.refreshMain).toHaveBeenCalledOnce();
-    expect(deps.currentBranch).toHaveBeenCalledTimes(2);
-    expect(deps.runCommand.mock.calls[1]?.[0].args).toEqual([
-      "check:changed",
-      "--base",
+    expect(deps.currentBranch).toHaveBeenCalledTimes(explicit ? 0 : 2);
+    expect(deps.resolveCommit).toHaveBeenCalledWith(explicit ? HEAD_SHA : "HEAD");
+    expect(
+      deps.runCommand.mock.calls.every(
+        ([command]) => command.env?.OPENCLAW_RELEASE_CONTEXT_REF === "release/2026.10.6",
+      ),
+    ).toBe(true);
+    expect(deps.runCommand.mock.calls[0]?.[0].args).toEqual([
+      "diff",
+      "--check",
       RELEASE_SHA,
-      "--head",
       HEAD_SHA,
     ]);
-    expect(deps.pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
-  });
-
-  it("validates and pushes an orchestrator-supplied exact cut to its canonical branch", async () => {
-    const { deps, run } = fixture();
-    deps.assertAuditBounds.mockReturnValueOnce(MERGE_BASE_SHA).mockReturnValueOnce(RELEASE_SHA);
-    deps.refreshReleaseBranch.mockReturnValue(RELEASE_SHA);
-    expect(await run({ branch: "release/2026.10.6", head: HEAD_SHA, push: true })).toBe(0);
-    expect(deps.resolveCommit).toHaveBeenCalledWith(HEAD_SHA);
-    expect(deps.currentBranch).not.toHaveBeenCalled();
     expect(deps.pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
   });
 
@@ -178,7 +168,7 @@ describe("release:prepush", () => {
     deps.assertAuditBounds.mockImplementation(assertAuditBounds);
     deps.resolveCommit.mockReturnValue(HEAD_SHA);
     expect(await run({ branch: "release/2026.10.6", head: HEAD_SHA, push: true })).toBe(0);
-    expect(deps.runCommand).toHaveBeenCalledTimes(4);
+    expect(deps.runCommand).toHaveBeenCalledTimes(2);
     expect(deps.pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
   });
 

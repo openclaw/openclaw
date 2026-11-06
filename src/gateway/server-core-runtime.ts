@@ -104,6 +104,7 @@ export async function startGatewayCoreRuntime(input: {
     workerPlacementControlAvailable,
     desktopSessionRegistry,
     gatewayComputerService,
+    openclawIdService,
     listStartupChannelGatewayMethods,
     workerEnvironmentStartup,
     activateRuntimeSecrets,
@@ -115,6 +116,10 @@ export async function startGatewayCoreRuntime(input: {
       await gatewayComputerService.close();
       await desktopSessionRegistry.stopAll();
     },
+  });
+  runtime.registerGatewayLifetimeSidecars({
+    name: "openclaw-id",
+    stop: () => openclawIdService.stop(),
   });
   const secretEgressProxy =
     cfgAtStart.secrets?.egressProxy?.enabled === true
@@ -420,7 +425,7 @@ export async function startGatewayCoreRuntime(input: {
     ]);
     const nextHandlerKeys = new Set(Object.keys(loaded.pluginRegistry.gatewayHandlers));
     return {
-      publish: () => {
+      publish: (retirePrevious?: () => Promise<void>) => {
         adoptPluginHttpRouteHandoffs(pluginRuntime.registry, loaded.pluginRegistry);
         // Startup and reload share one synchronous handoff, so another Gateway cannot
         // select and retire this candidate between activation and owner publication.
@@ -432,7 +437,7 @@ export async function startGatewayCoreRuntime(input: {
           pluginRuntime.registry,
           trackActivationCleanup,
         );
-        pluginRuntime.publish(loaded.pluginRegistry);
+        pluginRuntime.publish(loaded.pluginRegistry, retirePrevious);
         pluginRuntime.baseGatewayMethods = loaded.gatewayMethods;
         for (const key of attachedPluginGatewayHandlerKeys) {
           delete attachedGatewayExtraHandlers[key];
