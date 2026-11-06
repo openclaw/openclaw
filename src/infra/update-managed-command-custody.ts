@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
-import { COMMAND_RESERVATION_ENV } from "../process/command-reservation-census.js";
 import type {
   CommandProcessCustody,
   CommandProcessIdentity,
 } from "../process/command-process-custody.types.js";
+import { COMMAND_RESERVATION_ENV } from "../process/command-reservation-census.js";
 import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
   managedCommandCustody,

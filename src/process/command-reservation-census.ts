@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { readProcessCommand } from "@openclaw/proc-safe/inspect";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { readDarwinProcessCensus } from "./darwin-process-inspection.js";
 
 /** Every command spawned under a durable reservation carries its name before exec. */

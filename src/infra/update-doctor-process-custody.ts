@@ -314,9 +314,7 @@ export async function createUpdateDoctorProcessCustody(
         }
       })();
       retainCommandProcessCleanup(
-        cleanup.then((groups) =>
-          groups.settled && reservationsResolved ? "normal" : "uncertain",
-        ),
+        cleanup.then((groups) => (groups.settled && reservationsResolved ? "normal" : "uncertain")),
       );
       const groups = await cleanup;
       const settled = admitted && reservationsResolved && groups.settled;
