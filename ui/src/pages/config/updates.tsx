@@ -24,6 +24,7 @@ import {
   isUpdateActionable,
 } from "../../app/update-schedule-projection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   RetryAction,
   SettingsPage,
@@ -427,9 +428,9 @@ function GatewayUpdates(props: UpdatesViewProps) {
   return (
     <>
       <Show when={!props.canAdmin}>
-        <div class="callout warning" role="note">
+        <InlineAlert tone="warning" role="note">
           {t("updates.adminRequired")}
-        </div>
+        </InlineAlert>
       </Show>
       <BuildFacts {...props} />
       <RecordedAttempt
@@ -656,7 +657,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
       </p>
       <Errored
         fallback={(error, reset) => (
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {formatUiError(error())}
             <RetryAction
               type="button"
@@ -665,7 +666,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
                 void updateNow();
               }}
             />
-          </div>
+          </InlineAlert>
         )}
       >
         <Loading>{latest(confirmationOutcome) ?? null}</Loading>

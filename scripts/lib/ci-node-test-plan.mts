@@ -4809,6 +4809,10 @@ function createCompactNodeTestShardBundles(
   );
   const groupsByRunner = new Map<string, [NodeTestShardGroup, ...NodeTestShardGroup[]]>();
   const synthesizedSplitSeconds = new Map<string, number>();
+  const selectedToolingTimings =
+    selectedToolingFiles && (isBlacksmithProfile || options.runnerBackend === "hybrid")
+      ? readToolingFileTimings("blacksmith")
+      : undefined;
   const runnerRank = (group: Pick<NodeTestShardGroup, "runner">) =>
     [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER, EXTRA_LARGE_NODE_TEST_RUNNER].indexOf(
       group.runner,
@@ -4873,8 +4877,7 @@ function createCompactNodeTestShardBundles(
     const selectedTooling =
       (selectedToolingFiles && group.configs.includes(TOOLING_CONFIG)) || reducedToolingTier;
     if (selectedTooling) {
-      // Keep the parent's admission cost and partition policy, but never report
-      // a precise subset as a sample of the complete canonical stripe.
+      // Keep partition and timing identity separate from precise file selection.
       plannedGroups = plannedGroups.flatMap((planned) => {
         const includePatterns = (
           planned.group.includePatterns ?? listToolingGroupFiles(planned.group.configs)
@@ -4886,9 +4889,33 @@ function createCompactNodeTestShardBundles(
                 !isReleaseOnlyToolingTestFile(file)) ||
               keepPrExemptRuntimeFile(file)),
         );
-        return includePatterns?.length
-          ? [{ ...planned, group: { ...planned.group, includePatterns } }]
-          : [];
+        if (!includePatterns?.length) {
+          return [];
+        }
+        const measuredSelection =
+          selectedToolingTimings &&
+          isParallelToolingGroup(planned.group) &&
+          !planned.group.requiresDist &&
+          !planned.group.pretestBuildMode &&
+          includePatterns.every((file) => selectedToolingTimings[file] !== undefined);
+        return [
+          {
+            group: { ...planned.group, includePatterns },
+            // Known files need not reserve the discarded siblings' wall time.
+            // Retain startup headroom per process; unknown selections keep the parent floor.
+            seconds: measuredSelection
+              ? Math.max(
+                  DEFAULT_WHOLE_GROUP_SECONDS,
+                  estimateParallelToolingSeconds(
+                    planned.group,
+                    includePatterns,
+                    options.runnerBackend,
+                    selectedToolingTimings,
+                  ),
+                )
+              : planned.seconds,
+          },
+        ];
       });
       const generation = createCompactSplitTimingGeneration({
         configs: group.configs,

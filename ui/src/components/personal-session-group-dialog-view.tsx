@@ -11,6 +11,7 @@ import type {
   PersonalSessionGroupScopeChoices,
 } from "../lib/sessions/personal-groups.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
+import { Checkbox } from "./solid/checkbox.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Radio } from "./solid/radio.tsx";
 import { Picker } from "./solid/select-picker.tsx";
@@ -81,8 +82,7 @@ function SessionChoice(props: {
 }) {
   return (
     <label class="personal-section-dialog__option">
-      <input
-        type="checkbox"
+      <Checkbox
         checked={props.checked}
         onChange={(event) => props.onToggle(event.currentTarget.checked)}
       />

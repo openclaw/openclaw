@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { NativeBrowserMessage, NativeBrowserTab } from "../../app/native-browser-bridge.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "../panel-hosted-tabs.ts";
@@ -262,21 +261,7 @@ describe("Browser toolbar", () => {
 });
 
 describe("Browser recovery", () => {
-  let originalFonts: PropertyDescriptor | undefined;
-
-  beforeEach(() => {
-    originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
-    Object.defineProperty(document, "fonts", {
-      configurable: true,
-      value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
-    });
-    vi.stubGlobal("ResizeObserver", undefined);
-  });
-
-  afterEach(() => {
-    document.body.replaceChildren();
-    restorePropertyDescriptor(document, "fonts", originalFonts);
-  });
+  afterEach(() => document.body.replaceChildren());
 
   function mountFailingBrowser(nativeAvailable: boolean, remoteAvailable: boolean) {
     const nativeMessages: NativeBrowserMessage[] = [];
