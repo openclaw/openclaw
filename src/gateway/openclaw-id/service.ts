@@ -8,9 +8,9 @@ import type {
   Channel,
   Ed25519PublicKey,
   IrohEndpointKey,
-  MemberRole,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
+import type { OpenClawIdNodePairingProvenance } from "../../infra/device-pairing.types.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
 import type {
@@ -21,11 +21,10 @@ import type {
   DeviceTokenRef,
   OpenClawIdAuthority,
 } from "./authority.js";
-import type { OpenClawIdAccount, StoredClaw } from "./claw-store.js";
+import type { OpenClawIdAccount } from "./claw-store.js";
 import { createOpenClawIdConnectionAccess } from "./connection-identity.js";
 import { setDeviceTokenBindingOwner } from "./device-token-binding.js";
 import type { TunnelApiHandler } from "./ingress-listener.js";
-import { listInviteViews } from "./invites-view.js";
 import type { OpenClawIdPeerActivity } from "./member-activity.js";
 import { createOwnerExpiryTimer } from "./owner-expiry.js";
 import { armLocalExpiry, createPeopleExpiry, ownerLifecycleEvents } from "./owner-lifecycle.js";
@@ -65,6 +64,12 @@ export type OpenClawIdEffects = {
   revokeDeviceTokens: <T extends { deviceId: string; role: string }>(
     tokens: readonly T[],
   ) => Promise<T[]>;
+  /** Drop node-only grants and surface state for a removed peer. */
+  removeNodePairings?: (peerKeys: readonly string[]) => Promise<void>;
+  /** Retry orphaned grants after restart or a local owner reset. */
+  reconcileNodePairings?: (
+    isCurrent: (source: OpenClawIdNodePairingProvenance) => boolean,
+  ) => Promise<void>;
   /** Live activity of these device keys (connections, last seen, active runs). */
   describeActivity?: (peerKeys: readonly string[]) => Record<string, OpenClawIdPeerActivity>;
 };
@@ -282,6 +287,7 @@ export function createOpenClawIdService(params: {
       appliedKey = appliedConfigKey(config);
       await startMailbox();
       await revokeBoundTokens(await (await getAuthority()).orphanedTokens());
+      await reconcileNodePairings();
       // Publication runs beside the lifecycle, so a stalled Discovery cannot hold stop.
       void publicationRetry
         .start()
@@ -368,6 +374,19 @@ export function createOpenClawIdService(params: {
     await (await getAuthority()).unbindTokens(await effects.revokeDeviceTokens(tokens));
   };
 
+  // Compare durable listing provenance, not relay availability or the Labs switch.
+  const reconcileNodePairings = async () => {
+    const owner = await getAuthority();
+    if (closed) {
+      return;
+    }
+    const effects = await getEffects();
+    if (closed) {
+      return;
+    }
+    await effects?.reconcileNodePairings?.(owner.isCurrentNodeListing);
+  };
+
   // Performs the side effects of an accepted write in a fixed order: find the
   // removed keys' connections, withdraw tunnel access, cancel their runs, close
   // their sessions, revoke their tokens, then publish a new snapshot. Returns
@@ -398,6 +417,14 @@ export function createOpenClawIdService(params: {
         runsCancelled,
       };
     }
+    const removedNodes = [
+      ...new Set(
+        events.flatMap((event) => (event.type === "remove_node_pairings" ? event.peer_keys : [])),
+      ),
+    ];
+    if (removedNodes.length > 0) {
+      await effects?.removeNodePairings?.(removedNodes);
+    }
     void notifyOwners(events).catch((error: unknown) =>
       params.log.warn(`openclaw-id: owner notices failed: ${String(error)}`),
     );
@@ -409,34 +436,6 @@ export function createOpenClawIdService(params: {
         );
     }
     return summary;
-  };
-
-  // Members for the owner's People page: role, the name and email OpenClaw ID
-  // reported when they joined by invite (display only), when the owner approved
-  // them (seconds), and each device key's live activity read from this Gateway.
-  const describeMembers = async (
-    members: Record<string, { role: MemberRole; peer_keys: IrohEndpointKey[] }>,
-    approvedAt: StoredClaw["member_approved_at"],
-  ) => {
-    const effects = await getEffects();
-    const profiles = await (await getAuthority()).memberProfiles(Object.keys(members));
-    const keys = Object.values(members).flatMap((member) => member.peer_keys);
-    const activity = effects?.describeActivity?.(keys) ?? {};
-    return Object.entries(members).map(([accountId, member]) => {
-      const profile = profiles[accountId];
-      return {
-        accountId,
-        role: member.role,
-        peerKeys: member.peer_keys,
-        email: profile?.email ?? null,
-        displayName: profile?.displayName ?? null,
-        approvedAt: approvedAt?.[accountId] ?? null,
-        devices: member.peer_keys.map((peerKey) => ({
-          peerKey,
-          ...(activity[peerKey] ?? { connections: 0, lastSeenAt: null, runs: [] }),
-        })),
-      };
-    });
   };
 
   // Mails owner notices through Discovery once the claw is registered there.
@@ -534,6 +533,7 @@ export function createOpenClawIdService(params: {
       sink: {
         submit: (statement) => owner.submit(statement, "mailbox"),
         redeem: (redemption, sender) => owner.redeem(redemption, sender),
+        redeemNode: (redemption) => owner.redeemNode(redemption),
         saveCursor: (cursor) => owner.recordDiscovery({ mailbox_cursor: cursor }),
       },
       onEffects: async (events) => {
@@ -569,6 +569,7 @@ export function createOpenClawIdService(params: {
     const owner = await getAuthority();
     await handleTunnelApiRequest(req, res, peerKey, {
       membership: (key) => owner.ownerView(key),
+      prepareOwnerCheck: (key) => owner.prepareOwnerPeerCheck(key),
       submit: async (statement) => applyResult(await owner.submit(statement, "tunnel")),
       registerInvite: async (input) => {
         const result = await owner.registerInvite(input, "tunnel");
@@ -578,6 +579,13 @@ export function createOpenClawIdService(params: {
         return result;
       },
       seq: async () => (await owner.load())?.authority?.seq ?? 0,
+      registerNodeInvite: async (input, isCallerOwner) => {
+        const result = await owner.registerNodeInvite(input, "tunnel", isCallerOwner);
+        if (result.ok) {
+          await applyEvents(result.events);
+        }
+        return result;
+      },
       signOut: async (key) =>
         signOutTunnelPeer(key, owner, await getEffects(), params.getStateDir()),
     });
@@ -639,39 +647,15 @@ export function createOpenClawIdService(params: {
     }
   };
 
-  // Owner-only link state (see the service's linkStatus).
   const ownerLinkStatus = async () => {
-    if (!isOpenClawIdEnabled(params.getConfig())) {
-      return { linked: false as const, publication: undefined };
-    }
-    const record = await (await getAuthority()).load();
-    const state = record?.authority;
-    const { describeOwnerDevices } = await import("./owner-devices-view.js");
-    return {
-      linked: Boolean(state),
-      clawId: record?.claw_id,
-      hostname: record?.hostname ?? undefined,
-      rootPub: state?.anchor.root_pub,
-      seq: state?.seq,
-      ownerDevices: state ? describeOwnerDevices(state, Math.floor(Date.now() / 1000)) : [],
-      members: state ? await describeMembers(state.members, record?.member_approved_at) : [],
-      invites: listInviteViews(record, Math.floor(Date.now() / 1000)),
-      // After a restart, the last publication recorded with the claw stands in.
-      publication:
-        (lastPublish?.state === "failed"
-          ? { ...lastPublish, retryAt: publicationRetry.nextRetryAt() }
-          : lastPublish?.state === "published"
-            ? { ...lastPublish, refreshAt: publicationRetry.nextRefreshAt() }
-            : lastPublish) ??
-        (record?.discovery.owner_account_id
-          ? {
-              state: "published" as const,
-              ownerAccountId: record.discovery.owner_account_id,
-              snapshotSeq: record.discovery.published_snapshot_seq,
-              snapshotIssuedAt: record.discovery.published_snapshot_at ?? 0,
-            }
-          : undefined),
-    };
+    const { readOwnerLinkStatus } = await import("./owner-link-view.js");
+    return readOwnerLinkStatus({
+      enabled: isOpenClawIdEnabled(params.getConfig()),
+      getAuthority,
+      getEffects,
+      lastPublish,
+      publicationRetry,
+    });
   };
 
   const connectionAccess = createOpenClawIdConnectionAccess({
@@ -694,6 +678,10 @@ export function createOpenClawIdService(params: {
     /** Connects removal side effects owned by the Gateway's connection and run owners (loaded on first use). */
     bindEffects(load: () => Promise<OpenClawIdEffects>): void {
       loadEffects = load;
+      // This binding happens after token hydration and also when Labs is off.
+      void reconcileNodePairings().catch((error: unknown) =>
+        params.log.warn(`openclaw-id: could not reconcile node pairings: ${String(error)}`),
+      );
     },
     /** Serves one tunnel API request from an admitted device (the ingress listener's handler). */
     serveTunnelApi: handleTunnelApi,
@@ -824,6 +812,21 @@ export function createOpenClawIdService(params: {
         return refusal("not_direct", "invites are registered from an owner device on this claw");
       }
       const result = await (await getAuthority()).registerInvite(input, channel);
+      if (result.ok) {
+        await applyEvents(result.events);
+      }
+      return result;
+    },
+
+    /** Registers a signed, single-use node invitation without generating or signing credentials. */
+    async registerNodeInvite(
+      channel: Channel | undefined,
+      input: { cap: unknown; proofKey: Uint8Array },
+    ): Promise<AuthorityAccepted | AuthorityRefusal> {
+      if (!channel) {
+        return refusal("not_direct", "invites are registered from an owner device on this claw");
+      }
+      const result = await (await getAuthority()).registerNodeInvite(input, channel);
       if (result.ok) {
         await applyEvents(result.events);
       }

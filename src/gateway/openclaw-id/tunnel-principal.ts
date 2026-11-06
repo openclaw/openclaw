@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { NodeDescription } from "../../../packages/openclaw-id-protocol/src/index.js";
 // Gateway identity of an admitted OpenClaw ID tunnel device (OCF-225). The
 // tunnel child authenticates the device endpoint key W in the QUIC handshake
 // and the private ingress listener attributes the request to it; this module
@@ -24,6 +25,7 @@ type OpenClawIdMemberRole = "operator" | "viewer";
 /** Who an admitted tunnel device is, decided by the Gateway's membership authority. */
 export type OpenClawIdTunnelPrincipal = (
   | { kind: "owner"; peerKey: string }
+  | { kind: "node"; peerKey: string }
   | { kind: "member"; peerKey: string; accountId: string; role: OpenClawIdMemberRole }
 ) & {
   /** The resident membership owner supplies the original listing, not transport callers. */
@@ -48,6 +50,7 @@ const sourceFields = {
 /** Durable sources require the claw/root/listing identity; a bare peer is not recovery evidence. */
 export const openClawIdRecoveryPrincipalSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("owner"), ...sourceFields }),
+  z.strictObject({ kind: z.literal("node"), ...sourceFields }),
   z.strictObject({
     kind: z.literal("member"),
     ...sourceFields,
@@ -69,6 +72,7 @@ export type OpenClawIdTunnelPrincipalLookup = (
 let resolver: OpenClawIdTunnelPrincipalResolver | undefined;
 let lookup: OpenClawIdTunnelPrincipalLookup | undefined;
 let prepareLookup: (() => Promise<void>) | undefined;
+let recordActivity: ((peerKey: string) => void) | undefined;
 const changes = new Set<() => void>();
 
 /** Notifies retained work after committed membership changes or a service lifecycle change. */
@@ -135,6 +139,7 @@ export function isOpenClawIdTunnelPrincipalCurrent(principal: OpenClawIdTunnelPr
   }
   return (
     current.kind === "owner" ||
+    current.kind === "node" ||
     (principal.kind === "member" &&
       current.accountId === principal.accountId &&
       current.role === principal.role)
@@ -199,6 +204,9 @@ const VIEWER_POLICY: GatewayOperatorRoleDefinition = Object.freeze({
 export function openclawIdTunnelRolePolicy(
   principal: OpenClawIdTunnelPrincipal | undefined,
 ): GatewayOperatorRoleDefinition | undefined {
+  if (principal?.kind === "node") {
+    return { scopes: [], agents: [], sessions: { others: "none" } };
+  }
   if (principal?.kind !== "member") {
     return undefined;
   }
@@ -213,4 +221,27 @@ export async function prepareOpenClawIdTunnelPrincipal(
   if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
     throw new Error("OpenClaw ID membership authority changed");
   }
+}
+
+/** Records authenticated tunnel traffic; bare caller-supplied keys cannot refresh admission. */
+export function recordOpenClawIdTunnelActivity(principal: OpenClawIdTunnelPrincipal): void {
+  if (isOpenClawIdTunnelPrincipalCurrent(principal)) {
+    recordActivity?.(principal.peerKey);
+  }
+}
+
+/** The service owns activity persistence alongside its resolver lifetime. */
+export function setOpenClawIdTunnelActivityRecorder(next: typeof recordActivity): void {
+  recordActivity = next;
+}
+
+let nodeDescription: ((peerKey: string) => NodeDescription | undefined) | undefined;
+
+/** The resident membership owner supplies the signed surface, never connect metadata. */
+export function setOpenClawIdNodeDescriptionLookup(next: typeof nodeDescription): void {
+  nodeDescription = next;
+}
+
+export function openClawIdNodeDescription(peerKey: string): NodeDescription | undefined {
+  return nodeDescription?.(peerKey);
 }

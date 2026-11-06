@@ -16,6 +16,10 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(async () => ({ aborted: true })),
   invalidate: vi.fn(),
   revoke: vi.fn(async () => ({ ok: true })),
+  removeNodes: vi.fn(async () => ["node-device"]),
+  reconcileNodes: vi.fn(async () => ["node-device"]),
+  clearNode: vi.fn(),
+  revokeWorker: vi.fn(async () => {}),
 }));
 
 // mock-isolation: fixed run and connection fixtures stand in for process-global Gateway state.
@@ -34,6 +38,15 @@ vi.mock("../server/ws-policy-close.js", () => ({
 }));
 // mock-isolation: fixed run and connection fixtures stand in for process-global Gateway state.
 vi.mock("../../infra/device-pairing-tokens.js", () => ({ revokeDeviceToken: mocks.revoke }));
+
+vi.mock("./node-pairing.js", () => ({
+  removeNodePairings: mocks.removeNodes,
+  reconcileNodePairings: mocks.reconcileNodes,
+}));
+vi.mock("../node-runtime-state.js", () => ({ clearRemovedNodeRuntimeState: mocks.clearNode }));
+vi.mock("../device-worker-revocation.js", () => ({
+  reconcileRevokedDeviceWorker: mocks.revokeWorker,
+}));
 
 const { createOpenClawIdRemovalEffects } = await import("./removal-effects.js");
 const {
@@ -182,4 +195,34 @@ describe("removal effects", () => {
     mocks.entries = [];
     expect(openclawIdTunnelConnectionsOf([BOB])).toEqual([]);
   });
+});
+
+it("retires node runtime, worker authority and device sessions after peer-pairing removal", async () => {
+  const context = {
+    invalidateClientsForDevice: vi.fn(),
+    disconnectClientsForDevice: vi.fn(),
+    broadcast: vi.fn(),
+  };
+  const effects = createOpenClawIdRemovalEffects({
+    clients: () => [],
+    context: () => context as never,
+    log: { warn: vi.fn() },
+  });
+  await effects.removeNodePairings?.([BOB]);
+  expect(mocks.removeNodes).toHaveBeenCalledWith([BOB]);
+  expect(context.invalidateClientsForDevice).toHaveBeenCalledWith("node-device", {
+    role: "node",
+    reason: "device-pair-removed",
+  });
+  expect(mocks.clearNode).toHaveBeenCalledWith({ nodeId: "node-device", context });
+  expect(mocks.revokeWorker).toHaveBeenCalledWith(context, "node-device");
+  expect(context.broadcast).toHaveBeenCalledWith(
+    "node.pair.resolved",
+    expect.objectContaining({ nodeId: "node-device", decision: "removed" }),
+    { dropIfSlow: true },
+  );
+  expect(context.disconnectClientsForDevice).toHaveBeenCalledWith("node-device", { role: "node" });
+  const current = () => false;
+  await effects.reconcileNodePairings?.(current);
+  expect(mocks.reconcileNodes).toHaveBeenCalledWith(current);
 });
