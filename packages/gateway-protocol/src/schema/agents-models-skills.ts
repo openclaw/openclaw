@@ -43,6 +43,7 @@ export { SkillWorkshopDraftSchema } from "./skill-workshop-drafts.js";
 export type { SkillWorkshopDraft } from "./skill-workshop-drafts.js";
 
 export {
+  ProviderPresentationSchema,
   ModelChoiceSchema,
   ModelRuntimeChoiceSchema,
   ModelCatalogProviderOutcomeSchema,
@@ -50,6 +51,7 @@ export {
   ModelsListResultSchema,
 } from "./model-catalog.js";
 export type {
+  ProviderPresentation,
   ModelChoice,
   ModelRuntimeChoice,
   ModelCatalogProviderOutcome,

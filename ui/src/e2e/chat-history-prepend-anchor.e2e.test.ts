@@ -68,13 +68,25 @@ suite.define(() => {
     const pane = page.locator(".chat-pane-cache__pane--active");
     const thread = pane.locator(".chat-thread");
     const textarea = pane.locator(".agent-chat__composer-combobox textarea");
+    const recallPrompt = async (key: "ArrowUp" | "ArrowDown", text: string) => {
+      await textarea.press(key);
+      const caret = key === "ArrowUp" ? 0 : text.length;
+      // The recalled text commits before its next-frame caret restoration.
+      await expect
+        .poll(() =>
+          textarea.evaluate((input: HTMLTextAreaElement) => [
+            input.value,
+            input.selectionStart,
+            input.selectionEnd,
+          ]),
+        )
+        .toEqual([text, caret, caret]);
+    };
     await thread.getByText(/^History entry 82\./).waitFor();
     await waitForChatScrollIdle(page);
     expect(await gateway.getRequests("chat.history")).toHaveLength(0);
-    await textarea.press("ArrowUp");
-    await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
-    await textarea.press("ArrowDown");
-    await expect.poll(() => textarea.inputValue()).toBe("");
+    await recallPrompt("ArrowUp", "Latest prompt");
+    await recallPrompt("ArrowDown", "");
 
     await gateway.deferNext("chat.history");
     await thread.hover();
@@ -88,18 +100,12 @@ suite.define(() => {
     const requests = await gateway.getRequests("chat.history");
     expect(requests).toHaveLength(1);
     expect(requests[0]?.params).toMatchObject({ cursor: "older-recall" });
-    await textarea.press("ArrowUp");
-    await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
-    await textarea.press("ArrowUp");
-    await expect.poll(() => textarea.inputValue()).toBe("Recent prompt");
-    await textarea.press("ArrowUp");
-    await expect.poll(() => textarea.inputValue()).toBe("Earlier prompt");
-    await textarea.press("ArrowDown");
-    await expect.poll(() => textarea.inputValue()).toBe("Recent prompt");
-    await textarea.press("ArrowDown");
-    await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
-    await textarea.press("ArrowDown");
-    await expect.poll(() => textarea.inputValue()).toBe("");
+    await recallPrompt("ArrowUp", "Latest prompt");
+    await recallPrompt("ArrowUp", "Recent prompt");
+    await recallPrompt("ArrowUp", "Earlier prompt");
+    await recallPrompt("ArrowDown", "Recent prompt");
+    await recallPrompt("ArrowDown", "Latest prompt");
+    await recallPrompt("ArrowDown", "");
   });
 
   {
