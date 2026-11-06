@@ -118,5 +118,16 @@ a tunnel version never needs a new root key, a new recovery kit or a root epoch.
 stays the constant 1 so existing signatures verify (enrollment.md). Replacing a claw's root is
 owner reset (OCF-319), a separate, machine-local operation.
 
+### Owner reset (added to v1-draft in place)
+
+Owner reset added the `RootReset` statement type to envelope version 1 and the optional
+`reset` field to descriptor version 1. Under "Unknown fields" above, both would normally need a
+new version. They were added in place because v1-draft has not shipped: no released reader
+exists. Readers built before the change refuse a descriptor carrying `reset` (unknown field)
+and a `RootReset` (unknown statement type) as `malformed`; nothing is half-accepted. Discovery
+and the loader must update their vendored protocol before a Gateway publishes a reset. A
+descriptor without `reset` and every other statement are byte-for-byte what they were, so the
+existing v1 vectors are unchanged. After v1 ships, a change like this needs a new version.
+
 A new envelope version must not change how an existing recovery kit derives its root key:
 the kit format has its own version (`OCK1`).

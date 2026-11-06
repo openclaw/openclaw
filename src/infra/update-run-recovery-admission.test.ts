@@ -37,6 +37,7 @@ import {
   reconcileAbandonedUpdateRunsAsync,
 } from "./update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "./update-run-recovery-admission.js";
+import { assertNoPendingUpdateRecovery } from "./update-run-recovery.js";
 import { recordUpdateRunPhaseAsync } from "./update-run-write.async.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -156,6 +157,29 @@ describe("package-only recovery admission", () => {
       name: "UpdateRecoveryRequiredError",
       record: { runId: f.run.runId },
     });
+    expect(fs.readFileSync(f.file)).toEqual(before);
+  });
+
+  it("runs host recovery guards without copying the database", () => {
+    const f = createRetainedCheckpointFixture(dirs.make("update-guard-copies-"));
+    const copies = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+    for (let check = 0; check < 3; check += 1) {
+      expect(() =>
+        assertNoPendingUpdateRecovery({ ...f.options, allowNativeRead: true }),
+      ).toThrowError(expect.objectContaining({ name: "UpdateRecoveryRequiredError" }));
+    }
+    expect(copies).not.toHaveBeenCalled();
+  });
+
+  it("keeps Doctor catalog admission for host guards reading the live file", () => {
+    const f = createRetainedCheckpointFixture(dirs.make("update-guard-catalog-"));
+    createDanglingSkillWorkshopReviewIndex(f.file);
+    const before = fs.readFileSync(f.file);
+    const copies = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+    expect(() =>
+      assertNoPendingUpdateRecovery({ ...f.options, allowNativeRead: true }),
+    ).toThrowError(expect.objectContaining({ name: "UpdateRecoveryRequiredError" }));
+    expect(copies).not.toHaveBeenCalled();
     expect(fs.readFileSync(f.file)).toEqual(before);
   });
 

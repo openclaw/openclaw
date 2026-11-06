@@ -561,19 +561,23 @@ executable metadata supplies bundled plugin source checks and Doctor contract
 hashes. Installed plugins keep their normal filesystem admission and loading
 rules and live in the configured state directory.
 
-Standalone builds retain native plugin loading, Jiti, and its lazy Babel transformer
-in one host-owned package under
+Standalone builds retain Jiti and its lazy Babel transformer in one host-owned package under
 `runtime/node_modules/@openclaw/plugin-loader/`. The package loads only when a
-plugin needs source transformation or an AOT host loads an external module.
+plugin needs source transformation.
 Native plugin loading leaves Jiti and Babel uninitialized. The `pluginLoader`
 resource category includes the bundle, package metadata, and license.
 
 AOT builds keep bundled plugins and the host SDK in the compiled image. Fetched
-plugins load through the declared external loader and run interpreted against
-that same SDK; installing one does not change the executable. Existing plugin
+plugins run interpreted and receive the compiled SDK's exports through the
+existing module resolver. Disk code never imports the image's virtual files,
+and the host and plugins share the same SDK instances. Installing a plugin does
+not change the executable. Existing plugin
 admission and generation ownership still apply. A paired AOT/JIT build keeps the
 same loader resource snapshot in both sidecars. Strict code-generation policies
 can still reject interpreted plugins with runtime execution guidance.
+
+Due to a compiler limitation, query or fragment imports of disk modules in AOT
+builds do not create separate module instances.
 
 On-demand plugin installs use the declared npm runtime in `runtime/npm/` through
 the standalone executable's Bun mode. This preserves npm registry authentication,

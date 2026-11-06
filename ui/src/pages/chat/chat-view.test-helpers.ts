@@ -402,6 +402,7 @@ export function replaceSkillCommands(
       skillDisplayName,
       description,
       source: "skill" as const,
+      skillReferenceable: true,
       skillModelVisible: true,
     })),
   ]);

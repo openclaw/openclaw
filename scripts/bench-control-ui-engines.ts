@@ -72,6 +72,16 @@ import {
   type InteractionEvidence,
 } from "./lib/control-ui-interaction-scenarios.ts";
 import {
+  createControlUiLayerAudit,
+  type ControlUiLayerAudit,
+} from "./lib/control-ui-layer-audit.ts";
+import {
+  compareControlUiScreenshots,
+  createControlUiMutationAudit,
+  type ControlUiMutationAudit,
+} from "./lib/control-ui-mutation-audit.ts";
+import { summarizeControlUiNativeTrace } from "./lib/control-ui-native-trace.ts";
+import {
   finishControlUiPageObserver,
   installControlUiPageObserver,
   readControlUiPageObserver,
@@ -104,6 +114,8 @@ const { values } = parseArgs({
     "observer-origins": { type: "boolean", default: false },
     "cpu-only": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
+    "native-audit": { type: "boolean", default: false },
+    "mutation-audit": { type: "boolean", default: false },
     "cpu-throttle": { type: "string", default: "1" },
     "memory-soak-rounds": { type: "string", default: "10" },
   },
@@ -115,8 +127,8 @@ if (!Number.isInteger(memorySoakRounds) || memorySoakRounds < 1 || memorySoakRou
 }
 const pageBenchmark = values.pages || values.steps?.split(",").some((id) => id.startsWith("page-"));
 const pagePhases = values["page-phases"].split(",");
-if (pagePhases.some((phase) => !["visit", "action", "leave"].includes(phase))) {
-  throw new Error("page-phases must contain visit, action and/or leave");
+if (pagePhases.some((phase) => !["visit", "revisit", "action", "leave"].includes(phase))) {
+  throw new Error("page-phases must contain visit, revisit, action and/or leave");
 }
 const engines: ControlUiEngine[] = values.engines.split(",").map((name) => {
   if (name !== "chromium" && name !== "webkit") {
@@ -161,8 +173,20 @@ if (values["control-bundle-dir"]?.length && !values["compare-bundle-dir"]) {
 if (values.trace && values["cpu-only"]) {
   throw new Error("Choose --trace or --cpu-only; use separate untraced timing runs");
 }
+if (
+  values["mutation-audit"] &&
+  (values.trace || values["cpu-only"] || values["cpu-profile"] || values["native-audit"])
+) {
+  throw new Error("--mutation-audit is diagnostic; collect profiles and timings in separate runs");
+}
 if (values["cpu-profile"] && (values.trace || values["cpu-only"] || engines.includes("webkit"))) {
   throw new Error("--cpu-profile requires Chromium and a separate run from --trace/--cpu-only");
+}
+if (
+  values["native-audit"] &&
+  (engines.includes("webkit") || values.trace || values["cpu-only"] || values["cpu-profile"])
+) {
+  throw new Error("--native-audit requires Chromium and a separate run from other profiling modes");
 }
 const artifactDir = createControlUiE2eArtifactDir("engines", values.output);
 const viewports = [
@@ -186,6 +210,7 @@ const needsWorkboard =
     .some(
       (id) =>
         id.startsWith("workboard-") ||
+        id.startsWith("noop-workboard-") ||
         /^page-(?:workboard|plugin)-(?:visit|action|leave)$/u.test(id),
     );
 if (needsWorkboard && directories.some((_, index) => !sourceRoots[index])) {
@@ -263,6 +288,11 @@ type Observation = {
   hostLoadAverage: number[];
   metrics?: EngineMetrics;
   pageMetrics?: ControlUiPageObservation;
+  native?: ReturnType<typeof summarizeControlUiNativeTrace>;
+  mutations?: ControlUiMutationAudit;
+  pixels?: Awaited<ReturnType<typeof compareControlUiScreenshots>>;
+  computedTheme?: Record<string, string>;
+  layers?: ControlUiLayerAudit;
   requests?: Record<string, number>;
   evidence?: InteractionEvidence;
   navigationPreloads?: InteractionNavigationPreloads;
@@ -378,6 +408,9 @@ try {
         [
           "./bench-control-ui-engines.ts",
           "./lib/control-ui-engine-metrics.ts",
+          "./lib/control-ui-layer-audit.ts",
+          "./lib/control-ui-native-trace.ts",
+          "./lib/control-ui-mutation-audit.ts",
           "./lib/control-ui-cold-load-trace.ts",
           "./lib/control-ui-cpu-census.ts",
           "./lib/control-ui-engine-boot-scenarios.ts",
@@ -430,21 +463,27 @@ try {
     observerOrigins: values["observer-origins"],
     cpuOnly: values["cpu-only"],
     cpuProfile: values["cpu-profile"],
+    nativeAudit: values["native-audit"],
+    mutationAudit: values["mutation-audit"],
     cpuThrottle,
     memorySoakRounds,
-    collection: values["cpu-profile"]
-      ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
-      : values.trace
-        ? "Playwright tracing and engine Inspector/Profiler; overhead included"
-        : values["cpu-only"]
-          ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
-          : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
+    collection: values["mutation-audit"]
+      ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
+      : values["native-audit"]
+        ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
+        : values["cpu-profile"]
+          ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
+          : values.trace
+            ? "Playwright tracing and engine Inspector/Profiler; overhead included"
+            : values["cpu-only"]
+              ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
+              : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
     order:
       "Serial network profile and engine order alternates each pair; bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
       "Census ranks >1.3x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
     frameCadence:
-      "Prepare and settle frame intervals are consecutive requestAnimationFrame timestamp differences, not the full wait duration. scenarioMs includes driver input and scenario assertions; settleWaitMs measures the final two-frame wait. Their sum is wallMs. These are automation-to-assertion timings, not input-to-paint latency. Browser-local actionTiming splits the driver prefix, application elapsed to the last observed DOM commit (or native value edit), and the assertion/settle tail. These three sum to browserSpanMs, not Node wallMs. Focus work can occur in the prefix; compound input spans retain intermediate driver delays. Trace-only marks expose the same boundaries. Missing native input/commit makes action timing unavailable.",
+      "Prepare and settle frame intervals are consecutive requestAnimationFrame timestamp differences, not the full wait duration. scenarioMs includes driver input and scenario assertions; settleWaitMs measures the final two-frame wait. Their sum is wallMs. These are automation-to-assertion timings, not input-to-paint latency. Browser-local actionTiming splits the driver prefix, application elapsed to the last observed DOM commit (or native value edit), and the assertion/settle tail. These three sum to browserSpanMs, not Node wallMs. Focus work can occur in the prefix; compound input spans retain intermediate driver delays. Trace-only marks expose the same boundaries. Missing native input or an explicit Gateway-response mark, or a missing commit, makes action timing unavailable.",
     boundary:
       "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
@@ -528,6 +567,7 @@ try {
             let tracingStarted = false;
             let measurement: Awaited<ReturnType<typeof startEngineMeasurement>> | undefined;
             let cpuProfile: ColdLoadCpuProfile | undefined;
+            let layerAudit: Awaited<ReturnType<typeof createControlUiLayerAudit>> | undefined;
             let memory: Awaited<ReturnType<typeof createEngineMemoryCollector>> | undefined;
             let throttle: Awaited<ReturnType<typeof context.newCDPSession>> | undefined;
             try {
@@ -536,6 +576,11 @@ try {
                 await throttle.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
               }
               await page.addInitScript("globalThis.__name = (fn) => fn");
+              if (values["mutation-audit"]) {
+                await page.addInitScript(
+                  `window.openclawMutationAudit = (${createControlUiMutationAudit.toString()})();${scenario.navigation ? "window.openclawMutationAudit.start();" : ""}`,
+                );
+              }
               if (scenario.id.startsWith("page-")) {
                 await installControlUiPageObserver(page);
               }
@@ -636,11 +681,15 @@ try {
               await scenario.setup?.(page);
               if (scenario.navigation !== "measured") {
                 await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
-                await waitForControlUiInitialRoster(page, 30_000);
+                if (!scenario.standaloneDocument) {
+                  await waitForControlUiInitialRoster(page, 30_000);
+                }
               }
               await scenario.prepare(page, gateway);
               if (scenario.navigation !== "measured") {
-                observation.navigationPreloads = await settleInteractionNavigationPreloads(page);
+                if (!scenario.standaloneDocument) {
+                  observation.navigationPreloads = await settleInteractionNavigationPreloads(page);
+                }
                 await page.waitForLoadState("networkidle");
                 await page.evaluate(() => document.fonts.ready.then(() => undefined));
                 observation.prepareFrameIntervalMs = await frames(page);
@@ -669,10 +718,23 @@ try {
                 !scenario.navigation && !scenario.memory
                   ? await page.evaluateHandle(createEngineActionTiming, traceAction)
                   : undefined;
+              const beforePixels = values["mutation-audit"]
+                ? await page.screenshot({
+                    path: path.join(artifactDir, `${artifactPrefix}.before.png`),
+                  })
+                : undefined;
+              if (values["mutation-audit"] && !scenario.navigation) {
+                await page.evaluate(() => window.openclawMutationAudit!.start());
+              }
+              if (values["native-audit"]) {
+                layerAudit = await createControlUiLayerAudit(page);
+                await layerAudit.capture();
+              }
               measurement = await startEngineMeasurement(page, engine, {
                 trace: values.trace,
                 cpuOnly: values["cpu-only"],
                 cpuProfile: values["cpu-profile"],
+                nativeAudit: values["native-audit"],
               });
               phase = "measurement";
               const start = performance.now();
@@ -757,6 +819,36 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (values["mutation-audit"]) {
+                observation.mutations = await page.evaluate(() =>
+                  window.openclawMutationAudit!.finish(),
+                );
+                const afterPixels = await page.screenshot({
+                  path: path.join(artifactDir, `${artifactPrefix}.after.png`),
+                });
+                observation.pixels = await page.evaluate(compareControlUiScreenshots, {
+                  before: beforePixels!.toString("base64"),
+                  after: afterPixels.toString("base64"),
+                });
+              }
+              if (values["native-audit"]) {
+                await writeJson(`${artifactPrefix}.native.json`, captured);
+                observation.native = summarizeControlUiNativeTrace(
+                  captured.timeline ?? [],
+                  captured.profile,
+                );
+                observation.layers = await layerAudit!.finish();
+              }
+              if (values["native-audit"] || scenario.id === "theme-switch-cycles") {
+                observation.computedTheme = await page.evaluate(() => {
+                  const styles = getComputedStyle(document.documentElement);
+                  return Object.fromEntries(
+                    Array.from(styles)
+                      .filter((name) => name.startsWith("--"))
+                      .map((name) => [name, styles.getPropertyValue(name).trim()]),
+                  );
+                });
+              }
               if (values["cpu-profile"]) {
                 // SAFETY: This mode is Chromium-only; Profiler.stop returns V8's
                 // Profile shape, whose sample intervals the census validates.
@@ -809,6 +901,7 @@ try {
               phase = "capture";
               observation.errorEvents = errors;
               try {
+                await layerAudit?.dispose();
                 await memory?.dispose();
                 if (values.trace || values["observer-origins"]) {
                   const resizeErrors: unknown[] = await page.evaluate(() =>
@@ -1109,7 +1202,7 @@ await writeFile(
     "",
     `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
     "",
-    "Application elapsed is first trusted action event to last observed DOM commit/native value edit before scenario return. It excludes the initial driver prefix and later assertion/settle tail, but includes intermediate driver gaps in compound actions; it is not CPU or paint latency. Navigation/memory and actions without both boundaries are unranked. The driver prefix may include application focus work. Browser-local phases do not include boundary RPC transport and do not sum to Node wall time.",
+    "Application elapsed is first trusted native input (or an explicitly marked Gateway response delivery) to last observed DOM commit/native value edit before scenario return. Gateway marks run inside the page immediately before releasing the deferred response. It excludes the initial driver prefix and later assertion/settle tail, but includes intermediate driver gaps in compound actions; it is not CPU or paint latency. Navigation/memory and actions without both boundaries are unranked. The driver prefix may include application focus work. Browser-local phases do not include boundary RPC transport and do not sum to Node wall time.",
     "",
     "| Viewport | Scenario | Network | Bundle | Chromium application median/p95 (ms) | WebKit application median/p95 (ms) | Application W/C | Driver W/C | Chromium wall median/p95 (ms) | WebKit wall median/p95 (ms) | Wall W/C |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -1157,6 +1250,23 @@ await writeFile(
         ]
       : []),
     "",
+    ...(values["mutation-audit"]
+      ? [
+          "## Mutation census (diagnostic overhead; not timing evidence)",
+          "",
+          "Value no-op ratio counts individual attribute/text writes. Same-node moves preserve identity; different-node identical-content pairs are replacement candidates, not proof of a bug. Signatures are sampled at observer delivery. Screenshot changes include caret/animation noise. Formatter counts include all instrumented calls, not just rows; translation lookups are not instrumented.",
+          "",
+          "| Engine | Flow | Bundle | Attribute no-ops / writes | Text no-ops / writes | Value no-op % | Suspect operations % | Moved identical | Recreated identical | Changed viewport % | Formatter calls |",
+          "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+          ...observations
+            .filter((row) => row.mutations)
+            .map((row) => {
+              const audit = row.mutations!;
+              return `| ${row.engine} | ${row.step} | ${row.bundle} | ${audit.unchangedAttributes}/${audit.attributes} | ${audit.unchangedText}/${audit.text} | ${(100 * audit.valueNoopRatio).toFixed(1)} | ${(100 * audit.noopOperationRatio).toFixed(1)} | ${audit.movedIdentical} | ${audit.recreatedIdentical} | ${((row.pixels?.changedPixelRatio ?? 0) * 100).toFixed(2)} | ${Object.values(audit.formatters).reduce((sum, count) => sum + count, 0)} |`;
+            }),
+          "",
+        ]
+      : []),
     "Memory checkpoints follow two explicit GCs. WebKit snapshot self sizes omit some backing stores; engine categories and browser-tree RSS provide separate native/allocation evidence. RSS includes Inspector overhead and may exclude reparented platform services. Compare warm-to-late checkpoints within an engine, not absolute heap sizes between engines. Detached counts cover JSC wrappers versus V8 native DOM nodes; see per-checkpoint notes and unresolved counts. Memory scenario durations are excluded from the timing table.",
     "",
     "| Engine | Scenario | Bundle/pair | Checkpoint | Heap MiB | Engine MiB | Browser-tree RSS MiB | Detached | Unknown |",
