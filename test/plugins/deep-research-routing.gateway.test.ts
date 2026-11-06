@@ -1,41 +1,41 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
-import { prepareSystemAgentRunAdmission } from "../../../src/agents/admitted-run-context.js";
-import { createCodingToolsGatewayCaller } from "../../../src/agents/agent-tools.caller.js";
-import { prepareConversationCapabilityProfile } from "../../../src/agents/conversation-capability-profile.js";
+import { prepareSystemAgentRunAdmission } from "../../src/agents/admitted-run-context.js";
+import { createCodingToolsGatewayCaller } from "../../src/agents/agent-tools.caller.js";
+import { prepareConversationCapabilityProfile } from "../../src/agents/conversation-capability-profile.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
-} from "../../../src/agents/tools/gateway-caller-context.js";
-import { setRuntimeConfigSnapshot } from "../../../src/config/config.js";
-import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
-import { createGatewayMethodRegistry } from "../../../src/gateway/methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "../../../src/gateway/operator-run-authority.js";
-import { createDirectChatContext } from "../../../src/gateway/server-chat.agent-events.test-helpers.js";
-import { createOperatorClient } from "../../../src/gateway/server-plugin-in-process-dispatch.test-support.js";
-import { loadGatewayPlugins } from "../../../src/gateway/server-plugins.js";
-import { bindSessionRowProjection } from "../../../src/gateway/session-row-projection-access.js";
-import { createSessionRowProjection } from "../../../src/gateway/session-row-projection.js";
-import { createTestPluginServiceScheduler } from "../../../src/plugin-sdk/plugin-test-api.js";
-import { createPluginRuntimeCapabilityLease } from "../../../src/plugins/capability-lease.js";
-import * as pluginLoader from "../../../src/plugins/loader.js";
-import { clearPluginLoaderCache } from "../../../src/plugins/loader.test-fixtures.js";
+} from "../../src/agents/tools/gateway-caller-context.js";
+import { setRuntimeConfigSnapshot } from "../../src/config/config.js";
+import { upsertSessionEntryCore } from "../../src/config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { createGatewayMethodRegistry } from "../../src/gateway/methods/registry.js";
+import { captureGatewayOperatorRunAuthority } from "../../src/gateway/operator-run-authority.js";
+import { createDirectChatContext } from "../../src/gateway/server-chat.agent-events.test-helpers.js";
+import { createOperatorClient } from "../../src/gateway/server-plugin-in-process-dispatch.test-support.js";
+import { loadGatewayPlugins } from "../../src/gateway/server-plugins.js";
+import { bindSessionRowProjection } from "../../src/gateway/session-row-projection-access.js";
+import { createSessionRowProjection } from "../../src/gateway/session-row-projection.js";
+import { createTestPluginServiceScheduler } from "../../src/plugin-sdk/plugin-test-api.js";
+import { createPluginRuntimeCapabilityLease } from "../../src/plugins/capability-lease.js";
+import * as pluginLoader from "../../src/plugins/loader.js";
+import { clearPluginLoaderCache } from "../../src/plugins/loader.test-fixtures.js";
 import {
   disposePluginRegistryInstances,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
-} from "../../../src/plugins/runtime.js";
+} from "../../src/plugins/runtime.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
-} from "../../../src/plugins/runtime/gateway-request-scope.js";
-import { createPluginServiceSessionWork } from "../../../src/plugins/service-session-work.js";
-import { bindPluginToolCallbacks } from "../../../src/plugins/tool-factory-runtime.js";
-import { setPluginToolMeta } from "../../../src/plugins/tool-metadata.js";
-import { drainGlobalSingletonLifecycleState } from "../../../src/shared/global-singleton.js";
-import { withOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
+} from "../../src/plugins/runtime/gateway-request-scope.js";
+import { createPluginServiceSessionWork } from "../../src/plugins/service-session-work.js";
+import { bindPluginToolCallbacks } from "../../src/plugins/tool-factory-runtime.js";
+import { setPluginToolMeta } from "../../src/plugins/tool-metadata.js";
+import { drainGlobalSingletonLifecycleState } from "../../src/shared/global-singleton.js";
+import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
 // Drain global owners only after withOpenClawTestState closes scoped writers/leases.
 afterEach(() => drainGlobalSingletonLifecycleState());
@@ -142,7 +142,9 @@ it.each(["policy", "router-refusal", "host-abort"] as const)(
           resolveGatewayContext: () => context,
           env: {
             ...process.env,
-            OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../..", import.meta.url)),
+            OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(
+              new URL("../../extensions", import.meta.url),
+            ),
           },
         });
         const registry = loaded.pluginRegistry;

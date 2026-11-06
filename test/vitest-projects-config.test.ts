@@ -21,6 +21,7 @@ import { createExtensionDatabaseWorkersVitestConfig } from "./vitest/vitest.exte
 import { createExtensionImessageVitestConfig } from "./vitest/vitest.extension-imessage.config.ts";
 import { createExtensionsVitestConfig } from "./vitest/vitest.extensions.config.ts";
 import { diagnosticForksPool } from "./vitest/vitest.forks-pool.ts";
+import { createGatewayDatabaseWorkersVitestConfig } from "./vitest/vitest.gateway-database-workers.config.ts";
 import { createGatewayMethodsIsolatedVitestConfig } from "./vitest/vitest.gateway-methods-isolated.config.ts";
 import { createGatewayMethodsVitestConfig } from "./vitest/vitest.gateway-methods.config.ts";
 import { createGatewayServerIsolatedVitestConfig } from "./vitest/vitest.gateway-server-isolated.config.ts";
@@ -519,8 +520,6 @@ describe("projects vitest config", () => {
     "extensions/deep-research/src/jobs.test.ts",
     "extensions/deep-research/src/jobs.cancel.test.ts",
     "extensions/deep-research/src/jobs.wake.test.ts",
-    "extensions/deep-research/test/gateway-recovery.integration.test.ts",
-    "extensions/deep-research/test/gateway-routing.integration.test.ts",
     "extensions/google/research-gateway.test.ts",
   ])("routes %s through the host database owner exactly once", (file) => {
     const project = "test/vitest/vitest.extension-database-workers.config.ts";
@@ -531,6 +530,16 @@ describe("projects vitest config", () => {
     expect(requireTestConfig(createExtensionsVitestConfig({})).exclude).toContain(
       file.slice("extensions/".length),
     );
+  });
+
+  it.each([
+    "test/plugins/deep-research-recovery.gateway.test.ts",
+    "test/plugins/deep-research-routing.gateway.test.ts",
+  ])("routes %s through the Gateway database owner exactly once", (file) => {
+    const project = "test/vitest/vitest.gateway-database-workers.config.ts";
+    expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
+    expect(requireTestConfig(createGatewayDatabaseWorkersVitestConfig({})).pool).toBe("forks");
+    expect(requireTestConfig(createGatewayMethodsVitestConfig({})).exclude).toContain(file);
   });
 
   it.each([

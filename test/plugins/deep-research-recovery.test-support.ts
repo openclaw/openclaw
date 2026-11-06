@@ -1,14 +1,14 @@
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
-import * as operatorAuthority from "../../../src/gateway/operator-run-authority.js";
-import type { GatewayRequestContext } from "../../../src/gateway/server-methods/types.js";
-import { prepareInProcessAgentExecution } from "../../../src/gateway/server-plugin-in-process-dispatch.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import * as operatorAuthority from "../../src/gateway/operator-run-authority.js";
+import type { GatewayRequestContext } from "../../src/gateway/server-methods/types.js";
+import { prepareInProcessAgentExecution } from "../../src/gateway/server-plugin-in-process-dispatch.js";
 import {
   createGatewayNodesRuntime,
   createGatewaySubagentRuntime,
-} from "../../../src/gateway/server-plugins.js";
-import { sessionChanges } from "../../../src/sessions/session-row-changes.js";
-import type { OpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
+} from "../../src/gateway/server-plugins.js";
+import { sessionChanges } from "../../src/sessions/session-row-changes.js";
+import type { OpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
 /** Probe real sibling entry points under the fixture's accepted recovery borrow. */
 export function probeUnadmittedRuntimeSiblings(context: GatewayRequestContext, sessionKey: string) {

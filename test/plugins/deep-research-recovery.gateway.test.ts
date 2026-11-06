@@ -2,70 +2,70 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
-import { prepareSystemAgentRunAdmission } from "../../../src/agents/admitted-run-context.js";
-import { createCodingToolsGatewayCaller } from "../../../src/agents/agent-tools.caller.js";
-import { prepareConversationCapabilityProfile } from "../../../src/agents/conversation-capability-profile.js";
-import { resetPreparedModelRuntimeSnapshotsForTest } from "../../../src/agents/prepared-model-runtime.test-support.js";
+import { prepareSystemAgentRunAdmission } from "../../src/agents/admitted-run-context.js";
+import { createCodingToolsGatewayCaller } from "../../src/agents/agent-tools.caller.js";
+import { prepareConversationCapabilityProfile } from "../../src/agents/conversation-capability-profile.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../../src/agents/prepared-model-runtime.test-support.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
-} from "../../../src/agents/tools/gateway-caller-context.js";
-import { createWebFetchTool, createWebSearchTool } from "../../../src/agents/tools/web-tools.js";
-import { setRuntimeConfigSnapshot } from "../../../src/config/config.js";
+} from "../../src/agents/tools/gateway-caller-context.js";
+import { createWebFetchTool, createWebSearchTool } from "../../src/agents/tools/web-tools.js";
+import { setRuntimeConfigSnapshot } from "../../src/config/config.js";
 import {
   upsertSessionEntryCore,
   resetSessionEntryLifecycle,
   deleteSessionEntryLifecycle,
-} from "../../../src/config/sessions/session-accessor.js";
-import { captureGatewayAuthPolicy } from "../../../src/gateway/auth-policy.js";
+} from "../../src/config/sessions/session-accessor.js";
+import { captureGatewayAuthPolicy } from "../../src/gateway/auth-policy.js";
 import {
   createGatewayMethodRegistry,
   createCoreGatewayMethodDescriptors,
-} from "../../../src/gateway/methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "../../../src/gateway/operator-run-authority.js";
-import { createDirectChatContext } from "../../../src/gateway/server-chat.agent-events.test-helpers.js";
-import { toolsInvokeHandlers } from "../../../src/gateway/server-methods/tools-invoke.js";
-import { createOperatorClient } from "../../../src/gateway/server-plugin-in-process-dispatch.test-support.js";
-import { loadGatewayPlugins } from "../../../src/gateway/server-plugins.js";
-import { bindSessionRowProjection } from "../../../src/gateway/session-row-projection-access.js";
-import { createSessionRowProjection } from "../../../src/gateway/session-row-projection.js";
-import { createPluginStateKeyedStoreV2ForTests } from "../../../src/plugin-sdk/plugin-state-test-runtime.js";
-import * as stateWriter from "../../../src/plugin-state/plugin-state-worker-client.js";
+} from "../../src/gateway/methods/registry.js";
+import { captureGatewayOperatorRunAuthority } from "../../src/gateway/operator-run-authority.js";
+import { createDirectChatContext } from "../../src/gateway/server-chat.agent-events.test-helpers.js";
+import { toolsInvokeHandlers } from "../../src/gateway/server-methods/tools-invoke.js";
+import { createOperatorClient } from "../../src/gateway/server-plugin-in-process-dispatch.test-support.js";
+import { loadGatewayPlugins } from "../../src/gateway/server-plugins.js";
+import { bindSessionRowProjection } from "../../src/gateway/session-row-projection-access.js";
+import { createSessionRowProjection } from "../../src/gateway/session-row-projection.js";
+import { createPluginStateKeyedStoreV2ForTests } from "../../src/plugin-sdk/plugin-state-test-runtime.js";
+import * as stateWriter from "../../src/plugin-state/plugin-state-worker-client.js";
 import {
   bindLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
-} from "../../../src/plugins/legacy-sdk-resource-host.js";
-import * as pluginLoader from "../../../src/plugins/loader.js";
-import { clearPluginLoaderCache } from "../../../src/plugins/loader.test-fixtures.js";
-import { getPluginInstance } from "../../../src/plugins/plugin-instance-scope.js";
+} from "../../src/plugins/legacy-sdk-resource-host.js";
+import * as pluginLoader from "../../src/plugins/loader.js";
+import { clearPluginLoaderCache } from "../../src/plugins/loader.test-fixtures.js";
+import { getPluginInstance } from "../../src/plugins/plugin-instance-scope.js";
 import {
   disposePluginRegistryInstances,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
-} from "../../../src/plugins/runtime.js";
+} from "../../src/plugins/runtime.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
-} from "../../../src/plugins/runtime/gateway-request-scope.js";
-import * as serviceAutomation from "../../../src/plugins/service-automation-capabilities.js";
-import type { PluginServiceSessionWorkContextV1 } from "../../../src/plugins/service-session-work.types.js";
-import { startPluginServices, type PluginServicesHandle } from "../../../src/plugins/services.js";
-import { bindPluginToolCallbacks } from "../../../src/plugins/tool-factory-runtime.js";
-import { sessionChanges } from "../../../src/sessions/session-row-changes.js";
-import { drainGlobalSingletonLifecycleState } from "../../../src/shared/global-singleton.js";
-import { setUserProfileRole } from "../../../src/state/user-profile-writes.worker.js";
-import { jsonResponse, requestUrl } from "../../../src/test-helpers/http.js";
-import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
+} from "../../src/plugins/runtime/gateway-request-scope.js";
+import * as serviceAutomation from "../../src/plugins/service-automation-capabilities.js";
+import type { PluginServiceSessionWorkContextV1 } from "../../src/plugins/service-session-work.types.js";
+import { startPluginServices, type PluginServicesHandle } from "../../src/plugins/services.js";
+import { bindPluginToolCallbacks } from "../../src/plugins/tool-factory-runtime.js";
+import { sessionChanges } from "../../src/sessions/session-row-changes.js";
+import { drainGlobalSingletonLifecycleState } from "../../src/shared/global-singleton.js";
+import { setUserProfileRole } from "../../src/state/user-profile-writes.worker.js";
+import { jsonResponse, requestUrl } from "../../src/test-helpers/http.js";
+import { mockPinnedHostnameResolution } from "../../src/test-helpers/ssrf.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
-} from "../../../src/test-utils/gateway-scheduler-clock.js";
-import { withOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
+} from "../../src/test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import {
   interruptPendingResearchCapture,
   prepareResearchRecoveryConfig,
   probeUnadmittedRuntimeSiblings,
-} from "./gateway-recovery.test-support.js";
+} from "./deep-research-recovery.test-support.js";
 
 // The scoped fixture joins writers/agent leases before shared singleton drainage.
 afterEach(() => drainGlobalSingletonLifecycleState());
@@ -477,7 +477,9 @@ it.each([
           resolveGatewayContext: context.resolveGatewayContext,
           env: {
             ...process.env,
-            OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../..", import.meta.url)),
+            OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(
+              new URL("../../extensions", import.meta.url),
+            ),
           },
         });
         const registry = loaded.pluginRegistry;
