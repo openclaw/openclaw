@@ -7,7 +7,9 @@ import { insertKeywordFixture } from "./manager-search.test-support.js";
 import { hasTrigramTokenizerForTests } from "./unicode-query.test-support.js";
 
 type Document = { id: string; text: string };
-type SearchOptions = Partial<Pick<Parameters<typeof searchKeyword>[0], "limit" | "sourceFilter">>;
+type SearchOptions = Partial<
+  Pick<Parameters<typeof searchKeyword>[0], "limit" | "sourceFilter" | "matchAny">
+>;
 
 const hasTrigram = hasTrigramTokenizerForTests();
 
@@ -233,7 +235,7 @@ describe("memory keyword search CJK bigram companion index", () => {
       ],
       async (search) => {
         const hits = await search("設定 AI", { matchAny: true });
-        const ids = hits.map((hit) => hit.id).sort();
+        const ids = hits.map((hit) => hit.id).toSorted();
         expect(ids).toEqual(["ascii-only", "both", "han-only"]);
         const hanHit = hits.find((h) => h.id === "han-only");
         expect(hanHit?.textScore).toBeGreaterThan(0);

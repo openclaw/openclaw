@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import {
   encodeHanBigrams,
-  MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_CJK_FTS_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";

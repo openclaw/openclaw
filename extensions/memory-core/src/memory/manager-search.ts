@@ -5,7 +5,6 @@ import {
   type TextQuery,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { buildCompanionSearchSql } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -22,6 +21,7 @@ import {
   tokenizeFtsQuery,
 } from "./keyword-query.js";
 import {
+  buildCompanionSearchSql,
   projectMemorySearchRow,
   resolveSnippetProjection,
   type MemorySearchRow,
@@ -364,7 +364,7 @@ export async function searchKeyword(params: {
       registerSubstringSqlFunction(params.db, terms);
     }
     const sourceFilter = buildSqliteMemorySourceFilter(params.sourceFilter, "c");
-    const mixedOr = params.matchAny && terms.length > 0;
+    const mixedOr = Boolean(params.matchAny && terms.length > 0);
     try {
       const sql = buildCompanionSearchSql({
         cjkTable,
