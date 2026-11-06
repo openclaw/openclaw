@@ -383,6 +383,21 @@ export function classifySkillProofFailure(error: unknown) {
       ? [{ method: item.method, timeoutMs: item.timeoutMs, requestSent: item.requestSent }]
       : [],
   );
+  const assertionLocations = errors.flatMap((item) =>
+    item instanceof Error
+      ? [
+          ...(item.stack ?? "").matchAll(
+            /skills-library-import-authority\.real-gateway\.e2e\.test\.ts:(\d+):(\d+)/gu,
+          ),
+        ]
+          .slice(0, 1)
+          .map((match) => ({
+            file: "skills-library-import-authority.real-gateway.e2e.test.ts",
+            line: Number(match[1]),
+            column: Number(match[2]),
+          }))
+      : [],
+  );
   // Only fixed categories/codes and scalar counts leave the private error graph.
   return {
     kinds: [...new Set(kinds)],
@@ -400,6 +415,7 @@ export function classifySkillProofFailure(error: unknown) {
     ].filter((name) => names.has(name)),
     reportedExitCodes,
     clientTimeouts,
+    assertionLocations,
     errorNodes: errors.length,
   };
 }

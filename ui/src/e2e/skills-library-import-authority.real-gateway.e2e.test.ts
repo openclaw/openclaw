@@ -713,20 +713,36 @@ suite.define(() => {
                     });
                     progress("publication-revocation");
                     const before = await artifacts(fixture.state);
+                    let publicationRejection: unknown;
                     const publication = importUrl(
                       fixture.clients.publication,
                       "publication-revoked",
                       source.origin + "/publication.zip",
                     ).then(
                       () => true,
-                      () => false,
+                      (error: unknown) => {
+                        publicationRejection = error;
+                        return false;
+                      },
                     );
                     await expect.poll(() => fixture.policy.entered()).toBe(true);
+                    progress("publication-revocation-fetched-once");
                     expect(source.count("/publication.zip")).toBe(1);
+                    progress("publication-revocation-live-role");
                     await revoke(fixture, "publication");
                     await fixture.policy.release();
+                    progress("publication-revocation-server-rejection");
                     expect(await publication).toBe(false);
-                    expect(await artifacts(fixture.state)).toBe(before);
+                    if (!isGatewayProtocolResponseError(publicationRejection)) {
+                      throw new Error(
+                        "Publication revocation requires a server rejection, not transport failure",
+                        { cause: publicationRejection },
+                      );
+                    }
+                    progress("publication-revocation-settled-no-artifacts");
+                    // A cancelled RPC can answer before the owned policy process and staging cleanup settle.
+                    await expect.poll(() => artifacts(fixture.state)).toBe(before);
+                    progress("publication-revocation-no-entry");
                     const readOnly = await connect(
                       fixture.gatewayUrls.publication,
                       fixture.state,

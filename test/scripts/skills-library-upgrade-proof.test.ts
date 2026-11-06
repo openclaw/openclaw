@@ -250,3 +250,20 @@ it("keeps the upgrade client identity in the corresponding copied owned state", 
     });
   });
 });
+
+it("exposes only the fixed proof file and numeric assertion position", () => {
+  const secret = randomUUID();
+  const error = new Error(secret);
+  error.stack =
+    "Error: " +
+    secret +
+    "\n    at run (/private/" +
+    secret +
+    "/skills-library-import-authority.real-gateway.e2e.test.ts:741:19)";
+  const facts = classifySkillProofFailure(error);
+  expect(facts.assertionLocations).toEqual([
+    { file: "skills-library-import-authority.real-gateway.e2e.test.ts", line: 741, column: 19 },
+  ]);
+  expect(JSON.stringify(facts)).not.toContain(secret);
+  expect(JSON.stringify(facts)).not.toContain("/private/");
+});

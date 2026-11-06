@@ -1,10 +1,18 @@
+import fs from "node:fs/promises";
 import path from "node:path";
+import { getCACertificates, setDefaultCACertificates } from "node:tls";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SkillsLibraryListResult,
   SkillsLibraryReadResult,
   SkillsLibraryReceipt,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
+import { createLoopbackTlsFixture } from "../../../test/helpers/loopback-tls.test-support.ts";
+import {
+  createProofArchive,
+  createProofSource,
+  createProofPolicy,
+} from "../../../ui/src/e2e/skills-library-import-proof.test-support.ts";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -19,6 +27,7 @@ import {
   addSessionMemberInWorker,
   removeSessionMemberInWorker,
 } from "../../config/sessions/session-sharing-store.async.js";
+import type { OpenClawConfig } from "../../config/types.ts";
 import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import * as fsSafe from "../../infra/fs-safe.js";
 import * as libraryBundle from "../../skills/library/bundle.js";
@@ -27,6 +36,7 @@ import { mutateSkillLibrary, saveSkillLibrary } from "../../skills/library/servi
 import type { SkillLibraryAuthority } from "../../skills/library/store.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.ts";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   cleanupSessionStateForTest,
@@ -69,7 +79,9 @@ function retainedFilesHarness() {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const alice = ensureProfileForEmail("alice@example.test");
   const bob = ensureProfileForEmail("bob@example.test");
-  const cfg = { gateway: { uploads: { enabled: true } } };
+  const cfg: OpenClawConfig & { gateway: { uploads: { enabled: boolean } } } = {
+    gateway: { uploads: { enabled: true } },
+  };
   const actor = (profileId: string): SkillLibraryAuthority => ({
     profileId,
     scopes: ["operator.read", "operator.write"],
@@ -77,7 +89,7 @@ function retainedFilesHarness() {
     assertCurrent: () => {},
   });
   const methodRegistry = createGatewayMethodRegistry(
-    ["skills.library.save", "skills.library.read"].map((name) => ({
+    ["skills.library.save", "skills.library.read", "skills.library.import"].map((name) => ({
       name,
       handler: skillsLibraryHandlers[name]!,
       scope: "operator.write" as const,
@@ -85,10 +97,15 @@ function retainedFilesHarness() {
       profileAccess: "independent" as const,
     })),
   );
-  const call = async (method: string, params: Record<string, unknown>, profileId = alice.id) => {
+  const call = async (
+    method: string,
+    params: Record<string, unknown>,
+    profileId = alice.id,
+    scopes = ["operator.read", "operator.write"],
+  ) => {
     const client: GatewayClient = {
       authenticatedUserProfile: gatewayProfile(profileId),
-      connect: gatewayConnect(["operator.read", "operator.write"], {
+      connect: gatewayConnect(scopes, {
         id: "test",
         mode: "test",
         version: "1",
@@ -600,4 +617,75 @@ describe("session skill library projection and activation", () => {
     }));
     expect((await call("skills.library.list", { sessionKey: key }))[0]).toBe(false);
   });
+});
+
+it("does not publish immutable revisions after a real policy barrier loses the profile write role", async () => {
+  const { alice, cfg, call, root } = retainedFilesHarness();
+  const policy = await createProofPolicy(root);
+  cfg.security = { installPolicy: policy.config };
+  cfg.gateway = {
+    ...cfg.gateway,
+    roles: {
+      default: "reader",
+      definitions: {
+        writer: {
+          agents: ["main"],
+          sessions: { others: "view" },
+          scopes: ["operator.admin", "operator.read", "operator.write"],
+        },
+        reader: { agents: ["main"], sessions: { others: "view" }, scopes: ["operator.read"] },
+      },
+    },
+  };
+  await setCanonicalUserProfileRole(alice.id, "writer");
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  const tls = createLoopbackTlsFixture(root, "DNS:localhost,IP:127.0.0.1,IP:127.0.0.2");
+  const trusted = getCACertificates("default");
+  setDefaultCACertificates([...trusted, await fs.readFile(tls.caCert, "utf8")]);
+  const source = await createProofSource(tls, await createProofArchive());
+  cfg.skills = { library: { import: { allowedOrigins: [source.origin] } } };
+  const revisions = async () => {
+    const counts = { all: 0, staged: 0, immutable: 0 };
+    for (const entry of await fs
+      .readdir(path.join(root, "skill-library"), { withFileTypes: true })
+      .catch(() => [])) {
+      if (!entry.isDirectory() || !/^[a-f0-9-]{36}$/u.test(entry.name)) {
+        continue;
+      }
+      const names = await fs
+        .readdir(path.join(root, "skill-library", entry.name, "revisions"))
+        .catch(() => []);
+      counts.all += names.length;
+      counts.staged += names.filter((name) => name.startsWith(".staging-")).length;
+      counts.immutable += names.filter((name) => /^[a-f0-9]{64}$/u.test(name)).length;
+    }
+    return counts;
+  };
+  try {
+    const pending = call(
+      "skills.library.import",
+      {
+        slug: "publication-revoked",
+        source: { kind: "url", url: source.origin + "/publication.zip", path: "skills/proof" },
+      },
+      alice.id,
+      ["operator.admin", "operator.read", "operator.write"],
+    );
+    await expect.poll(() => policy.entered(), { timeout: 10000 }).toBe(true);
+    expect(source.count("/publication.zip")).toBe(1);
+    expect(await revisions()).toEqual({ all: 1, staged: 1, immutable: 0 });
+    await setCanonicalUserProfileRole(alice.id, "reader");
+    await policy.release();
+    const result = await pending;
+    expect(result[0]).toBe(false);
+    expect(await revisions()).toEqual({ all: 0, staged: 0, immutable: 0 });
+    expect(await policy.receipts()).toContainEqual({
+      remote: true,
+      name: "publication-revoked",
+      decision: "allow",
+    });
+  } finally {
+    await source.close();
+    setDefaultCACertificates(trusted);
+  }
 });
