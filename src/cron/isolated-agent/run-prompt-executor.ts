@@ -638,8 +638,8 @@ export function createCronPromptExecutor(
                 authProfileBinding: {
                   profileId: binding.profileId,
                   authRequirement: binding.authRequirement,
-                  assertCurrent: inferenceAuthorization.assertCurrent,
-                  revalidate: inferenceAuthorization.revalidate,
+                  assertCurrent: () => inferenceAuthorization.assertCurrent(),
+                  revalidate: () => inferenceAuthorization.revalidate(),
                 },
                 allowAuthProfileFallback: false,
                 onSuccessfulAuthProfile: (profileId: string | undefined) => {

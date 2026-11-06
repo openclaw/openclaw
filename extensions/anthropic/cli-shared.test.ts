@@ -30,7 +30,7 @@ const CLAUDE_CLI_DISALLOWED_TOOLS =
 const CLAUDE_CACHE_FLAG = "--exclude-dynamic-system-prompt-sections";
 
 const argv = (...parts: string[]) => parts.flatMap((part) => part.split(" "));
-const backend = buildAnthropicCliBackend();
+const defaultBackend = buildAnthropicCliBackend();
 function executionArgs(overrides: Partial<Parameters<typeof resolveClaudeCliExecutionArgs>[0]>) {
   return resolveClaudeCliExecutionArgs({
     workspaceDir: "/tmp",
@@ -186,7 +186,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
   it.each([false, true])(
     "keeps yolo bypass on ordinary turns but omits it for manual compaction (resume=%s)",
     (useResume) => {
-      const normalized = normalizeClaudeBackendConfig(backend.config);
+      const normalized = normalizeClaudeBackendConfig(defaultBackend.config);
       const context = {
         config: { tools: { exec: { mode: "full" as const } } },
         useResume,
@@ -215,9 +215,9 @@ describe("resolveClaudeCliExecutionArgs", () => {
   });
 
   it("keeps the real resumed manual-compaction command enabled", () => {
-    expect(backend.config.systemPromptWhen).toBe("always");
-    const manualCompaction = backend.manualCompaction;
-    const baseArgs = backend.config.resumeArgs?.map((arg) =>
+    expect(defaultBackend.config.systemPromptWhen).toBe("always");
+    const manualCompaction = defaultBackend.manualCompaction;
+    const baseArgs = defaultBackend.config.resumeArgs?.map((arg) =>
       arg.replaceAll("{sessionId}", "native-session"),
     );
     if (!manualCompaction || !baseArgs) {
