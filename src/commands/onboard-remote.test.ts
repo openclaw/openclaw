@@ -235,7 +235,7 @@ describe("promptRemoteGatewayConfig", () => {
     });
   });
 
-  it("keeps an IPv6 discovery host bracketed in the SSH tunnel hint", async () => {
+  it("keeps the raw IPv6 host as the OpenSSH destination in the SSH tunnel hint", async () => {
     vi.stubEnv("OPENCLAW_LOCALE", "en");
     try {
       const { prompter } = await runRemotePrompt({
@@ -246,7 +246,7 @@ describe("promptRemoteGatewayConfig", () => {
         text: urlText(() => "ws://127.0.0.1:18789"),
       });
       expect(prompter.note).toHaveBeenCalledWith(
-        expect.stringContaining("ssh -N -L 18789:127.0.0.1:18789 <user>@[2001:db8::1] -p 2222"),
+        expect.stringContaining("ssh -N -L 18789:127.0.0.1:18789 <user>@2001:db8::1 -p 2222"),
         "SSH tunnel",
       );
     } finally {
