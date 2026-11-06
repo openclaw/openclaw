@@ -1,3 +1,4 @@
 # OpenClaw ID Control UI and People plugin: new tests for the account menu, linking and recovery-kit
 # dialogs, owner approval, People page and Labs-off parity. No existing tests replaced.
-3499
+# Includes one-preparation, owner-key custody, IndexedDB commit and Labs-off dialog regressions.
+3661
