@@ -167,6 +167,7 @@ async function archive(label) {
   sourceCheck();
   const archivePath = path.join(output, "archive.xcarchive");
   fs.rmSync(archivePath, { recursive: true, force: true });
+  fs.rmSync(path.join(output, "DerivedData"), { recursive: true, force: true });
   const log = path.join(output, `${label}-archive.log`);
   const timeline = path.join(output, `${label}-resources.jsonl`);
   const result = await start(
@@ -190,6 +191,8 @@ async function archive(label) {
       archivePath,
       "-derivedDataPath",
       path.join(output, "DerivedData"),
+      "-clonedSourcePackagesDirPath",
+      path.join(output, "SourcePackages"),
       "-packageCachePath",
       path.join(output, "package-cache"),
       "COMPILATION_CACHE_ENABLE_CACHING=YES",

@@ -234,7 +234,9 @@ For a non-publishing notes/archive contention comparison, run
 with `OPENAI_API_KEY` available. The plan schema is documented in the helper;
 freeze the source SHA and release identity before running. After warming the
 archive and notes generator, it interleaves warm serial and overlapping samples
-using the same generated inputs and isolated compilation caches. Results include timings, task counts, compilation replay
+using the same generated inputs and isolated compilation caches. Each archive
+starts with fresh DerivedData while retaining compilation replay and package
+download caches to model a fresh release runner with restored caches. Results include timings, task counts, compilation replay
 hits/misses, and resource samples. Archives are unsigned: this does not validate
 signing, export, upload, or hosted-runner performance.
 
