@@ -213,20 +213,19 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [193846](https://github.com/openclaw/openclaw/pull/193846): Remove the orphan MCP gate waiter and its two declarations/three cases after the last runtime consumer retired. Both process cleanup bodies remain byte-identical; original five and candidate/published two pass. Scoped checks, unused-file scans and fresh review complete; the unchanged Talk export scan failure stays disclosed. Exact-head CI31 success/30 skipped and security pass. Squash `e1e3660a25da` verified; native checkout removed, managed carrier retained for shared-store contention. Removes 73 test and 63 support lines without new census credit.
 
+- [193887](https://github.com/openclaw/openclaw/pull/193887): Remove the redundant Swift AnyCodable adapter and its dedicated case; the three CLI/schema/public-package keepers remain byte-identical. Original four and candidate/published three pass; the actual canonical 6,457-byte Swift input is unchanged. All scoped/removal checks and fresh review pass; exact-head CI27 success/30 skipped and security pass. Squash `30568bed81c4` verified; native checkout removed, managed carrier retained. Removes ten test and five support lines without new census credit.
+
 ## Current qualification
 
-Batch111, pinned main `60a0ffc99caf`: remove the redundant Swift AnyCodable
-portability adapter and its dedicated case. The unchanged four-case baseline
-passes; the candidate passes all three retained CLI/schema/public-package cases,
-whose bodies remain byte-identical. Invoking the old helper on the actual 6,457-byte
-canonical Swift source returns exactly those bytes, including its existing
-CoreFoundation import; the sole writer now uses that source directly. The actual
-Swift compilation/decode harness and canonical source remain unchanged; no new
-Swift platform run is claimed. The change removes 10 test and five support lines.
-Types, typed lint, formatting, ledger compilation, whitespace, the line ratchet
-and every dependency/unused-file/export removal phase pass. Fresh review and
-exact-head hosted admission are recorded in the PR. Source dispositions were
-already recorded; this adds no census marks.
+Batches113–118, pinned main `a07facd84480`: qualify six Control UI test
+nominees in one scoped change. The native destination disconnect, History search,
+session-read observer, dictation close negatives and annotation fixture lifetime
+require actual boundary proof before repair. Two fallback-divider clone-only
+expansions are candidates for contraction while preserving their five declarations
+and distinct contracts. This draft carries only the ledger prerequisite for native
+physical dependency qualification; all six test sources remain unchanged and
+runtime proof is pending. Completed source classifications and durable census
+counts remain unchanged.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
