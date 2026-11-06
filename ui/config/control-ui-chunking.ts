@@ -190,6 +190,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/panel-loading-skeleton.tsx":
     case "ui/src/components/solid/sanitized-html.tsx":
     case "ui/src/lib/session-progress-cards.ts":
+    case "ui/src/components/markdown-template-links.ts":
       // These shared helpers load together in Chat without retaining its renderers.
       return "deferred-ui-support";
     case "ui/src/styles/panel-loading-skeleton.css":

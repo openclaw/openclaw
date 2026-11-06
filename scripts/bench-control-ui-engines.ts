@@ -121,8 +121,8 @@ if (!Number.isInteger(memorySoakRounds) || memorySoakRounds < 1 || memorySoakRou
 }
 const pageBenchmark = values.pages || values.steps?.split(",").some((id) => id.startsWith("page-"));
 const pagePhases = values["page-phases"].split(",");
-if (pagePhases.some((phase) => !["visit", "action", "leave"].includes(phase))) {
-  throw new Error("page-phases must contain visit, action and/or leave");
+if (pagePhases.some((phase) => !["visit", "revisit", "action", "leave"].includes(phase))) {
+  throw new Error("page-phases must contain visit, revisit, action and/or leave");
 }
 const engines: ControlUiEngine[] = values.engines.split(",").map((name) => {
   if (name !== "chromium" && name !== "webkit") {

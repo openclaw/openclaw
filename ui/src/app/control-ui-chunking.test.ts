@@ -354,6 +354,7 @@ describe("Control UI build chunking", () => {
     const usage = modulePath("../pages/usage/usage-page.tsx");
     const meetings = modulePath("../pages/meetings/meetings-page.tsx");
     const markdownTables = modulePath("../components/markdown-tables.ts");
+    const markdownTemplateLinks = modulePath("../components/markdown-template-links.ts");
     const markdownBlockPresentation = modulePath("../components/markdown-block-presentation.ts");
     const reactiveFormat = modulePath("../lib/reactive/format.ts");
     const permissionError = modulePath("../lib/permission-error.ts");
@@ -426,9 +427,10 @@ describe("Control UI build chunking", () => {
       [meetings, `export { table } from ${JSON.stringify(markdownTables)};`],
       [
         markdownTables,
-        `import { parked } from ${JSON.stringify(markdownBlockPresentation)}; export const table = () => parked();`,
+        `import { parked } from ${JSON.stringify(markdownBlockPresentation)}; import { template } from ${JSON.stringify(markdownTemplateLinks)}; export const table = () => parked() + template;`,
       ],
       [markdownBlockPresentation, "export const parked = () => false;"],
+      [markdownTemplateLinks, "export const template = 'catalog-link';"],
       [
         usage,
         `import { format } from ${JSON.stringify(reactiveFormat)}; import { denied } from ${JSON.stringify(permissionError)}; export const render = () => format(denied());`,
