@@ -37,8 +37,8 @@ final class ChatSourcePreviewState {
     @ObservationIgnored private var projector = ChatSourcePreviewProjector()
     @ObservationIgnored private var messages: [OpenClawChatMessage] = []
     @ObservationIgnored private var task: Task<Void, Never>?
-    // Split rows come from the narrated transcript, not from update(), so each
-    // part's links are checked against the part's own visible-text inputs on read.
+    /// Split rows come from the narrated transcript, not from update(), so each
+    /// part's links are checked against the part's own visible-text inputs on read.
     @ObservationIgnored private var partLinks: [UUID: PartLinks] = [:]
 
     func update(_ messages: [OpenClawChatMessage]) {
