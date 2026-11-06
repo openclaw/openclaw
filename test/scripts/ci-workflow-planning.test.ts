@@ -4637,7 +4637,7 @@ describe("ci workflow guards", () => {
         });
         expect(manifest.status, manifest.output).toBe(0);
         const rows = readJsonOutput(manifest.outputs, "android_matrix").include;
-        const context = {
+        const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
           eventName,
           repository: "openclaw/openclaw",
           runAttempt: 1,
