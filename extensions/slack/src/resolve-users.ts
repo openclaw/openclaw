@@ -43,7 +43,8 @@ function parseSlackUserInput(raw: string): { id?: string; name?: string; email?:
   if (trimmed.includes("@") && !trimmed.startsWith("@")) {
     return { email: normalizeLowercaseStringOrEmpty(trimmed) };
   }
-  const name = normalizeLowercaseStringOrEmpty(trimmed.replace(/^@/, ""));
+  // Canonical forms compare equal against profile names below.
+  const name = normalizeLowercaseStringOrEmpty(trimmed.replace(/^@/, "")).normalize("NFC");
   return name ? { name } : {};
 }
 
@@ -108,7 +109,8 @@ export async function resolveSlackUserAllowlist(params: {
           ? user.email === parsed.email
           : parsed.name
             ? [user.name, user.displayName, user.realName].some(
-                (value) => normalizeLowercaseStringOrEmpty(value) === parsed.name,
+                // Canonical forms compare equal here; Slack keeps original spellings.
+                (value) => normalizeLowercaseStringOrEmpty(value).normalize("NFC") === parsed.name,
               )
             : false,
     );
