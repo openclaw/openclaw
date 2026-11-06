@@ -1464,13 +1464,6 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   display: none;
 }
 
-/* Popovers and menus: same tone, denser box on the menu item radius. */
-.callout--compact {
-  padding: 8px 10px;
-  border-radius: var(--radius-menu-item);
-  font-size: 12px;
-  line-height: 1.4;
-}
 
 .callout__dismiss {
   width: 28px;
@@ -1532,6 +1525,16 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 
 .callout.success {
   --callout-tone: var(--ok);
+}
+
+/* Popovers and menus: a row message. Tone colours the text; no box. */
+.callout.callout--compact {
+  padding: 4px var(--oc-menu-item-padding-inline, 8px);
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font-size: inherit;
+  line-height: 1.4;
 }
 
 /* Pending routes reserve the content layout without exposing transient panel text. */

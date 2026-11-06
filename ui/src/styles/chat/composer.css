@@ -1023,7 +1023,6 @@
 
 .chat-talk-input-picker__alert {
   width: 100%;
-  margin-block: 2px 4px;
 }
 
 /* Sole content of the popover when no input can be selected, so it carries the
