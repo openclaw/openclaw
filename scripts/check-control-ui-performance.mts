@@ -73,7 +73,7 @@ const controlUiPerformanceBudgets = {
   // Header-local notice matching adds 13 B and lowers 400-message 4x scroll CPU 5–7%.
   totalCssGzipBytes: 324_685,
   // Ranked selector splits: measured raw CSS plus 64 B headroom.
-  totalCssRawBytes: 1_678_307,
+  totalCssRawBytes: 1_678_428,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

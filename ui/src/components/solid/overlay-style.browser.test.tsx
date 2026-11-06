@@ -194,12 +194,15 @@ describe("native overlay presentation", () => {
           : { right: "8px", bottom: position === "bottom" ? "8px" : "250px" },
       );
       await openMenu();
+      // Native open state can precede WebKit's entry-scale transition.
+      finishElementAnimations(surface());
       const parentBox = expectWithinViewport(surface());
       if (position === "bottom") {
         expect(parentBox.bottom).toBeLessThanOrEqual(trigger().getBoundingClientRect().top);
       }
       await openMenu("people-actions");
       const child = surface("people-actions");
+      finishElementAnimations(child);
       const last = item(`Action ${count}`, "people-actions");
       expectWithinViewport(child);
       if (!enlarged) {
