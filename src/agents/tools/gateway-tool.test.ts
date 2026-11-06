@@ -47,6 +47,28 @@ describe("gateway tool", () => {
     callGatewayToolMock.mockResolvedValue({ ok: true });
   });
 
+  it("reads update status even when config reads are withheld", async () => {
+    callGatewayToolMock.mockResolvedValue({ activeRun: null, lastRun: { runId: "run-1" } });
+    const tool = createGatewayTool({ allowConfigReads: false, senderIsOwner: true });
+    const controller = new AbortController();
+
+    const result = await tool.execute(
+      "status-check",
+      { action: "update.status" },
+      controller.signal,
+    );
+
+    expect(callGatewayToolMock).toHaveBeenCalledExactlyOnceWith(
+      "update.status",
+      {},
+      {},
+      { signal: controller.signal },
+    );
+    expect(result).toMatchObject({
+      details: { activeRun: null, lastRun: { runId: "run-1" } },
+    });
+  });
+
   it.each(["config.schema.lookup"])(
     "rejects %s without config read authority before calling the Gateway",
     async (action) => {

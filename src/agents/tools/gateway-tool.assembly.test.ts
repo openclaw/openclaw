@@ -51,6 +51,7 @@ function gatewayActions(tools: AnyAgentTool[]) {
 }
 
 const updateActions = ["update.run", "restart", "update.cleanup"];
+const statusActions = [...updateActions, "update.status"];
 
 describe("assembled Gateway update capability", () => {
   beforeEach(() => {
@@ -59,7 +60,7 @@ describe("assembled Gateway update capability", () => {
 
   it("makes update actions available in the coding profile without config reads", () => {
     const tools = createTools({ tools: { profile: "coding" } });
-    expect(gatewayActions(tools)).toEqual(updateActions);
+    expect(gatewayActions(tools)).toEqual(statusActions);
     expect(Object.keys(gatewayParameters(tools).properties).toSorted()).toEqual([
       "action",
       "dryRun",
@@ -73,6 +74,7 @@ describe("assembled Gateway update capability", () => {
       expect(gatewayActions(createTools({ tools: { profile } }))).toEqual([
         "config.get",
         "config.schema.lookup",
+        "update.status",
         ...updateActions,
       ]);
     },
@@ -94,7 +96,7 @@ describe("assembled Gateway update capability", () => {
           tools: { profile: "coding", alsoAllow: ["session_status"] },
         }),
       ),
-    ).toEqual(updateActions);
+    ).toEqual(statusActions);
   });
 
   it.each([
@@ -120,6 +122,7 @@ describe("assembled Gateway update capability", () => {
       );
 
       expect(actions).toContain("update.run");
+      expect(actions).toContain("update.status");
       expect(actions.includes("config.get")).toBe(configRead);
     },
   );
