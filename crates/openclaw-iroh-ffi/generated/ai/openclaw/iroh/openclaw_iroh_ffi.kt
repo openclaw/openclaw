@@ -715,13 +715,13 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_openclaw_iroh_ffi_fn_free_connection(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    external fun uniffi_openclaw_iroh_ffi_fn_method_connection_accept_bi(`ptr`: Long,
+    external fun uniffi_openclaw_iroh_ffi_fn_method_connection_accept_bi(`ptr`: Long,`cancel`: RustBuffer.ByValue,
     ): Long
     external fun uniffi_openclaw_iroh_ffi_fn_method_connection_close(`ptr`: Long,`code`: Long,`reason`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     external fun uniffi_openclaw_iroh_ffi_fn_method_connection_closed(`ptr`: Long,
     ): Long
-    external fun uniffi_openclaw_iroh_ffi_fn_method_connection_open_bi(`ptr`: Long,
+    external fun uniffi_openclaw_iroh_ffi_fn_method_connection_open_bi(`ptr`: Long,`cancel`: RustBuffer.ByValue,
     ): Long
     external fun uniffi_openclaw_iroh_ffi_fn_method_connection_remote_id(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
@@ -894,7 +894,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_openclaw_iroh_ffi_checksum_method_canceltoken_cancel() != 43830) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_openclaw_iroh_ffi_checksum_method_connection_accept_bi() != 56680) {
+    if (lib.uniffi_openclaw_iroh_ffi_checksum_method_connection_accept_bi() != 34083) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_openclaw_iroh_ffi_checksum_method_connection_close() != 50949) {
@@ -903,7 +903,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_openclaw_iroh_ffi_checksum_method_connection_closed() != 25800) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_openclaw_iroh_ffi_checksum_method_connection_open_bi() != 28072) {
+    if (lib.uniffi_openclaw_iroh_ffi_checksum_method_connection_open_bi() != 13239) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_openclaw_iroh_ffi_checksum_method_connection_remote_id() != 34609) {
@@ -1662,13 +1662,19 @@ public object FfiConverterTypeCancelToken: FfiConverter<CancelToken, Long> {
 
 public interface ConnectionInterface {
 
-    suspend fun `acceptBi`(): BiStream
+    /**
+     * Accepts a stream. Cancelling `cancel` abandons only this wait; the connection stays up.
+     */
+    suspend fun `acceptBi`(`cancel`: CancelToken? = null): BiStream
 
     fun `close`(`code`: kotlin.Long, `reason`: kotlin.ByteArray)
 
     suspend fun `closed`(): CloseInfo
 
-    suspend fun `openBi`(): BiStream
+    /**
+     * Opens a stream. Cancelling `cancel` abandons only this wait; the connection stays up.
+     */
+    suspend fun `openBi`(`cancel`: CancelToken? = null): BiStream
 
     fun `remoteId`(): kotlin.String
 
@@ -1774,14 +1780,17 @@ open class Connection: Disposable, AutoCloseable, ConnectionInterface
     }
 
 
+    /**
+     * Accepts a stream. Cancelling `cancel` abandons only this wait; the connection stays up.
+     */
     @Throws(IrohException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `acceptBi`() : BiStream {
+    override suspend fun `acceptBi`(`cancel`: CancelToken?) : BiStream {
         return uniffiRustCallAsync(
         callWithHandle { uniffiHandle ->
             UniffiLib.uniffi_openclaw_iroh_ffi_fn_method_connection_accept_bi(
                 uniffiHandle,
-
+                FfiConverterOptionalTypeCancelToken.lower(`cancel`),
             )
         },
         { future, callback, continuation -> UniffiLib.ffi_openclaw_iroh_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
@@ -1828,14 +1837,17 @@ open class Connection: Disposable, AutoCloseable, ConnectionInterface
     }
 
 
+    /**
+     * Opens a stream. Cancelling `cancel` abandons only this wait; the connection stays up.
+     */
     @Throws(IrohException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `openBi`() : BiStream {
+    override suspend fun `openBi`(`cancel`: CancelToken?) : BiStream {
         return uniffiRustCallAsync(
         callWithHandle { uniffiHandle ->
             UniffiLib.uniffi_openclaw_iroh_ffi_fn_method_connection_open_bi(
                 uniffiHandle,
-
+                FfiConverterOptionalTypeCancelToken.lower(`cancel`),
             )
         },
         { future, callback, continuation -> UniffiLib.ffi_openclaw_iroh_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },

@@ -677,13 +677,19 @@ public func FfiConverterTypeCancelToken_lower(_ value: CancelToken) -> UInt64 {
 
 public protocol ConnectionProtocol: AnyObject, Sendable {
 
-    func acceptBi() async throws  -> BiStream
+    /**
+     * Accepts a stream. Cancelling `cancel` abandons only this wait; the connection stays up.
+     */
+    func acceptBi(cancel: CancelToken?) async throws  -> BiStream
 
     func close(code: Int64, reason: Data) throws
 
     func closed() async  -> CloseInfo
 
-    func openBi() async throws  -> BiStream
+    /**
+     * Opens a stream. Cancelling `cancel` abandons only this wait; the connection stays up.
+     */
+    func openBi(cancel: CancelToken?) async throws  -> BiStream
 
     func remoteId()  -> String
 
@@ -743,13 +749,16 @@ open class Connection: ConnectionProtocol, @unchecked Sendable {
 
 
 
-open func acceptBi()async throws  -> BiStream  {
+    /**
+     * Accepts a stream. Cancelling `cancel` abandons only this wait; the connection stays up.
+     */
+open func acceptBi(cancel: CancelToken? = nil)async throws  -> BiStream  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_openclaw_iroh_ffi_fn_method_connection_accept_bi(
-                    self.uniffiCloneHandle()
-
+                    self.uniffiCloneHandle(),
+                    FfiConverterOptionTypeCancelToken.lower(cancel)
                 )
             },
             pollFunc: ffi_openclaw_iroh_ffi_rust_future_poll_rust_buffer,
@@ -787,13 +796,16 @@ open func closed()async  -> CloseInfo  {
         )
 }
 
-open func openBi()async throws  -> BiStream  {
+    /**
+     * Opens a stream. Cancelling `cancel` abandons only this wait; the connection stays up.
+     */
+open func openBi(cancel: CancelToken? = nil)async throws  -> BiStream  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_openclaw_iroh_ffi_fn_method_connection_open_bi(
-                    self.uniffiCloneHandle()
-
+                    self.uniffiCloneHandle(),
+                    FfiConverterOptionTypeCancelToken.lower(cancel)
                 )
             },
             pollFunc: ffi_openclaw_iroh_ffi_rust_future_poll_rust_buffer,
@@ -2190,7 +2202,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openclaw_iroh_ffi_checksum_method_canceltoken_cancel() != 43830) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_openclaw_iroh_ffi_checksum_method_connection_accept_bi() != 56680) {
+    if (uniffi_openclaw_iroh_ffi_checksum_method_connection_accept_bi() != 34083) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openclaw_iroh_ffi_checksum_method_connection_close() != 50949) {
@@ -2199,7 +2211,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openclaw_iroh_ffi_checksum_method_connection_closed() != 25800) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_openclaw_iroh_ffi_checksum_method_connection_open_bi() != 28072) {
+    if (uniffi_openclaw_iroh_ffi_checksum_method_connection_open_bi() != 13239) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openclaw_iroh_ffi_checksum_method_connection_remote_id() != 34609) {

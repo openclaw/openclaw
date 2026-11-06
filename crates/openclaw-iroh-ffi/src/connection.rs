@@ -1,4 +1,4 @@
-use crate::{BiStream, IrohError, cancelled, transport};
+use crate::{BiStream, CancelToken, IrohError, cancelled, transport};
 use iroh::endpoint::{self, ConnectionError, VarInt};
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -39,20 +39,26 @@ impl Connection {
     pub fn remote_id(&self) -> String {
         self.inner.remote_id().to_string()
     }
-    pub async fn open_bi(&self) -> Result<BiStream, IrohError> {
+    /// Opens a stream. Cancelling `cancel` abandons only this wait; the connection stays up.
+    #[uniffi::method(default(cancel = None))]
+    pub async fn open_bi(&self, cancel: Option<Arc<CancelToken>>) -> Result<BiStream, IrohError> {
         tokio::select! {
             biased;
             () = cancelled(self.shutdown.clone()) => Err(IrohError::EndpointClosed),
+            () = CancelToken::wait(cancel.as_ref()) => Err(IrohError::Cancelled),
             result = self.inner.open_bi() => {
                 let (send, recv) = result.map_err(|_| transport("open stream failed"))?;
                 Ok(BiStream::new(send, recv, self.shutdown.clone()))
             }
         }
     }
-    pub async fn accept_bi(&self) -> Result<BiStream, IrohError> {
+    /// Accepts a stream. Cancelling `cancel` abandons only this wait; the connection stays up.
+    #[uniffi::method(default(cancel = None))]
+    pub async fn accept_bi(&self, cancel: Option<Arc<CancelToken>>) -> Result<BiStream, IrohError> {
         tokio::select! {
             biased;
             () = cancelled(self.shutdown.clone()) => Err(IrohError::EndpointClosed),
+            () = CancelToken::wait(cancel.as_ref()) => Err(IrohError::Cancelled),
             result = self.inner.accept_bi() => {
                 let (send, recv) = result.map_err(|_| transport("accept stream failed"))?;
                 Ok(BiStream::new(send, recv, self.shutdown.clone()))
