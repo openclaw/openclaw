@@ -29,7 +29,7 @@ import {
 } from "./commands.js";
 import { BrokerFileReads } from "./file-reads.js";
 import { createBrokerReceiver, createBrokerSender } from "./ipc.js";
-import { holdPipe, restoreStdinPipe } from "./pipe.js";
+import { drainUntrackedPipe, holdPipe, restoreStdinPipe } from "./pipe.js";
 import { SpawnBrokerError, type BrokerRequest, type BrokerResponse } from "./protocol.js";
 import { createNativeResourceAuthority } from "./resource-authority.js";
 import {
@@ -554,7 +554,7 @@ export class SpawnBrokerHost {
           handle.destroy();
         }
         if (message.type === "pipe") {
-          void this.transmit({ type: "pipe-received", id: message.id, fd: message.fd }).catch(fail);
+          void drainUntrackedPipe(message, (value) => this.transmit(value)).catch(fail);
         } else if (message.type === "prepared") {
           void this.transmit({ type: "launch", id: message.id, allowed: false }).catch(fail);
         }
