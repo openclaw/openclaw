@@ -4,8 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.ts";
 import type { PreparedNativeControlUiPluginBuild } from "../ui/src/test-helpers/control-ui-e2e-shared-preview.ts";
-import { uiE2ePrebuiltParallelTestFiles } from "./vitest/vitest.ui-paths.mjs";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
+import { uiE2ePrebuiltParallelTestFiles } from "./vitest/vitest.ui-paths.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const tempDirs: string[] = [];
