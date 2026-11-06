@@ -586,6 +586,8 @@ export type GatewayRequestHandlerOptions = Omit<
   "methodRegistry" | "expectedProfileBinding" | "prepareDispatchCurrent"
 > & {
   params: Record<string, unknown>;
+  /** Plugin registrations receive a live owner fence; recheck after awaits and before effects. */
+  assertHandlerCurrent?: () => void;
   sessionMutationAuthorization?: SessionMutationAuthorization;
   /** Source-authorized plugin adoption; bound to this request's caller and lifetime. */
   copySessionCatalogToGateway?: (source: {
