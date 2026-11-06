@@ -94,7 +94,7 @@ describe.skipIf(process.platform === "win32")("managed command process custody",
           [
             process.execPath,
             "-e",
-            "process.stdin.resume();process.stdin.on('end',()=>process.stdout.write('owned'));",
+            "process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(process.env.OPENCLAW_UPDATE_COMMAND_RESERVATION?'owned':'unmarked'));",
           ],
           {
             timeoutMs: 10_000,
