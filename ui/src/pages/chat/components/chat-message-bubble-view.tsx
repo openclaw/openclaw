@@ -274,6 +274,9 @@ function MessageText(props: ContentProps) {
       </Match>
       <Match when={prepared().text}>
         <MessageMarkdown
+          onOpenImage={(item, index) =>
+            props.state().imageRenderOptions.openInlineImage(index, item.src)
+          }
           markdown={prepared().text ?? ""}
           messageKey={props.messageKey}
           options={prepared().options}

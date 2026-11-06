@@ -3,6 +3,7 @@ import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { ControlUiSessionNamespace } from "@openclaw/session-url-contract";
 import type { MarkdownIt, Token } from "markdown-it";
 import { resolveGatewayPublicOrigin } from "../../../src/config/gateway-public-origin.js";
+import { templateCatalogPackageNameFromPath } from "../app-route-paths.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -10,7 +11,6 @@ import { currentDisplayRuntimeConfig } from "../lib/config/config-state-model.ts
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
-import { markdownTemplatePackage } from "./markdown-template-links.ts";
 import {
   markdownInlineChildren,
   replaceMarkdownTextMatches,
@@ -31,6 +31,21 @@ type SessionPathTarget = {
 };
 
 export type SessionLinkTarget = SessionKeyTarget | SessionPathTarget;
+
+function markdownTemplatePackage(raw: string): string | null {
+  const location = globalThis.location;
+  if (!location) {
+    return null;
+  }
+  const url = URL.parse(raw, location.href);
+  if (!url || url.origin !== location.origin || url.search || url.hash) {
+    return null;
+  }
+  return templateCatalogPackageNameFromPath(
+    url.pathname,
+    resolveControlUiPaths(location.pathname)[0],
+  );
+}
 
 function parseSessionLinkKey(raw: string): SessionKeyTarget | null {
   const sessionKey = raw.trim();

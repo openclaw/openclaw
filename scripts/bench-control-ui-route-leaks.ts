@@ -37,9 +37,11 @@ import {
   createControlUiMockGatewayInitScript,
   resolvePlaywrightChromiumExecutablePath,
   defaultControlUiFeatureMethods,
-  prepareControlUiMockGatewayScenario,
-  type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  prepareNativePluginMockGatewayScenario,
+  type NativeControlUiMockGatewayScenario,
+} from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import { parityBaseScenario, parityWorkboardScenario } from "./control-ui-parity/fixtures.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
@@ -380,11 +382,11 @@ function censusTarget(id: CensusRoute): RouteTarget {
 
 function censusFixture(
   id: CensusRoute,
-  base: ControlUiMockGatewayScenario,
-): ControlUiMockGatewayScenario {
+  base: NativeControlUiMockGatewayScenario,
+): NativeControlUiMockGatewayScenario {
   const methods = new Set(base.featureMethods ?? []);
   const methodResponses = { ...base.methodResponses };
-  const changes: Partial<ControlUiMockGatewayScenario> = {};
+  const changes: Partial<NativeControlUiMockGatewayScenario> = {};
   const add = (name: string, response: unknown) => {
     methods.add(name);
     methodResponses[name] = response;
@@ -843,7 +845,7 @@ function fixtureFor(
   build: { buildId: string; version: string },
   id: ProbeRoute,
   baseUrl: string,
-): ControlUiMockGatewayScenario {
+): NativeControlUiMockGatewayScenario {
   if (isDockScenario(id)) {
     return dockFixture(build, id);
   }
@@ -1343,7 +1345,7 @@ async function summarizeCoverage(
   coverage: CoverageEntry[],
   requests: AssetRequest[],
   root: string,
-  assets: Awaited<ReturnType<typeof prepareControlUiMockGatewayScenario>>["assets"],
+  assets: Awaited<ReturnType<typeof prepareNativePluginMockGatewayScenario>>["assets"],
 ) {
   const scripts = await Promise.all(
     requests.map(async (request) => {
@@ -1703,7 +1705,7 @@ try {
             try {
               console.info(`[route-leaks] ${prefix}: preparing synthetic fixture`);
               const routeFixture = fixtureFor(variant.build, route, server.baseUrl);
-              const prepared = await prepareControlUiMockGatewayScenario(
+              const prepared = await prepareNativePluginMockGatewayScenario(
                 route === "apps"
                   ? appsPilotFixture(routeFixture, appsSandbox!.descriptor)
                   : routeFixture,

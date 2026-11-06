@@ -55,8 +55,14 @@ export function captureCronStreamSandboxTarget(params: {
       throw new Error("This sandbox's original access cannot be resumed for a persistent stream.");
     }
     const roleFacts = authority.readCurrentRoleFacts();
+    if (authority.openclawIdPrincipal && !authority.openclawIdPrincipal.authority) {
+      throw new Error("This source's original OpenClaw ID listing is unavailable.");
+    }
     return {
       profileId: authority.profileId,
+      ...(authority.openclawIdPrincipal
+        ? { openclawIdPrincipal: authority.openclawIdPrincipal }
+        : {}),
       scopes: [...authority.scopes],
       assignedRole: roleFacts.assignedRole,
       githubLogin: roleFacts.githubLogin ?? null,

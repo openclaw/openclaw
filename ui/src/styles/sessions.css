@@ -12,41 +12,27 @@
   font-size: 26px;
 }
 
-.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs {
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  padding: 0;
-  color: var(--muted);
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-
-.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs:hover {
-  color: var(--text-strong);
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-
-.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs:focus-visible {
-  box-shadow: var(--focus-ring);
-}
-
-.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs svg {
-  width: 18px;
-  height: 18px;
-}
-
+/* Applied filters tint the trigger; it is a status, not a pressed toggle. */
 .settings-section__actions .sessions-filter-popover__trigger.active {
   color: var(--accent);
 }
 
+/* The primary action keeps its fill but shares the toolbar icons' box and glyph. */
 .settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  box-shadow: none;
   color: var(--primary-foreground);
   background: var(--primary);
   border-color: transparent;
+}
+
+.settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs svg {
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs:hover {
@@ -216,11 +202,6 @@
   .sessions-filter-popover__search input {
     min-height: 44px;
     padding-inline-end: 48px;
-  }
-
-  .sessions-filter-popover__clear {
-    width: 44px;
-    height: 44px;
   }
 }
 
@@ -1039,25 +1020,33 @@ select.session-group-select {
 
   openclaw-sessions-page
     .settings-section__actions
-    .sessions-filter-popover__trigger.btn--icon.btn--xs,
+    .sessions-filter-popover__trigger.oc-icon-button,
   openclaw-sessions-page
     .settings-section__actions
-    .sessions-filter-popover__trigger.btn--icon.btn--xs:hover {
+    .sessions-filter-popover__trigger.oc-icon-button:hover {
     width: var(--settings-control-height);
     min-width: var(--settings-control-height);
     height: var(--settings-control-height);
     color: var(--text);
     background: var(--field-bg);
-    border-color: var(--field-border);
+    border: 1px solid var(--field-border);
     border-radius: var(--field-radius);
+  }
+
+  /* Beside the search field the trigger wears the field's contour, lift included. */
+  :root[data-theme-mode="light"]
+    openclaw-sessions-page
+    .settings-section__actions
+    .sessions-filter-popover__trigger.oc-icon-button {
+    box-shadow: var(--shadow-sm);
   }
 
   openclaw-sessions-page
     .settings-section__actions
-    .sessions-filter-popover__trigger.btn--icon.btn--xs.active,
+    .sessions-filter-popover__trigger.oc-icon-button.active,
   openclaw-sessions-page
     .settings-section__actions
-    .sessions-filter-popover__trigger.btn--icon.btn--xs.active:hover {
+    .sessions-filter-popover__trigger.oc-icon-button.active:hover {
     color: var(--accent);
   }
 

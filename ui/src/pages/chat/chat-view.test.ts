@@ -47,6 +47,7 @@ import * as chatProgress from "./chat-progress.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import * as chatThread from "./chat-thread.ts";
+import { expectInlineImageOpened } from "./chat-view-media.test-support.ts";
 import {
   authStatus,
   googleAuthProviders,
@@ -1304,7 +1305,7 @@ describe("chat loading skeleton", () => {
     expect(contextUsage?.closest(".agent-chat__composer-context")).not.toBeNull();
   });
 
-  it("keeps subscription usage and its navigation scoped to the configured base path", () => {
+  it("keeps subscription usage and its navigation scoped to the configured base path", async () => {
     const controls = createComposerControlsFixture();
     controls.model.accountSelection = {
       kind: "shared",
@@ -1349,15 +1350,15 @@ describe("chat loading skeleton", () => {
     container.querySelector<HTMLElement>(".context-usage summary")!.click();
     flush();
     expect(container.querySelector("[data-chat-usage-account='true']")?.textContent).toBe("OpenAI");
-    const limitRow = container.querySelector(".context-usage__limit");
-    expect(limitRow?.getAttribute("role")).toBe("progressbar");
-    expect(limitRow?.getAttribute("aria-label")).toBe("Weekly");
-    expect(limitRow?.getAttribute("aria-valuenow")).toBe("72");
+    expect(container.querySelectorAll(".context-usage__limit")).toHaveLength(1);
     const usageLink = container.querySelector<HTMLAnchorElement>(
       ".context-usage__popover [data-chat-provider-usage='true']",
     );
     expect(usageLink?.getAttribute("href")).toBe("/rosita/usage");
     expect(usageLink?.getAttribute("aria-label")).toBe("Open usage dashboard");
+    const limitRow = await waitForElement(container, '.context-usage__limit[role="progressbar"]');
+    expect(limitRow.getAttribute("aria-label")).toBe("Weekly");
+    expect(limitRow.getAttribute("aria-valuenow")).toBe("72");
   });
 
   it.each([
@@ -1578,7 +1579,7 @@ describe("chat voice controls", () => {
     });
     expect(
       container
-        .querySelector('[role="alert"].agent-chat__talk-status .agent-chat__talk-status-text')
+        .querySelector('[role="alert"].agent-chat__composer-alert .callout__content')
         ?.textContent?.trim(),
     ).toBe(detail);
     const stop = requireElement(
@@ -4328,14 +4329,9 @@ describe("chat transcript rendering cache", () => {
       expect(container.querySelector("iframe")?.getAttribute("src")).toBe(widgetUrl);
       expect(container.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
       requireElement(container, ".markdown-inline-image-button", "image control").dispatchEvent(
-        new MouseEvent("click", { bubbles: true }),
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
       );
-      await waitForFast(() =>
-        expect(onOpenImage).toHaveBeenCalledExactlyOnceWith(
-          { src: imageSource, title: "Synthetic preview" },
-          7,
-        ),
-      );
+      await expectInlineImageOpened(onOpenImage, imageSource, 7);
       expect(onRequestOpenImage).toHaveBeenCalledOnce();
       requireElement(container, "a.markdown-file-link", "workspace file link").dispatchEvent(
         new MouseEvent("click", { bubbles: true }),

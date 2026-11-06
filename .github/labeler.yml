@@ -606,6 +606,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/crabbox/**"
+"extensions: deep-research":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deep-research/**"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:

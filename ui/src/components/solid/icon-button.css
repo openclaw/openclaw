@@ -1,0 +1,93 @@
+/* Shared icon-only action. The component owns the box, glyph and every state;
+   a surface class may only place it (margins, position, reveal). */
+.oc-icon-button {
+  --oc-icon-button-size: 32px;
+  --oc-icon-button-glyph: var(--chrome-icon-size);
+  --oc-icon-button-stroke: var(--chrome-icon-stroke);
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: var(--oc-icon-button-size);
+  min-width: var(--oc-icon-button-size);
+  height: var(--oc-icon-button-size);
+  min-height: var(--oc-icon-button-size);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  line-height: 0;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.oc-icon-button--28 {
+  --oc-icon-button-size: 28px;
+}
+
+.oc-icon-button--36 {
+  --oc-icon-button-size: 36px;
+}
+
+.oc-icon-button--row-glyph {
+  --oc-icon-button-glyph: var(--list-row-icon-size);
+  --oc-icon-button-stroke: var(--list-row-icon-stroke);
+}
+
+.oc-icon-button svg {
+  display: block;
+  width: var(--oc-icon-button-glyph);
+  height: var(--oc-icon-button-glyph);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: var(--oc-icon-button-stroke);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.oc-icon-button:hover:where(:not(:disabled, [aria-disabled="true"])),
+.oc-icon-button[aria-haspopup][aria-expanded="true"] {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.oc-icon-button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--text) 11%, transparent);
+  color: var(--text);
+}
+
+.oc-icon-button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.oc-icon-button:disabled,
+.oc-icon-button[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.oc-icon-button[aria-busy="true"]:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-icon-button {
+    transition: none;
+  }
+}
+
+/* Display-only mask glyphs (sessionIcon) and menu-trigger label wrappers size like the SVG glyph. */
+.oc-icon-button .session-css-icon {
+  width: var(--oc-icon-button-glyph);
+  height: var(--oc-icon-button-glyph);
+}
+
+.oc-icon-button > .oc-menu-item__label {
+  display: contents;
+}

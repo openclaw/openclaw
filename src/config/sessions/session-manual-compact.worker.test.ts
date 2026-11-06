@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -16,7 +17,12 @@ import {
   upsertConversationIdentities,
 } from "./session-accessor.sqlite-conversation.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  assertSqliteTranscriptDigestUnchanged,
+  readTranscriptEventRows,
+  readTranscriptEventRowsDigest,
+} from "./session-accessor.sqlite-read.js";
+import { getSessionKysely, resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { readSessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
@@ -24,6 +30,7 @@ import { trimSessionTranscriptForManualCompact } from "./session-accessor.transc
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
 import * as rewrite from "./session-message-rewrite-domain.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { readSessionTranscriptModelContextInWorker } from "./session-transcript-read-worker-runtime.js";
 import * as reconcile from "./session-transcript-reconcile.js";
@@ -77,6 +84,30 @@ function fixture(seed = true) {
     },
   };
 }
+
+it("rejects a same-sequence byte rewrite after streaming snapshot preparation", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const snapshot = readTranscriptEventRowsDigest(f.database, f.scope.sessionId);
+    const [header] = readTranscriptEventRows(f.database, f.scope.sessionId);
+    assert(header);
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        executeSqliteQuerySync(
+          database.db,
+          getSessionKysely(database.db)
+            .updateTable("transcript_events")
+            .set({ event_json: header.eventJson + " ", event_zstd: null, event_utf8_bytes: null })
+            .where("session_id", "=", f.scope.sessionId)
+            .where("seq", "=", header.seq),
+        ),
+      { agentId: f.scope.agentId, path: f.database.path },
+    );
+    expect(readTranscriptEventRowsDigest(f.database, f.scope.sessionId).count).toBe(snapshot.count);
+    expect(() =>
+      assertSqliteTranscriptDigestUnchanged(f.database, f.scope.sessionId, snapshot),
+    ).toThrow(SqliteTranscriptMutationConflictError);
+  }));
 
 it("trims compressed history into a ready next-turn projection and clears accounting", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {

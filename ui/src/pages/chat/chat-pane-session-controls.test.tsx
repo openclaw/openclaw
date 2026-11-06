@@ -411,7 +411,7 @@ describe("chat pane composer controls", () => {
     const menu = container.querySelector<HTMLElement>('[role="menu"]')!;
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
 
-    const heading = container.querySelector<HTMLElement>(".chat-controls__permission-heading");
+    const heading = menu.querySelector<HTMLElement>(".oc-menu-heading__label");
     expect(heading?.textContent?.trim()).toBe("Permissions");
     expect(heading?.closest('[role="menuitem"]')).toBeNull();
     const docsLink = container.querySelector<HTMLElement>("a.chat-controls__permission-learn-more");
