@@ -128,6 +128,26 @@ async function update(sidebar: Sidebar, change: (() => void) | Partial<Sidebar>)
 }
 
 describe("sidebar projection memo", () => {
+  it("keeps held rows when a selected descriptor is covered by the list", async () => {
+    const first = session("first");
+    const second = session("second");
+    const { sidebar, row } = await mount([first, second]);
+    await update(sidebar, { activeRouteId: "chat", sessionKey: first.key });
+    const owner = getAppSidebarOwner(sidebar.hostElement)!;
+    const held = row(first.key);
+    projectRows.mockClear();
+    await update(sidebar, () => {
+      owner.sessionData.activeSessionLineageSelectedRow = { ...first, label: "Detail title" };
+      owner.invalidate();
+    });
+    expect(projectRows).not.toHaveBeenCalled();
+    expect(row(first.key)).toBe(held);
+    expect(row(first.key)?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
+    await update(sidebar, { sessionKey: second.key });
+    expect(row(first.key)?.querySelector("a")?.getAttribute("aria-current")).toBeNull();
+    expect(row(second.key)?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
+  });
+
   it("keeps a saved group collapsed when opening its top-level session", async () => {
     const storageKey = "openclaw:sidebar:sessions:collapsed-sections";
     const saved = JSON.stringify(["category:Alpha"]);

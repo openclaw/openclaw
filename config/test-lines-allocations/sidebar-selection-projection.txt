@@ -1,0 +1,2 @@
+# Preserve row projection across a covered selected-descriptor refresh, then verify old/new DOM selection on a real switch.
+20

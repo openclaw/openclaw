@@ -85,6 +85,7 @@ export type SidebarProjectionHost = {
 export function sidebarNavigationInputs(
   host: SidebarProjectionHost,
   result: SessionsListResult | null,
+  navigation?: SidebarSessionNavigationState,
 ) {
   const data = host.sessionData;
   const context = host.sessionDataContext;
@@ -96,13 +97,13 @@ export function sidebarNavigationInputs(
     data.sessionsAgentId,
     data.sessionResultsByAgent,
     data.activeSessionLineageRoot,
-    data.activeSessionLineageSelectedRow,
+    navigation ? navigation.activeRowKey : data.activeSessionLineageSelectedRow,
     data.childSessionRowsByParent,
     data.loadingChildSessionKeys,
-    host.getRouteSessionKey(),
+    navigation ? navigation.routeSessionKey : host.getRouteSessionKey(),
     pending?.creation,
     pending?.creation.admitted,
-    context?.gateway.snapshot.sessionKey,
+    navigation ? navigation.selectedAgentId : context?.gateway.snapshot.sessionKey,
     isSessionRouteId(host.activeRouteId),
     context?.agentSelection.state.selectedId,
     context?.gateway.snapshot.assistantAgentId,
@@ -284,12 +285,12 @@ export function sidebarRowsInputs(
   navigationState: SidebarSessionNavigationState,
 ) {
   const data = host.sessionData;
-  // List only inputs not already keyed by the upstream stage value.
+  // Resolved selection and source facts matter here; a fresh navigation closure
+  // after Gateway selection acknowledgement does not change the row projection.
   return [
-    navigationState,
+    ...sidebarNavigationInputs(host, data.sessionsResult, navigationState),
     host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null,
     host.expandedAgentId(),
-    data.sessionsResult,
     data.loadedChildSessionKeys,
     data.childSessionErrorsByParent,
     data.sessionCatalogs,
@@ -298,6 +299,8 @@ export function sidebarRowsInputs(
     host.sessionOwnerFilterId,
     host.sessionInvolvingMeFilterActive,
     host.sessionDataContext?.gateway.snapshot.selfUser,
+    // Slot equality also covers fresh arrays with unchanged membership and order.
+    ...navigationState.visibleSessionRows,
   ];
 }
 
