@@ -211,22 +211,22 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [193386](https://github.com/openclaw/openclaw/pull/193386): Typing-preview checks now target the animated caret, with active-animation controls before pause and reduced-motion checks. Both omitted CSS rules escape the original assertions and fail the repaired ones; all nine cases remain. Original/candidate/published suites and scoped checks pass; exact-head CI32 success/28 skipped and security pass. Squash `01a5e160dabf` verified; native checkout removed, managed carrier retained. No cases removed.
 
+- [193846](https://github.com/openclaw/openclaw/pull/193846): Remove the orphan MCP gate waiter and its two declarations/three cases after the last runtime consumer retired. Both process cleanup bodies remain byte-identical; original five and candidate/published two pass. Scoped checks, unused-file scans and fresh review complete; the unchanged Talk export scan failure stays disclosed. Exact-head CI31 success/30 skipped and security pass. Squash `e1e3660a25da` verified; native checkout removed, managed carrier retained for shared-store contention. Removes 73 test and 63 support lines without new census credit.
+
 ## Current qualification
 
-Batch110, pinned main `57953680cdf7`: remove two obsolete gate declarations/three
-expanded cases and the orphan MCP fixture gate waiter after its last runtime
-consumer was retired. The two HTTP/process cleanup tests remain byte-identical:
-failed readiness kills its captured process, and stopping the captured root joins
-its task-owned descendant. The unchanged five-case baseline passes; the complete
-candidate passes both retained cases through the same tooling runner. Test time
-is 115ms before and 54ms after; routed wall time is 3.47s and 1.61s respectively.
-The change removes 73 test lines and 63 support lines; production is unchanged.
-Source dispositions were already recorded; this adds no census marks. Types,
-typed lint, format, MDX, whitespace, the line ratchet and unused-file scans pass.
-Dependency/full-tree export scans report only the unchanged Talk helper export
-`setSourceConfig`; source comparison attributes it to the pinned baseline, with
-no passing aggregate claim or unrelated repair. The PR records fresh review and
-exact-head hosted admission separately.
+Batch111, pinned main `60a0ffc99caf`: remove the redundant Swift AnyCodable
+portability adapter and its dedicated case. The unchanged four-case baseline
+passes; the candidate passes all three retained CLI/schema/public-package cases,
+whose bodies remain byte-identical. Invoking the old helper on the actual 6,457-byte
+canonical Swift source returns exactly those bytes, including its existing
+CoreFoundation import; the sole writer now uses that source directly. The actual
+Swift compilation/decode harness and canonical source remain unchanged; no new
+Swift platform run is claimed. The change removes 10 test and five support lines.
+Types, typed lint, formatting, ledger compilation, whitespace, the line ratchet
+and every dependency/unused-file/export removal phase pass. Fresh review and
+exact-head hosted admission are recorded in the PR. Source dispositions were
+already recorded; this adds no census marks.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
