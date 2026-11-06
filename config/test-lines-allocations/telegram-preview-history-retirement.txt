@@ -1,2 +1,2 @@
-# Telegram preview retirement adds 592 regression lines; current main leaves 578 lines of budget.
-14
+# Telegram preview retirement adds 592 regression lines across cache, draft and fan-out contracts.
+592
