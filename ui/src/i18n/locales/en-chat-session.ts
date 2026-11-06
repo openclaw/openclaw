@@ -17,7 +17,6 @@ const enChatSession = {
     sessionAutomation: {
       everyDuration: "Every {duration}",
       onceAt: "{day} at {time}",
-      today: "Today",
       tomorrow: "Tomorrow",
     },
     activityPills: {
