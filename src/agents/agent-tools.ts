@@ -95,13 +95,8 @@ import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js"
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
-import {
-  createToolSearchTools,
-  resolveToolSearchConfig,
-  TOOL_CALL_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_RAW_TOOL_NAME,
-} from "./tool-search.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "./tool-search-protocol.js";
+import { createToolSearchTools, resolveToolSearchConfig } from "./tool-search.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js";
@@ -136,6 +131,11 @@ function* assembleOpenClawCodingTools(
       pluginMetadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
     });
   const { agentId, runtimePluginToolGrant } = capabilityProfile.policy;
+  // Global denial cannot be widened by tool grants. Keep collector construction:
+  // its structured output and host-owned tools are restored after ordinary policy.
+  const skipOrdinaryToolConstruction =
+    capabilityProfile.policy.globalPolicy?.deny?.some((name) => name.trim() === "*") === true &&
+    !(options?.swarmCollector && options.swarmOutputSchema);
   // Tool restrictions can belong to another agent. Never use that owner for
   // credentials, requester identity, or execution hooks.
   const executionAgentId =
@@ -150,7 +150,7 @@ function* assembleOpenClawCodingTools(
   const toolSearchControlsEnabled =
     options?.includeToolSearchControls === true && toolSearchConfig.enabled;
   const toolSearchControlAllowlist = toolSearchControlsEnabled
-    ? [TOOL_SEARCH_RAW_TOOL_NAME, TOOL_DESCRIBE_RAW_TOOL_NAME, TOOL_CALL_RAW_TOOL_NAME]
+    ? [...TOOL_SEARCH_CONTROL_TOOL_NAMES]
     : [];
   const runtimeToolAllowlistIncludesMessage = expandToolGroups(
     options?.runtimeToolAllowlist ?? [],
@@ -250,7 +250,7 @@ function* assembleOpenClawCodingTools(
     yield { prepareBrowserLoopback: browserLoopback };
   }
   const coreTools =
-    preparedTools === undefined
+    preparedTools === undefined && !skipOrdinaryToolConstruction
       ? createCoreCodingTools({
           abortSignal: options?.abortSignal,
           attachmentReadRoot,
@@ -387,7 +387,7 @@ function* assembleOpenClawCodingTools(
     requesterAgentIdOverride: executionAgentId,
   };
   const pluginToolsOnly = filterToolsByClientCaps(
-    includeOpenClawTools || !includePluginTools
+    skipOrdinaryToolConstruction || includeOpenClawTools || !includePluginTools
       ? []
       : yield {
           pluginTools: {
@@ -434,8 +434,10 @@ function* assembleOpenClawCodingTools(
   });
   const assembledTools: AnyAgentTool[] = [
     ...scheduledCoreTools,
-    ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),
-    ...(includeOpenClawTools
+    ...(!skipOrdinaryToolConstruction && includeChannelTools
+      ? listChannelAgentTools({ cfg: options?.config })
+      : []),
+    ...(!skipOrdinaryToolConstruction && includeOpenClawTools
       ? mergeAgentRingZeroTools(
           ringZeroTools,
           yield {

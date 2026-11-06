@@ -5,9 +5,15 @@ import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createWorkerPlacementTools } from "../worker/worker-placement-tools.js";
-import { createOpenClawCodingToolsInternal as buildTools } from "./agent-tools.js";
+import {
+  createOpenClawCodingToolsInternal as buildTools,
+  createOpenClawCodingToolsInternalAsync,
+} from "./agent-tools.js";
+import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import * as coreCodingTools from "./core-coding-tools.js";
+import * as pluginTools from "./openclaw-plugin-tools.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import { prepareCoreToolPolicy, projectAgentToolDefinition } from "./prepared-tool-surface.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -24,6 +30,39 @@ const baseOptions = (openClaw = false, deny: string[] = []) => ({
     includePluginTools: false,
   },
 });
+
+it.each([buildTools, createOpenClawCodingToolsInternalAsync])(
+  "does not construct globally denied tools and retains host-owned tools (%#)",
+  async (build) => {
+    const core = vi.spyOn(coreCodingTools, "createCoreCodingTools");
+    const plugin = vi
+      .spyOn(pluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([]);
+    const pluginAsync = vi
+      .spyOn(pluginTools, "resolveOpenClawPluginToolsForOptionsAsync")
+      .mockResolvedValue([]);
+    vi.mocked(createOpenClawTools).mockClear();
+    const host: AnyAgentTool = {
+      name: "host_ping",
+      label: "Host ping",
+      description: "Host-owned test tool",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn(async () => ({ content: [], details: {} })),
+    };
+    const options = {
+      workspaceDir: tempDirs.make("denied-tools-"),
+      config: { tools: { deny: ["*"] } },
+      forceMessageTool: true,
+    };
+    const tools = await runWithAgentRingZeroTools([host], () => build(options));
+    expect(tools.map((tool) => tool.name)).toEqual([host.name]);
+    expect(await build({ ...options, includeCoreTools: false })).toEqual([]);
+    expect(core.mock.calls.length).toBe(0);
+    expect(vi.mocked(createOpenClawTools).mock.calls.length).toBe(0);
+    expect(plugin.mock.calls.length).toBe(0);
+    expect(pluginAsync.mock.calls.length).toBe(0);
+  },
+);
 
 it.each([false, true])(
   "preserves local definition bytes and policy for placement (deny process=%s)",
