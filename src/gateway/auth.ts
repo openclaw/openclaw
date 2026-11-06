@@ -207,7 +207,7 @@ export function gatewayPersonPrincipalAuthError(
 }
 
 /** Match the current trusted-proxy allowlist against an identity's canonical names. */
-export function isTrustedProxyUserAllowed(
+function isTrustedProxyUserAllowed(
   trustedProxy: Pick<GatewayTrustedProxyConfig, "allowUsers"> | undefined,
   users: readonly string[],
 ): boolean {

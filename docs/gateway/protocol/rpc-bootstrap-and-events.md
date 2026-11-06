@@ -100,6 +100,8 @@ retention per projection. The estimate counts history identities, current row
 references and cached row/fact encodings, serialized array buffers, selection and
 partition entries, query keys, and view overhead. Shared current row encodings are
 counted once per projection, while packed replies are charged per view. Selection
+vectors charge eight bytes per reference to an upstream-owned entry pair;
+facet and map records retain a larger per-record estimate. Selection
 refreshes remove superseded filtered partitions and their byte charges together;
 unchanged partitions remain reusable. This accounting does not depend on garbage
 collection. This is a

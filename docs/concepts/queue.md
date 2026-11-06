@@ -103,6 +103,12 @@ Per-session `/queue` options apply to queued delivery. The `debounce` option als
 - `drop: "old"`: drop the oldest queued entries as needed, without preserving summaries.
 - `drop: "new"`: reject the newest message when the queue is already full.
 
+Messages discarded by `old` or `new` reach a terminal queue-policy outcome.
+Durable channel ingress records that outcome and does not replay the discarded
+message. If every queued entry is protected, capacity rejection remains retryable
+backpressure. Summarized entries retain their source receipts until the summary
+is adopted or discarded.
+
 At capacity, optional ambient room events yield to user requests before these drop
 policies apply; incoming room events cannot evict user requests. With `summarize`,
 OpenClaw preserves short previews as background context on an eligible pending
@@ -136,7 +142,11 @@ When channel streaming is `partial` or `block`, steering can look like several s
 - `block`: draft-sized blocks can create the same sequential appearance.
 - Without streaming, steering falls back to a followup after the active run when the runtime cannot accept same-turn steering.
 
-`steer` does not abort in-flight tools. Skipped OpenClaw tool calls receive synthetic paired error results so the transcript remains valid. Use `/queue interrupt` when the newest message should abort the current run.
+Ordinary `steer` does not abort in-flight tools. The Control UI's **Send now** link
+explicitly interrupts supported tools for a waiting steer while keeping the run
+alive; unsupported tools show why they must finish. Skipped OpenClaw tool calls
+receive synthetic paired error results so the transcript remains valid. Use
+`/queue interrupt` when the newest message should abort the current run.
 
 ## Answering a pending question
 
@@ -174,8 +184,12 @@ Queue acceptance appears only after enqueue succeeds. The Control UI shows it in
 the input queue, without adding an agent reply. Other clients and channels retain
 a textual acknowledgment. If the message starts
 immediately, its start notice appears when execution starts, before the answer.
-Rejected outcomes are reported separately. Queue capacity, overflow, and cancellation
-rules still apply. Gateway-backed chat and the local embedded TUI support this
+Rejected outcomes are reported separately, including when `drop:new` refuses a
+`/followup`. Ordinary overflow drops stay silent on durable channels, where the
+ingress ledger records the outcome; surfaces without that ledger retain their
+queue-full feedback. A refused `/followup` reports that it was not queued, without
+asking the sender to retry. Queue capacity, overflow, and cancellation rules still
+apply. Gateway-backed chat and the local embedded TUI support this
 command. See [Steer](/tools/steer#one-message-as-a-new-turn) for the contrast with
 steering the active run.
 

@@ -965,7 +965,17 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     rowSelector: "[data-dashboard-session]",
     prepare: prepareGallery,
     run: async (page) => {
-      await page.locator(`${galleryHost} select`).last().selectOption("title");
+      const filter = page.locator(`${galleryHost} .dashboards-filter__trigger`);
+      if (await filter.isVisible()) {
+        await filter.click();
+        await page
+          .locator("#dashboards-filter-popover")
+          .getByRole("radio", { name: "Title A–Z", exact: true })
+          .click();
+        await page.keyboard.press("Escape");
+      } else {
+        await page.locator(`${galleryHost} select`).last().selectOption("title");
+      }
       await page.waitForFunction(
         () =>
           document
