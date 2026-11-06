@@ -102,14 +102,23 @@ export function qualifyDetailsSubagentsWarmState(input: {
     }
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open("openclaw-chat-snapshots");
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+      request.addEventListener("success", () => resolve(request.result), { once: true });
+      request.addEventListener(
+        "error",
+        () => reject(new Error("Unable to open ordinary child snapshot", { cause: request.error })),
+        { once: true },
+      );
     });
     try {
       const record = await new Promise<StoredTranscript | undefined>((resolve, reject) => {
         const request = database.transaction("snapshots").objectStore("snapshots").get(entry[0]);
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        request.addEventListener("success", () => resolve(request.result), { once: true });
+        request.addEventListener(
+          "error",
+          () =>
+            reject(new Error("Unable to read ordinary child snapshot", { cause: request.error })),
+          { once: true },
+        );
       });
       const receipt = record?.snapshot.details?.subagents;
       const settledHeight = group.getBoundingClientRect().height;

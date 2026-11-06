@@ -2260,10 +2260,10 @@ try {
         );
         await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
         await qualifyLateRowFacts();
-        const detailsSubagentsWarmState = await qualifyDetails();
+        const primedDetailsSubagentsWarmState = await qualifyDetails();
         const { storage: captured, ...saved } = await page.evaluate(persistColdLoadWarmState, {
           ...warmInput,
-          detailsSubagentsWarmState,
+          detailsSubagentsWarmState: primedDetailsSubagentsWarmState,
         });
         qualifyLateRowSnapshot(saved, index);
         storage = captured;
