@@ -48,7 +48,6 @@ const COMPOSER_POPOVER_VIEWPORT_INSET_PX = 28;
 function hasNativeTextareaContentSizing(el: HTMLTextAreaElement) {
   return (
     el.matches(".agent-chat__composer-combobox > textarea") &&
-    typeof CSS !== "undefined" &&
     CSS.supports("field-sizing", "content")
   );
 }
@@ -83,18 +82,14 @@ function observeComposerPopoverAnchor(el: HTMLElement) {
       });
     },
   };
-  if (typeof ResizeObserver === "function") {
-    state.resizeObserver = new ResizeObserver(state.scheduleUpdate);
-    state.resizeObserver.observe(el);
-  }
-  if (typeof MutationObserver === "function") {
-    state.toggleObserver = new MutationObserver(state.scheduleUpdate);
-    state.toggleObserver.observe(el, {
-      attributes: true,
-      attributeFilter: ["open"],
-      subtree: true,
-    });
-  }
+  state.resizeObserver = new ResizeObserver(state.scheduleUpdate);
+  state.resizeObserver.observe(el);
+  state.toggleObserver = new MutationObserver(state.scheduleUpdate);
+  state.toggleObserver.observe(el, {
+    attributes: true,
+    attributeFilter: ["open"],
+    subtree: true,
+  });
   const stopResize = listen(window, "resize", state.scheduleUpdate);
   const stopViewportResize = viewport && listen(viewport, "resize", state.scheduleUpdate);
   const stopViewportScroll = viewport && listen(viewport, "scroll", state.scheduleUpdate);
@@ -496,29 +491,23 @@ export function observeTextareaOverflow(
     getContext,
   };
   let width = el.getBoundingClientRect().width;
-  state.observer =
-    typeof ResizeObserver === "function"
-      ? new ResizeObserver(() => {
-          state.cappedValue = undefined;
-          const nextWidth = el.getBoundingClientRect().width;
-          if (nextWidth !== width) {
-            width = nextWidth;
-            if (
-              composerTextareaResizeObservers.get(el) === state &&
-              state.adjustmentFrame === null
-            ) {
-              state.adjustmentFrame = requestAnimationFrame(() => {
-                state.adjustmentFrame = null;
-                if (composerTextareaResizeObservers.get(el) === state) {
-                  adjustTextareaHeight(el);
-                }
-              });
-            }
-            return;
+  state.observer = new ResizeObserver(() => {
+    state.cappedValue = undefined;
+    const nextWidth = el.getBoundingClientRect().width;
+    if (nextWidth !== width) {
+      width = nextWidth;
+      if (composerTextareaResizeObservers.get(el) === state && state.adjustmentFrame === null) {
+        state.adjustmentFrame = requestAnimationFrame(() => {
+          state.adjustmentFrame = null;
+          if (composerTextareaResizeObservers.get(el) === state) {
+            adjustTextareaHeight(el);
           }
-          updateTextareaOverflow(el, false);
-        })
-      : null;
+        });
+      }
+      return;
+    }
+    updateTextareaOverflow(el, false);
+  });
   composerTextareaResizeObservers.set(el, state);
   state.observer?.observe(el);
   updateTextareaOverflow(el);

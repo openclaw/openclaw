@@ -20,6 +20,7 @@ const bunFile = "src/process/spawn-broker/context.test.ts";
 const validatorFile = "src/agents/agent-tools.execution-validation.test.ts";
 const agentBunFile = "src/agents/agent-tools.policy.test.ts";
 const clawRouterFile = "src/decisions/clawrouter.integration.test.ts";
+const catalogWorkerFile = "src/agents/prepared-model-catalog-worker.reuse.integration.test.ts";
 const websocketFile = "packages/ai/src/transports/openai-responses-websocket.test.ts";
 const websocketBunFiles = [
   "packages/ai/src/transports/openai-responses-websocket-client.test.ts",
@@ -109,6 +110,7 @@ it.each([
   [validatorFile, false],
   [websocketFile, false],
   [clawRouterFile, true],
+  [catalogWorkerFile, true],
   ...uiRetentionFiles.map((file) => [file, false] as const),
   ...codeModeFiles.map((file) => [file, true] as const),
 ] as const)("retains host coverage for exact target %s", async (file, bothHosts) => {
@@ -149,7 +151,7 @@ it.each([
     [],
   ],
   ["agents-core", "src/agents", [validatorFile], codeModeFiles.slice(1)],
-  ["infra", "src/agents", [], codeModeFiles.slice(0, 1)],
+  ["infra", "src/agents", [], [...codeModeFiles.slice(0, 1), catalogWorkerFile]],
   ["unit-support", "packages", [websocketFile], []],
 ] as const)(
   "preserves Node contracts for the %s inventory",
@@ -212,7 +214,7 @@ it.each(["node", "bun-all", "dual-all"] as const)(
         [processConfig, infraConfig, agentsConfig],
         [nodeFile],
         [bunFile, "src/agents/code-mode-node.lifecycle.test.ts"],
-        codeModeFiles,
+        [...codeModeFiles, catalogWorkerFile],
       ],
     ] as const) {
       const includePatterns = [...nodeOnly, ...bunOnly, ...bothHosts];

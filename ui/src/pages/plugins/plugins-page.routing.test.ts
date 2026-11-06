@@ -533,7 +533,7 @@ it.each(["disabled", "needs-setup"] as const)(
     if (state === "needs-setup") {
       expect(page.querySelector(".plugins-settings-detail-setup")).toBeNull();
       expect(page.querySelector('[role="tablist"]')).toBeNull();
-      expect(page.querySelector(".plugin-catalog-detail__panel .oc-banner-warning")).toBeNull();
+      expect(page.querySelector(".plugins-row-message--warning")).toBeNull();
       expect(
         page.querySelector<HTMLAnchorElement>(
           '.plugin-catalog-detail__actions a[aria-label="Settings"]',

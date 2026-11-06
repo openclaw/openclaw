@@ -15,6 +15,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
+  detectChangedLanes,
   detectChangedLanesForPaths,
   getChangedCoreTestPaths,
   hasConfigDocInput,
@@ -33,7 +34,11 @@ import {
   parseFlagArgs,
   stringFlag,
 } from "./lib/arg-utils.mts";
-import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
+import {
+  getChangedPathFacts,
+  isTestLineAllocationPath,
+  normalizeChangedPath,
+} from "./lib/changed-path-facts.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
@@ -1382,7 +1387,11 @@ export async function createChangedCiLintPlan(
   result: ChangedLaneResult,
   { runnerProfile }: { runnerProfile: string },
 ) {
-  const commands = createChangedCheckPlan(result, { lintOnly: true }).commands;
+  // Budget records retain their guards and formatting, but cannot affect lint inputs.
+  const lintPaths = result.paths.filter((file) => !isTestLineAllocationPath(file));
+  const lintResult =
+    lintPaths.length === result.paths.length ? result : detectChangedLanes(lintPaths);
+  const commands = createChangedCheckPlan(lintResult, { lintOnly: true }).commands;
   if (
     result.paths.some((file) => path.basename(file) === "package.json") ||
     commands.some(({ args }) =>
@@ -1411,6 +1420,7 @@ export async function createChangedCiLintPlan(
     coreStripes: [],
     extensionStripes: [],
     groups: [],
+    fullGroups: [],
     central: true,
   };
   const core: { stripe: number; lint_selection_json: string }[] = [];

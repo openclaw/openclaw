@@ -117,7 +117,7 @@ export function syncControlUiSystemChrome(
   const root = document.documentElement;
   committedShell = shell ?? committedShell;
   const { contentCanvas, navScrim } = committedShell;
-  const narrow = globalThis.matchMedia?.(
+  const narrow = globalThis.matchMedia(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   ).matches;
   const narrowCanvas = narrow && contentCanvas;

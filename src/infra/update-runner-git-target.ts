@@ -27,7 +27,11 @@ import {
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
-import { createGitStepFactory, gitCleanCheckArgs } from "./update-runner-git-commands.js";
+import {
+  createGitStepFactory,
+  gitCleanCheckArgs,
+  resolveGitNoLazyFetchArgs,
+} from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import { readGitTargetSchemaVersions } from "./update-runner-git-schema.js";
 import { runClassifiedGitStep } from "./update-runner-git-steps.js";
@@ -76,10 +80,23 @@ export async function classifyPartialCloneGitFailure(params: {
         'git fetch "<promisor-remote>" --stdin).',
     );
   }
-  const fsck = await params
-    .runCommand(
-      ["git", "--no-lazy-fetch", "-C", params.root, "fsck", "--connectivity-only", "--no-dangling"],
-      { cwd: params.root, timeoutMs: params.timeoutMs },
+  const fsck = await resolveGitNoLazyFetchArgs(params.runCommand, {
+    cwd: params.root,
+    timeoutMs: params.timeoutMs,
+  })
+    .then((noLazyFetchArgs) =>
+      params.runCommand(
+        [
+          "git",
+          ...noLazyFetchArgs,
+          "-C",
+          params.root,
+          "fsck",
+          "--connectivity-only",
+          "--no-dangling",
+        ],
+        { cwd: params.root, timeoutMs: params.timeoutMs },
+      ),
     )
     .catch(() => undefined);
   const fsckOutput = `${fsck?.stdout ?? ""}\n${fsck?.stderr ?? ""}`.trim();
@@ -380,11 +397,17 @@ export async function fetchGitUpdateTarget(params: {
   let devSource: (GitFetchTarget & { revision?: string }) | null = null;
   const result = (ok: boolean) => ({ ok, refreshedRemotes, ...(devSource ? { devSource } : {}) });
   if (channel === "dev" && devTarget?.mode === "detached" && isFullGitObjectId(devTarget.ref)) {
-    // A pinned commit needs no remote freshness. Probe privately without allowing
-    // promised-object hydration; the normal candidate/transfer owners still verify its contents.
+    // A pinned commit needs no remote freshness. Avoid promised-object hydration
+    // when Git supports it; candidate/transfer owners still verify its contents.
+    const probe = step("git-resolve-target");
+    const noLazyFetchArgs = await resolveGitNoLazyFetchArgs(probe.runCommand, {
+      cwd: root,
+      timeoutMs: probe.timeoutMs,
+      env: probe.env,
+    });
     const options = step(
       "git-resolve-target",
-      "--no-lazy-fetch",
+      ...noLazyFetchArgs,
       "cat-file",
       "--batch-check=%(objectname) %(objecttype)",
     );

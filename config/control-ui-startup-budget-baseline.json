@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 89622,
-  "reason": "Remove unused boot copy, obsolete browser fallbacks, and unused initialization; measured startup 89,622 B normalized gzip.",
+  "startupJsGzipBytes": 89370,
+  "reason": "Retire unused browser fallbacks, dead English copy, and unused theme validator initialization; measured startup 89,370 B normalized gzip.",
   "updatedAt": "2026-11-06"
 }

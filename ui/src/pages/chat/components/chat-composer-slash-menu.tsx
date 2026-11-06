@@ -1,4 +1,5 @@
 import { For, Show, createMemo, lazy } from "solid-js";
+import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import {
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
@@ -56,12 +57,16 @@ export function SlashMenu(props: { menu: SlashMenuState; host: SlashMenuHost; dr
         >
           {activeMode === "args" ? (
             <div class="slash-menu-group">
-              <div class="slash-menu-group__label">
-                /{state().slashMenuCommand?.name}{" "}
-                {state().slashMenuCommand
-                  ? getSlashCommandDescription(state().slashMenuCommand!)
-                  : ""}
-              </div>
+              <MenuHeading
+                label={
+                  <>
+                    /{state().slashMenuCommand?.name}{" "}
+                    {state().slashMenuCommand
+                      ? getSlashCommandDescription(state().slashMenuCommand!)
+                      : ""}
+                  </>
+                }
+              />
               <ChatLazyBoundary
                 fallback={
                   <ComposerMenuLoadingRows
@@ -101,7 +106,7 @@ export function SlashMenu(props: { menu: SlashMenuState; host: SlashMenuHost; dr
                       { "slash-menu-group--skills": group()[0] === "skills" },
                     ]}
                   >
-                    <div class="slash-menu-group__label">{label()}</div>
+                    <MenuHeading label={label()} />
                     <ChatLazyBoundary
                       fallback={
                         <ComposerMenuLoadingRows

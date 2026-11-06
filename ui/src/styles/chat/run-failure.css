@@ -139,7 +139,6 @@
 
 .chat-run-failure__well {
   --chat-run-failure-copy-size: 26px;
-  --scrollbar-size: 10px;
   --chat-run-failure-copy-clearance: calc(var(--chat-run-failure-copy-size) + 10px);
 
   position: relative;
@@ -194,12 +193,6 @@
 }
 
 @supports selector(::-webkit-scrollbar) {
-  /* Any non-auto scrollbar property would switch the styled thumb off. */
-  .chat-run-failure__panel .chat-run-failure__log {
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
   .chat-run-failure__log::-webkit-scrollbar-track {
     margin-block: var(--chat-run-failure-copy-clearance) 6px;
   }

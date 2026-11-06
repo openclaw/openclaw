@@ -29,6 +29,7 @@ import {
   prepareCandidateCommandEnv,
   resolveBuildEnv,
   resolveDevPreflightLintEnv,
+  resolveGitNoLazyFetchArgs,
   resetPreflightCandidateWorktree,
   type StepFactory,
   shouldInstallWithoutScriptsOnWindows,
@@ -518,8 +519,12 @@ export async function runGitCandidatePreflight(params: {
       : undefined;
 
   if (rebaseFrom && !params.referenceSource) {
+    const noLazyFetchArgs = await resolveGitNoLazyFetchArgs(params.runCommand, {
+      cwd: params.gitRoot,
+      timeoutMs: params.timeoutMs,
+    });
     const relation = await runClassifiedGitStep(
-      step("preflight-local-history", "--no-lazy-fetch", "merge-base", rebaseFrom, candidates[0]!),
+      step("preflight-local-history", ...noLazyFetchArgs, "merge-base", rebaseFrom, candidates[0]!),
       (result) => {
         if (
           result.exitCode === 1 &&

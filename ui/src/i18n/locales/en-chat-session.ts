@@ -45,7 +45,6 @@ const enChatSession = {
       automationMore: en.chat.sessionDetails.automationMore,
       automationAttention: en.chat.sessionDetails.automationAttention,
       automationPaused: en.chat.sessionDetails.automationPaused,
-      automationEnabled: en.chat.sessionDetails.automationEnabled,
     },
     usageLimit: {},
     providerPolicy: {},

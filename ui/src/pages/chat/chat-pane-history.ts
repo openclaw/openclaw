@@ -237,7 +237,6 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
       }
     }
     if (
-      typeof IntersectionObserver !== "function" ||
       !this.presented ||
       !this.visuallyPresented ||
       document.visibilityState === "hidden" ||
@@ -403,10 +402,6 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
       return;
     }
     this.historyAutoLoadBlocked = false;
-    if (typeof IntersectionObserver !== "function") {
-      void this.loadOlderMessages();
-      return;
-    }
     this.historyObserverArmed = true;
     this.syncHistoryObserver();
   }

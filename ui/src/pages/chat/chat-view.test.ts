@@ -1545,7 +1545,7 @@ describe("chat voice controls", () => {
     });
     expect(
       container
-        .querySelector('[role="alert"].agent-chat__talk-status .agent-chat__talk-status-text')
+        .querySelector('[role="alert"].agent-chat__composer-alert .callout__content')
         ?.textContent?.trim(),
     ).toBe(detail);
     const stop = requireElement(
