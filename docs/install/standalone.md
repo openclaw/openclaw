@@ -573,6 +573,9 @@ admission and generation ownership still apply. A paired AOT/JIT build keeps the
 same loader resource snapshot in both sidecars. Strict code-generation policies
 can still reject interpreted plugins with runtime execution guidance.
 
+Due to a compiler limitation, query or fragment imports of disk modules in AOT
+builds do not create separate module instances.
+
 On-demand plugin installs use the declared npm runtime in `runtime/npm/` through
 the standalone executable's Bun mode. This preserves npm registry authentication,
 configuration, lockfile integrity checks, and the installer's disabled lifecycle
