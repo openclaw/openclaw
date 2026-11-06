@@ -132,6 +132,8 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   // scripts/README.md invokes this warm-interaction benchmark CLI by path.
   "scripts/bench-control-ui-interactions.ts!",
+  // Its companion guide invokes the isolated RPC payload census by path.
+  "scripts/bench-control-ui-rpc-payloads.ts!",
   // scripts/README.md invokes the real-Gateway Usage benchmark; it spawns this exact child path.
   "scripts/bench-usage-gateway.ts!",
   "scripts/lib/usage-bench-child.ts!",

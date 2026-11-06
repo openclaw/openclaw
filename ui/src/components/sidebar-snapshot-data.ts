@@ -189,6 +189,8 @@ export const sidebarSnapshotSchema = json.object({
   ),
   ownerId: json.nullable(text),
   involvingMe: json.boolean,
+  windowKeys: json.array(sessionKey),
+  rowFloor: json.number,
   footer: json.nullable(user),
   brand: json.object({
     name: text,
@@ -237,6 +239,7 @@ export function removeSidebarSnapshotSession(
   };
   const next = {
     ...model,
+    windowKeys: model.windowKeys.filter((value) => retain({ key: value })),
     pinnedSessions: prune(model.pinnedSessions),
     pages: prune(model.pages),
     entries: model.entries.filter(
