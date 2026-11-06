@@ -100,7 +100,7 @@ async function createFixture(
       expect(sendTelegram).toHaveBeenCalledExactlyOnceWith(TELEGRAM_GROUP, text, {
         verbose: false,
         cfg,
-        accountId: undefined,
+        accountId: "default",
         ...(silent !== undefined ? { silent } : {}),
       });
     },

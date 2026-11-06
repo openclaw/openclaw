@@ -21,12 +21,13 @@ it("coalesces snapshot progress while its receipt is settling", async () => {
   await fs.writeFile(
     worker,
     `
-    import fs from "node:fs";
     let input = "";
     for await (const chunk of process.stdin) input += chunk;
     const request = JSON.parse(input);
     for (let i = 0; i < 256; i++) {
-      fs.writeSync(2, "State schema progress: " + JSON.stringify({phase: "copy-" + i, snapshot: {status: "copying", copiedPages: i + 1, totalPages: 256, elapsedMs: i + 1}}) + "\\n");
+      await new Promise((resolve, reject) => {
+        process.stderr.write("State schema progress: " + JSON.stringify({phase: "copy-" + i, snapshot: {status: "copying", copiedPages: i + 1, totalPages: 256, elapsedMs: i + 1}}) + "\\n", (error) => error ? reject(error) : resolve());
+      });
     }
     process.stdout.write(JSON.stringify(request.mode === "inventory"
       ? {databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json"}

@@ -7768,7 +7768,7 @@ describe("ci workflow guards", () => {
         expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "Node test matrix"),
       ).include;
       expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ test_runtime_policy: policy });
+      expect(rows[0].test_runtime_policy ?? "node").toBe(policy);
       expect(rows[0].requires_bun === undefined ? false : rows[0].requires_bun).toBe(bun);
       expect(manifest.outputs.ui_test_runtime_policy).toBe(uiPolicy);
       const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
@@ -11695,6 +11695,24 @@ describe("ci workflow guards", () => {
       });
       expect(manifest.status, manifest.output).toBe(0);
       expect(manifest.outputChars, label).toBeLessThan(262_144);
+      if (label === "full manual") {
+        const rows = JSON.parse(
+          expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "manual Node matrix"),
+        ).include;
+        const runStep = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps.find(
+          (step: WorkflowStep) => step.name === "Run Node test shard",
+        );
+        expect(rows.length).toBeGreaterThan(0);
+        for (const row of rows) {
+          expect(row).not.toHaveProperty("test_runtime_policy");
+          expect(
+            evaluateWorkflowExpression(runStep.env.OPENCLAW_CI_TEST_RUNTIME_POLICY, {
+              eventName,
+              matrix: row,
+            }),
+          ).toBe("node");
+        }
+      }
     },
   );
 

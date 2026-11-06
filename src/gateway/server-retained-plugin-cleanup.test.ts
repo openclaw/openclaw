@@ -377,12 +377,13 @@ it.each(["startup", "current"] as const)(
         layout: "project",
       });
       const log = { info: vi.fn(), warn: vi.fn() };
-      for (const dir of [packageDir, obsolete])
+      for (const dir of [packageDir, obsolete]) {
         await markRetainedManagedNpmInstall({
           packageDir: dir,
           pluginId: dir === packageDir ? "codex" : "obsolete",
           reason: "replaced-plugin-generation",
         });
+      }
       await seedInstalledPluginIndex({}, { env: state.env, candidates: [] });
       setRuntimeConfigSnapshot(source === "current" ? cfg : {});
       try {

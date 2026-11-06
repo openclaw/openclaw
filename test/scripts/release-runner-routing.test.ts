@@ -64,6 +64,8 @@ const workflows = new Map(
     parse(readFileSync(`.github/workflows/${name}.yml`, "utf8")) as Workflow,
   ]),
 );
+// These pack jobs intentionally execute target code only on disposable hosted runners.
+const hostedSandboxJobs = new Set(["plugin-clawhub-release/pack_plugins_clawhub_artifacts"]);
 const group = 'Release "reserved"';
 const context = {
   matrix: { runner: "ubuntu-24.04", group: "fixture", task: "test", check_name: "fixture" },
@@ -87,6 +89,12 @@ function credentialed(name: string, job: Job) {
 }
 
 describe("release runner reservation", () => {
+  it("keeps target package execution on disposable GitHub-hosted runners", () => {
+    const job = workflows.get("plugin-clawhub-release")!.jobs.pack_plugins_clawhub_artifacts!;
+    expect(job["runs-on"]).toBe("ubuntu-latest");
+    expect(evaluateWorkflowRunner(job["runs-on"], releaseDispatch)).toBe("ubuntu-latest");
+  });
+
   it("keeps the credentialed Linux promotion dispatcher on GitHub-hosted runners", () => {
     const name = "openclaw-release-promote";
     const workflow = parse(readFileSync(`.github/workflows/${name}.yml`, "utf8")) as Workflow;
@@ -166,7 +174,9 @@ describe("release runner reservation", () => {
               : { ...ordinary, releaseRunnerGroup: group },
           );
           expect(routed, `${name}/${jobName}/${eventName}/${release}`).toEqual(
-            !release || credentialed(name, job) ? baseline : { group, labels: baseline },
+            !release || credentialed(name, job) || hostedSandboxJobs.has(`${name}/${jobName}`)
+              ? baseline
+              : { group, labels: baseline },
           );
         }
       }

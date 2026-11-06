@@ -41,6 +41,7 @@ async function dependencyOwner(
   target: string,
   withinRetainedHost = false,
   retainedHost?: { root: string; moduleOnlyRoots: Set<string> },
+  fileOwnerBoundaries?: readonly string[],
 ): Promise<string> {
   // A pnpm package resolves dependencies beside its package directory. Preserve
   // that Node lookup ancestry, including scoped packages and nested installs.
@@ -57,6 +58,15 @@ async function dependencyOwner(
   let directory = stat.isDirectory() ? target : path.dirname(target);
   const fallback = target;
   for (;;) {
+    // A shared ancestor containing the referring link or snapshot is not an
+    // external package owner. Keep the file edge exact instead of copying it all.
+    if (
+      !withinRetainedHost &&
+      stat.isFile() &&
+      fileOwnerBoundaries?.some((boundary) => isPathInside(directory, boundary))
+    ) {
+      return fallback;
+    }
     if (directory === retainedHost?.root) {
       // A retired workspace can leave only ignored modules behind. Other host
       // contents still belong to the host and must reach the inferred-root refusal.
@@ -510,6 +520,7 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
           real,
           retainedDependency,
           isRetainedDependency(real) ? retainedHost : undefined,
+          [privateRoot, file],
         ).catch((cause: unknown) => {
           throw new Error(`Cannot privately copy plugin dependency ${file} -> ${real}`, { cause });
         }));

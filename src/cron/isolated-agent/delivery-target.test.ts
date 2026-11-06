@@ -279,20 +279,15 @@ describe("resolveDeliveryTarget", () => {
 
   it("uses the channel's own default account when the delivery names none", async () => {
     // A legacy {channel, to} delivery block with only a named account configured (#186043).
-    setPlugins(
-      plugin(
-        "forum",
-        { messaging: forumMessagingForTest },
-        {
-          config: {
-            listAccountIds: () => ["main"],
-            resolveAccount: () => ({}),
-          },
-        },
-      ),
+    setSingleOutboundTestPlugin(
+      { id: "forum", outbound: createStubOutbound("Forum"), messaging: forumMessagingForTest },
+      { config: { listAccountIds: () => ["main"], resolveAccount: () => ({}) } },
     );
 
-    const result = await resolveTarget({ channel: "forum", to: "room:ops" });
+    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+    });
 
     expect(result).toMatchObject({ ok: true, accountId: "main", to: "room:ops" });
   });

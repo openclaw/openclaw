@@ -1296,6 +1296,11 @@ const nodeTestShards = targetNodeTestShards
       ),
     };
     if (compactReleaseMatrixRows || (packedGroups && !frozenTarget)) {
+      // Full manual matrices repeat this default for every row; the workflow
+      // already resolves an absent runtime policy to Node. Keep explicit trials.
+      if (compactReleaseMatrixRows && row.test_runtime_policy === "node") {
+        delete row.test_runtime_policy;
+      }
       // The workflow treats absent feature flags as false and history as [].
       // Encoded groups own their names; the outer name is only a legacy fallback.
       for (const key of [

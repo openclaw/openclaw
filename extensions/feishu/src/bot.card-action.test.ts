@@ -242,9 +242,13 @@ describe("Feishu Card Action Handler", () => {
     async (failure) => {
       const log = vi.fn();
       const detail = "private-card-provider-detail";
-      if (failure === "response") getChat.mockResolvedValueOnce({ code: 99, msg: detail });
-      else if (failure === "exception") getChat.mockRejectedValueOnce(new Error(detail));
-      else getChat.mockResolvedValueOnce({ code: 0, data: {} });
+      if (failure === "response") {
+        getChat.mockResolvedValueOnce({ code: 99, msg: detail });
+      } else if (failure === "exception") {
+        getChat.mockRejectedValueOnce(new Error(detail));
+      } else {
+        getChat.mockResolvedValueOnce({ code: 0, data: {} });
+      }
       await dispatch(cardEvent({ text: "/help", chat_type: "p2p" }), {
         runtime: { ...runtime, log },
       });

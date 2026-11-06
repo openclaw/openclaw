@@ -4,7 +4,6 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
@@ -183,10 +182,6 @@ async function dispatchSyntheticCommand(
 
 const CHAT_TYPE_CACHE_TTL_MS = 30 * 60_000;
 const CHAT_TYPE_CACHE_MAX_SIZE = 5_000;
-
-function sanitizeLogValue(v: string): string {
-  return truncateUtf16Safe(v.replace(/[\r\n]/g, " "), 500);
-}
 
 function cacheResolvedCardActionChatType(
   cacheKey: string,
