@@ -27,7 +27,10 @@ import {
   buildSqliteMemoryBodyFtsSchema,
   buildSqliteMemoryPathFtsSchema,
 } from "./database-engine/sqlite-memory-search-fragments.js";
-import { ensureMemoryPathFtsTriggers } from "./database-engine/sqlite-search-schema.js";
+import {
+  ensureMemoryChunkFtsTriggers,
+  ensureMemoryPathFtsTriggers,
+} from "./database-engine/sqlite-search-schema.js";
 import {
   completeGatewayBootLifecycle,
   inspectGatewayCrashLoopBreakerAsync,
@@ -369,8 +372,9 @@ it.each([
           buildSqliteMemoryBodyFtsSchema({ tableName: "memory_index_chunks_fts", tokenizer }),
         );
         db.exec(buildSqliteMemoryPathFtsSchema({ tokenizer }));
-        // Current chunk triggers address chunk_rowid, which this published v16
-        // chunks table does not have. The lazy index is the virtual tables.
+        // The lazy index can already carry the current body triggers. They
+        // address chunk_rowid before this published table has that column.
+        ensureMemoryChunkFtsTriggers(db);
         ensureMemoryPathFtsTriggers(db);
         db.prepare(
           `INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line)
