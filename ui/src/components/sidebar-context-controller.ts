@@ -48,7 +48,7 @@ export function createSidebarScroll(
     () => {
       const element = scroller;
       if (!element) {
-        return;
+        return undefined;
       }
       const restoreTop = pendingTop;
       const next = readScrollState(element, false, restoreTop);
