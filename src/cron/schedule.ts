@@ -33,10 +33,6 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
   // Expression parsing is expensive, so retain the most recently promoted entries.
   pruneMapToMaxSize(cronEvalCache, CRON_EVAL_CACHE_MAX - 1);
   const next = new Cron(expr, { timezone, catch: false });
-  // Croner also accepts ISO timestamps, but those belong to the one-shot schedule kind.
-  if (next.getPattern() === undefined) {
-    throw new Error('invalid cron expression: use schedule.kind="at" for absolute timestamps');
-  }
   cronEvalCache.set(key, next);
   return next;
 }

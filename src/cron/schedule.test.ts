@@ -12,12 +12,12 @@ function expectOccurrences(schedule: CronSchedule, now: string, next?: string, p
 
 describe("cron schedule", () => {
   it.each(["2027-02-01T09:00:00Z", "2027-02-01T09:00:00-05:00"])(
-    "rejects a one-shot timestamp used as a recurring cron expression: %s",
+    "rejects timestamp input but preserves evaluation of previously stored schedules: %s",
     (expr) => {
       expect(isValidCronExpression(expr, "UTC")).toBe(false);
-      expect(() =>
+      expect(
         computeNextRunAtMs({ kind: "cron", expr, tz: "UTC" }, Date.parse("2027-01-01T00:00:00Z")),
-      ).toThrow(/cron expression.*schedule.kind="at"/);
+      ).toBe(Date.parse(expr));
     },
   );
 
