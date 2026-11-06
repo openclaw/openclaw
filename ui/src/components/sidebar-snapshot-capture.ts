@@ -1,10 +1,14 @@
+import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import { parseSidebarEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { presenceViewerLastActivity, profilePresenceViewer } from "../lib/presence-users.ts";
+import { profileDirectory } from "../lib/profile-directory.ts";
+import type { SessionCreatedActor } from "../lib/session-owner.ts";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -96,6 +100,7 @@ export function captureSidebarSnapshotModel(
     return null;
   }
   const bootRoster = context.sessions.captureBootRoster();
+  const visibleKeys = new Set(windowKeys.filter((key) => !isIncognitoSessionKey(key)));
   const agents = context.agents.state.agentsList;
   if (!bootRoster || !agents) {
     return null;
@@ -125,7 +130,32 @@ export function captureSidebarSnapshotModel(
   for (const { key, pluginId, value } of host.pluginNavigation()) {
     plugins.push({ key, pluginId, id: value.page.id, label: value.label, icon: value.icon });
   }
+  const displayPerson = <T extends SessionCreatedActor | SessionParticipant>(person: T) => ({
+    ...person,
+    avatarUrl:
+      person.identity?.type === "agent"
+        ? (resolveAgentAvatarUrl(
+            agents.agents.find((agent) => agent.id === person.identity?.id) ?? {},
+            context.agentIdentity.get(person.identity.id),
+          ) ?? person.avatarUrl)
+        : profileDirectory(context.gateway).avatarIdentity({
+            identity: person.identity,
+            name: person.label,
+            profileAvatarUrl: person.avatarUrl,
+          }).profileAvatarUrl,
+  });
   const presentation = (row: SidebarRecentSession) => ({
+    ...(visibleKeys.has(row.key)
+      ? {
+          owner: row.owner && { ...row.owner, actor: displayPerson(row.owner.actor) },
+          archivedBy: row.archivedBy && displayPerson(row.archivedBy),
+          participants:
+            (row.participantCount ?? row.participants?.length) === 1
+              ? row.participants?.slice(0, 1).map(displayPerson)
+              : undefined,
+          participantCount: row.participantCount ?? row.participants?.length,
+        }
+      : {}),
     childrenDisplayMode: host.sessionProjection.children.capture(row.key),
     snapshotSubtitle: row.snapshot
       ? row.snapshotSubtitle
@@ -174,7 +204,7 @@ export function captureSidebarSnapshotModel(
       const lastActivityAt = presenceViewerLastActivity(user);
       return {
         ...displayUser(user),
-        watchedSessions: [],
+        watchedSessions: user.watchedSessions.filter((key) => visibleKeys.has(key)),
         entries: [{ ts: 0, lastActivityAt }],
       };
     }),
@@ -187,6 +217,7 @@ export function captureSidebarSnapshotModel(
       .map(profilePresenceViewer),
     ownerId: host.sessionOwnerFilterId,
     involvingMe: host.sessionInvolvingMeFilterActive,
+    ownershipAvatars: host.sessionOwnershipVisibility.avatars,
     windowKeys: windowKeys.filter((key) => !isIncognitoSessionKey(key)),
     rowFloor: host.scroll?.rowFloor() ?? 32,
     footer: displayUser(context.gateway.snapshot.selfUser),

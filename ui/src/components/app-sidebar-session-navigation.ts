@@ -60,7 +60,6 @@ import {
   projectSidebarVisibleMainSession,
   resolveLatestSidebarAgentSession,
   resolveSidebarMainSessionKey,
-  restoreSnapshotNavigation,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
 import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
@@ -108,6 +107,7 @@ import {
   type SidebarProjectionHost,
 } from "./sidebar-projection-memo.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
+import { restoreSnapshotNavigation } from "./sidebar-snapshot-navigation.ts";
 import { mountedViewerSessionKeys } from "./solid/viewer-facepile.tsx";
 
 export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase {
@@ -483,6 +483,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   private readonly snapshotNavigation = new SidebarProjectionMemo<
     ReturnType<typeof restoreSnapshotNavigation>
   >();
+
+  get sidebarPresencePayload(): PresencePayload | undefined {
+    return this.sidebarSnapshot
+      ? this.readSnapshotNavigation(this.sidebarSnapshot).presence
+      : this.sessionData.presencePayload;
+  }
 
   private readSnapshotNavigation(model: SidebarSnapshotModel) {
     const selectedKey = this.getRouteSessionKey();

@@ -1,4 +1,4 @@
-import { createMemo, Show } from "solid-js";
+import { Show } from "solid-js";
 import type { SessionParticipant } from "../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveAvatar } from "../../lib/identity-avatar.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -29,15 +29,25 @@ function ownerHue(id: string): number {
 export function SessionOwnerAvatar(props: {
   owner: Pick<SessionOwnerOption, "id" | "label" | "avatarUrl" | "identity">;
 }) {
+  // Reconcile owner facts without replacing the bridge's user prop.
+  const user = {
+    get id() {
+      return props.owner.id;
+    },
+    get name() {
+      return props.owner.label;
+    },
+    get avatarUrl() {
+      return props.owner.avatarUrl;
+    },
+    get identity() {
+      return props.owner.identity;
+    },
+    watchedSessions: [],
+  };
   return (
     <ParticipantAvatar
-      user={{
-        id: props.owner.id,
-        name: props.owner.label,
-        avatarUrl: props.owner.avatarUrl,
-        identity: props.owner.identity,
-        watchedSessions: [],
-      }}
+      user={user}
       markAsViewer={false}
       label={props.owner.label || props.owner.id}
       aria-hidden="true"
@@ -59,16 +69,6 @@ export function SessionOwnerChip(props: SessionOwnerChipProps) {
     );
     return props.viewingNow ? `${attribution} · ${t("sessionsView.viewingNow")}` : attribution;
   };
-  const avatar = createMemo(() =>
-    owner()
-      ? resolveAvatar({
-          id: owner()!.id,
-          identity: owner()!.identity,
-          name: owner()!.label,
-          profileAvatarUrl: owner()!.avatarUrl,
-        })
-      : null,
-  );
   const stacked = () => (props.size ?? "row") === "row" && (props.participantCount ?? 0) > 0;
   const participant = () => props.participants?.[0];
   const combinedLabel = () => {
@@ -94,7 +94,12 @@ export function SessionOwnerChip(props: SessionOwnerChipProps) {
         when={
           owner()!.identity?.type === "agent" ||
           owner()!.identity?.type === "profile" ||
-          avatar()?.kind === "profile"
+          resolveAvatar({
+            id: owner()!.id,
+            identity: owner()!.identity,
+            name: owner()!.label,
+            profileAvatarUrl: owner()!.avatarUrl,
+          }).kind === "profile"
         }
         fallback={<span class="session-owner-chip__initials">{initials()}</span>}
       >

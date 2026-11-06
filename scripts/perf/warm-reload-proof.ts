@@ -17,6 +17,7 @@ import {
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
+import { sidebarPresentationProbe } from "../../ui/src/test-helpers/control-ui-sidebar-presentation-probe.test-support.ts";
 import { installPaneChromeProbe } from "../lib/control-ui-pane-chrome-probe.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { freeProofPort, startWarmReloadAdmission } from "./warm-reload-admission.ts";
@@ -49,6 +50,8 @@ const { values } = parseArgs({
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
+    "sidebar-presentation-probe": { type: "boolean", default: false },
+    "sidebar-scroll-top": { type: "string" },
     route: { type: "string", default: "both" },
     "audit-report": { type: "string" },
     "paint-audit": { type: "string" },
@@ -96,6 +99,10 @@ const reloads = integer(values.reloads, "--reloads", 0, 100);
 const sessions = integer(values.sessions, "--sessions", 2000, 20000);
 const rttMs = integer(values["rtt-ms"], "--rtt-ms", 0, 1000);
 const captureMs = integer(values["capture-ms"], "--capture-ms", 1000, 60000);
+const sidebarScrollTop =
+  values["sidebar-scroll-top"] === undefined
+    ? undefined
+    : integer(values["sidebar-scroll-top"], "--sidebar-scroll-top", 0, 100000);
 const extraInitScripts = await Promise.all(
   values["init-script"].map((file) => readFile(file, "utf8")),
 );
@@ -150,8 +157,13 @@ async function readProbe(page: Page) {
       "__warmReloadProof",
     );
     data.stopped = true;
+    const sidebar: ReturnType<typeof sidebarPresentationProbe> | undefined = Reflect.get(
+      window,
+      "__sidebarPresentation",
+    );
     return {
       ...data,
+      sidebarPresentation: sidebar?.read(),
       paneChrome: Reflect.get(window, "__paneChrome").read(data.firstTranscriptDomMs),
       timeOrigin: performance.timeOrigin,
       capturedUntilMs: performance.now(),
@@ -948,6 +960,9 @@ try {
           await page.addInitScript({
             content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"] || values["composer-controls"]});`,
           });
+          if (values["sidebar-presentation-probe"]) {
+            await page.addInitScript({ content: `(${sidebarPresentationProbe.toString()})();` });
+          }
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");
           await cdp.send("Page.setLifecycleEventsEnabled", { enabled: true });
@@ -1220,6 +1235,16 @@ try {
                 visitedAtMs,
               ),
             };
+          }
+          if (sidebarScrollTop !== undefined) {
+            await item.page.locator(".sidebar-shell__body").evaluate(async (element, offset) => {
+              element.scrollTop = offset;
+              element.dispatchEvent(new Event("scroll"));
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              });
+              window.dispatchEvent(new Event("pagehide"));
+            }, sidebarScrollTop);
           }
           const run = await captureReload(
             item.page,

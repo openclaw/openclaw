@@ -35,14 +35,7 @@ function expectCachedScroll(
 }
 
 function expectCachedRows(
-  report: {
-    frames: Array<{
-      cached: boolean;
-      scrollTop: number;
-      mountedRows: Array<{ key: string }>;
-      rows: Array<{ key: string }>;
-    }>;
-  },
+  report: ReturnType<ReturnType<typeof sidebarPresentationProbe>["read"]>,
   scrollTop: number,
 ) {
   expectCachedScroll(report, scrollTop);
@@ -53,6 +46,17 @@ function expectCachedRows(
     expect(frame.rows.length).toBeGreaterThan(0);
     expect(frame.mountedRows.map((row) => row.key)).toEqual(live.mountedRows.map((row) => row.key));
     expect(frame.rows.map((row) => row.key)).toEqual(live.rows.map((row) => row.key));
+    const avatars = (rows: typeof frame.rows) =>
+      rows.map((row) => [
+        row.avatarPresentation,
+        row.ownerStack,
+        row.ownerAway,
+        row.participantCount,
+      ]);
+    expect(avatars(frame.rows)).toEqual(avatars(live.rows));
+    expect(frame.rows.map((row) => row.avatarRootNodes)).toEqual(
+      live.rows.map((row) => row.avatarRootNodes),
+    );
   }
 }
 
