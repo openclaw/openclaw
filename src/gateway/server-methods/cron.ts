@@ -28,6 +28,8 @@ import {
   getCronManagementAuthority,
   withCronManagementGrant,
 } from "../cron-creator-authority-grant.js";
+import { retainCronControlSource } from "../cron-operator-source.js";
+import type { OperatorRunRecoverySnapshot } from "../operator-run-recovery-source.codec.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { cronAddHandler } from "./cron-add.js";
 import { cronBindHandler } from "./cron-bind.js";
@@ -182,8 +184,11 @@ export const cronHandlers: GatewayRequestHandlers = {
     let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
     let inference: Awaited<ReturnType<typeof captureCronUpdatedInferenceBinding>>;
     let operatorCapture: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
+    // The native process is authorized by whoever approves it now; the payload keeps its requester.
+    let processSource: OperatorRunRecoverySnapshot | undefined;
     let operatorSourceExecutionRevision: string | undefined;
     let streamExecPolicy: ReturnType<typeof resolveCronStreamExecPolicy>;
+    const requiresStreamExec = cronUpdateRequiresStreamExecAuthority(patch, currentJob);
     let creatorSessionId: string | undefined;
     if (callerScope && !callerScope.manageAll && "agentId" in patch) {
       respondInvalidCronParams(respond, "cron.update", "agentId cannot be changed by caller scope");
@@ -273,24 +278,41 @@ export const cronHandlers: GatewayRequestHandlers = {
       return nextJob;
     };
     try {
-      streamExecPolicy = resolveCronStreamExecPolicy(
-        client,
-        cronUpdateRequiresStreamExecAuthority(patch, currentJob),
-        context,
-      );
+      streamExecPolicy = resolveCronStreamExecPolicy(client, requiresStreamExec, context);
       capture = resolveCronCreatorAuthorityCapture(creatorScope);
       const runtimeAuthority = capture?.captureRuntimeAuthority();
       capture &&= { ...capture, captureRuntimeAuthority: () => runtimeAuthority };
       const nextJob = await validateUpdate(currentJob);
-      if (creatorScope) {
-        operatorSourceExecutionRevision = resolveCronOperatorExecutionRevision(nextJob);
+      const nextSourceRevision = resolveCronOperatorExecutionRevision(nextJob);
+      const sealed = currentJob.operatorSource;
+      const sourceBound = Boolean(
+        client?.internal?.openclawIdPrincipal ||
+        sealed?.source.kind === "gateway" ||
+        sealed?.source.snapshot.openclawIdPrincipal ||
+        currentJob.streamOperatorSource,
+      );
+      if (
+        creatorScope ||
+        (sourceBound &&
+          (requiresStreamExec ||
+            patch.enabled === true ||
+            sealed?.executionRevision !== nextSourceRevision))
+      ) {
+        operatorSourceExecutionRevision = nextSourceRevision;
         operatorCapture = await captureCronCreatorSession(
           nextJob,
           creatorScope,
-          { client, context, signal },
+          { client, context, signal, hasCurrentClientAuthority },
           cfg,
           true,
         );
+        processSource = operatorCapture.operatorSource?.snapshot;
+        operatorCapture = retainCronControlSource({
+          job: currentJob,
+          patch,
+          capture: operatorCapture,
+          context,
+        });
       }
       inference = runtimeAuthority
         ? undefined
@@ -300,6 +322,7 @@ export const cronHandlers: GatewayRequestHandlers = {
             signal,
           });
     } catch (err) {
+      operatorCapture?.disposeOperatorSource?.();
       targetAccess?.release();
       respondInvalidCronParams(respond, "cron.update", formatErrorMessage(err));
       return;
@@ -342,6 +365,21 @@ export const cronHandlers: GatewayRequestHandlers = {
     };
     let job: Awaited<ReturnType<typeof context.cron.update>>;
     try {
+      if (
+        requiresStreamExec &&
+        !currentJob.streamSandbox &&
+        !streamExecPolicy?.sandboxContext &&
+        (currentJob.streamOperatorSource ||
+          currentJob.operatorSource?.source.snapshot.openclawIdPrincipal ||
+          processSource?.openclawIdPrincipal)
+      ) {
+        if (!processSource) {
+          throw new TypeError(
+            "Reauthorize this stream from a current authenticated Gateway operator.",
+          );
+        }
+        updateOptions.streamOperatorSource = processSource;
+      }
       if (currentJob.streamSandbox && streamExecPolicy && !streamExecPolicy.sandboxContext) {
         assertActiveAgentRuntimeAuthority(client, context);
         throw new TypeError("Change this sandbox stream from its original sandbox session.");
@@ -417,11 +455,14 @@ export const cronHandlers: GatewayRequestHandlers = {
                   );
                 }
               }
-              const requiresStreamExec = cronUpdateRequiresStreamExecAuthority(patch, lockedJob);
-              if (requiresStreamExec && !streamExecPolicy) {
+              const lockedRequiresStreamExec = cronUpdateRequiresStreamExecAuthority(
+                patch,
+                lockedJob,
+              );
+              if (lockedRequiresStreamExec && !streamExecPolicy) {
                 streamExecPolicy = resolveCronStreamExecPolicy(client, true, context);
               }
-              const execPolicy = requiresStreamExec ? streamExecPolicy : undefined;
+              const execPolicy = lockedRequiresStreamExec ? streamExecPolicy : undefined;
               const nextJob = await validateUpdate(lockedJob);
               deliveryPreview = await resolveCronDeliveryFailurePreview({
                 cfg,
@@ -468,6 +509,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondInvalidCronParams(respond, "cron.update", formatErrorMessage(err));
       return;
     } finally {
+      operatorCapture?.disposeOperatorSource?.();
       targetAccess?.release();
       inference?.disposeInferenceAuthorization();
     }

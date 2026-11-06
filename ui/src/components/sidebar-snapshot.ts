@@ -84,6 +84,8 @@ export function createSidebarSnapshot(host: {
         if (deleted) {
           // Cancel accepted stale captures, retaining the rest of the display and cache.
           generation += 1;
+          cancelCapture?.();
+          cancelCapture = undefined;
           pending = false;
           if (captured && saved) {
             const model = removeSidebarSnapshotSession(captured.model, deleted);

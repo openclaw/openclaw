@@ -6578,7 +6578,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       "steps.npm_package_version.outputs.already_published != 'true'",
     );
     const readback = workflowStep(pluginPublishJob, "Verify immutable npm registry readback");
-    expect(readback.if).toBeUndefined();
+    expect(readback.if).toBe("steps.oidc_publish.outputs.deferred_auth != 'true'");
     expect(readback.run).toContain("--allow-missing false");
     expect(readback.env).toMatchObject({
       TARBALL_PATH: "${{ steps.publication_evidence.outputs.tarball_path }}",
@@ -10680,8 +10680,8 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain('bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"');
     expect(workflow).toContain("use_github_hosted_runners:");
     for (const [jobName, runner] of [
-      ["validate_special_e2e", "blacksmith-32vcpu-ubuntu-2404"],
-      ["validate_live_provider_suites", "blacksmith-8vcpu-ubuntu-2404"],
+      ["validate_special_e2e", "blacksmith-8vcpu-ubuntu-2404"],
+      ["validate_live_provider_suites", "blacksmith-2vcpu-ubuntu-2404"],
     ] as const) {
       expect(evaluateWorkflowRunner(workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"])).toBe(
         runner,
@@ -10696,7 +10696,7 @@ describe("package artifact reuse", () => {
       const selector = workflowJob(".github/workflows/openclaw-repo-e2e-reusable.yml", jobName)[
         "runs-on"
       ];
-      expect(evaluateWorkflowRunner(selector)).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateWorkflowRunner(selector)).toBe("blacksmith-8vcpu-ubuntu-2404");
       expect(evaluateWorkflowRunner(selector, { useGithubHostedRunners: true })).toBe(
         "ubuntu-24.04",
       );
@@ -10772,7 +10772,7 @@ describe("package artifact reuse", () => {
     const mediaRunner = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_media_provider_suites")[
       "runs-on"
     ];
-    expect(evaluateWorkflowRunner(mediaRunner)).toBe("blacksmith-8vcpu-ubuntu-2404");
+    expect(evaluateWorkflowRunner(mediaRunner)).toBe("blacksmith-2vcpu-ubuntu-2404");
     expect(evaluateWorkflowRunner(mediaRunner, { useGithubHostedRunners: true })).toBe(
       "ubuntu-24.04",
     );

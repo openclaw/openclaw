@@ -1692,7 +1692,7 @@ AFTER_CD
         );
         const hosted = runnerBackend === "github" || runAttempt > 1;
         expect(runner, JSON.stringify(context)).toBe(
-          hosted ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404",
+          hosted ? "ubuntu-24.04" : "blacksmith-2vcpu-ubuntu-2404",
         );
         expect(parallel, JSON.stringify(context)).toBe(hosted ? 2 : 4);
       }
@@ -1760,7 +1760,7 @@ AFTER_CD
     } as const;
     expect(evaluateWorkflowExpression("${{ " + prepare.if + " }}", releaseChild)).toBe(true);
     expect(evaluateWorkflowExpression(job["runs-on"], releaseChild)).toBe(
-      "blacksmith-16vcpu-ubuntu-2404",
+      "blacksmith-4vcpu-ubuntu-2404",
     );
     expect(evaluateWorkflowExpression(parallelism!, releaseChild)).toBe(1);
     for (const recovery of [
@@ -2377,7 +2377,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         ciValue(jobName, "runs-on", { ...context, ...overrides });
       for (const eventName of ["pull_request", "push"] as const) {
         expect(runner({ eventName }), jobName).toBe(
-          jobName === "security-fast" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04",
+          jobName === "security-fast" ? "blacksmith-2vcpu-ubuntu-2404" : "ubuntu-24.04",
         );
       }
       expect(
@@ -2386,7 +2386,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           headRepository: "contributor/openclaw",
         }),
         `${jobName}: untrusted fork first attempt`,
-      ).toBe("blacksmith-4vcpu-ubuntu-2404");
+      ).toBe("blacksmith-2vcpu-ubuntu-2404");
       for (const override of [
         { runAttempt: 0 },
         { runAttempt: 2 },
@@ -2400,7 +2400,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       for (const runnerBackend of ["", "blacksmith"] as const) {
         for (const eventName of ["pull_request", "push"] as const) {
           expect(runner({ eventName, runnerBackend }), jobName).toBe(
-            jobName === "preflight" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04",
+            jobName === "preflight" ? "blacksmith-2vcpu-ubuntu-2404" : "ubuntu-24.04",
           );
         }
       }
@@ -2408,10 +2408,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     for (const [jobName, task, expected] of [
       ["preflight", undefined, "ubuntu-24.04"],
       ["security-fast", undefined, "ubuntu-24.04"],
-      ["checks-ui", undefined, "blacksmith-8vcpu-ubuntu-2404"],
+      ["checks-ui", undefined, "blacksmith-2vcpu-ubuntu-2404"],
       ["checks-ui-e2e", "browser-extension", "ubuntu-24.04"],
-      ["checks-ui-e2e", "control-ui", "blacksmith-16vcpu-ubuntu-2404"],
-      ["checks-ui-e2e-real-gateway", undefined, "blacksmith-16vcpu-ubuntu-2404"],
+      ["checks-ui-e2e", "control-ui", "blacksmith-4vcpu-ubuntu-2404"],
+      ["checks-ui-e2e-real-gateway", undefined, "blacksmith-4vcpu-ubuntu-2404"],
     ] as const) {
       expect(
         ciValue(jobName, "runs-on", {
@@ -2428,7 +2428,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           ...context,
           preflightOutputs: { frozen_target: frozenTarget },
         }),
-      ).toBe("blacksmith-32vcpu-ubuntu-2404");
+      ).toBe("blacksmith-8vcpu-ubuntu-2404");
     }
     for (const authorAssociation of ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]) {
       for (const headRepository of ["openclaw/openclaw", "contributor/openclaw"]) {
@@ -2444,7 +2444,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           ).toBe(
             runnerBackend === "hybrid" && headRepository === "openclaw/openclaw"
               ? "ubuntu-24.04"
-              : "blacksmith-4vcpu-ubuntu-2404",
+              : "blacksmith-2vcpu-ubuntu-2404",
           );
         }
       }
@@ -2454,12 +2454,12 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
   it.each([
     {
       file: "full-release-validation.yml",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
+      runner: "blacksmith-2vcpu-ubuntu-2404",
       job: "release_decision",
     },
     {
       file: "openclaw-npm-preflight.yml",
-      runner: "blacksmith-32vcpu-ubuntu-2404",
+      runner: "blacksmith-8vcpu-ubuntu-2404",
       job: "check_openclaw_npm",
     },
   ])("honors the global hosted runner override for $file/$job", ({ file, runner, job }) => {
@@ -2497,6 +2497,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       const runsOn = readCiWorkflow().jobs["check-shard"]["runs-on"];
       const lintMatrix = {
         runner: "blacksmith-32vcpu-ubuntu-2404",
+        runner_label: "blacksmith-8vcpu-ubuntu-2404",
         task: "lint",
       };
       const evaluateDispatch = (
@@ -2510,7 +2511,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           ...overrides,
         });
 
-      expect(evaluateDispatch("blacksmith")).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateDispatch("blacksmith")).toBe("blacksmith-8vcpu-ubuntu-2404");
       for (const backend of ["blacksmith", "github", "hybrid"] as const) {
         expect(
           evaluateDispatch(backend, backend === "blacksmith" ? { releaseGate: true } : {}),
@@ -2522,7 +2523,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         frozenTarget: true,
         targetContextRef,
       };
-      expect(evaluateDispatch("hybrid", frozenFrv)).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateDispatch("hybrid", frozenFrv)).toBe("blacksmith-8vcpu-ubuntu-2404");
       expect(evaluateDispatch("github", frozenFrv)).toBe("ubuntu-24.04");
       for (const overrides of [
         { frozenTarget: false },
@@ -2540,7 +2541,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           matrix: lintMatrix,
           runnerBackend: "blacksmith",
         }),
-      ).toBe("blacksmith-32vcpu-ubuntu-2404");
+      ).toBe("blacksmith-8vcpu-ubuntu-2404");
     },
   );
 
@@ -2620,7 +2621,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           runnerBackend,
           preflightOutputs: { hybrid_hosted_offload: String(offload) },
         } as const;
-        expect(ciValue("checks-ui", "runs-on", context)).toBe("blacksmith-8vcpu-ubuntu-2404");
+        expect(ciValue("checks-ui", "runs-on", context)).toBe("blacksmith-2vcpu-ubuntu-2404");
         for (const [jobName, timeout] of [
           ["build-artifacts", 20],
           ["android", 20],
@@ -2888,7 +2889,12 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       jobId?: string;
       jobCondition?: string;
     }> = [];
-    const rubySetups: Array<{ file: string; step: WorkflowStep }> = [];
+    const rubySetups: Array<{
+      file: string;
+      step: WorkflowStep;
+      jobId?: string;
+      jobCondition?: string;
+    }> = [];
     for (const file of [
       ...findYamlFiles(".github/workflows"),
       ...findYamlFiles(".github/actions"),
@@ -2911,7 +2917,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
             directCaches.push({ file, step, jobId, jobCondition });
           }
           if (step.uses?.startsWith("ruby/setup-ruby@")) {
-            rubySetups.push({ file, step });
+            rubySetups.push({ file, step, jobId, jobCondition });
           }
           if (
             step.uses === "./.github/actions/setup-node-env" ||
@@ -2925,11 +2931,20 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       }
     }
     expect(rubySetups.length).toBeGreaterThan(0);
-    for (const { file, step } of rubySetups) {
+    for (const { file, step, jobId, jobCondition } of rubySetups) {
       const bundlerCache = step.with?.["bundler-cache"] ?? false;
       expect([false, true, "false", "true"], `${file}: ${step.name}`).toContain(bundlerCache);
       if (bundlerCache === true || bundlerCache === "true") {
-        expect(String(step.if), `${file}: ${step.name}`).toContain("cache_write_allowed == 'true'");
+        if (file === ".github/workflows/ios-store-release.yml" && jobId === "release") {
+          expectIncludes(jobCondition, [
+            "github.repository == 'openclaw/openclaw'",
+            "github.ref == 'refs/heads/main'",
+          ]);
+        } else {
+          expect(String(step.if), `${file}: ${step.name}`).toContain(
+            "cache_write_allowed == 'true'",
+          );
+        }
       }
     }
     expect(callers.length).toBeGreaterThan(0);
@@ -3015,6 +3030,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         }
         const releaseCacheId = new Map([
           ["${{ runner.temp }}/openclaw-watch-rtc-release-libraries", "watch-rtc-cache"],
+          ["${{ runner.temp }}/openclaw-ios-release-cas", "ios-compilation-cache"],
           ["~/Library/Developer/Xcode/DerivedData/OpenClaw-*/SourcePackages", "ios-packages-cache"],
         ]).get(String(step.with?.path));
         if (file === ".github/workflows/ios-store-release.yml" && releaseCacheId) {
@@ -5606,7 +5622,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           : `checks-ui (${shard}/${scenario.shards.length})`,
       );
       expect(evaluateWorkflowExpression(ui["runs-on"], rowContext)).toBe(
-        scenario.frozenTarget ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404",
+        scenario.frozenTarget ? "ubuntu-24.04" : "blacksmith-2vcpu-ubuntu-2404",
       );
       const env = Object.fromEntries(
         Object.entries({ ...ui.env, ...test.env }).map(([key, value]) => [
