@@ -1314,7 +1314,6 @@ final class TalkModeManager {
 
     private func startRecognition(pttCaptureId: String? = nil) throws {
         self.stopRecognition()
-        let recognitionGeneration = self.recognitionGeneration
         #if targetEnvironment(simulator)
         if self.allowSimulatorCapture {
             self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
@@ -1324,7 +1323,8 @@ final class TalkModeManager {
         throw NSError(domain: "TalkMode", code: 2, userInfo: [
             NSLocalizedDescriptionKey: "Talk mode is not supported on the iOS simulator",
         ])
-        #endif
+        #else
+        let recognitionGeneration = self.recognitionGeneration
 
         let resolvedSpeech = TalkSpeechLocale.makeRecognizer(
             gatewaySelection: self.gatewaySpeechLocaleID)
@@ -1374,6 +1374,7 @@ final class TalkModeManager {
                 pttCaptureId: pttCaptureId,
                 recognitionGeneration: recognitionGeneration)
         }
+        #endif
     }
 
     private func updateMicLevel(_ level: Float, recognitionGeneration: UInt64) {
@@ -2536,6 +2537,7 @@ final class TalkModeManager {
         return self.closeRealtimeVoiceSessions(owners)
     }
 
+    @discardableResult
     private func closeRealtimeVoiceSessions(_ owners: [TalkRealtimeVoiceSessionOwner]) -> Task<Void, Never> {
         let transcriptStore = self.realtimeTranscriptStore
         return Task { @MainActor in
