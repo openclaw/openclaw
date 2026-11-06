@@ -132,7 +132,7 @@ async function ready(page: Page) {
   await page.locator(".usage-page .session-bar-row").first().waitFor();
   await page.waitForFunction(() => {
     const refresh = document.querySelector<HTMLButtonElement>(
-      '.usage-page button[aria-label="Refresh"]',
+      ".usage-view-options button.refresh-button",
     );
     if (refresh) {
       return !refresh.disabled;
@@ -166,18 +166,19 @@ async function months(page: Page) {
   const now = Date.now();
   const start = new Date(now - (dayCount - 1) * dayMs).toISOString().slice(0, 10);
   const end = new Date(now).toISOString().slice(0, 10);
-  const startInput = page.getByLabel("Start date", { exact: true });
-  const endInput = page.getByLabel("End date", { exact: true });
+  const startInput = page.locator(".usage-date-input").nth(0);
+  const endInput = page.locator(".usage-date-input").nth(1);
   // The fixture uses UTC days; the page's default end date uses the browser's local day.
   await endInput.fill(end);
   await endInput.press("Tab");
   await startInput.fill(start);
   await startInput.press("Tab");
   await closeFilters(page, opened);
-  await page
-    .locator(".sessions-card-count")
-    .filter({ hasText: /12[,.]?000/ })
-    .waitFor();
+  const formattedSessionCount = await page.evaluate(
+    (count) => count.toLocaleString(),
+    sessionCount,
+  );
+  await page.locator(".sessions-card-count").filter({ hasText: formattedSessionCount }).waitFor();
 }
 
 const fixture = {
@@ -285,15 +286,12 @@ const usageScenarios: readonly InteractionScenario[] = [
     prepare: months,
     run: async (page, gateway) => {
       const after = (await gateway.getRequests("sessions.usage")).length;
-      const refresh = page.locator(".usage-page").getByRole("button", {
-        name: "Refresh",
-        exact: true,
-      });
+      const refresh = page.locator(".usage-view-options button.refresh-button");
       if (await refresh.isVisible()) {
         await refresh.click();
       } else {
         await page.locator(".usage-phone-actions__trigger").click();
-        await page.getByRole("menuitem", { name: "Refresh", exact: true }).click();
+        await page.locator('[id="usage-phone-actions:content"] [data-value="refresh"]').click();
       }
       await gateway.waitForRequest("sessions.usage", { after });
       await ready(page);
