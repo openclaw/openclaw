@@ -47,7 +47,10 @@ it.skipIf(process.platform === "win32")(
         const gateway = await owner.start({
           repoRoot: process.cwd(),
           initializeCurrentRuntimeState: true,
-          command: { executablePath: process.execPath, argsPrefix: [path.resolve("dist/index.js")] },
+          command: {
+            executablePath: process.execPath,
+            argsPrefix: [path.resolve("dist/index.js")],
+          },
           transportBaseUrl: "http://127.0.0.1:1",
           enabledPluginIds: ["file-transfer"],
           controlUiEnabled: false,
@@ -110,7 +113,11 @@ it.skipIf(process.platform === "win32")(
         const status = operator.request<SkillStatusReport>("skills.status", { agentId: "qa" });
         // Install both observers before the socket closes; an early product failure must stay handled.
         const reconnect = withinTest(
-          awaitGateBeforeSettlement(disconnected.promise, status, "Skill status completed before disconnection"),
+          awaitGateBeforeSettlement(
+            disconnected.promise,
+            status,
+            "Skill status completed before disconnection",
+          ),
           context.signal,
         ).then(() => node!.connect());
         const [result, connection] = await Promise.allSettled([status, reconnect]);
@@ -129,11 +136,13 @@ it.skipIf(process.platform === "win32")(
             }),
           ]),
         );
-        const discovery = node.frames.slice(firstFrame).filter(
-          (frame) =>
-            frame.command === "workspace.skills" &&
-            JSON.parse(frame.paramsJSON ?? "{}").operation === "discovery",
-        );
+        const discovery = node.frames
+          .slice(firstFrame)
+          .filter(
+            (frame) =>
+              frame.command === "workspace.skills" &&
+              JSON.parse(frame.paramsJSON ?? "{}").operation === "discovery",
+          );
         expect(discovery.length).toBeGreaterThanOrEqual(2);
         expect(new Set(discovery.map((frame) => frame.id)).size).toBe(discovery.length);
         expect(discovery.every((frame) => frame.nodeId === identity.deviceId)).toBe(true);

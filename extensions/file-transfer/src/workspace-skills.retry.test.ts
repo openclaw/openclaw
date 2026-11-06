@@ -111,7 +111,7 @@ it("keeps one read deadline across connection attempts", async () => {
           return;
         }
         // An active transport honors the caller's abort; it does not invent its own timeout.
-        signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+        signal!.addEventListener("abort", () => reject(signal!.reason as Error), { once: true });
       }),
   );
   const result = reader(open).readInstructions("/node/workspace/skills/tool/SKILL.md", {});
