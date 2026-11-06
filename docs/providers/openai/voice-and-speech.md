@@ -336,7 +336,9 @@ sidebarTitle: "Voice and speech"
     `channels.discord.voice.realtime.model` is `gpt-live-1-codex`. Set
     `channels.discord.voice.realtime.speakerVoice` to `cove` for the Codex
     default voice. The other supported voices are `arbor`, `breeze`, `ember`,
-    `juniper`, `maple`, `sol`, `spruce`, and `vale`. A voice selection is specific
+    `juniper`, `maple`, `sol`, `spruce`, `vale`, `aube`, `bubbie`, `haetsal`,
+    `hanul`, `himari`, `leher`, `miko`, `neer`, `porto`, `rindo`, `rio`,
+    `rivage`, `selva`, `sonna`, `tinta`, and `viola`. A voice selection is specific
     to its model route, regardless of whether the client is Talk, Discord, or
     Voice Call.
 
