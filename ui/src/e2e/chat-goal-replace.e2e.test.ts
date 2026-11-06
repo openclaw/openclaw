@@ -12,9 +12,6 @@ const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 suite.define(() => {
   it("confirms replacement from Goal shorthand and the picker without restarting the goal", async () => {
     const artifacts = captureProof ? createControlUiE2eArtifactDir("goal-replace") : undefined;
-    if (artifacts) {
-      console.log("Goal replacement screenshots:", artifacts);
-    }
     await suite.withPage(
       { viewport: { width: 1440, height: 900 }, colorScheme: "light" },
       async ({ page }) => {
@@ -151,9 +148,6 @@ suite.define(() => {
     const artifacts = captureProof
       ? createControlUiE2eArtifactDir("goal-replace-running")
       : undefined;
-    if (artifacts) {
-      console.log("Running goal screenshots:", artifacts);
-    }
     await suite.withPage(
       { viewport: { width: 1440, height: 900 }, colorScheme: "light" },
       async ({ page }) => {

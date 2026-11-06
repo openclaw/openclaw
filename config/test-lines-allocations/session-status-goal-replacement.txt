@@ -1,4 +1,0 @@
-# Goal shorthand replacement: +3 LF in the existing browser scenarios to prove
-# Goal mode survives confirmation cancellation and to leave it before picker entry.
-# No new scenarios; keep the shared scalar unchanged. Retire with the coverage.
-3
