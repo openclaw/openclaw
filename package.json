@@ -437,6 +437,8 @@
     "skills/",
     "custodian-skills/",
     "scripts/check-install-dependency-ownership.mjs",
+    "scripts/sandbox-image-build.sh",
+    "scripts/docker/sandbox/Dockerfile",
     "scripts/freebsd-service-inspect.mjs",
     "scripts/generate-kysely-types.mts",
     "scripts/lib/direct-run.mjs",
